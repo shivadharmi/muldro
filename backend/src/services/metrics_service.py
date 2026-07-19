@@ -34,7 +34,7 @@ AGENT_CALLS = Counter(
 )
 AGENT_RUNTIME_CALLS = Counter(
     "jarvis_agent_runtime_calls_total",
-    "Streaming agent calls by execution runtime (legacy agent_loop vs deep Deep-Agents)",
+    'Streaming agent calls on the deep Deep-Agents runtime (runtime label is always "deep")',
     ["runtime"],
 )
 TOOL_CALLS = Counter(

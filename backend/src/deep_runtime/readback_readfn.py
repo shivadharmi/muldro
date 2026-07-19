@@ -26,7 +26,7 @@ Fail-safe design (mirrors ``run_readback``):
      resolution only; ``execute_tool`` re-resolves the tool workspace-scoped at dispatch, and
      reads are side-effect-free, so there is no cross-tenant effect from the name lookup.
   3. Dispatch through ``execute_tool`` (the dispatcher). Reads bypass the idempotency ledger
-     (side-effect-free), so no double-fire in any ``execute_tool`` variant (real / shadow /
+     (side-effect-free), so no double-fire in any ``execute_tool`` variant (real /
      ledger-wrapped). Any exception here -> the verifier resolves UNVERIFIED (readback.py).
 """
 
@@ -75,8 +75,8 @@ def make_readback_read_fn(
     dispatch through ``execute_tool``.
 
     ``execute_tool`` is the BUILD's resolved dispatcher fn (the real
-    ``ToolExecutor.execute_tool`` for chat/autonomous, or the shadow / ledger-wrapped variant
-    for those turns). It is invoked with the same POSITIONAL convention as
+    ``ToolExecutor.execute_tool`` for chat/autonomous, or the ledger-wrapped variant
+    for autonomous turns). It is invoked with the same POSITIONAL convention as
     ``jarvis_tool_dispatcher`` / ``ExecuteToolFn`` (``name, args, user_id, workspace_id``), so
     every variant honors it. ``tool_registry`` only needs an async
     ``list_tools(enabled_only=True)`` -> records carrying ``.name`` + ``.capability``.

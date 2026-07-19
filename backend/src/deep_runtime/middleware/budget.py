@@ -16,7 +16,7 @@ an async ``aafter_model`` hook so the DB write needs no thread hop.
 failure (including ``record_usage`` raising ``ValueError`` for a missing
 ``workspace_id``) is caught and logged; the hook always returns ``None``.
 
-TODO(phase2): per-tool token attribution. Legacy ``agent_loop`` (~917-942) also
+TODO(phase2): per-tool token attribution. The former ``agent_loop`` also
 wrote per-tool ``TokenUsage`` rows with ``trigger=f"tool:{tool_name}"``. A
 faithful per-tool token *split* needs per-round tool context that is not
 available inside ``after_model`` alone, so it is intentionally omitted here. It is

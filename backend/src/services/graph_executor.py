@@ -321,7 +321,7 @@ class GraphExecutor:
             if not run:
                 raise ValueError(f"Run not found: {run_id}")
 
-            # Create a live JarvisTrace so agent_loop can accumulate spans.
+            # Create a live JarvisTrace so the deep runtime can accumulate spans.
             effective_trace_id = trace_id or f"trace_{ULID()}"
             # Always stamp run.trace_id BEFORE step execution so the detail
             # endpoint can resolve token/cost totals on a running or completed

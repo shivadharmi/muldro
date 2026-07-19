@@ -2,8 +2,8 @@
 
 This is the Phase-1 model layer for the Deep Agents migration. It maps a Jarvis
 agent's ``model_tier`` + ``thinking`` config onto the ``ChatAnthropic`` thinking/
-effort/temperature surface, faithfully reproducing
-``agent_loop.build_thinking_params`` (confirmed live in Phase 0).
+effort/temperature surface, faithfully reproducing the former
+``agent_loop.build_thinking_params`` mapping.
 
 Cheap mode is applied UPSTREAM by ``build_agent_set``/``apply_cheap_mode`` — this
 factory only reads the (possibly already-downgraded) ``agent.model_tier`` and
@@ -60,7 +60,7 @@ def build_chat_model(agent: SubAgent) -> ChatAnthropic:
         else:
             # Anthropic requires max_tokens > thinking.budget_tokens (thinking tokens count
             # toward max_tokens, so the reply needs headroom). Clamp the budget below
-            # max_tokens, mirroring legacy build_thinking_params (agent_loop.py:458-459) —
+            # max_tokens, mirroring the former build_thinking_params clamp —
             # a default SubAgent has max_tokens == budget_tokens == 4096, which 400s raw.
             budget = thinking_cfg.budget_tokens
             if budget >= agent.max_tokens:

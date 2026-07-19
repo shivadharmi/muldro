@@ -1,11 +1,10 @@
 """Model-aware thinking/effort helpers for the Deep Agents runtime.
 
-These are ported VERBATIM (intent-preserving) from
-``src.orchestrator.agent_loop`` so ``deep_runtime`` stays self-contained and
-import-light — it must not import private helpers from ``agent_loop`` (which
-pulls in the whole legacy runtime). When the legacy runtime is deleted in
-Phase 5, this module is the single source of truth for the adaptive-vs-legacy
-thinking split.
+These were ported VERBATIM (intent-preserving) from the former
+``src.orchestrator.agent_loop`` build_thinking_params so ``deep_runtime`` stays
+self-contained and import-light. Since the legacy runtime was retired (Step 11),
+this module is the single source of truth for the adaptive-vs-legacy thinking
+split.
 
 Adaptive-only models (Opus 4.7/4.8, Fable 5, Mythos 5) reject ``temperature``
 and the legacy ``thinking:{type:"enabled", budget_tokens}`` shape; they require
@@ -16,8 +15,8 @@ enabled-thinking + temperature surface they still accept.
 from __future__ import annotations
 
 # Models whose API rejects ``temperature`` and the legacy enabled-thinking shape
-# — they require adaptive thinking + effort. Matched as substrings so Bedrock
-# inference-profile IDs (e.g. us.anthropic.claude-opus-4-8) are covered too.
+# — they require adaptive thinking + effort. Matched as substrings so any prefixed
+# model-id variant (e.g. a region/inference-profile prefix) is still covered.
 # MAINTENANCE: every new adaptive-only model (e.g. a future Opus 4.9) MUST be
 # added here, or it falls through to the legacy path and 400s on every call.
 ADAPTIVE_THINKING_MARKERS: tuple[str, ...] = (

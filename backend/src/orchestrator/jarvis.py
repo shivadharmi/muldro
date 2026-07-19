@@ -863,7 +863,7 @@ class JarvisOrchestrator:
     async def _execute_tool(
         self, tool_name: str, tool_input: dict, user_id: str, workspace_id: str = ""
     ) -> dict:
-        """Delegate to ToolExecutor (facade kept for internal callers + agent_loop)."""
+        """Delegate to ToolExecutor (facade kept for internal callers)."""
         return await self._tool_executor.execute_tool(
             tool_name, tool_input, user_id, workspace_id=workspace_id
         )

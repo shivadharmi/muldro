@@ -61,7 +61,7 @@ def make_lock_wrapped_execute_tool_fn(
     Layered OUTSIDE the idempotency ledger so the lock serializes the whole write attempt
     (idempotency check + execute).
 
-    The wrapped fn matches agent_loop's calling convention exactly:
+    The wrapped fn matches the tool dispatcher's calling convention exactly:
     ``execute_tool_fn(tool_name, tool_input, user_id=..., workspace_id=...)`` — user_id and
     workspace_id are keyword-only, forwarded verbatim to ``inner_fn``. The LOCK KEY, however,
     is keyed on the CLOSURE-captured workspace_id (the run's workspace), never on the call's

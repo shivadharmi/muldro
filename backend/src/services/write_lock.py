@@ -16,7 +16,7 @@ import asyncio
 import uuid
 from contextlib import asynccontextmanager
 
-WRITE_LOCK_TTL_SECONDS = 120  # 2x the 60s agent_loop tool timeout — must exceed max call length
+WRITE_LOCK_TTL_SECONDS = 120  # lock lease ceiling — must exceed the longest single write-tool call
 _WAIT_TIMEOUT_DEFAULT = 5.0
 _POLL_INTERVAL = 0.05
 

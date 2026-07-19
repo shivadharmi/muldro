@@ -10,7 +10,7 @@ completion tail:
 * :meth:`resume_message_events` — the RESUME half of a paused ask/auto turn (drives the
   invoker's ``resume_deep_lead``, re-homes the continuation reply, runs the tail).
 * :meth:`_emit_completion_tail` — the ONE completion tail (run_completed → surface push →
-  optional learner/shadow → ``RunCompleted``) shared by ``_run_single_lead``,
+  optional learner → ``RunCompleted``) shared by ``_run_single_lead``,
   ``resume_message_events``, and (for the legacy branch) ``_process_core``. Co-locating
   the two lead paths kills the tail duplication they used to carry independently.
 
@@ -195,8 +195,7 @@ class _ChatSingleLeadMixin:
         (:meth:`_run_single_lead_planless`) single-lead paths — the ONLY difference between them
         is how the lead + ``context_block`` are built, so that setup stays in each caller and this
         streaming/pause/tail seam lives here once (mirrors how ``_emit_completion_tail`` folds the
-        tail). ``agent_name`` is always None on the single-lead path (no per-step agent → shadow
-        skipped by its own guard)."""
+        tail). ``agent_name`` is always None on the single-lead path (no per-step agent)."""
         presenter_text = ""
         async for frame in self._invoker.stream_deep_lead(
             lead,
@@ -416,8 +415,7 @@ class _ChatSingleLeadMixin:
                 # non-paused ``_run_single_lead`` tail. ``message`` is the ORIGINAL user message —
                 # persisted on the Approval at first-pass persist and surfaced back on the
                 # ``agent_done`` frame (``resume_user_message``). ``intent`` is not persisted → it
-                # stays None (the learner treats it as optional); ``run_shadow`` stays False
-                # (resume has no per-step ``agent_name`` to compare). ``run_learner`` is gated on a
+                # stays None (the learner treats it as optional). ``run_learner`` is gated on a
                 # truthy message: a pre-A1 approval (no persisted ``user_message``) resolves to ""
                 # and must NOT train the learner on an empty ask.
                 async for evt in self._emit_completion_tail(

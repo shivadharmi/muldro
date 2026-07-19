@@ -1,14 +1,16 @@
 """AgentInvoker — the shared sub-agent invocation engine.
 
 Extracted from ``JarvisOrchestrator`` (god-object decomposition, 2026-06-19).
-This is the primitive that runs a single sub-agent through the agent loop, used by
+This is the primitive that runs a single sub-agent through the deep runtime, used by
 BOTH the chat path (streaming) and the perception path (non-streaming). Extracting
 it as its own collaborator is what breaks the would-be chat<->perception cycle:
 both depend downward on AgentInvoker instead of on each other.
 
 Depends on ToolExecutor (tools + dispatch) and ContextAssembler (ambient context),
-plus the agent-execution resources (client, budget, circuit breaker) owned by the
-orchestrator. The current agent set is pushed in via ``set_agents`` so the
+plus the agent-execution resources (budget accounting, circuit-breaker health) owned
+by the orchestrator. (The legacy raw-LLM ``client`` handle is still threaded in but is
+vestigial — the deep runtime builds its own model; its removal is a tracked follow-up.)
+The current agent set is pushed in via ``set_agents`` so the
 orchestrator stays the single source of truth across ``load_agents_from_db``.
 """
 
@@ -73,9 +75,9 @@ def _is_reply_lead(agent_name: str) -> bool:
     turn output comes from ``call_agent_stream("presenter", ...)``, while the ``planner``
     (emits PlanOutput JSON) and the routed per-step read/execute agents (Perceiver /
     Executor / Librarian) are non-responding steps that must NOT carry surface-generation
-    rules. Both the live seam (``call_agent_stream``) and the shadow seam
-    (``run_shadow_turn``) derive the lead flag from this same pure function on the same
-    ``agent_name``, so they can never diverge on the augmentation for an equivalent turn.
+    rules. The live seam (``call_agent_stream`` / ``stream_deep_lead``) derives the lead
+    flag from this same pure function on the same ``agent_name``, so callers can never
+    diverge on the augmentation for an equivalent turn.
 
     Step-10 note: when the separate presenter step is dropped (chat_processor change,
     tracked separately) the reply lead's name changes and this predicate moves with it.
@@ -92,13 +94,13 @@ def _augment_system_blocks_for_inline(
     presenter itself) is not double-injected.
 
     Lead-scoped (A-3/B2): the voice is appended ONLY when ``is_reply_lead`` is True (the
-    single reply-producing lead). ``call_agent_stream``/``run_shadow_turn`` also build
+    single reply-producing lead). ``call_agent_stream`` also builds
     non-reply agents (planner, Perceiver reads, Executor); those must NOT receive
     surface-generation rules. The default is the SAFE value (no append), so a caller that
     omits the flag never leaks the voice into a non-lead prompt.
 
-    Immutable: never mutates ``system_blocks`` — the same list object feeds the legacy
-    agent_loop, which must stay byte-identical. When ``inline_format`` is False (or the
+    Immutable: never mutates ``system_blocks`` — the same list object is shared across
+    callers, so it must stay stable. When ``inline_format`` is False (or the
     agent is not the reply lead) the input is returned unchanged (identity), so the deep
     prompt is byte-neutral by default.
     """
@@ -139,8 +141,8 @@ def _augment_system_blocks_for_delegation(
     Composes cleanly with ``_augment_system_blocks_for_inline`` (A-3): both take a block list
     and return a NEW list (or the input unchanged), never mutating in place, so wrapping one
     around the other is order-independent and neither clobbers the other. Idempotent: a block
-    list already carrying the instruction is not doubled. The immutable input keeps the legacy
-    ``agent_loop`` path — which reads the same ``system_blocks`` — byte-identical.
+    list already carrying the instruction is not doubled. The immutable input keeps the shared
+    ``system_blocks`` list stable for every caller that reads it.
     """
     if not has_delegates:
         return system_blocks
@@ -209,11 +211,11 @@ class AgentInvoker:
 
     @property
     def checkpointer(self):
-        """The durable LangGraph checkpointer for this turn (or None on the legacy runtime).
+        """The durable LangGraph checkpointer for this turn (or None when none is wired).
 
         Public accessor so the scheduler's retention-sweep tick can reach the durable saver
         without a double-private reach into ``_checkpointer_provider``. Returns ``None`` when
-        no durable saver is wired (legacy runtime, or a worker built without one)."""
+        no durable saver is wired (e.g. a worker built without one)."""
         return self._checkpointer_provider()
 
     def has_durable_checkpointer(self) -> bool:
@@ -326,23 +328,21 @@ class AgentInvoker:
         ``execute_tool`` (Step 10B Task 3b, ADDITIVE): the dispatcher's tool-execution
         function. Defaults to ``None``, which falls back to
         ``self._tool_executor.execute_tool`` — byte-identical to before this param
-        existed. The shadow-compare harness (``run_shadow_turn``) injects a
-        ``ShadowToolExecutor`` so a shadow WRITE never reaches the real executor, and the
-        autonomous step seam (``run_autonomous_deep_step``) injects the ledger-wrapped
-        adapter. The two chat callers (the chat build below and the resume build) never
-        pass it.
+        existed. The autonomous step seam (``run_autonomous_deep_step``) injects the
+        ledger-wrapped adapter so a duplicate WRITE never reaches the real executor. The
+        two chat callers (the chat build below and the resume build) never pass it.
 
         ``pre_approved_capabilities`` (Step 10C SQ2 Branch C, ADDITIVE): forwarded verbatim
         to the trust_gate so a capability already gated at the STEP level is not double-
         prompted at the tool-call level. Defaults to the empty frozenset — the chat + resume
-        + shadow callers never pass it, so the gate is byte-identical for them.
+        callers never pass it, so the gate is a no-op for them.
 
         ``require_write_lock`` (Step 10D P1 A3, ADDITIVE): fail the write lock CLOSED for this
         build, OR'd with the per-caller ``write_lock_require_redis`` setting. The ungated chat
         single-lead path (``stream_deep_lead``) passes True so its writes are NEVER executed
         unserialized while Redis is down. Defaults to False, keeping ALL other callers
-        (``call_agent_stream`` deep branch, ``resume_deep_turn``, ``run_autonomous_deep_step``,
-        ``run_shadow_turn``) byte-identical to before this param existed.
+        (``call_agent_stream`` deep branch, ``resume_deep_turn``, ``run_autonomous_deep_step``)
+        byte-identical to before this param existed.
 
         ``permission_mode`` (P2.1, ADDITIVE): the chat permission model (``bypass``/``ask``/
         ``auto``). When ``"ask"`` or ``"auto"`` the action-time ``permission_gate`` is inserted
@@ -531,7 +531,7 @@ class AgentInvoker:
         # calendar.create cannot false-CONTRADICT). Safety is NOT from capability-scope (a separate
         # outer middleware the read_fn bypasses) — the read capability is post-condition-derived,
         # side-effect-free, and workspace-scoped at dispatch. It uses the BUILD's execute_tool (the
-        # same resolved dispatcher fn the tool chain uses — real / shadow / ledger-wrapped), so a
+        # same resolved dispatcher fn the tool chain uses — real / ledger-wrapped), so a
         # read honors the turn's execution context. Reuses _resolve_cap (fail-open cap|None, same
         # as write_lock) + _assess_risk. CONFIRMED + gated → the deep trust-increment helper.
         gated_chain: tuple[Any, ...] = (write_lock, dispatcher)
@@ -815,9 +815,8 @@ class AgentInvoker:
         reap the durable checkpoint IFF the turn ran to non-paused completion. The shared tail of
         every deep streaming path whose reap is CONDITIONAL on not-pausing: the four passthrough
         sites (``call_agent_stream`` routed per-step, ``stream_deep_lead`` chat single-lead,
-        ``resume_deep_turn`` per-step resume, ``resume_deep_lead`` chat resume) plus
-        ``run_shadow_turn``, which CONSUMES the yielded frames (capturing ``final_text``) instead of
-        re-yielding them. Only ``run_autonomous_deep_step`` stays inline — its reap is UNCONDITIONAL
+        ``resume_deep_turn`` per-step resume, ``resume_deep_lead`` chat resume). Only
+        ``run_autonomous_deep_step`` stays inline — its reap is UNCONDITIONAL
         (Branch C never pauses, so it reaps on EVERY terminal outcome), which this helper's
         ``if not paused`` guard would break.
 
@@ -858,7 +857,7 @@ class AgentInvoker:
         permission_mode: str | None = None,
     ) -> AsyncGenerator[dict[str, Any], None]:
         """Run ONE synthetic deep lead over a whole user goal, streaming SSE-compatible frames
-        (Step 10D A-5). Generalizes the ``call_agent_stream`` ``runtime=="deep"`` branch for a
+        (Step 10D A-5). Generalizes the ``call_agent_stream`` deep branch for a
         single lead that gathers, acts, and replies inline — replacing the per-step loop +
         presenter step on the deep single-lead chat path (wired in 5b).
 
@@ -892,12 +891,9 @@ class AgentInvoker:
         """
         if tools is None:
             tools = await self._resolve_tools(lead, workspace_id, None)
-        # This method IS the deep single-lead path — it is only ever reached when the chat
-        # runtime resolves to "deep" (the 5b caller gates on it). Increment with the fixed
-        # "deep" label so a live single-lead turn is counted in the Step-10B rollback/adoption
-        # signal, mirroring ``call_agent_stream``'s per-call increment (and UNLIKE the shadow
-        # turn, which is not live authoritative traffic and deliberately omits it). Dormant in
-        # 5a (no live caller), so this is byte-neutral on legacy.
+        # This method IS the deep single-lead path (the 5b caller gates on it). Increment the
+        # runtime-call counter with the fixed "deep" label, mirroring ``call_agent_stream``'s
+        # per-call increment. Dormant in 5a (no live caller).
         AGENT_RUNTIME_CALLS.labels(runtime="deep").inc()
         model = self.get_model_for_agent(lead)
         system_blocks = self.build_system_prompt(lead, context_block)
@@ -1453,7 +1449,8 @@ class AgentInvoker:
         # audit trail. No permission_mode → permission_gate is NOT installed. No durable
         # checkpointer needed (never pauses); _build_deep_agent_for auto-uses MemorySaver
         # and _stream_and_reap's reap is a MemorySaver no-op. Final text = the agent_done
-        # frame's "text" (stream_adapter.py) — mirrors run_shadow_turn's consume pattern.
+        # frame's "text" (stream_adapter.py) — this seam consumes the yielded frames rather
+        # than re-yielding them.
         thread_id = make_thread_id(workspace_id)
         deep_agent = await self._build_deep_agent_for(
             agent,

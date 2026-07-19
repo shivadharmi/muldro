@@ -191,15 +191,15 @@ class Settings(BaseSettings):
     # False the deep path builds the full eager pack (byte-identical to legacy).
     deep_context_jit: bool = False  # JARVIS_DEEP_CONTEXT_JIT
 
-    # Step 10D A-5: gate the deep-chat single-lead restructure. When True AND runtime
-    # resolves to "deep" AND mode=="ask", the chat path runs ONE synthetic lead over the
-    # whole goal (built in 5a, wired in 5b) instead of the per-step loop + presenter step.
+    # Step 10D A-5: gate the deep-chat single-lead restructure. When True AND mode=="ask",
+    # the chat path runs ONE synthetic lead over the whole goal (built in 5a, wired in 5b)
+    # instead of the per-step loop + presenter step.
     # Off by default — dormant until the 5b chat wiring lands and this flag is flipped.
     deep_single_lead: bool = False  # JARVIS_DEEP_SINGLE_LEAD
 
     # Step 10D P2.5c: drop the Planner from the deep chat single-lead path. When True (and only
-    # when the single-lead path is already active — deep_single_lead + runtime=="deep" +
-    # permission_mode), a chat turn skips classify_intent + fast-path + Planner + plan record +
+    # when the single-lead path is already active — deep_single_lead + permission_mode), a chat
+    # turn skips classify_intent + fast-path + Planner + plan record +
     # resolve_plan_routing entirely and builds ONE lead from the connector-derived scope
     # (resolve_connector_scope). Off by default — dormant; flag-off is byte-identical (Planner
     # still called). Gates ONLY the P2.5c reroute, independently of deep_single_lead.

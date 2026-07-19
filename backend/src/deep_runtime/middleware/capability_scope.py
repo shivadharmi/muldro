@@ -3,10 +3,10 @@
 CRITICAL-SECURITY. This is the only safety net on the *ungated* chat path of the
 Jarvis → Deep Agents runtime: even when no TrustEngine approval gate fires, an
 agent must never be able to call a tool whose capability lies outside its
-``capability_scope``. This ports the legacy in-loop check from
-``src/orchestrator/agent_loop.py`` (``_capability_in_scope`` /
-``_resolve_tool_scope_and_server`` and its denial shape ≈697-742) into a
-deepagents ``wrap_tool_call`` interceptor.
+``capability_scope``. This ports the former in-loop check
+(``_capability_in_scope`` / ``_resolve_tool_scope_and_server`` and its denial
+shape) from the retired ``agent_loop`` into a deepagents ``wrap_tool_call``
+interceptor.
 
 Enforcement is **fail-closed**: a tool is allowed *only* when a single
 ``ToolRegistry.get_tool`` lookup resolves a capability that is present in the

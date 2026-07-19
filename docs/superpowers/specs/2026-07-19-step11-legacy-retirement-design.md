@@ -1,6 +1,7 @@
 # Step 11 — Legacy Runtime Retirement (design)
 
-> **Status:** DESIGN (2026-07-19), brainstormed + grounded (2 verify-don't-trust scouts:
+> **Status:** BUILT (Phases 1–6 complete, 2026-07-20; see §11 build-record). Originally
+> DESIGN (2026-07-19), brainstormed + grounded (2 verify-don't-trust scouts:
 > direct-SDK blast radius + 10B control-plane / worker-MCP map). On branch
 > `rebuild/first-principles` (off an untouched `main`, NEVER pushed). This is the **eventual
 > end-state** of the first-principles rebuild — retire the legacy runtime entirely so the
@@ -281,3 +282,49 @@ Anthropic key and drop the Bedrock env. Confirm prod's current Anthropic access 
    call sites pass `None`. The FastMCP server/`jarvis_tools` global is untouched. See §4 build note.
 5. **Test-migration inventory → RESOLVED (see §7).** ~737 tests / 67 files, self-distributing;
    worklist and clusters enumerated.
+
+## 11. Build record (BUILT 2026-07-20)
+
+All six phases landed on `rebuild/first-principles` (off an untouched `main`, **NOT pushed /
+merged / deployed** — Step-10 Merge(E) + prod(F) remain gated). Single alembic head
+`1a2770a28c39`, **zero migrations** across all of Step 11. Full non-e2e gate green and an
+independent spec+quality review at every phase checkpoint. Commit anchors (durable; the tree is
+green at each):
+
+- **Phase 1 — model layer** (`dee62d1`, `078836a`, `576290c`, `28df17b`): added `src/llm/`
+  (`build_langchain_model` pure `ChatAnthropic` + `build_utility_model` + `UtilityLLM.complete_text`);
+  `deep_runtime.build_chat_model` delegates to it. Additive, dormant, byte-neutral.
+- **Phase 2 — re-home 12 consumers** (`f07ce01`…`ae4fdb9`, grouped G1–G6): switched every shared-SDK
+  caller (risk_assessor, governor critique, event_processor, relevance, world_model, memory
+  extraction/contradictions, step_runner, verifier, presenter, context_assembler, intent_classifier)
+  onto `UtilityLLM`, behavior-preserving. After this, `agent_loop` was the only raw-SDK caller left.
+- **Phase 3 — worker/MCP dual-loop fix** (`11fe37e` + review-fix `53af892`): **verify-don't-trust
+  caught the spec's root cause was wrong** — FastMCP transport is fine across loops; the real
+  loop-bound resource was a shared module-global DB factory. Fix = `_get_db()` resolves the
+  thread-local `get_session_factory()`; 3 prod `configure_tool_servers` sites pass `None`; FastMCP
+  untouched.
+- **Phase 4 — collapse to deep-only + delete 10B** (`362985d`…`cf5b4be`, C1–C6, +review-fix
+  `7feb492`): re-homed `CancellationRequested`→`execution_support`; collapsed chat/perception/
+  autonomous surfaces to the deep runtime; deleted the entire 10B control plane
+  (runtime_gate/runtime_breaker/runtime_rollback_tick/routes_admin_runtime/shadow_runner/
+  shadow_tool_executor/divergence) + shadow stack; stripped `runtime`/`shadow_sample_rate`/
+  `rollback_*` settings + startup gates.
+- **Phase 5 — delete agent_loop + raw client + LLM Bedrock** (`4470d99`, `253343f`, +review-fix
+  `f58b01e`): deleted `agent_loop.py` (`.messages.create` in `src/` → **ZERO**), the
+  `get_anthropic_client` factory, and all LLM Bedrock (`use_bedrock`, `AsyncAnthropicBedrock`,
+  `BEDROCK_MODEL_TIERS`, `resolved_model`/`get_haiku_model` Bedrock arms); 102 `get_anthropic_client`
+  test patches removed. **Verify-don't-trust caught a critical**: `bedrock_region` is an *embedding*
+  dep (read unconditionally by `EmbeddingService.__init__`), not the LLM `use_bedrock` toggle —
+  removing it crashed prod while MagicMock tests hid it; restored + verified against real Settings.
+  KEPT (out of scope): the Voyage/Titan embedding fallback (incl. `bedrock_region`) + Bedrock reranker.
+- **Phase 6 — docs / CLAUDE.md R1** (this change): collapsed CLAUDE.md "Two execution paths" →
+  "One runtime, gated at action-time by `permission_mode`"; rewrote "Runtime Resilience" for the
+  deep runtime; removed all legacy/10B/shadow/LLM-Bedrock references; finished the deferred
+  stale-comment sweep so `rg 'shadow|effective_runtime|use_bedrock|AsyncAnthropic' src/` → **ZERO**
+  and every residual `agent_loop`/`Bedrock` hit is legit (embedding/reranker) or clearly-labelled
+  historical provenance. No src logic change.
+
+**End state:** the deep runtime (`src/deep_runtime/` over `langchain-anthropic`) is the ONLY runtime
+on all three surfaces; pure Claude API via `src/llm/`; no legacy engine, no runtime-selection control
+plane, no LLM Bedrock. Deferred follow-up (both Phase-5 reviewers OK'd keeping): the dead `client=None`
+plumbing threaded through 6 collaborators (removal ripples through hundreds of test constructions).

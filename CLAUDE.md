@@ -28,7 +28,8 @@ User <-> Next.js Frontend (A2UI)
 ```
 
 **Key paths:**
-- Orchestrator + agents: `backend/src/orchestrator/` (jarvis.py, agents.py, agent_loop.py, hooks.py, prompts.py, tracing.py, budget.py, perception.py, recovery.py, intent_classifier.py, api_circuit_breaker.py, capability_summary.py, services.py)
+- Orchestrator + agents: `backend/src/orchestrator/` (jarvis.py, agents.py, hooks.py, prompts.py, tracing.py, budget.py, perception.py, recovery.py, intent_classifier.py, api_circuit_breaker.py, capability_summary.py, services.py)
+- Deep runtime (the single execution engine): `backend/src/deep_runtime/` (agent_builder.py, model_factory.py, _thinking.py, stream_adapter.py, middleware/) + the model layer `backend/src/llm/` (model_factory.py, utility.py)
 - Services (business logic): `backend/src/services/` — planner, governor, executor, presenter, memory_service, world_model, event_processor, capability_resolver, risk_assessor, trust_engine, etc.
 - Tool layer: `backend/src/tools/` (catalog.py, schemas.py, validation.py, intelligence_server.py, communication_server.py, server.py)
 - Runtime contracts: `backend/src/contracts/` (PlanOutput, PlanStep, CapabilityGap, PolicyDecision, SurfaceUpdate, InsightSurfaceData, StepResult, ToolCallRequest, DomainEvent, WorkspaceSurfacePush) — neutral layer both api and services import downward from
@@ -147,11 +148,11 @@ The Planner produces a `PlanOutput` with ordered `PlanStep` entries. Each step h
 
 ## Agentic vs Scripted Execution
 
-All steps use **agentic execution**: the agent goes through the agent loop, discovers available tools, and autonomously decides which to call.
+All steps use **agentic execution**: the agent runs on the deep runtime (a LangGraph agent loop built by `build_deep_agent`), discovers available tools, and autonomously decides which to call.
 
-Multi-step plans trigger GraphExecutor for DAG management (dependencies, checkpointing, resume, TrustEngine approval gates), but each step within the DAG is executed via the agent loop — the routed agent discovers tools autonomously per step. GraphExecutor is a **durable DAG wrapper around agent_loop**, not a separate execution mode.
+Multi-step plans trigger GraphExecutor for DAG management (dependencies, checkpointing, resume, TrustEngine approval gates), but each step within the DAG is executed **through the deep runtime** — the routed agent discovers tools autonomously per step. GraphExecutor is a **durable DAG wrapper around the deep runtime** (`build_deep_agent` per step), not a separate execution mode.
 
-**Do not** hardcode tool-calling sequences in Python handlers. Let agents discover tools via the agent loop. The agent loop handles tool discovery, multi-turn reasoning, error recovery, and audit hooks automatically.
+**Do not** hardcode tool-calling sequences in Python handlers. Let agents discover tools via the deep runtime's agent loop, which handles tool discovery, multi-turn reasoning, error recovery, and audit hooks automatically.
 
 ## Unified Tool Registry
 
@@ -270,17 +271,19 @@ Single deterministic approval gate via `TrustEngine` (`src/services/trust_engine
 - **TrustEngine.evaluate()**: 4×4 matrix (trust_level × risk_level) → `PolicyDecision` (approval_required, auto_execute_notify, auto_execute_silent, blocked).
 - **Trust graduation**: 3 approved → learning, 10 approved (<10% reject) → trusted, 25 approved (<5% reject) → autonomous.
 - **Trust demotion**: Rejection applies cooldowns (72h/48h/24h) with demotion ladder.
-- **Per-tool cost attribution**: `TokenUsage` with `trigger=f"tool:{tool_name}"` in `agent_loop.py`.
+- **Per-call cost attribution**: the `budget` middleware (`deep_runtime/middleware/budget.py`) records a `TokenUsage` span per model call (`trigger="chat"`) via a LangChain `after_model` hook. Per-*tool* token splitting is intentionally not carried over (it was analytics-only).
 - **Trust API**: endpoints in `routes_trust.py` (dashboard, detail, ceiling, reset, time-policies GET+PUT).
 - **Frontend Trust tab**: the Trust tab inside the Settings popup modal — grouped-by-family display, progress bars, ceiling dropdown, reset.
 - **Risk assessment fails closed**: when the RiskAssessor LLM/JSON call fails, it returns `risk_level="high"` (not `medium`). `high` maps to `approval_required` at *every* trust level including `autonomous`, so an assessment outage can never silently auto-execute a write. Both fallback sites (`risk_assessor.py`, `graph_executor._assess_step_risk`) agree on this.
 
-**Two execution paths — only the autonomous path is gated (by design):**
-- **Chat path** (`jarvis.py` `process_message` / `process_message_stream`): single-step / lightweight plans execute inline via `_call_agent()` with **no TrustEngine gate**. This is intentional — the user's direct chat message *is* the authorization for that turn. Do **not** "add a trust gate to the chat path" as a bugfix; it would double-prompt the user for actions they just requested.
-- **Autonomous path** (`graph_executor.py`): multi-step / risky plans (and all scheduler/perception-triggered runs) are persisted as DB `Plan`s and executed through GraphExecutor, where **TrustEngine gates every step**.
-- **Compensating control on the chat path (ORCH-P0-1):** `agent_loop._capability_in_scope()` enforces capability-scope at tool-execution time, so even ungated, a chat-routed agent can only call tools within its `capability_scope` (fail-closed for known capabilities). This is what keeps the ungated path safe.
-- **Latent enhancement (not yet implemented):** if a chat turn's write step was triggered by *perception-sourced* content rather than the user's literal words, gating it would be defensible. Tracked, not built.
-- **Deep Agents runtime (`JARVIS_RUNTIME`, default `legacy`; in-progress replacement — not yet the default):** the chat path runs on either the legacy `agent_loop` or, when `JARVIS_RUNTIME=deep`, a LangGraph/Deep Agents runtime (`src/deep_runtime/`), selected per streaming call in `AgentInvoker.call_agent_stream` (same SSE contract either way). The deep path preserves the same **tools-are-schemas / execution-is-central** invariant as the legacy loop: Jarvis tools are inert schema shells and a central `jarvis_tool_dispatcher` (`wrap_tool_call`) routes execution through `ToolExecutor.execute_tool`, with `capability_scope` kept as a **separate outer** guard (dispatcher inner). Treat `src/deep_runtime/` as the source of truth for its internals; the rebuild's step history lives in `docs/superpowers/plans/`, not here.
+**One runtime, gated at action-time — two surfaces, two gate middlewares:**
+
+All surfaces (chat, perception, autonomous) execute on the **single deep runtime** (`src/deep_runtime/` — a LangGraph/Deep-Agents graph built by `build_deep_agent`). This is the *only* runtime; the legacy `agent_loop` engine and its runtime-selection control plane are deleted. Jarvis tools are inert schema shells (**tools-are-schemas / execution-is-central**): a central `jarvis_tool_dispatcher` (`wrap_tool_call`) routes every execution through `ToolExecutor.execute_tool`. Policy is enforced by a fixed middleware chain wrapping that dispatcher (outer→inner): `capability_scope → governor_audit → unavailable_server → trust_gate → [permission_gate] → write_lock → [read_back] → dispatcher`. Treat `src/deep_runtime/` as the source of truth for its internals; the rebuild's step history lives in `docs/superpowers/plans/`, not here.
+
+- **Chat path** (`jarvis.py` `process_message` / `process_message_stream`): the turn carries `authorization_source = DIRECT_USER_REQUEST`, so `trust_gate` (TrustEngine) stays **dormant** — the user's message *is* the turn's authorization. Writes are instead gated at action-time by **`permission_gate`** (`src/deep_runtime/middleware/permission_gate.py`) per the turn's Claude-Code-style **`permission_mode`**: `bypass` never interrupts, `ask` always confirms a write, `auto` confirms only irreversible / external-or-public / high-risk writes (fails closed when risk is unknown). Do **not** "add a TrustEngine gate to the chat path" as a bugfix — `permission_mode` is the chat gate; TrustEngine is a separate, provenance-based gate for the autonomous path.
+- **Autonomous path** (`graph_executor.py`; all scheduler/perception-triggered runs): persisted as DB `Plan`s and driven per-step by `GraphExecutor` / `DagRunner`, which run each step *through the deep runtime* with `authorization_source = AUTONOMOUS`. **TrustEngine's 4×4 matrix gates every step**, enforced at two layers — the DAG-step `TrustGate` (`dag_runner.py`) and the deep `trust_gate` middleware (`trust_engine.evaluate`); `pre_approved_capabilities` short-circuits the inner gate so a step approved at the DAG level is not double-prompted.
+- **Capability-scope (the always-on compensating control):** `src/deep_runtime/middleware/capability_scope.py` is the **outermost** guard (installed first by `build_deep_agent`), enforcing each agent's `capability_scope` at tool-execution time via one `ToolRegistry.get_tool` lookup (fail-closed for known capabilities; `build_deep_agent` refuses to compile a write-capable agent without it). This is what keeps the chat path safe even though TrustEngine is dormant there.
+- **Latent enhancement (not yet implemented):** if a chat turn's write was triggered by *perception-sourced* content rather than the user's literal words, forcing `permission_gate` to confirm it regardless of `bypass` would be defensible. Tracked, not built.
 
 **Key files:** `src/services/risk_assessor.py`, `src/services/trust_engine.py`, `src/models/trust_state.py` (TrustState + TrustCeiling), `src/api/routes_trust.py`
 
@@ -300,13 +303,14 @@ State transitions are enforced by `src/services/execution_state.py` — never mu
 
 **Eviction**: `EvictionService` (`src/services/eviction_service.py`) — 90-day retention with cascade cleanup (vector store + graph engine).
 
-## Runtime Resilience (agent_loop.py)
+## Runtime Resilience
 
-- **Tool timeout**: 60s via `asyncio.wait_for`. Timed-out tools return `{"error": "...", "timed_out": true}`.
-- **API retry**: 3 attempts with exponential backoff (2s→4s→8s, capped 30s) for `anthropic.RateLimitError` only.
-- **API circuit breaker**: `AnthropicCircuitBreaker` (`src/orchestrator/api_circuit_breaker.py`) tracks failures per model. CLOSED/OPEN/HALF_OPEN states, 5-failure threshold, 120s cooldown. When OPEN, agent_loop yields LoopError without calling the API.
-- **Thinking fallback**: If API rejects thinking blocks, automatically disables thinking mid-loop and retries.
-- **Tool error signaling**: Error dicts (`{"error": "..."}`) are flagged with `is_error: true` in tool results so Claude knows the tool failed.
+The deep runtime is a LangGraph graph over `langchain-anthropic`, so several behaviors the legacy `agent_loop` hand-rolled are now provided by that stack or deliberately dropped — the notes below reflect the *current* deep runtime, not the retired loop.
+
+- **Run-level timeout**: background runs are capped via `asyncio.wait_for` in `graph_executor.py` (`run.timeout_seconds or 600`s); user-initiated chat runs are uncapped. There is no per-tool timeout on the deep path (the legacy 60s per-tool ceiling was not carried over).
+- **API retry / backoff**: delegated to `langchain-anthropic`'s client — the runtime no longer wraps the Anthropic API in a Jarvis-owned RateLimit backoff loop.
+- **Tool error signaling**: a failed tool returns a `ToolMessage(status="error")` — set in `jarvis_tool_dispatcher.py` when the result carries `error`/`blocked`, and by the `capability_scope` / `permission_gate` / `write_lock` middlewares on refusal. `stream_adapter.py` maps `status="error"` to the frozen `blocked` SSE frame so the client knows the call failed.
+- **Model / thinking params**: built once per agent tier at model construction (`deep_runtime/model_factory.py` + `_thinking.py`) — adaptive-thinking models (e.g. Opus 4.7/4.8) drop `temperature` and the legacy `thinking:{type:"enabled"}` shape. There is no mid-loop "disable thinking and retry" fallback.
 - **Background task tracking**: `_spawn_background()` replaces bare `asyncio.create_task()`. Tasks are tracked in `_background_tasks` set with done-callback cleanup. `shutdown()` awaits pending tasks.
 - **Perception idempotency**: `pending_run=False` is set atomically BEFORE running perception cycles, preventing the next scheduler tick from double-picking the same source.
 - **Perception circuit breaker**: `PerceptionPolicyService` (`src/services/perception_policy.py`) with error classification (transient: 6 failures, permanent: 1 failure), starvation prevention (30-min ceiling), exponential backoff with jitter.
@@ -371,14 +375,14 @@ See [docs/engineering-standards.md](docs/engineering-standards.md) for the full 
 
 ### Approval & Trust
 - Do not use Governor as the primary approval gate — TrustEngine in GraphExecutor is the single approval gate. Governor hooks are audit-only
-- Do not add a TrustEngine gate to the chat path (`process_message`/`process_message_stream`) — it is ungated **by design** (user's message = authorization); capability-scope enforcement in `agent_loop` is the compensating control. See "Two execution paths" above
+- Do not add a TrustEngine gate to the chat path (`process_message`/`process_message_stream`) — TrustEngine stays **dormant** there by design (user's message = authorization). Action-time write confirmation is `permission_gate`'s job (per `permission_mode`); capability-scope enforcement lives in the `capability_scope` deep-runtime middleware. See "One runtime, gated at action-time" above
 - Do not make the RiskAssessor fail open — its failure default is `risk_level="high"` (forces approval). Do not "simplify" it back to `medium`
 - Do not reference `ApprovalPolicyEngine`, `TrustScore` model, or `ApprovalPolicy` model — deleted. Use `TrustEngine` + `TrustState` + `TrustCeiling`
 - Do not create tool-level approvals without `run_id` and `artifact_refs` — the approval resume path needs these
 
 ### Execution & State
 - Do not mutate TaskRun/TaskStep status directly — use `transition_run()` / `transition_step()`
-- Do not bypass agent loop for step execution — GraphExecutor delegates to agent_loop per step
+- Do not bypass the deep runtime for step execution — GraphExecutor delegates to the deep runtime (`build_deep_agent`) per step
 - Do not use bare `asyncio.create_task()` in jarvis.py — use `self._spawn_background()` for lifecycle tracking
 
 ### Data & Services
