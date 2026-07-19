@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -16,16 +16,11 @@ from src.orchestrator.intent_classifier import (
 )
 
 
-def _mock_client_returning(text: str):
-    """Build a mock Anthropic client whose response yields a single text block."""
-    block = MagicMock()
-    block.type = "text"
-    block.text = text
-    response = MagicMock()
-    response.content = [block]
-    client = MagicMock()
-    client.messages.create = AsyncMock(return_value=response)
-    return client
+def _patch_complete(text: str):
+    """Patch the UtilityLLM seam so classify_intent's Haiku call yields *text*."""
+    return patch(
+        "src.orchestrator.intent_classifier.complete_text", AsyncMock(return_value=text)
+    )
 
 
 class TestClassifyIntentParsing:
@@ -39,11 +34,8 @@ class TestClassifyIntentParsing:
             "Here is my analysis {note: braces in prose}.\n"
             '```json\n{"intent": "greeting", "confidence": 0.9, "sources": []}\n```'
         )
-        client = _mock_client_returning(text)
-
-        intent, confidence, sources = await classify_intent(
-            client, "claude-haiku-4-5-20251001", "hi there"
-        )
+        with _patch_complete(text):
+            intent, confidence, sources = await classify_intent("hi there")
 
         assert intent == "greeting"
         assert confidence == 0.9
@@ -51,11 +43,8 @@ class TestClassifyIntentParsing:
 
     @pytest.mark.asyncio
     async def test_non_json_response_falls_back_to_command(self):
-        client = _mock_client_returning("I'm not sure how to classify this.")
-
-        intent, confidence, sources = await classify_intent(
-            client, "claude-haiku-4-5-20251001", "???"
-        )
+        with _patch_complete("I'm not sure how to classify this."):
+            intent, confidence, sources = await classify_intent("???")
 
         assert intent == "command"
         assert sources == []

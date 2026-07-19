@@ -152,21 +152,21 @@ class TestBriefingStylePrompts:
         mock_settings.resolved_model = "claude-sonnet-4-6-20250514"
         mock_db = AsyncMock()
 
-        mock_client = MagicMock()
-        mock_response = MagicMock()
-        mock_response.content = [
-            MagicMock(
-                text='{"headline":"test","top_priorities":[],"changes_since_last":[],'
-                '"recommended_actions":[],"full_text":"test"}'
-            )
-        ]
-        mock_client.messages.create = AsyncMock(return_value=mock_response)
-
-        with patch("src.services.presenter.get_anthropic_client", return_value=mock_client):
+        json_text = (
+            '{"headline":"test","top_priorities":[],"changes_since_last":[],'
+            '"recommended_actions":[],"full_text":"test"}'
+        )
+        with (
+            patch("src.services.presenter.get_anthropic_client", return_value=MagicMock()),
+            patch(
+                "src.services.presenter.complete_text",
+                new=AsyncMock(return_value=json_text),
+            ) as mock_complete,
+        ):
             p = Presenter(mock_settings, mock_db)
             await p._call_claude("test context", style="founder")
 
-        call_kwargs = mock_client.messages.create.call_args.kwargs
+        call_kwargs = mock_complete.call_args.kwargs
         assert call_kwargs["system"] == BRIEFING_STYLE_PROMPTS["founder"]
 
 

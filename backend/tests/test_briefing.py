@@ -31,9 +31,9 @@ def mock_db():
     return db
 
 
-@patch("src.services.presenter.get_anthropic_client")
+@patch("src.services.presenter.complete_text")
 @pytest.mark.asyncio
-async def test_generate_briefing_creates_new(mock_get_client, settings, mock_db):
+async def test_generate_briefing_creates_new(mock_complete, settings, mock_db):
     """Should generate a new briefing when none exists for the date."""
     briefing_content = {
         "headline": "2 priorities, 1 follow-up",
@@ -43,11 +43,7 @@ async def test_generate_briefing_creates_new(mock_get_client, settings, mock_db)
         "full_text": "Today you have 2 priorities...",
     }
 
-    mock_client = MagicMock()
-    response = MagicMock()
-    response.content = [MagicMock(text=json.dumps(briefing_content))]
-    mock_client.messages.create = AsyncMock(return_value=response)
-    mock_get_client.return_value = mock_client
+    mock_complete.return_value = json.dumps(briefing_content)
 
     presenter = Presenter(settings=settings, db=mock_db)
     briefing = await presenter.generate_briefing(TEST_USER_ID, date(2026, 3, 13))
@@ -59,9 +55,9 @@ async def test_generate_briefing_creates_new(mock_get_client, settings, mock_db)
     mock_db.commit.assert_called_once()
 
 
-@patch("src.services.presenter.get_anthropic_client")
+@patch("src.services.presenter.complete_text")
 @pytest.mark.asyncio
-async def test_generate_briefing_returns_cached(mock_get_client, settings, mock_db):
+async def test_generate_briefing_returns_cached(mock_complete, settings, mock_db):
     """Should return existing briefing without calling Claude."""
     cached_briefing = MagicMock()
     cached_briefing.briefing_id = "brief_cached"
@@ -71,24 +67,19 @@ async def test_generate_briefing_returns_cached(mock_get_client, settings, mock_
     cached_result.scalar_one_or_none.return_value = cached_briefing
     mock_db.execute = AsyncMock(return_value=cached_result)
 
-    mock_client = MagicMock()
-    mock_get_client.return_value = mock_client
-
     presenter = Presenter(settings=settings, db=mock_db)
     briefing = await presenter.generate_briefing(TEST_USER_ID, date(2026, 3, 13))
 
     assert briefing.briefing_id == "brief_cached"
     # Claude should NOT have been called
-    mock_client.messages.create.assert_not_called()
+    mock_complete.assert_not_called()
 
 
-@patch("src.services.presenter.get_anthropic_client")
+@patch("src.services.presenter.complete_text")
 @pytest.mark.asyncio
-async def test_generate_briefing_handles_claude_failure(mock_get_client, settings, mock_db):
+async def test_generate_briefing_handles_claude_failure(mock_complete, settings, mock_db):
     """Should return a fallback briefing if Claude fails."""
-    mock_client = MagicMock()
-    mock_client.messages.create = AsyncMock(side_effect=RuntimeError("API down"))
-    mock_get_client.return_value = mock_client
+    mock_complete.side_effect = RuntimeError("API down")
 
     presenter = Presenter(settings=settings, db=mock_db)
     briefing = await presenter.generate_briefing(TEST_USER_ID, date(2026, 3, 13))
@@ -227,9 +218,9 @@ def test_briefing_prompt_scopes_verify_suggestion_to_disconnection():
 
 
 @patch("src.services.presenter.get_integration_statuses")
-@patch("src.services.presenter.get_anthropic_client")
+@patch("src.services.presenter.complete_text")
 @pytest.mark.asyncio
-async def test_presenter_does_not_notify(mock_get_client, mock_statuses, settings, mock_db):
+async def test_presenter_does_not_notify(mock_complete, mock_statuses, settings, mock_db):
     """Bug B: presenter.generate_briefing must NOT notify — delivery is owned by
     the orchestrator path. The presenter only builds + caches the Briefing.
     """
@@ -241,11 +232,7 @@ async def test_presenter_does_not_notify(mock_get_client, mock_statuses, setting
         "recommended_actions": [],
         "full_text": "Nothing urgent today.",
     }
-    mock_client = MagicMock()
-    response = MagicMock()
-    response.content = [MagicMock(text=json.dumps(briefing_content))]
-    mock_client.messages.create = AsyncMock(return_value=response)
-    mock_get_client.return_value = mock_client
+    mock_complete.return_value = json.dumps(briefing_content)
 
     notifier = MagicMock()
     notifier.notify = AsyncMock()

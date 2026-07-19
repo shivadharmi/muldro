@@ -458,9 +458,7 @@ class ChatProcessor(_ChatSingleLeadMixin):
                         return
 
                 # Step 0: Fast intent classification
-                intent, confidence, sources = await classify_intent(
-                    self._client, self._haiku_model, message, history_block
-                )
+                intent, confidence, sources = await classify_intent(message, history_block)
                 yield IntentClassified(intent=intent, confidence=confidence)
 
                 if sources:

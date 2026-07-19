@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ulid import ULID
 
 from src.config.settings import Settings, get_anthropic_client
+from src.llm.utility import complete_text
 from src.models.approvals import Approval
 from src.models.briefings import Briefing
 from src.models.entities import Entity
@@ -626,15 +627,15 @@ class Presenter:
     async def _call_meeting_prep(self, context: str) -> dict:
         """Call Claude to generate meeting prep content."""
         try:
-            response = await self._client.messages.create(
-                model=self._settings.resolved_model,
-                max_tokens=2048,
+            text = await complete_text(
                 system=MEETING_PREP_SYSTEM_PROMPT,
-                messages=[{"role": "user", "content": context}],
+                user=context,
+                tier="resolved",
+                max_tokens=2048,
             )
             from src.llm_utils import parse_llm_json
 
-            return parse_llm_json(response.content[0].text)
+            return parse_llm_json(text)
         except Exception:
             logger.warning("Meeting prep generation failed", exc_info=True)
             return {
@@ -650,15 +651,15 @@ class Presenter:
         """Call Claude to generate briefing content."""
         system_prompt = BRIEFING_STYLE_PROMPTS.get(style, BRIEFING_SYSTEM_PROMPT)
         try:
-            response = await self._client.messages.create(
-                model=self._settings.resolved_model,
-                max_tokens=2048,
+            text = await complete_text(
                 system=system_prompt,
-                messages=[{"role": "user", "content": context}],
+                user=context,
+                tier="resolved",
+                max_tokens=2048,
             )
             from src.llm_utils import parse_llm_json
 
-            return parse_llm_json(response.content[0].text)
+            return parse_llm_json(text)
         except Exception:
             logger.warning("Briefing generation failed", exc_info=True)
             return {

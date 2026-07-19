@@ -8,6 +8,7 @@ import json
 import logging
 
 from src.contracts import PlanOutput, PlanStep
+from src.llm.utility import complete_text
 from src.llm_utils import parse_llm_json
 
 logger = logging.getLogger(__name__)
@@ -231,8 +232,6 @@ def intent_to_plan(intent: str, message: str, capabilities: list[str]) -> PlanOu
 
 
 async def classify_intent(
-    client,
-    model: str,
     message: str,
     history_block: str = "",
 ) -> tuple[str, float, list[str]]:
@@ -246,15 +245,13 @@ async def classify_intent(
         classifier_input = f"{history_block}\n\nUser: {message}"
 
     try:
-        response = await client.messages.create(
-            model=model,
+        text = await complete_text(
+            system=[{"type": "text", "text": INTENT_CLASSIFIER_PROMPT}],
+            user=classifier_input,
+            tier="haiku",
             max_tokens=150,
             temperature=0,
-            system=[{"type": "text", "text": INTENT_CLASSIFIER_PROMPT}],
-            messages=[{"role": "user", "content": classifier_input}],
         )
-
-        text = "".join(b.text for b in response.content if b.type == "text")
 
         # Parse via the robust helper (handles code fences + JSON embedded in
         # prose) — the same path extract_plan uses. Naive index/rindex brace

@@ -9,8 +9,8 @@ Anthropic client, the service container, and the DB session factory.
 
 import logging
 
-from src.config.models import BEDROCK_MODEL_TIERS, MODEL_TIERS
 from src.config.settings import Settings
+from src.llm.utility import complete_text
 from src.orchestrator.services import ServiceContainer
 from src.services.context_builder import ContextBuilder, ContextPack
 
@@ -152,16 +152,8 @@ class ContextAssembler:
     ) -> str:
         """Summarize older conversation messages using Haiku (cheap, fast)."""
         try:
-            if self._settings.use_bedrock:
-                model = BEDROCK_MODEL_TIERS["haiku"]
-            else:
-                model = MODEL_TIERS["haiku"]
-
             text = "\n".join(lines)
-            response = await self._client.messages.create(
-                model=model,
-                max_tokens=300,
-                temperature=0,
+            summary = await complete_text(
                 system=[
                     {
                         "type": "text",
@@ -172,9 +164,11 @@ class ContextAssembler:
                         ),
                     }
                 ],
-                messages=[{"role": "user", "content": text}],
+                user=text,
+                tier="haiku",
+                max_tokens=300,
+                temperature=0,
             )
-            summary = "".join(b.text for b in response.content if b.type == "text")
 
             # Embed conversation summary into Qdrant for semantic search
             if summary and conversation_id:
