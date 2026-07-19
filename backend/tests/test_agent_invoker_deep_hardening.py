@@ -523,38 +523,6 @@ async def test_deep_chat_write_lock_defaults_fail_open():
     assert mock_wl.call_args.kwargs["require_redis"] is False
 
 
-async def test_legacy_runtime_unchanged_after_new_param():
-    """runtime=legacy: agent_loop is still the path; the deep adapter is never called.
-
-    This mirrors test_agent_invoker_runtime_branch.test_legacy_runtime_uses_agent_loop
-    to confirm the new checkpointer_provider param does NOT alter legacy behaviour.
-    """
-    inv = _make_invoker(runtime="legacy")
-
-    async def _fake_loop(**kw):
-        from src.orchestrator.agent_loop import LoopDone
-
-        yield LoopDone(agent="perceiver", text="ok")
-
-    with (
-        patch("src.orchestrator.agent_invoker.agent_loop", _fake_loop),
-        patch("src.orchestrator.agent_invoker.stream_deep_agent_events") as mock_deep,
-    ):
-        frames = [
-            f
-            async for f in inv.call_agent_stream(
-                "perceiver",
-                message="hi",
-                user_id="u",
-                workspace_id="ws",
-                tools_override=[],
-            )
-        ]
-
-    assert any(f["event"] == "agent_done" for f in frames)
-    mock_deep.assert_not_called()
-
-
 async def test_librarian_learn_closure_adapts_interaction_learner():
     """The seam's ``learn`` closure (Step 7B1 P3) adapts the existing InteractionLearner:
     it constructs it with the SAME ctor deps the live jarvis path uses (settings, db_factory,

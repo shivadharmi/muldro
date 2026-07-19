@@ -513,23 +513,6 @@ async def test_legacy_when_deep_single_lead_flag_off():
     assert rec.called_agent("presenter")
 
 
-async def test_legacy_when_runtime_not_deep_even_with_bypass():
-    """SECURITY: bypass + deep_single_lead but runtime=='legacy' → legacy path (all
-    three required)."""
-    plan = PlanOutput(goal="g", reasoning="r", steps=[_step("s1", "respond")])
-    chat, rec = _make_chat(settings_overrides={"deep_single_lead": True}, runtime="legacy")
-    ctx = _patches(plan, [(plan.steps[0], "presenter", [{"name": "t"}])], [])
-    for c in ctx:
-        c.start()
-    try:
-        await _run_stream(chat, permission_mode="bypass")
-    finally:
-        for c in ctx:
-            c.stop()
-    assert rec.lead_calls == []
-    assert rec.called_agent("presenter")
-
-
 # ── Security: permission_mode is INDEPENDENT of the legacy ``mode`` slot ──────────
 
 
@@ -856,27 +839,6 @@ async def test_planless_flag_off_still_runs_the_planner():
 
     started[0].assert_awaited()  # classify_intent WAS called on the flag-off path
     chat._invoker.build_planless_lead.assert_not_awaited()  # planless never entered
-
-
-async def test_planless_not_taken_when_runtime_not_deep():
-    """Flag ON but the single-lead path is NOT active (runtime != deep) → planless is NOT
-    entered; control falls through to the legacy Planner flow (classify_intent runs)."""
-    chat, rec = _make_chat(
-        settings_overrides={"deep_single_lead": True, "chat_planless": True},
-        runtime="legacy",
-    )
-    chat._invoker.build_planless_lead = AsyncMock(return_value=chat._fake_lead)
-    plan = PlanOutput(goal="g", reasoning="r", steps=[_step("s1", "respond")])
-    ctx = _patches(plan, [], [])
-    started = [c.start() for c in ctx]
-    try:
-        await _run_stream(chat, permission_mode="bypass")
-    finally:
-        for c in ctx:
-            c.stop()
-
-    chat._invoker.build_planless_lead.assert_not_awaited()  # planless gate did not fire
-    started[0].assert_awaited()  # fell through to classify_intent
 
 
 async def test_planless_entered_in_auto_mode_not_bypass_only():

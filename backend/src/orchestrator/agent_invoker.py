@@ -53,13 +53,8 @@ from src.errors import _GENERIC_CODE, _GENERIC_MESSAGE, new_correlation_id
 from src.middleware.observability import get_correlation_id
 from src.models.approvals import Approval
 from src.orchestrator.agent_loop import (
-    LoopAgentStart,
     LoopDone,
     LoopError,
-    LoopTextDelta,
-    LoopThinking,
-    LoopToolCall,
-    LoopToolResult,
     agent_loop,
 )
 from src.orchestrator.agents import SubAgent
@@ -683,16 +678,6 @@ class AgentInvoker:
             )
             return []
 
-    async def effective_chat_runtime(self) -> str:
-        """Resolve the chat surface's effective runtime (override > breaker > enabled >
-        static settings.runtime). Centralizes the resolution call_agent_stream does inline so
-        the chat_processor single-lead branch (5b) can gate on the SAME resolved value."""
-        return await effective_runtime(
-            "chat",
-            redis=self._services.extras.get("redis") if self._services else None,
-            settings=self._settings,
-        )
-
     async def call_agent_stream(
         self,
         agent_name: str,
@@ -710,18 +695,6 @@ class AgentInvoker:
             yield {"event": "error", "message": f"Unknown agent: {agent_name}"}
             return
 
-        # Step 10B Phase 4: resolve the chat surface's runtime ONCE, up front, instead of
-        # reading self._settings.runtime at each of the three points below. Priority
-        # override > breaker > enabled > static settings.runtime (redis=None or any Redis
-        # error falls through to static, never to an accidental "deep" — see
-        # runtime_gate.effective_runtime). With no Redis keys set this returns
-        # self._settings.runtime unchanged, so the seam stays byte-neutral.
-        runtime = await effective_runtime(
-            "chat",
-            redis=self._services.extras.get("redis") if self._services else None,
-            settings=self._settings,
-        )
-
         model = self.get_model_for_agent(agent)
         tools = await self._resolve_tools(agent, workspace_id, tools_override)
         capability_summary = await self._maybe_capability_summary(
@@ -733,162 +706,85 @@ class AgentInvoker:
             message,
             user_id=user_id,
             workspace_id=workspace_id,
-            # Step 8 P2: the slim JIT context pack only ever applies on the deep
-            # runtime AND behind its own flag (dormant by default). Per-agent
-            # gating (JIT_ENABLED_AGENTS) happens inside assemble_context itself.
-            # Step 10B Phase 4: gated on the resolved runtime, not the static setting, so a
-            # gate-flipped surface gets the JIT pack too.
-            jit=(runtime == "deep" and self._settings.deep_context_jit),
+            # Step 8 P2: the slim JIT context pack applies behind its own flag
+            # (deep_context_jit, dormant by default). Per-agent gating
+            # (JIT_ENABLED_AGENTS) happens inside assemble_context itself.
+            jit=self._settings.deep_context_jit,
         )
         system_blocks = self.build_system_prompt(
             agent, context_block, capability_summary=capability_summary
         )
 
-        AGENT_RUNTIME_CALLS.labels(runtime=runtime).inc()
-        if runtime == "deep":
-            # Step 6B: the routed chat agent runs on the Deep Agents runtime through the
-            # single gated build path (``_build_deep_agent_for``, shared with the resume
-            # seam). On live chat authorization_source is direct_user_request, so trust_gate
-            # SHORT-CIRCUITS (dormant) — byte-identical to today; the gate only activates for
-            # non-direct provenance (6C). thread_id is minted ONCE and shared by both the
-            # graph config and the gate closure so a paused turn is resumable. A6 (Step-10A):
-            # the thread_id embeds workspace_id (make_thread_id) so the checkpointer's
-            # identity is workspace-bound — the resume path below asserts it as
-            # defense-in-depth on top of the existing approval.workspace_id IDOR guard.
-            thread_id = make_thread_id(workspace_id)
-            # Step 7B2 P4 (DORMANT behind deep_delegates_enabled): build the read-only
-            # Perceiver delegate list so the lead's built-in ``task`` tool can route reads to
-            # it. Flag OFF → ``()`` → _build_deep_agent_for forwards subagents=() →
-            # build_deep_agent(subagents=()) → create_deep_agent(subagents=None) = byte-identical
-            # to 7B1 (no delegate build, no GP-disable). No live lead→delegate routing exists
-            # yet; that is a Step-8/10 gate.
-            subagents = (
-                await self._build_delegate_subagents(
-                    agent, workspace_id=workspace_id, user_id=user_id
-                )
-                if self._settings.deep_delegates_enabled
-                else ()
-            )
-            deep_agent = await self._build_deep_agent_for(
-                agent,
-                tools,
-                user_id=user_id,
-                workspace_id=workspace_id,
-                thread_id=thread_id,
-                authorization_source=AuthorizationSource.DIRECT_USER_REQUEST,
-                subagents=subagents,
-                # Step 7B1 P4 (Fork-1): deep-only, off-by-default inline-format
-                # augmentation. Builds a NEW block list (legacy agent_loop below keeps the
-                # ORIGINAL system_blocks) so the deep lead can format the reply inline. A
-                # no-op identity when deep_inline_format is False → deep prompt unchanged.
-                # A-3/B2: lead-scoped — the Presenter voice is appended ONLY for the
-                # reply-producing lead, never the planner or a routed read/execute step.
-                # A-4/B3: the delegation routing instruction is appended ONLY when a delegate
-                # was actually built (``bool(subagents)`` — flag on AND non-empty). It is
-                # offered to ANY deep agent that built a delegate — NOT lead-scoped (unlike the
-                # Presenter voice above, which is gated on ``_is_reply_lead``). Lead-scoping the
-                # offering to the post-B5 deep lead is a DELIBERATE Step-10 Part-B activation
-                # refinement (scoping to the current reply-lead=presenter now would encode a
-                # transitional assumption — the not-yet-scoped behavior is pinned by a test).
-                # Both augmentations compose immutably; flag off (subagents==()) OR a degraded
-                # build (subagents==[]) → identity → byte-neutral.
-                system_prompt=build_system_message(
-                    _augment_system_blocks_for_delegation(
-                        _augment_system_blocks_for_inline(
-                            system_blocks,
-                            self._settings.deep_inline_format,
-                            is_reply_lead=_is_reply_lead(agent_name),
-                        ),
-                        has_delegates=bool(subagents),
-                    )
-                ),
-                # CF-1: persist the assembled ContextPack on any Approval this turn pauses
-                # on, so the resume path can re-inject it (dormant on direct chat — the gate
-                # short-circuits before persisting — but threaded uniformly through the seam).
-                context_block=context_block,
-            )
-            graph_input = {"messages": [{"role": "user", "content": message}]}
-            async for frame in self._stream_and_reap(
-                deep_agent,
-                graph_input,
-                thread_id=thread_id,
-                agent_name=agent_name,
-                model=model,
-            ):
-                yield frame
-            return
-
-        async for evt in agent_loop(
-            client=self._client,
-            agent=agent,
-            model=model,
-            system_blocks=system_blocks,
-            tools=tools,
-            message=message,
+        AGENT_RUNTIME_CALLS.labels(runtime="deep").inc()
+        # Deep Agents is the ONLY chat runtime (Step 11 Phase 4 — legacy agent_loop retired).
+        # Step 6B: the routed chat agent runs on the Deep Agents runtime through the
+        # single gated build path (``_build_deep_agent_for``, shared with the resume
+        # seam). On live chat authorization_source is direct_user_request, so trust_gate
+        # SHORT-CIRCUITS (dormant) — byte-identical to today; the gate only activates for
+        # non-direct provenance (6C). thread_id is minted ONCE and shared by both the
+        # graph config and the gate closure so a paused turn is resumable. A6 (Step-10A):
+        # the thread_id embeds workspace_id (make_thread_id) so the checkpointer's
+        # identity is workspace-bound — the resume path below asserts it as
+        # defense-in-depth on top of the existing approval.workspace_id IDOR guard.
+        thread_id = make_thread_id(workspace_id)
+        # Step 7B2 P4 (DORMANT behind deep_delegates_enabled): build the read-only
+        # Perceiver delegate list so the lead's built-in ``task`` tool can route reads to
+        # it. Flag OFF → ``()`` → _build_deep_agent_for forwards subagents=() →
+        # build_deep_agent(subagents=()) → create_deep_agent(subagents=None) = byte-identical
+        # to 7B1 (no delegate build, no GP-disable). No live lead→delegate routing exists
+        # yet; that is a Step-8/10 gate.
+        subagents = (
+            await self._build_delegate_subagents(agent, workspace_id=workspace_id, user_id=user_id)
+            if self._settings.deep_delegates_enabled
+            else ()
+        )
+        deep_agent = await self._build_deep_agent_for(
+            agent,
+            tools,
             user_id=user_id,
             workspace_id=workspace_id,
-            db_factory=self._db_factory,
-            services=self._services,
-            budget=self._budget,
-            trace=trace,
-            execute_tool_fn=self._tool_executor.execute_tool,
-            max_tool_rounds=max_tool_rounds,
-            stream=True,
-            circuit_breaker=self._circuit_breaker,
+            thread_id=thread_id,
+            authorization_source=AuthorizationSource.DIRECT_USER_REQUEST,
+            subagents=subagents,
+            # Step 7B1 P4 (Fork-1): deep-only, off-by-default inline-format
+            # augmentation. Builds a NEW block list so the deep lead can format the reply
+            # inline. A no-op identity when deep_inline_format is False → deep prompt unchanged.
+            # A-3/B2: lead-scoped — the Presenter voice is appended ONLY for the
+            # reply-producing lead, never the planner or a routed read/execute step.
+            # A-4/B3: the delegation routing instruction is appended ONLY when a delegate
+            # was actually built (``bool(subagents)`` — flag on AND non-empty). It is
+            # offered to ANY deep agent that built a delegate — NOT lead-scoped (unlike the
+            # Presenter voice above, which is gated on ``_is_reply_lead``). Lead-scoping the
+            # offering to the post-B5 deep lead is a DELIBERATE Step-10 Part-B activation
+            # refinement (scoping to the current reply-lead=presenter now would encode a
+            # transitional assumption — the not-yet-scoped behavior is pinned by a test).
+            # Both augmentations compose immutably; flag off (subagents==()) OR a degraded
+            # build (subagents==[]) → identity → byte-neutral.
+            system_prompt=build_system_message(
+                _augment_system_blocks_for_delegation(
+                    _augment_system_blocks_for_inline(
+                        system_blocks,
+                        self._settings.deep_inline_format,
+                        is_reply_lead=_is_reply_lead(agent_name),
+                    ),
+                    has_delegates=bool(subagents),
+                )
+            ),
+            # CF-1: persist the assembled ContextPack on any Approval this turn pauses
+            # on, so the resume path can re-inject it (dormant on direct chat — the gate
+            # short-circuits before persisting — but threaded uniformly through the seam).
+            context_block=context_block,
+        )
+        graph_input = {"messages": [{"role": "user", "content": message}]}
+        async for frame in self._stream_and_reap(
+            deep_agent,
+            graph_input,
+            thread_id=thread_id,
+            agent_name=agent_name,
+            model=model,
         ):
-            if isinstance(evt, LoopAgentStart):
-                yield {"event": "agent_start", "agent": evt.agent, "model": evt.model}
-            elif isinstance(evt, LoopThinking):
-                yield {
-                    "event": "thinking",
-                    "agent": evt.agent,
-                    "text": evt.text,
-                    "is_thinking": evt.is_thinking,
-                }
-            elif isinstance(evt, LoopTextDelta):
-                yield {"event": "text_delta", "agent": evt.agent, "text": evt.text}
-            elif isinstance(evt, LoopToolCall):
-                yield {
-                    "event": "tool_call",
-                    "agent": evt.agent,
-                    "tool": evt.tool_name,
-                    "input": evt.tool_input,
-                }
-            elif isinstance(evt, LoopToolResult):
-                yield {
-                    "event": "tool_result",
-                    "agent": evt.agent,
-                    "tool": evt.tool_name,
-                    "result": evt.result,
-                    "blocked": evt.blocked,
-                    "latency_ms": evt.latency_ms,
-                }
-            elif isinstance(evt, LoopError):
-                # evt.message may carry a raw upstream exception string (see
-                # agent_loop LoopError(message=str(e))). Log it, but only emit a
-                # client-safe generic frame — never the raw detail.
-                logger.error("agent_loop error agent=%s: %s", evt.agent, evt.message)
-                cid = get_correlation_id() or new_correlation_id()
-                yield {
-                    "event": "error",
-                    "agent": evt.agent,
-                    "code": _GENERIC_CODE,
-                    "message": _GENERIC_MESSAGE,
-                    "correlation_id": cid,
-                }
-            elif isinstance(evt, LoopDone):
-                yield {
-                    "event": "agent_done",
-                    "agent": evt.agent,
-                    "text": evt.text,
-                    "input_tokens": evt.input_tokens,
-                    "output_tokens": evt.output_tokens,
-                    "cache_creation_tokens": evt.cache_creation_tokens,
-                    "cache_read_tokens": evt.cache_read_tokens,
-                    "tools_called": evt.tools_called,
-                    "latency_ms": evt.latency_ms,
-                    "cost_usd": round(evt.cost_usd, 6),
-                }
+            yield frame
+        return
 
     async def build_chat_lead(self, steps, workspace_id: str) -> SubAgent:
         """Build the synthetic single-lead SubAgent for a plan (Step 10D chat permission model, P1).

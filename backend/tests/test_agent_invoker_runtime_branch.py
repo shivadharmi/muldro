@@ -44,34 +44,6 @@ def _make_invoker(runtime: str) -> AgentInvoker:
     )
 
 
-async def test_legacy_runtime_uses_agent_loop():
-    """runtime=legacy (default): the invoker drives agent_loop, never the deep adapter."""
-    inv = _make_invoker(runtime="legacy")
-
-    async def _fake_loop(**kw):
-        from src.orchestrator.agent_loop import LoopDone
-
-        yield LoopDone(agent="perceiver", text="ok")
-
-    with (
-        patch("src.orchestrator.agent_invoker.agent_loop", _fake_loop),
-        patch("src.orchestrator.agent_invoker.stream_deep_agent_events") as mock_deep,
-    ):
-        frames = [
-            f
-            async for f in inv.call_agent_stream(
-                "perceiver",
-                message="hi",
-                user_id="u",
-                workspace_id="ws",
-                tools_override=[],
-            )
-        ]
-
-    assert any(f["event"] == "agent_done" for f in frames)
-    mock_deep.assert_not_called()
-
-
 async def test_deep_runtime_uses_adapter():
     """runtime=deep: the invoker builds a deep agent + streams the adapter, never agent_loop."""
     inv = _make_invoker(runtime="deep")

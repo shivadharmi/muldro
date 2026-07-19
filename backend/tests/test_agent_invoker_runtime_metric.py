@@ -40,38 +40,6 @@ def _make_invoker(runtime: str) -> AgentInvoker:
     )
 
 
-async def test_legacy_runtime_increments_metric_with_legacy_label():
-    """runtime=legacy: AGENT_RUNTIME_CALLS.labels(runtime="legacy").inc() is called once."""
-    inv = _make_invoker(runtime="legacy")
-    mock_counter = MagicMock()
-
-    async def _fake_loop(**kw):
-        from src.orchestrator.agent_loop import LoopDone
-
-        yield LoopDone(agent="perceiver", text="ok")
-
-    with (
-        patch("src.orchestrator.agent_invoker.AGENT_RUNTIME_CALLS", mock_counter),
-        patch("src.orchestrator.agent_invoker.agent_loop", _fake_loop),
-        patch("src.orchestrator.agent_invoker.stream_deep_agent_events"),
-    ):
-        _ = [
-            f
-            async for f in inv.call_agent_stream(
-                "perceiver",
-                message="hi",
-                user_id="u",
-                workspace_id="ws",
-                tools_override=[],
-            )
-        ]
-
-    # Fails if .labels() is removed or called with wrong runtime value.
-    mock_counter.labels.assert_called_once_with(runtime="legacy")
-    # Fails if .inc() is removed — the core teeth of this test.
-    mock_counter.labels.return_value.inc.assert_called_once()
-
-
 async def test_deep_runtime_increments_metric_with_deep_label():
     """runtime=deep: AGENT_RUNTIME_CALLS.labels(runtime="deep").inc() is called once."""
     inv = _make_invoker(runtime="deep")

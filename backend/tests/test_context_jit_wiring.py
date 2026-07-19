@@ -126,36 +126,6 @@ async def test_flag_on_deep_planner_calls_assemble_context_with_jit_true():
     assert captured.await_args.kwargs["jit"] is True
 
 
-async def test_legacy_runtime_calls_assemble_context_with_jit_false_regardless_of_flag():
-    """Legacy runtime: jit is always False even with deep_context_jit=True — the flag
-    only ever matters on the deep branch."""
-    invoker, captured = _make_invoker(runtime="legacy", agent_name="planner", deep_context_jit=True)
-
-    async def _fake_loop(**kw):
-        from src.orchestrator.agent_loop import LoopDone
-
-        yield LoopDone(agent="planner", text="ok")
-
-    with (
-        patch("src.orchestrator.agent_invoker.agent_loop", _fake_loop),
-        patch("src.orchestrator.agent_invoker.stream_deep_agent_events") as mock_deep,
-    ):
-        _ = [
-            f
-            async for f in invoker.call_agent_stream(
-                "planner",
-                message="hi",
-                user_id="u",
-                workspace_id="ws",
-                tools_override=[],
-            )
-        ]
-
-    mock_deep.assert_not_called()
-    captured.assert_awaited_once()
-    assert captured.await_args.kwargs["jit"] is False
-
-
 def test_build_system_prompt_two_block_cache_layout_survives_slim_context():
     """Task 4.2: structural prompt-cache-layout guard.
 

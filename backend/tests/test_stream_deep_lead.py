@@ -211,24 +211,6 @@ async def test_stream_deep_lead_increments_deep_runtime_metric():
     mock_counter.labels.return_value.inc.assert_called_once()
 
 
-async def test_effective_chat_runtime_resolves_via_gate():
-    """``effective_chat_runtime`` centralizes the ``effective_runtime("chat", ...)`` call so
-    the 5b single-lead branch gates on the SAME resolved value ``call_agent_stream`` uses."""
-    inv = _make_invoker()
-
-    with patch(
-        "src.orchestrator.agent_invoker.effective_runtime",
-        new=AsyncMock(return_value="deep"),
-    ) as mock_eff:
-        resolved = await inv.effective_chat_runtime()
-
-    assert resolved == "deep"
-    mock_eff.assert_awaited_once()
-    assert mock_eff.await_args.args[0] == "chat"
-    # services=None on this invoker → redis resolves to None (no crash).
-    assert mock_eff.await_args.kwargs["redis"] is None
-
-
 # --- Dormancy proof: 5a adds callable-but-UNWIRED code --------------------------------
 def test_chat_processor_wires_single_lead_branch():
     """P1 Task B (5b) wired the deep single-lead chat path into ``_process_core``;
