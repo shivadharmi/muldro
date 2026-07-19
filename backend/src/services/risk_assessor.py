@@ -19,7 +19,7 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.config.models import get_haiku_model
+from src.llm.utility import complete_text
 
 logger = logging.getLogger(__name__)
 
@@ -75,15 +75,11 @@ async def assess_risk(
     capability: str,
     step_input: dict,
     user_context: dict,
-    client: Any,
-    model: str | None = None,
 ) -> RiskAssessment:
     """Call Haiku to assess contextual risk for an action.
 
     Falls back to medium risk on any failure (API error, invalid JSON, etc.).
     """
-    if model is None:
-        model = get_haiku_model()
     user_message = json.dumps(
         {
             "capability": capability,
@@ -94,13 +90,12 @@ async def assess_risk(
     )
 
     try:
-        response = await client.messages.create(
-            model=model,
-            max_tokens=256,
+        text = await complete_text(
             system=_RISK_SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": user_message}],
+            user=user_message,
+            tier="haiku",
+            max_tokens=256,
         )
-        text = response.content[0].text
         from src.llm_utils import parse_llm_json
 
         data = parse_llm_json(text)
@@ -126,13 +121,9 @@ async def get_or_assess_risk(
     step_input: dict,
     user_context: dict,
     workspace_id: str,
-    client: Any,
     redis: Any,
-    model: str | None = None,
 ) -> RiskAssessment:
     """Redis-cached risk assessment. 24h TTL."""
-    if model is None:
-        model = get_haiku_model()
     cache_key = build_risk_cache_key(capability, step_input, user_context)
     full_key = f"risk:{workspace_id}:{cache_key}"
 
@@ -145,7 +136,7 @@ async def get_or_assess_risk(
         logger.debug("Redis cache read failed for %s", full_key, exc_info=True)
 
     # Cache miss — call LLM
-    assessment = await assess_risk(capability, step_input, user_context, client, model)
+    assessment = await assess_risk(capability, step_input, user_context)
 
     # Store in cache
     try:

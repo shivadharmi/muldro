@@ -2,14 +2,14 @@
 
 The critique is the ONE lead-side ``@wrap_tool_call`` that does NOT skip the built-in
 ``task`` tool: it runs the read-only research delegate (the inner handler → a ``task``
-``Command``), side-calls Haiku to critique the delegate's returned summary, and annotates
-the summary with the verdict.
+``Command``), side-calls Haiku (via the shared ``complete_text`` seam) to critique the
+delegate's returned summary, and annotates the summary with the verdict.
 
 Two flavours of test:
 
 * Unit tests drive the interceptor DIRECTLY via ``mw.awrap_tool_call(request, handler)``
-  (same offline pattern as ``test_governor_audit.py``), with a FAKE critique client whose
-  ``messages.create`` returns a scripted JSON verdict (or raises). No live API, no DB.
+  (same offline pattern as ``test_governor_audit.py``), with ``complete_text`` patched to
+  return a scripted JSON verdict (or raise). No live API, no DB.
 
 * Two wiring tests build a REAL ``AgentInvoker`` and assert ``_build_deep_agent_for``
   PREPENDS the critique to ``extra_middleware`` when ``deep_delegates_enabled`` and leaves
@@ -34,6 +34,8 @@ from src.deep_runtime.middleware.governor_delegate_critique import (
 )
 
 INVOKER = "src.orchestrator.agent_invoker"
+# The UtilityLLM seam imported into the critique module — patch target for the Haiku side-call.
+_CT = "src.deep_runtime.middleware.governor_delegate_critique.complete_text"
 
 
 # ── shared offline doubles ───────────────────────────────────────────────────
@@ -64,29 +66,23 @@ def _handler_returning(value):
     return handler
 
 
-def _fake_client(*, ok: bool = True, concerns: list[str] | None = None, raises: bool = False):
-    """A fake Anthropic client whose ``messages.create`` returns a scripted JSON verdict."""
-    client = MagicMock()
+def _complete_mock(*, ok: bool = True, concerns: list[str] | None = None, raises: bool = False):
+    """AsyncMock standing in for ``complete_text`` — returns a scripted verdict JSON (or raises)."""
     if raises:
-        client.messages.create = AsyncMock(side_effect=RuntimeError("critique model down"))
-    else:
-        payload = json.dumps({"ok": ok, "concerns": concerns or []})
-        resp = SimpleNamespace(content=[SimpleNamespace(text=payload)])
-        client.messages.create = AsyncMock(return_value=resp)
-    return client
+        return AsyncMock(side_effect=RuntimeError("critique model down"))
+    return AsyncMock(return_value=json.dumps({"ok": ok, "concerns": concerns or []}))
 
 
 # ── (a) clean summary → read delegate → unreviewed=false, summary preserved ──
 
 
 async def test_clean_summary_read_delegate_annotates_unreviewed_false():
-    client = _fake_client(ok=True, concerns=[])
-    mw = make_governor_delegate_critique_middleware(
-        client=client, redis=None, is_read_only_delegate=True, model="haiku-test"
-    )
+    ct = _complete_mock(ok=True, concerns=[])
+    mw = make_governor_delegate_critique_middleware(redis=None, is_read_only_delegate=True)
     cmd = _summary_command(json.dumps({"findings": ["f1"], "synthesis": "s"}))
 
-    result = await _hook(mw)(_request("task"), _handler_returning(cmd))
+    with patch(_CT, ct):
+        result = await _hook(mw)(_request("task"), _handler_returning(cmd))
 
     assert isinstance(result, Command)
     tm = result.update["messages"][0]
@@ -103,13 +99,12 @@ async def test_clean_summary_read_delegate_annotates_unreviewed_false():
 
 
 async def test_flagged_summary_read_delegate_fails_open_annotated():
-    client = _fake_client(ok=False, concerns=["hallucinated metric"])
-    mw = make_governor_delegate_critique_middleware(
-        client=client, redis=None, is_read_only_delegate=True, model="haiku-test"
-    )
+    ct = _complete_mock(ok=False, concerns=["hallucinated metric"])
+    mw = make_governor_delegate_critique_middleware(redis=None, is_read_only_delegate=True)
     cmd = _summary_command(json.dumps({"findings": ["f"]}))
 
-    result = await _hook(mw)(_request("task"), _handler_returning(cmd))
+    with patch(_CT, ct):
+        result = await _hook(mw)(_request("task"), _handler_returning(cmd))
 
     assert isinstance(result, Command)
     tm = result.update["messages"][0]
@@ -125,13 +120,12 @@ async def test_flagged_summary_read_delegate_fails_open_annotated():
 
 
 async def test_critique_exception_read_delegate_fails_open():
-    client = _fake_client(raises=True)
-    mw = make_governor_delegate_critique_middleware(
-        client=client, redis=None, is_read_only_delegate=True, model="haiku-test"
-    )
+    ct = _complete_mock(raises=True)
+    mw = make_governor_delegate_critique_middleware(redis=None, is_read_only_delegate=True)
     cmd = _summary_command(json.dumps({"findings": ["f"]}))
 
-    result = await _hook(mw)(_request("task"), _handler_returning(cmd))
+    with patch(_CT, ct):
+        result = await _hook(mw)(_request("task"), _handler_returning(cmd))
 
     assert isinstance(result, Command)
     tm = result.update["messages"][0]
@@ -146,13 +140,12 @@ async def test_critique_exception_read_delegate_fails_open():
 
 
 async def test_non_json_summary_wrapped_and_annotated():
-    client = _fake_client(ok=True, concerns=[])
-    mw = make_governor_delegate_critique_middleware(
-        client=client, redis=None, is_read_only_delegate=True, model="haiku-test"
-    )
+    ct = _complete_mock(ok=True, concerns=[])
+    mw = make_governor_delegate_critique_middleware(redis=None, is_read_only_delegate=True)
     cmd = _summary_command("just plain prose, not json")
 
-    result = await _hook(mw)(_request("task"), _handler_returning(cmd))
+    with patch(_CT, ct):
+        result = await _hook(mw)(_request("task"), _handler_returning(cmd))
 
     tm = result.update["messages"][0]
     payload = json.loads(tm.content)
@@ -185,39 +178,37 @@ def test_annotate_content_non_serializable_does_not_raise():
     assert payload["summary"] == "<weird-summary>"  # stringified via default=str, not dropped
 
 
-# ── (d) name != "task" → passthrough UNCHANGED; critique client NEVER called ──
+# ── (d) name != "task" → passthrough UNCHANGED; critique seam NEVER called ──
 
 
 async def test_non_task_tool_passthrough_unchanged():
-    client = _fake_client(ok=True, concerns=[])
-    mw = make_governor_delegate_critique_middleware(
-        client=client, redis=None, is_read_only_delegate=True, model="haiku-test"
-    )
+    ct = _complete_mock(ok=True, concerns=[])
+    mw = make_governor_delegate_critique_middleware(redis=None, is_read_only_delegate=True)
     sentinel = ToolMessage(content="real-tool-output", tool_call_id="tc9", name="internal_search")
 
     async def handler(request):  # noqa: ANN001, ARG001
         return sentinel
 
-    result = await _hook(mw)(_request("internal_search", "tc9"), handler)
+    with patch(_CT, ct):
+        result = await _hook(mw)(_request("internal_search", "tc9"), handler)
 
     assert result is sentinel  # unchanged — the real gate downstream is NOT skipped
-    client.messages.create.assert_not_awaited()  # no critique for a non-task tool
+    ct.assert_not_awaited()  # no critique for a non-task tool
 
 
 # ── (d2) non-Command / non-ToolMessage result → returned as-is ───────────────
 
 
 async def test_task_non_command_result_returned_unchanged():
-    client = _fake_client(ok=True, concerns=[])
-    mw = make_governor_delegate_critique_middleware(
-        client=client, redis=None, is_read_only_delegate=True, model="haiku-test"
-    )
+    ct = _complete_mock(ok=True, concerns=[])
+    mw = make_governor_delegate_critique_middleware(redis=None, is_read_only_delegate=True)
     plain = ToolMessage(content="not a command", tool_call_id="tc1", name="task")
 
-    result = await _hook(mw)(_request("task"), _handler_returning(plain))
+    with patch(_CT, ct):
+        result = await _hook(mw)(_request("task"), _handler_returning(plain))
 
     assert result is plain
-    client.messages.create.assert_not_awaited()
+    ct.assert_not_awaited()
 
 
 # ── (e) NEGATIVE CONTROL: write delegate + flagged critique → BLOCKED ─────────
@@ -227,15 +218,11 @@ async def test_negative_control_write_delegate_blocks_flagged_summary():
     """The read/write branch is REAL: with ``is_read_only_delegate=False`` a flagged critique
     BLOCKS (status='error'); the SAME flagged verdict on the READ path does NOT block. The two
     differ ONLY by the flag — that is the teeth proving the write branch is not dead code."""
-    write_mw = make_governor_delegate_critique_middleware(
-        client=_fake_client(ok=False, concerns=["overreach"]),
-        redis=None,
-        is_read_only_delegate=False,
-        model="haiku-test",
-    )
-    write_result = await _hook(write_mw)(
-        _request("task"), _handler_returning(_summary_command(json.dumps({"findings": ["f"]})))
-    )
+    write_mw = make_governor_delegate_critique_middleware(redis=None, is_read_only_delegate=False)
+    with patch(_CT, _complete_mock(ok=False, concerns=["overreach"])):
+        write_result = await _hook(write_mw)(
+            _request("task"), _handler_returning(_summary_command(json.dumps({"findings": ["f"]})))
+        )
 
     # WRITE + flagged → a BLOCKED ToolMessage (status='error'), NOT an annotated Command.
     assert isinstance(write_result, ToolMessage)
@@ -245,15 +232,11 @@ async def test_negative_control_write_delegate_blocks_flagged_summary():
     assert "overreach" in wpayload["concerns"]
 
     # SAME flagged verdict on the READ path → NOT blocked (fail-open annotation).
-    read_mw = make_governor_delegate_critique_middleware(
-        client=_fake_client(ok=False, concerns=["overreach"]),
-        redis=None,
-        is_read_only_delegate=True,
-        model="haiku-test",
-    )
-    read_result = await _hook(read_mw)(
-        _request("task"), _handler_returning(_summary_command(json.dumps({"findings": ["f"]})))
-    )
+    read_mw = make_governor_delegate_critique_middleware(redis=None, is_read_only_delegate=True)
+    with patch(_CT, _complete_mock(ok=False, concerns=["overreach"])):
+        read_result = await _hook(read_mw)(
+            _request("task"), _handler_returning(_summary_command(json.dumps({"findings": ["f"]})))
+        )
     assert isinstance(read_result, Command)
     read_tm = read_result.update["messages"][0]
     assert read_tm.status == "success"  # read with the SAME verdict is NOT blocked
@@ -264,13 +247,12 @@ async def test_negative_control_write_delegate_blocks_flagged_summary():
 
 
 async def test_write_delegate_clean_summary_allowed():
-    client = _fake_client(ok=True, concerns=[])
-    mw = make_governor_delegate_critique_middleware(
-        client=client, redis=None, is_read_only_delegate=False, model="haiku-test"
-    )
+    ct = _complete_mock(ok=True, concerns=[])
+    mw = make_governor_delegate_critique_middleware(redis=None, is_read_only_delegate=False)
     cmd = _summary_command(json.dumps({"findings": ["f"]}))
 
-    result = await _hook(mw)(_request("task"), _handler_returning(cmd))
+    with patch(_CT, ct):
+        result = await _hook(mw)(_request("task"), _handler_returning(cmd))
 
     assert isinstance(result, Command)  # clean write is allowed through, annotated
     tm = result.update["messages"][0]
@@ -284,13 +266,12 @@ async def test_write_delegate_clean_summary_allowed():
 
 
 async def test_write_delegate_critique_exception_fails_closed():
-    client = _fake_client(raises=True)
-    mw = make_governor_delegate_critique_middleware(
-        client=client, redis=None, is_read_only_delegate=False, model="haiku-test"
-    )
+    ct = _complete_mock(raises=True)
+    mw = make_governor_delegate_critique_middleware(redis=None, is_read_only_delegate=False)
     cmd = _summary_command(json.dumps({"findings": ["f"]}))
 
-    result = await _hook(mw)(_request("task"), _handler_returning(cmd))
+    with patch(_CT, ct):
+        result = await _hook(mw)(_request("task"), _handler_returning(cmd))
 
     assert isinstance(result, ToolMessage)
     assert result.status == "error"  # write fails CLOSED on critique outage
@@ -312,18 +293,17 @@ class _FakeRedis:
 
 
 async def test_redis_cache_second_identical_summary_hits_cache():
-    client = _fake_client(ok=True, concerns=[])
+    ct = _complete_mock(ok=True, concerns=[])
     redis = _FakeRedis()
-    mw = make_governor_delegate_critique_middleware(
-        client=client, redis=redis, is_read_only_delegate=True, model="haiku-test"
-    )
+    mw = make_governor_delegate_critique_middleware(redis=redis, is_read_only_delegate=True)
     summary = json.dumps({"findings": ["f"]})
 
-    r1 = await _hook(mw)(_request("task"), _handler_returning(_summary_command(summary)))
-    r2 = await _hook(mw)(_request("task"), _handler_returning(_summary_command(summary)))
+    with patch(_CT, ct):
+        r1 = await _hook(mw)(_request("task"), _handler_returning(_summary_command(summary)))
+        r2 = await _hook(mw)(_request("task"), _handler_returning(_summary_command(summary)))
 
     # The LLM is consulted ONCE; the second identical summary is served from the redis cache.
-    assert client.messages.create.await_count == 1
+    assert ct.await_count == 1
     assert json.loads(r1.update["messages"][0].content)["unreviewed"] is False
     assert json.loads(r2.update["messages"][0].content)["unreviewed"] is False
 
@@ -333,17 +313,16 @@ async def test_redis_failure_still_runs_critique():
     bad_redis = MagicMock()
     bad_redis.get = AsyncMock(side_effect=RuntimeError("redis down"))
     bad_redis.setex = AsyncMock(side_effect=RuntimeError("redis down"))
-    client = _fake_client(ok=True, concerns=[])
-    mw = make_governor_delegate_critique_middleware(
-        client=client, redis=bad_redis, is_read_only_delegate=True, model="haiku-test"
-    )
+    ct = _complete_mock(ok=True, concerns=[])
+    mw = make_governor_delegate_critique_middleware(redis=bad_redis, is_read_only_delegate=True)
     cmd = _summary_command(json.dumps({"findings": ["f"]}))
 
-    result = await _hook(mw)(_request("task"), _handler_returning(cmd))
+    with patch(_CT, ct):
+        result = await _hook(mw)(_request("task"), _handler_returning(cmd))
 
     assert isinstance(result, Command)
     assert json.loads(result.update["messages"][0].content)["unreviewed"] is False
-    client.messages.create.assert_awaited_once()  # cache error did not suppress the critique
+    ct.assert_awaited_once()  # cache error did not suppress the critique
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -419,7 +398,6 @@ async def test_wiring_flag_on_prepends_critique():
     # redis sourced from services.extras (6C carry-fix pattern); services=None → None here.
     assert mock_factory.call_args.kwargs["redis"] is None
     assert mock_factory.call_args.kwargs["is_read_only_delegate"] is True
-    assert mock_factory.call_args.kwargs["client"] is invoker._client
 
     mw_tuple = mock_build.call_args.kwargs["extra_middleware"]
     assert mw_tuple[0] is sentinel  # PREPENDED — outermost

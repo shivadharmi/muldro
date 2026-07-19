@@ -38,7 +38,7 @@ from langchain_core.messages import ToolMessage
 from langgraph.types import Command
 from pydantic import BaseModel, ConfigDict
 
-from src.config.models import get_haiku_model
+from src.llm.utility import complete_text
 from src.llm_utils import parse_llm_json
 
 logger = logging.getLogger(__name__)
@@ -124,18 +124,18 @@ def _annotated_command(result: Command, tm: ToolMessage, *, unreviewed: bool, cr
 
 
 def make_governor_delegate_critique_middleware(
-    *, client, redis, is_read_only_delegate: bool, model: str | None = None
+    *, redis, is_read_only_delegate: bool
 ) -> AgentMiddleware:
     """Build the delegate-summary critique middleware for one turn.
 
     Args:
-        client: The Anthropic client (``.messages.create``); cloned from the RiskAssessor call
-            shape. Never LLM-supplied — captured in the closure.
         redis: Best-effort 24h cache backend (or ``None``); sourced by the invoker from
             ``services.extras.get("redis")`` (the 6C carry-fix pattern), never a typed attr.
         is_read_only_delegate: ``True`` → fail-open annotation (never blocks); ``False`` →
             fail-closed block on a failed/negative critique (the defensive write branch).
-        model: Override for the critique model; defaults to ``get_haiku_model()``.
+
+    The critique side-call goes through the shared ``UtilityLLM`` seam (``complete_text``,
+    Haiku tier) — same shape the RiskAssessor uses.
 
     Returns:
         An ``AgentMiddleware`` exposing an async ``wrap_tool_call`` hook that critiques the
@@ -169,13 +169,12 @@ def make_governor_delegate_critique_middleware(
             "__CLOSE__", close_tag
         )
         try:
-            response = await client.messages.create(
-                model=model or get_haiku_model(),
-                max_tokens=256,
+            text = await complete_text(
                 system=system_prompt,
-                messages=[{"role": "user", "content": f"{open_tag}\n{summary_text}\n{close_tag}"}],
+                user=f"{open_tag}\n{summary_text}\n{close_tag}",
+                tier="haiku",
+                max_tokens=256,
             )
-            text = response.content[0].text
             verdict = CritiqueVerdict.model_validate(parse_llm_json(text))
         except Exception:
             logger.warning("delegate summary critique failed", exc_info=True)

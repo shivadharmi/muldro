@@ -69,7 +69,6 @@ class TrustGate:
                 step_input=step.input_data or {},
                 user_context={"user_id": run.user_id},
                 workspace_id=run.workspace_id or "",
-                client=self._client,
                 redis=self._redis,
             )
         except Exception:

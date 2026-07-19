@@ -400,7 +400,6 @@ class AgentInvoker:
                     step_input=tool_input,
                     user_context={"user_id": user_id},
                     workspace_id=workspace_id,
-                    client=self._client,
                     # redis lives in services.extras (runtime.py stores it there); a typed
                     # ``redis`` field never existed, so the old getattr was always None →
                     # risk assessment never cached. None-safe: services may be None in tests.
@@ -605,7 +604,6 @@ class AgentInvoker:
         # on ``task`` only, and the resume path (no delegates) never fires it.
         if self._settings.deep_delegates_enabled:
             critique = make_governor_delegate_critique_middleware(
-                client=self._client,
                 redis=self._services.extras.get("redis") if self._services else None,
                 is_read_only_delegate=True,
             )
