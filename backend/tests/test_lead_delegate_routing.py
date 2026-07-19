@@ -196,7 +196,6 @@ async def _run_stream_capturing_build(inv: AgentInvoker, agent_name: str = "pres
         patch("src.orchestrator.agent_invoker.build_deep_agent", side_effect=_capture_build),
         patch("src.orchestrator.agent_invoker.stream_deep_agent_events", _fake_stream),
         patch("src.orchestrator.agent_invoker.reap_thread", AsyncMock()),
-        patch("src.orchestrator.agent_invoker.agent_loop") as mock_loop,
     ):
         frames = [
             f
@@ -204,7 +203,6 @@ async def _run_stream_capturing_build(inv: AgentInvoker, agent_name: str = "pres
                 agent_name, message="hi", user_id=USER, workspace_id=WS, tools_override=[]
             )
         ]
-    mock_loop.assert_not_called()  # deep runtime, never legacy
     captured["frames"] = frames
     return captured
 

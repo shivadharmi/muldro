@@ -52,14 +52,9 @@ from src.deep_runtime.tool_bridge import build_tool_shells
 from src.errors import _GENERIC_CODE, _GENERIC_MESSAGE, new_correlation_id
 from src.middleware.observability import get_correlation_id
 from src.models.approvals import Approval
-from src.orchestrator.agent_loop import (
-    LoopDone,
-    agent_loop,
-)
 from src.orchestrator.agents import SubAgent
 from src.orchestrator.budget import BudgetTracker
 from src.orchestrator.context_assembler import ContextAssembler
-from src.orchestrator.divergence import ShadowDecision
 from src.orchestrator.prompts import (
     DEEP_DELEGATION_INSTRUCTION,
     JARVIS_SOUL_CORE,
@@ -1420,137 +1415,6 @@ class AgentInvoker:
         elif approval_blocked or error_occurred:
             output["status"] = "error"
         return output
-
-    async def run_shadow_turn(
-        self,
-        agent_name: str,
-        message: str,
-        *,
-        user_id: str,
-        workspace_id: str,
-        runtime: str,
-        tool_executor,
-    ) -> ShadowDecision:
-        """Run one NON-authoritative turn on ``runtime`` (``"deep"`` | ``"legacy"``) with
-        ALL tool dispatch routed through the injected ``tool_executor`` — a
-        ``ShadowToolExecutor``-shaped wrapper (``execute_tool(name, input, user_id,
-        workspace_id) -> dict``) that hard-suppresses writes. Step 10B Task 3b: this is
-        the method the shadow-compare harness (``ShadowRunner.maybe_run_shadow``) calls;
-        it is NEVER invoked from the live seam (``call_agent_stream``) — the live path is
-        unaffected byte-for-byte.
-
-        Builds fresh, throwaway state on every call: a brand-new deep-agent thread_id
-        (reaped on non-paused completion, mirroring ``call_agent_stream``) and no
-        persisted Plan / InteractionLog / A2UI surface / idempotency wrap on either
-        branch — this is an OBSERVATION run, not a real turn. Reuses the SAME assembly
-        helpers ``call_agent_stream`` uses (``_resolve_tools``, ``ContextAssembler
-        .assemble_context``, ``build_system_prompt``, ``get_model_for_agent``,
-        ``_maybe_capability_summary``) so the shadow decision reflects the real runtime
-        build, not a hand-rolled approximation.
-
-        Deliberately does NOT increment ``AGENT_RUNTIME_CALLS`` — that counter tracks
-        live authoritative traffic for the Step-10 rollback/adoption signal; counting
-        shadow runs against it would corrupt that signal.
-        """
-        agent = self._agents.get(agent_name)
-        if not agent:
-            return ShadowDecision(route=agent_name, final_text="", write_intents=frozenset())
-
-        model = self.get_model_for_agent(agent)
-        tools = await self._resolve_tools(agent, workspace_id, None)
-        capability_summary = await self._maybe_capability_summary(agent_name, "", workspace_id)
-        context_block = await self._context.assemble_context(
-            agent_name,
-            message,
-            user_id=user_id,
-            workspace_id=workspace_id,
-            jit=(runtime == "deep" and self._settings.deep_context_jit),
-        )
-        system_blocks = self.build_system_prompt(
-            agent, context_block, capability_summary=capability_summary
-        )
-
-        final_text = ""
-        if runtime == "deep":
-            thread_id = make_thread_id(workspace_id)
-            # SAFETY INVARIANT (delegate-free shadow lead): we deliberately pass NO
-            # ``subagents`` here, so this defaults to () even when
-            # ``deep_delegates_enabled`` is ON. This is load-bearing, NOT an incidental
-            # omission: ``_build_delegate_subagents`` (this file, ~:511) wires the REAL
-            # ``self._tool_executor.execute_tool`` into ``build_read_only_delegate`` —
-            # the injected shadow ``execute_tool`` reaches ONLY the lead's own
-            # dispatcher, not a delegate's. A shadow lead that built delegates would
-            # therefore LEAK a real write for any non-read-only delegate call, defeating
-            # the whole point of the shadow harness. If shadow delegate-fidelity is ever
-            # needed (10C/10D), the injected shadow executor MUST first be threaded into
-            # the delegate build (build_read_only_delegate(..., execute_tool=<shadow>))
-            # before subagents may be passed here.
-            deep_agent = await self._build_deep_agent_for(
-                agent,
-                tools,
-                user_id=user_id,
-                workspace_id=workspace_id,
-                thread_id=thread_id,
-                # Matches the live chat build's authorization_source: keeps trust_gate
-                # dormant (short-circuits before any interrupt/DB) so an observation run
-                # never pauses waiting on an approval nobody will ever answer.
-                authorization_source=AuthorizationSource.DIRECT_USER_REQUEST,
-                # A-3/B2: the shadow lead must get the SAME lead flag the live lead gets for
-                # the equivalent turn — both derive it from the same ``agent_name`` via
-                # ``_is_reply_lead`` — so a shadow/live mismatch can never poison the
-                # divergence signal.
-                # A-4/B3: ``_augment_system_blocks_for_delegation`` is intentionally NOT
-                # applied here — the shadow lead is deliberately delegate-free (``subagents=()``,
-                # per the SAFETY INVARIANT above), so ``has_delegates`` would be False anyway.
-                # If shadow delegate-fidelity is ever wired (10C/10D), add the delegation
-                # augment here in the same composition the live seam uses, gated on the same
-                # ``bool(subagents)``.
-                system_prompt=build_system_message(
-                    _augment_system_blocks_for_inline(
-                        system_blocks,
-                        self._settings.deep_inline_format,
-                        is_reply_lead=_is_reply_lead(agent_name),
-                    )
-                ),
-                context_block=context_block,
-                execute_tool=tool_executor.execute_tool,
-            )
-            graph_input = {"messages": [{"role": "user", "content": message}]}
-            async for frame in self._stream_and_reap(
-                deep_agent,
-                graph_input,
-                thread_id=thread_id,
-                agent_name=agent_name,
-                model=model,
-            ):
-                if isinstance(frame, dict) and frame.get("event") == "agent_done":
-                    final_text = frame.get("text", "")
-        else:
-            async for evt in agent_loop(
-                client=self._client,
-                agent=agent,
-                model=model,
-                system_blocks=system_blocks,
-                tools=tools,
-                message=message,
-                user_id=user_id,
-                workspace_id=workspace_id,
-                db_factory=self._db_factory,
-                services=self._services,
-                budget=self._budget,
-                trace=None,
-                execute_tool_fn=tool_executor.execute_tool,
-                max_tool_rounds=10,
-                stream=False,
-                circuit_breaker=self._circuit_breaker,
-            ):
-                if isinstance(evt, LoopDone):
-                    final_text = evt.text
-
-        # Read the injected executor's recorded write-intents AFTER the run completes —
-        # it accumulates them as the turn's tool calls happen.
-        write_intents = frozenset(getattr(tool_executor, "write_intents", ()))
-        return ShadowDecision(route=agent_name, final_text=final_text, write_intents=write_intents)
 
     async def call_agent(
         self,

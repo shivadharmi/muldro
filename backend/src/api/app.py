@@ -6,7 +6,6 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from src.api.routes_admin_runtime import router as admin_runtime_router
 from src.api.routes_approvals import router as approvals_router
 from src.api.routes_artifacts import router as artifacts_router
 from src.api.routes_auth import router as auth_router
@@ -497,9 +496,6 @@ def create_app() -> FastAPI:
 
     # Runtime projections
     app.include_router(runtime_router, tags=["runtime"])
-
-    # Runtime cutover kill-switch (Step 10B Phase 5 Task 5b) — manual escape hatch
-    app.include_router(admin_runtime_router, tags=["admin"])
 
     # Insight surfaces (dismiss + execute)
     app.include_router(insights_router, tags=["insights"])

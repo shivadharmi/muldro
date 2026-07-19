@@ -32,10 +32,7 @@ from src.orchestrator.chat_pipeline import (
     format_prior_step_results,
     resolve_plan_routing,
 )
-from src.orchestrator.chat_single_lead import (
-    _ChatSingleLeadMixin,
-    _shadow_compare_enabled,  # noqa: F401 — re-exported for tests.test_shadow_runner
-)
+from src.orchestrator.chat_single_lead import _ChatSingleLeadMixin
 from src.orchestrator.core_events import (
     CoreEvent,
     IntentClassified,
@@ -107,11 +104,6 @@ class ChatProcessor(_ChatSingleLeadMixin):
     tail) from :class:`_ChatSingleLeadMixin` (P2.2c split-via-inheritance).
     """
 
-    # Class-level default so instances built via ``__new__`` (some orchestrator test
-    # harnesses bypass __init__) still resolve ``self._shadow_runner`` as None without
-    # a getattr fallback — the shadow-compare spawn guard below reads it directly.
-    _shadow_runner = None
-
     def __init__(
         self,
         settings: Settings,
@@ -129,7 +121,6 @@ class ChatProcessor(_ChatSingleLeadMixin):
         spawn_background,
         ensure_learner_deps,
         interaction_learner,
-        shadow_runner=None,
     ):
         self._settings = settings
         self._client = client
@@ -149,7 +140,6 @@ class ChatProcessor(_ChatSingleLeadMixin):
         self._spawn_background = spawn_background
         self._ensure_learner_deps = ensure_learner_deps
         self._interaction_learner = interaction_learner
-        self._shadow_runner = shadow_runner
 
     @property
     def _db_factory(self):
@@ -744,8 +734,7 @@ class ChatProcessor(_ChatSingleLeadMixin):
                 # COMPLETION TAIL (legacy path) — the shared ``_emit_completion_tail``
                 # (run_completed → surface push → learner → shadow → RunCompleted). The
                 # single-lead path runs the SAME helper from inside the mixin; the resume
-                # path runs it with the learner/shadow disabled. ``agent_name`` may be None
-                # (empty step_routing) → the shadow guard skips, matching the pre-split code.
+                # path runs it with the learner disabled.
                 async for evt in self._emit_completion_tail(
                     trace=trace,
                     presenter_text=presenter_text,
@@ -755,7 +744,6 @@ class ChatProcessor(_ChatSingleLeadMixin):
                     intent=intent,
                     agent_name=agent_name,
                     run_learner=True,
-                    run_shadow=True,
                 ):
                     yield evt
 

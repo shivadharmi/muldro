@@ -174,14 +174,10 @@ async def test_deep_gate_execute_run_single_flight_only_one_drives():
         body_spy = AsyncMock(side_effect=slow_body)
         executor._execute_run_body = body_spy
 
-        with patch(
-            "src.services.runtime_gate.effective_runtime",
-            AsyncMock(return_value="deep"),
-        ):
-            results = await asyncio.gather(
-                executor.execute_run(run_id),
-                executor.execute_run(run_id),
-            )
+        results = await asyncio.gather(
+            executor.execute_run(run_id),
+            executor.execute_run(run_id),
+        )
 
         assert body_spy.call_count == 1  # exactly one worker drove the run
         assert all(res is run for res in results)  # both return a valid TaskRun
@@ -209,67 +205,13 @@ async def test_deep_gate_resume_run_single_flight_only_one_drives():
         body_spy = AsyncMock(side_effect=slow_body)
         executor._resume_run_body = body_spy
 
-        with patch(
-            "src.services.runtime_gate.effective_runtime",
-            AsyncMock(return_value="deep"),
-        ):
-            results = await asyncio.gather(
-                executor.resume_run(run_id),
-                executor.resume_run(run_id),
-            )
+        results = await asyncio.gather(
+            executor.resume_run(run_id),
+            executor.resume_run(run_id),
+        )
 
         assert body_spy.call_count == 1
         assert all(res is run for res in results)
     finally:
         await r.delete(key)
-        await r.aclose()
-
-
-async def test_legacy_gate_execute_run_no_lease_body_always_runs():
-    # Real redis present so this proves the ``runtime == "deep"`` gate specifically
-    # (not merely redis-absence): with the effective runtime forced ``"legacy"`` no
-    # lease is taken and the body runs on every call — byte-neutral with today.
-    r = redis_async.from_url(get_settings().redis_url, decode_responses=True)
-    run_id = f"run_{uuid.uuid4().hex}"
-    try:
-        executor = _make_executor(redis=r)
-        run = _stub_run(run_id)
-        body_spy = AsyncMock(return_value=run)
-        executor._execute_run_body = body_spy
-
-        with patch(
-            "src.services.runtime_gate.effective_runtime",
-            AsyncMock(return_value="legacy"),
-        ):
-            await executor.execute_run(run_id)
-            await executor.execute_run(run_id)
-
-        assert body_spy.call_count == 2
-        # No lease key was ever written on the legacy path.
-        assert await r.get(run_lease_key(run_id)) is None
-    finally:
-        await r.delete(run_lease_key(run_id))
-        await r.aclose()
-
-
-async def test_legacy_gate_resume_run_no_lease_body_always_runs():
-    r = redis_async.from_url(get_settings().redis_url, decode_responses=True)
-    run_id = f"run_{uuid.uuid4().hex}"
-    try:
-        executor = _make_executor(redis=r)
-        run = _stub_run(run_id)
-        body_spy = AsyncMock(return_value=run)
-        executor._resume_run_body = body_spy
-
-        with patch(
-            "src.services.runtime_gate.effective_runtime",
-            AsyncMock(return_value="legacy"),
-        ):
-            await executor.resume_run(run_id)
-            await executor.resume_run(run_id)
-
-        assert body_spy.call_count == 2
-        assert await r.get(run_lease_key(run_id)) is None
-    finally:
-        await r.delete(run_lease_key(run_id))
         await r.aclose()

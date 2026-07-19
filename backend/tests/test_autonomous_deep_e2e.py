@@ -73,7 +73,6 @@ from src.models.task_graph import TaskCheckpoint, TaskRun, TaskStep
 from src.models.tool_definitions import ToolBackend, ToolDefinition
 from src.models.users import User, Workspace
 from src.orchestrator.agent_invoker import AgentInvoker
-from src.services import runtime_breaker
 from src.services.autonomous_lease import run_lease_key
 from src.services.idempotency import (
     IdempotencyContext,
@@ -92,7 +91,6 @@ READ_TOOL = "read_email"
 # email.send identity = (to, cc, bcc, subject) — stable across resume regardless of body.
 WRITE_ARGS = {"to": "founder@example.com", "subject": "quarterly update"}
 READ_ARGS = {"q": "investor"}
-AUTONOMOUS_SURFACE = "autonomous"
 
 
 # ─────────────────────────── reachability guards ────────────────────────────
@@ -494,18 +492,9 @@ async def _reload_run_and_steps(factory, run_id: str) -> tuple[TaskRun, list[Tas
 
 @asynccontextmanager
 async def _forced_deep_gate(redis):
-    """Force ``effective_runtime("autonomous") == "deep"`` via the REAL, process-global
-    rollout enable key. Clears any stale override/breaker first (defensive) and DELETES the
-    enable key on exit — the key is global by design, so this cleanup is mandatory."""
-    await redis.delete(
-        runtime_breaker.override_key(AUTONOMOUS_SURFACE),
-        runtime_breaker.breaker_key(AUTONOMOUS_SURFACE),
-    )
-    await redis.set(runtime_breaker.enabled_key(AUTONOMOUS_SURFACE), "deep")
-    try:
-        yield
-    finally:
-        await redis.delete(runtime_breaker.enabled_key(AUTONOMOUS_SURFACE))
+    """No-op: deep is the only runtime (Step 11 Phase 4). Kept as a context manager so the
+    two e2e tests that used it read unchanged."""
+    yield
 
 
 # ═══════════════════════ TEST 1 — happy-path e2e (assertions 1–5) ═══════════════════════
@@ -856,8 +845,7 @@ async def test_nc3_lease_single_flight_double_drive_guard():
         body_spy = AsyncMock(side_effect=_slow_body)
         gx._execute_run_body = body_spy
 
-        with patch("src.services.runtime_gate.effective_runtime", AsyncMock(return_value="deep")):
-            results = await asyncio.gather(gx.execute_run(run_id), gx.execute_run(run_id))
+        results = await asyncio.gather(gx.execute_run(run_id), gx.execute_run(run_id))
 
         # GREEN (NX intact): exactly one worker drove the body; both return a valid run.
         assert body_spy.call_count == 1

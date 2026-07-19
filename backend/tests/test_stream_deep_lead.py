@@ -73,7 +73,6 @@ async def test_stream_deep_lead_streams_frames_and_builds_agent():
     with (
         patch("src.orchestrator.agent_invoker.build_deep_agent", new=AsyncMock()) as mock_build,
         patch("src.orchestrator.agent_invoker.stream_deep_agent_events", _agent_done_stream),
-        patch("src.orchestrator.agent_invoker.agent_loop") as mock_loop,
     ):
         frames = [
             f
@@ -89,7 +88,6 @@ async def test_stream_deep_lead_streams_frames_and_builds_agent():
 
     assert any(f["event"] == "agent_done" for f in frames)
     mock_build.assert_awaited()
-    mock_loop.assert_not_called()  # never falls back to the legacy loop
 
 
 async def test_stream_deep_lead_always_appends_presenter_voice():

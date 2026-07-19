@@ -357,7 +357,6 @@ async def test_deep_gate_reconciles_on_resume():
 
     with (
         patch("src.services.graph_executor.transition_run"),
-        patch("src.services.runtime_gate.effective_runtime", AsyncMock(return_value="deep")),
         patch("src.services.run_reconcile.reconcile_run_from_events", reconcile_spy),
     ):
         await executor.resume_run("run_001")

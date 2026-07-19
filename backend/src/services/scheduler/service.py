@@ -16,7 +16,6 @@ from src.services.scheduler.notification_tick import NotificationTickMixin
 from src.services.scheduler.perception_tick import PerceptionTickMixin
 from src.services.scheduler.persona_tick import PersonaTickMixin
 from src.services.scheduler.run_health_tick import RunHealthTickMixin
-from src.services.scheduler.runtime_rollback_tick import RuntimeRollbackTickMixin
 from src.services.scheduler.schedule_dispatch import ScheduleDispatchMixin
 from src.services.scheduler.webhook_renewal_tick import WebhookRenewalTickMixin
 
@@ -33,7 +32,6 @@ class SchedulerLoop(
     WebhookRenewalTickMixin,
     DeferredVerificationTickMixin,
     CheckpointReaperTickMixin,
-    RuntimeRollbackTickMixin,
     SchedulerBase,
 ):
     """Backend-owned scheduler. Runs as asyncio task in worker thread."""

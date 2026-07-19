@@ -85,13 +85,6 @@ UNGATED_PERCEPTION_WRITE = Counter(
     "Perception-sourced write that executed without passing an approval gate",
     ["surface"],
 )
-# shadow_divergence: dormant until the Phase-3 shadow comparator lands.
-SHADOW_DIVERGENCE = Counter(
-    "jarvis_shadow_divergence_total",
-    "Shadow-compare divergence between authoritative and non-authoritative runtimes, by kind",
-    ["kind"],
-)
-
 # Gauges
 ACTIVE_RUNS = Gauge(
     "jarvis_active_runs",
@@ -216,10 +209,6 @@ class MetricsService:
     @staticmethod
     def record_ungated_perception_write(surface: str) -> None:
         UNGATED_PERCEPTION_WRITE.labels(surface=surface).inc()
-
-    @staticmethod
-    def record_shadow_divergence(kind: str) -> None:
-        SHADOW_DIVERGENCE.labels(kind=kind).inc()
 
     @staticmethod
     def read_counter_total(counter, **labels) -> float:

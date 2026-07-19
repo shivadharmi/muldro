@@ -39,23 +39,9 @@ from src.orchestrator.core_events import (
     UserActionsReady,
     agent_event_from_sse,
 )
-from src.orchestrator.divergence import ShadowDecision
 from src.services.surface_mapping import extract_surface_spec, strip_surface_blocks
 
 logger = logging.getLogger(__name__)
-
-
-def _shadow_compare_enabled(settings) -> bool:
-    """True only when ``settings.shadow_sample_rate`` is a real positive number.
-
-    Several pre-existing orchestrator-construction test harnesses build ``settings``
-    as a bare ``MagicMock()`` (predating this field), whose unconfigured attribute
-    is not float-comparable — ``MagicMock() > 0`` raises ``TypeError``. Treat
-    anything that isn't a real ``int``/``float`` as "off", matching the real
-    ``Settings`` default (0.0) — never raises.
-    """
-    rate = getattr(settings, "shadow_sample_rate", 0.0)
-    return isinstance(rate, (int, float)) and rate > 0
 
 
 class _ChatSingleLeadMixin:
@@ -77,26 +63,16 @@ class _ChatSingleLeadMixin:
         intent: str | None = None,
         agent_name: str | None = None,
         run_learner: bool = False,
-        run_shadow: bool = False,
     ) -> AsyncGenerator[CoreEvent, None]:
         """The ONE completion tail: run_completed event → surface push → optional
-        learner/shadow spawns → terminal ``RunCompleted``.
+        learner spawn → terminal ``RunCompleted``.
 
-        Shared by all three producers of a terminal chat reply so the tail (and its
-        exact ordering) lives in one place:
+        Shared by all producers of a terminal chat reply so the tail (and its exact
+        ordering) lives in one place. ``resume_message_events`` sets ``run_learner=True``
+        (A1: fires the learner on an approved resume; ``message`` = the ORIGINAL user
+        message, persisted on the Approval and read back off the ``agent_done`` frame).
 
-        * ``_run_single_lead`` — ``run_learner=True``, ``run_shadow=True``, ``agent_name``
-          left ``None`` (the single-lead path has no per-step agent → shadow's
-          ``agent_name is not None`` guard skips it, matching the pre-split behavior).
-        * ``_process_core`` legacy branch — ``run_learner=True``, ``run_shadow=True`` with
-          the loop's ``agent_name``.
-        * ``resume_message_events`` — ``run_learner=True`` (A1: fires the learner on an approved
-          resume; ``message`` = the ORIGINAL user message, persisted on the Approval and read
-          back off the ``agent_done`` frame), ``run_shadow=False`` (resume has no per-step
-          ``agent_name`` to compare).
-
-        Ordering is preserved verbatim from the pre-split tails: run_completed →
-        surface → learner → shadow → ``RunCompleted``.
+        Ordering is preserved: run_completed → surface → learner → ``RunCompleted``.
         """
         self._spawn_background(
             self._events.emit_runtime_event(
@@ -135,39 +111,6 @@ class _ChatSingleLeadMixin:
                     agent_response=presenter_text,
                     intent=intent,
                     trace_id=trace.trace_id,
-                )
-            )
-
-        # Shadow-compare (Step 10B Task 3b, GUARDED for byte-neutrality): with the
-        # default shadow_sample_rate=0.0 this branch never runs, so NO extra background
-        # task is ever scheduled — the live path is byte-identical to before this wiring
-        # existed. write_intents=frozenset() on the authoritative side is a documented
-        # Phase-3 limitation: authoritative tool-intent capture (mirroring what
-        # _IntentRecordingShadowExecutor does for the shadow side) is a 10D enrichment,
-        # consistent with the plan's "no live verification-FN signal" scoping.
-        #
-        # The class-level ``_shadow_runner = None`` default lets ``__new__``-built
-        # harnesses read the attribute directly (no getattr). ``_shadow_compare_enabled``
-        # (rather than a direct ``> 0``) is still needed: several pre-existing harnesses
-        # build ``settings`` as a bare ``MagicMock()`` (predating this field), whose
-        # unconfigured rate attribute is not float-comparable — it must degrade to "off",
-        # never raise.
-        if (
-            run_shadow
-            and self._shadow_runner is not None
-            and _shadow_compare_enabled(self._settings)
-            and agent_name is not None
-        ):
-            auth_decision = ShadowDecision(
-                route=agent_name, final_text=presenter_text, write_intents=frozenset()
-            )
-            self._spawn_background(
-                self._shadow_runner.maybe_run_shadow(
-                    agent_name=agent_name,
-                    message=message,
-                    user_id=user_id,
-                    workspace_id=workspace_id,
-                    authoritative_decision=auth_decision,
                 )
             )
 
@@ -308,7 +251,6 @@ class _ChatSingleLeadMixin:
             intent=intent,
             agent_name=None,
             run_learner=True,
-            run_shadow=True,
         ):
             yield evt
 

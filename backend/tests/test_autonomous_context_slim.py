@@ -36,7 +36,6 @@ from src.services.step_graph_store import StepGraphStore
 from src.services.step_runner import StepRunner
 from tests.conftest import TEST_USER_ID, TEST_WORKSPACE_ID, make_mock_settings
 
-GATE = "src.services.runtime_gate.effective_runtime"
 RUN_DETAIL = "src.services.run_detail_store.RunDetailStore"
 
 
@@ -186,8 +185,7 @@ async def test_graph_executor_populate_gate_on_passes_jit_true():
     executor = _make_executor(settings, _mock_db([_plan_task()]), context_builder=_spy_builder())
     executor._store.populate_steps = AsyncMock()
 
-    with patch(GATE, AsyncMock(return_value="deep")):
-        await executor._populate_steps(_run(), _plan())
+    await executor._populate_steps(_run(), _plan())
 
     assert executor._store.populate_steps.await_args.kwargs["jit"] is True
 
@@ -213,18 +211,15 @@ async def test_graph_executor_populate_gate_off_is_byte_neutral_no_redis_get():
     executor = _make_executor(settings, _mock_db([_plan_task()]), context_builder=_spy_builder())
     executor._store.populate_steps = AsyncMock()
 
-    spy_gate = AsyncMock(return_value="deep")
-    with patch(GATE, spy_gate):
-        await executor._populate_steps(_run(), _plan())
+    await executor._populate_steps(_run(), _plan())
 
     assert executor._store.populate_steps.await_args.kwargs["jit"] is False
-    spy_gate.assert_not_awaited()
 
 
 # ══════════════ resume-refresh persisting caller ════════════════════════════
 
 
-async def _drive_resume_refresh(*, settings, redis, gate_value):
+async def _drive_resume_refresh(*, settings, redis):
     """Drive ``_resume_run_body`` far enough to exercise the >30-min stale-context refresh,
     with the surrounding DAG machinery patched out. Returns the ``build`` spy."""
     spy_cb = _spy_builder()
@@ -254,10 +249,7 @@ async def _drive_resume_refresh(*, settings, redis, gate_value):
     rds_instance.get_context_pack = AsyncMock(return_value={})
     rds_instance.upsert_context_pack = AsyncMock()
 
-    with (
-        patch(RUN_DETAIL, return_value=rds_instance),
-        patch(GATE, AsyncMock(return_value=gate_value)),
-    ):
+    with patch(RUN_DETAIL, return_value=rds_instance):
         await executor._resume_run_body("run_r")
     return spy_cb
 
@@ -267,7 +259,6 @@ async def test_resume_refresh_gate_on_builds_jit_true():
     spy_cb = await _drive_resume_refresh(
         settings=make_mock_settings(deep_context_jit=True, runtime="deep"),
         redis=MagicMock(),
-        gate_value="deep",
     )
     spy_cb.build.assert_awaited_once()
     assert spy_cb.build.await_args.kwargs["jit"] is True
@@ -275,7 +266,6 @@ async def test_resume_refresh_gate_on_builds_jit_true():
 
 async def test_resume_refresh_gate_off_builds_jit_false():
     """Default flag: resume refresh keeps the eager pack (``jit=False``) — byte-neutral."""
-    spy_gate = AsyncMock(return_value="deep")
     spy_cb = _spy_builder()
     db = AsyncMock()
     run = SimpleNamespace(
@@ -303,11 +293,10 @@ async def test_resume_refresh_gate_off_builds_jit_false():
     rds_instance.get_context_pack = AsyncMock(return_value={})
     rds_instance.upsert_context_pack = AsyncMock()
 
-    with patch(RUN_DETAIL, return_value=rds_instance), patch(GATE, spy_gate):
+    with patch(RUN_DETAIL, return_value=rds_instance):
         await executor._resume_run_body("run_r")
 
     assert spy_cb.build.await_args.kwargs["jit"] is False
-    spy_gate.assert_not_awaited()
 
 
 # ══════════════ TEST 3 — ephemeral caller (build_step_context) slims ═════════
@@ -338,8 +327,7 @@ async def test_build_step_context_gate_on_builds_jit_true():
         context_builder=cb,
     )
 
-    with patch(GATE, AsyncMock(return_value="deep")):
-        await runner.build_step_context(_run(), _step())
+    await runner.build_step_context(_run(), _step())
 
     cb.build.assert_awaited_once()
     assert cb.build.await_args.kwargs["jit"] is True
@@ -349,11 +337,8 @@ async def test_build_step_context_gate_off_builds_jit_false_no_redis_get():
     """Default flag: ephemeral build keeps the eager pack (``jit=False``) and does NOT call
     ``effective_runtime`` — byte-neutral, no Redis GET."""
     cb = _spy_builder()
-    spy_gate = AsyncMock(return_value="deep")
     runner = _step_runner(settings=make_mock_settings(), redis=None, context_builder=cb)
 
-    with patch(GATE, spy_gate):
-        await runner.build_step_context(_run(), _step())
+    await runner.build_step_context(_run(), _step())
 
     assert cb.build.await_args.kwargs["jit"] is False
-    spy_gate.assert_not_awaited()
