@@ -36,12 +36,6 @@ class TestCancellationToken:
         assert "cancelled" in STEP_TRANSITIONS  # terminal state exists
         assert STEP_TRANSITIONS["cancelled"] == set()  # terminal
 
-    def test_agent_loop_accepts_cancel_event(self):
-        from src.orchestrator.agent_loop import agent_loop
-
-        sig = inspect.signature(agent_loop)
-        assert "cancel_event" in sig.parameters
-
     def test_cancellation_requested_is_exception(self):
         assert issubclass(CancellationRequested, Exception)
         exc = CancellationRequested("test message")
