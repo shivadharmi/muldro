@@ -57,6 +57,10 @@ def _resolve_utility_model_id(tier: str) -> str:
       (``settings.anthropic_model``), preserving the ``JARVIS_ANTHROPIC_MODEL`` override
       that the raw-SDK consumers honored via ``resolved_model``.
 
+    Note: the ``resolved`` id comes from the PROCESS settings singleton
+    (``get_settings().anthropic_model``). All consumers share that singleton in production;
+    a consumer built with a divergent hand-crafted ``Settings`` would use the global model.
+
     Raises ``ValueError`` on any other tier so a typo fails loudly instead of
     silently resolving to the Sonnet model.
     """

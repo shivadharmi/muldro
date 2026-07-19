@@ -34,6 +34,21 @@ async def test_complete_text_omits_system_when_none():
     assert out == "summary text"
 
 
+async def test_complete_text_accepts_block_list_system():
+    # context_assembler + intent_classifier pass a [{"type":"text",...}] block-list system.
+    model = _mock_model("ok")
+    with patch("src.llm.utility.build_utility_model", return_value=model):
+        await complete_text(
+            system=[{"type": "text", "text": "sys prompt"}],
+            user="u",
+            tier="haiku",
+            max_tokens=10,
+        )
+    msgs = model.ainvoke.call_args.args[0]
+    assert isinstance(msgs[0], SystemMessage)
+    assert msgs[0].content == [{"type": "text", "text": "sys prompt"}]
+
+
 async def test_complete_text_appends_prefill_and_returns_continuation():
     model = _mock_model('"passed": true}')  # continuation after the "{" prefill
     with patch("src.llm.utility.build_utility_model", return_value=model):
