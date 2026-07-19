@@ -61,7 +61,6 @@ class _ChatSingleLeadMixin:
         workspace_id: str,
         message: str | None = None,
         intent: str | None = None,
-        agent_name: str | None = None,
         run_learner: bool = False,
     ) -> AsyncGenerator[CoreEvent, None]:
         """The ONE completion tail: run_completed event → surface push → optional
@@ -240,8 +239,7 @@ class _ChatSingleLeadMixin:
                 # is empty. Keep presenter_text RAW for the shared tail's surface extraction.
                 yield Presentation(text=strip_surface_blocks(presenter_text))
 
-        # COMPLETION TAIL — single-lead: agent_name=None (no per-step agent → shadow
-        # skipped by its own guard); the learner runs with the RAW user message + reply.
+        # COMPLETION TAIL — single-lead: the learner runs with the RAW user message + reply.
         async for evt in self._emit_completion_tail(
             trace=trace,
             presenter_text=presenter_text,
@@ -249,7 +247,6 @@ class _ChatSingleLeadMixin:
             workspace_id=workspace_id,
             message=message,
             intent=intent,
-            agent_name=None,
             run_learner=True,
         ):
             yield evt

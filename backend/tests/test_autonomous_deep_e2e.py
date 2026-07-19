@@ -1,25 +1,15 @@
-"""Step 10C P7: forced-ON OFFLINE end-to-end test of the autonomous deep durable run.
+"""OFFLINE end-to-end test of the autonomous deep durable run (Step 10C P7).
 
 This is the capstone that exercises P1–P6 TOGETHER through
-``graph_executor.execute_run`` / ``resume_run`` with the per-surface
-effective-runtime gate FORCED to ``"deep"`` for the ``"autonomous"`` surface.
-Real Postgres + real Redis + a real ``AsyncPostgresSaver`` durable checkpointer;
-the ONLY fake is the react model (patched ``build_chat_model``) and the leaf
-tool executor (records external effects). The whole gated middleware chain
-(capability_scope → governor_audit → unavailable_server → trust_gate[AUTONOMOUS]
-→ write_lock → jarvis_tool_dispatcher), the idempotency ledger, the DAG, the
-single TrustEngine step gate, the runtime_events log, and the durable saver are
-all REAL.
-
-Forcing the gate deep
----------------------
-``effective_runtime("autonomous")`` resolves ``"deep"`` ONLY on a successful read
-of the *rollout enable* key ``jarvis:runtime:enabled:autonomous == "deep"`` (with
-no override / no tripped breaker). We set that REAL, process-global Redis key just
-before driving the run and DELETE it in ``finally`` (it is global by design — the
-teardown is mandatory). ``settings.runtime`` stays ``"legacy"`` so the enable key
-is provably what flips the surface (the negative control NC-1 leaves the key unset
-and the SAME wiring routes legacy).
+``graph_executor.execute_run`` / ``resume_run`` on the deep autonomous substrate
+(deep is the only runtime — Step 11 Phase 4). Real Postgres + real Redis + a real
+``AsyncPostgresSaver`` durable checkpointer; the ONLY fake is the react model
+(patched ``build_chat_model``) and the leaf tool executor (records external
+effects). The whole gated middleware chain (capability_scope → governor_audit →
+unavailable_server → trust_gate[AUTONOMOUS] → write_lock → jarvis_tool_dispatcher),
+the idempotency ledger, the DAG, the single TrustEngine step gate, the
+runtime_events log, and the durable saver are all REAL. ``_forced_deep_gate`` is
+retained as an honest no-op context manager (diff-stability) now that no gate exists.
 
 Getting past the step gate
 --------------------------
@@ -552,8 +542,6 @@ async def test_autonomous_deep_e2e_happy_path():
                     deep_step_runner=_deep_spy,
                     execute_tool_fn=_RecordingToolExecutor(effects).execute_tool,
                 )
-                legacy_spy = AsyncMock()
-                gx._runner.run_step_via_agent_loop = legacy_spy
 
                 run = await gx.create_run(plan_id, uid, ws, source="background")
                 run_id = run.run_id
@@ -568,10 +556,9 @@ async def test_autonomous_deep_e2e_happy_path():
                     ):
                         result_run = await gx.execute_run(run_id)
 
-            # ── Assertion 1: the write ran via the DEEP path, NOT the legacy agent loop.
+            # ── Assertion 1: the write ran via the DEEP step executor.
             assert frozenset({"email.send"}) in deep_calls, deep_calls
             assert frozenset({"email.read"}) in deep_calls, deep_calls
-            assert legacy_spy.call_count == 0  # legacy run_step_via_agent_loop never called
 
             # ── Assertion 2: the external write fired EXACTLY ONCE + a completed ledger row.
             assert effects.count(WRITE_TOOL) == 1, effects

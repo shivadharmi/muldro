@@ -138,8 +138,6 @@ class GraphExecutor:
             tool_registry=tool_registry,
             context_builder=context_builder,
             execute_tool_fn=execute_tool_fn,
-            budget=budget,
-            circuit_breaker=circuit_breaker,
             redis=redis,
             deep_step_runner=deep_step_runner,
         )

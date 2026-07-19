@@ -567,11 +567,9 @@ class ChatProcessor(_ChatSingleLeadMixin):
                     self._db_factory, workspace_id, plan.steps
                 )
 
-                # Step 3: Execute steps. `presenter_text` + `agent_name` are declared here
-                # for the LEGACY path's shared completion tail below — `agent_name` may stay
-                # None when step_routing is empty, and the tail's shadow guard
-                # (`agent_name is not None`) skips that case. The single-lead path (below)
-                # owns its own presenter_text + completion tail inside the mixin.
+                # Step 3: Execute steps. `presenter_text` is declared here for the
+                # multi-agent path's shared completion tail below. The single-lead path
+                # (below) owns its own presenter_text + completion tail inside the mixin.
                 presenter_text = ""
                 agent_name: str | None = None
 
@@ -731,10 +729,10 @@ class ChatProcessor(_ChatSingleLeadMixin):
                                 # while keeping presenter_text raw for surface extraction.
                                 yield Presentation(text=strip_surface_blocks(presenter_text))
 
-                # COMPLETION TAIL (legacy path) — the shared ``_emit_completion_tail``
-                # (run_completed → surface push → learner → shadow → RunCompleted). The
-                # single-lead path runs the SAME helper from inside the mixin; the resume
-                # path runs it with the learner disabled.
+                # COMPLETION TAIL (multi-agent path) — the shared ``_emit_completion_tail``
+                # (run_completed → surface push → learner → RunCompleted). The single-lead
+                # path runs the SAME helper from inside the mixin; the resume path runs it
+                # with the learner disabled.
                 async for evt in self._emit_completion_tail(
                     trace=trace,
                     presenter_text=presenter_text,
@@ -742,7 +740,6 @@ class ChatProcessor(_ChatSingleLeadMixin):
                     workspace_id=workspace_id,
                     message=message,
                     intent=intent,
-                    agent_name=agent_name,
                     run_learner=True,
                 ):
                     yield evt

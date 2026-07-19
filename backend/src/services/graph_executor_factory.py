@@ -44,9 +44,9 @@ async def create_graph_executor(
     ``deep_step_runner`` (Step 10C P2) is the durable autonomous deep step-executor
     callable (``AgentInvoker.run_autonomous_deep_step``), forwarded to ``GraphExecutor``.
     Defaults to ``None`` — which keeps every existing caller (routes_approvals,
-    routes_history, runtime, other scheduler ticks) byte-neutral, since the deep step
-    branch is unreachable without both a wired runner AND an ``effective_runtime`` gate
-    resolving to ``deep``.
+    routes_history, runtime, other scheduler ticks) working, since the deep step branch
+    is unreachable without a wired ``deep_step_runner`` (+ a db_factory); with no runner
+    it falls back to the minimal single-turn Claude action.
     """
     from src.services.event_bus import EventBus
     from src.services.graph_executor import GraphExecutor

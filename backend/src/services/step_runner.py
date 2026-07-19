@@ -1,10 +1,10 @@
 """StepRunner — agentic execution of a single DAG step.
 
-Extracted from ``GraphExecutor`` (god-object decomposition, 2026-06-20). This is
-the durable-DAG-wraps-``agent_loop`` core: given a ready ``TaskStep``, it runs the
-Executor sub-agent through the agent loop (with full tool discovery, prior-step
-context injection, and per-run trace accumulation), falling back to a minimal
-single-turn Claude call when the agent-loop dependencies are not wired.
+Extracted from ``GraphExecutor`` (god-object decomposition, 2026-06-20). Given a
+ready ``TaskStep``, it runs the Executor step on the durable deep step-executor
+(``run_step_via_deep_agent`` → ``AgentInvoker.run_autonomous_deep_step``, with full
+tool discovery, prior-step context injection, and per-run trace accumulation),
+falling back to a minimal single-turn Claude call when no deep step-runner is wired.
 
 It depends *downward* on ``StepGraphStore`` (to read sibling step outputs) and
 ``SurfaceEmitter`` (the ``tool_call_started`` event); it never imports
@@ -115,8 +115,6 @@ class StepRunner:
         tool_registry=None,
         context_builder=None,
         execute_tool_fn=None,
-        budget=None,
-        circuit_breaker=None,
         redis=None,
         deep_step_runner=None,
     ):
@@ -129,8 +127,6 @@ class StepRunner:
         self._tool_registry = tool_registry
         self._context_builder = context_builder
         self._execute_tool_fn = execute_tool_fn
-        self._budget = budget
-        self._circuit_breaker = circuit_breaker
         self._redis = redis
         # Step 10C P1b: the autonomous durable deep step-executor callable
         # (``AgentInvoker.run_autonomous_deep_step``), injected by GraphExecutor's
