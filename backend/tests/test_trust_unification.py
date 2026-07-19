@@ -310,11 +310,9 @@ async def test_create_graph_executor_injects_trust_engine():
     db.flush = AsyncMock()
 
     with (
-        patch("src.services.graph_executor.get_anthropic_client") as mock_client,
         patch("src.services.trust_engine.TrustEngine") as mock_te_cls,
         patch("redis.asyncio.from_url") as mock_redis_from_url,
     ):
-        mock_client.return_value = MagicMock()
         mock_te_cls.return_value = MagicMock()
         mock_redis_from_url.return_value = MagicMock()
 

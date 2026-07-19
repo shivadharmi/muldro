@@ -11,13 +11,12 @@ def _make_world_model(db=None, embedding_service=None, vector_store=None):
     settings = make_mock_settings()
     db = db or AsyncMock()
 
-    with patch("src.services.world_model.get_anthropic_client"):
-        wm = WorldModel(
-            settings=settings,
-            db=db,
-            embedding_service=embedding_service,
-            vector_store=vector_store,
-        )
+    wm = WorldModel(
+        settings=settings,
+        db=db,
+        embedding_service=embedding_service,
+        vector_store=vector_store,
+    )
     return wm
 
 

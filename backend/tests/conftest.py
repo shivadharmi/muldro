@@ -58,8 +58,6 @@ def make_mock_settings(**overrides) -> MagicMock:
         ses_from_address="",
         ses_region="ap-south-1",
         ses_enabled=False,
-        bedrock_region="us-east-1",
-        use_bedrock=False,
         event_processor_concurrency=5,
         max_perception_per_tick=5,
         webhook_lag_threshold=5000,

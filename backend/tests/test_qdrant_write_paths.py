@@ -159,7 +159,6 @@ async def test_conversation_summary_embedded():
     lines = ["User: Hello", "Assistant: Hi there", "User: What's my schedule?"]
 
     with (
-        patch("src.orchestrator.jarvis.get_anthropic_client") as mock_get_client,
         patch(
             "src.services.vector_store.VectorStore",
             return_value=mock_vs,
@@ -169,8 +168,6 @@ async def test_conversation_summary_embedded():
             return_value=mock_es,
         ) as _mock_es_cls,
     ):
-        mock_get_client.return_value = MagicMock()
-
         from src.orchestrator.jarvis import JarvisOrchestrator
 
         orch = JarvisOrchestrator(settings=settings, db_factory=MagicMock(), services=MagicMock())
@@ -204,12 +201,9 @@ async def test_conversation_embedding_skipped_without_conversation_id():
     mock_vs = AsyncMock()
 
     with (
-        patch("src.orchestrator.jarvis.get_anthropic_client") as mock_get_client,
         patch("src.services.vector_store.VectorStore", return_value=mock_vs),
         patch("src.services.embedding_service.EmbeddingService"),
     ):
-        mock_get_client.return_value = MagicMock()
-
         from src.orchestrator.jarvis import JarvisOrchestrator
 
         orch = JarvisOrchestrator(settings=settings, db_factory=MagicMock(), services=MagicMock())

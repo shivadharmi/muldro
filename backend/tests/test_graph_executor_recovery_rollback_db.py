@@ -5,7 +5,7 @@ holistic-review carry."""
 
 import asyncio
 from contextlib import asynccontextmanager
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 from sqlalchemy import delete, select, text
@@ -99,8 +99,7 @@ async def test_execute_run_recovers_from_poisoned_session():
     async with _run_env() as (factory, ws, uid):
         run_id = await _seed_run(factory, ws, uid)
         async with factory() as db:
-            with patch("src.services.graph_executor.get_anthropic_client"):
-                executor = GraphExecutor(get_settings(), db)
+            executor = GraphExecutor(get_settings(), db)
 
             executor._get_all_steps = AsyncMock(return_value=[])
             executor._emit_event = AsyncMock()
@@ -134,8 +133,7 @@ async def test_execute_run_ordinary_failure_preserves_partial_progress():
     async with _run_env() as (factory, ws, uid):
         run_id = await _seed_run(factory, ws, uid)
         async with factory() as db:
-            with patch("src.services.graph_executor.get_anthropic_client"):
-                executor = GraphExecutor(get_settings(), db)
+            executor = GraphExecutor(get_settings(), db)
 
             executor._get_all_steps = AsyncMock(return_value=[])
             executor._emit_event = AsyncMock()
@@ -171,8 +169,7 @@ async def test_resume_run_recovers_from_poisoned_session():
     async with _run_env() as (factory, ws, uid):
         run_id = await _seed_resumable_run(factory, ws, uid)
         async with factory() as db:
-            with patch("src.services.graph_executor.get_anthropic_client"):
-                executor = GraphExecutor(get_settings(), db)
+            executor = GraphExecutor(get_settings(), db)
 
             executor._get_all_steps = AsyncMock(return_value=[])
             executor._emit_event = AsyncMock()

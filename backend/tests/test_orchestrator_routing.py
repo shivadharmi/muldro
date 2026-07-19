@@ -37,8 +37,7 @@ def _make_orchestrator():
     services.reranker = None
     services.notifier = None
 
-    with patch("src.orchestrator.jarvis.get_anthropic_client"):
-        orch = JarvisOrchestrator(settings=settings, db_factory=db_factory, services=services)
+    orch = JarvisOrchestrator(settings=settings, db_factory=db_factory, services=services)
 
     return orch
 

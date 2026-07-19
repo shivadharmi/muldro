@@ -14,10 +14,9 @@ def _make_memory_service(dead_letter=None):
     """Construct a MemoryService with mocked dependencies."""
     settings = make_mock_settings()
     db = AsyncMock()
-    with patch("src.services.memory_service._base.get_anthropic_client", return_value=MagicMock()):
-        from src.services.memory_service import MemoryService
+    from src.services.memory_service import MemoryService
 
-        return MemoryService(settings=settings, db=db, dead_letter=dead_letter)
+    return MemoryService(settings=settings, db=db, dead_letter=dead_letter)
 
 
 def test_accepts_dead_letter_param():
@@ -98,10 +97,7 @@ def _make_memory_service_full(dead_letter=None, vector_store=None, embedder_retu
     db.flush = AsyncMock()
     mock_embedder = AsyncMock()
     mock_embedder.embed_text = AsyncMock(return_value=embedder_return)
-    with (
-        patch("src.services.memory_service._base.get_anthropic_client", return_value=MagicMock()),
-        patch("src.services.memory_service._base.EmbeddingService", return_value=mock_embedder),
-    ):
+    with patch("src.services.memory_service._base.EmbeddingService", return_value=mock_embedder):
         from src.services.memory_service import MemoryService
 
         svc = MemoryService(

@@ -23,7 +23,7 @@ from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.types import Command
 from sqlalchemy import update
 
-from src.config.models import BEDROCK_MODEL_TIERS, MODEL_TIERS
+from src.config.models import MODEL_TIERS
 from src.config.settings import Settings
 from src.deep_runtime.agent_builder import build_deep_agent
 from src.deep_runtime.authorization import AuthorizationSource
@@ -236,8 +236,6 @@ class AgentInvoker:
 
     def get_model_for_agent(self, agent: SubAgent) -> str:
         """Get the Claude model ID for an agent's tier."""
-        if self._settings.use_bedrock:
-            return BEDROCK_MODEL_TIERS.get(agent.model_tier, BEDROCK_MODEL_TIERS["sonnet"])
         return MODEL_TIERS.get(agent.model_tier, MODEL_TIERS["sonnet"])
 
     def build_system_prompt(

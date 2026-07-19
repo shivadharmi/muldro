@@ -35,11 +35,9 @@ def mock_db():
 
 
 def _make_executor(settings, mock_db):
-    with patch("src.services.graph_executor.get_anthropic_client") as mock_client:
-        mock_client.return_value = MagicMock()
-        from src.services.graph_executor import GraphExecutor
+    from src.services.graph_executor import GraphExecutor
 
-        return GraphExecutor(settings, mock_db)
+    return GraphExecutor(settings, mock_db)
 
 
 def _trace_with_usage(trace_id, *, input_t, output_t, cost):

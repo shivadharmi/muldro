@@ -545,13 +545,7 @@ class TestPerceptionRelevanceAssessment:
 
         settings = make_mock_settings()
 
-        with (
-            patch("src.orchestrator.jarvis.get_anthropic_client") as mock_get_client,
-            patch("src.services.relevance_assessor.assess_relevance") as mock_assess,
-        ):
-            mock_client = AsyncMock()
-            mock_get_client.return_value = mock_client
-
+        with patch("src.services.relevance_assessor.assess_relevance") as mock_assess:
             from src.services.relevance_assessor import RelevanceAssessment
 
             mock_assess.return_value = RelevanceAssessment(
@@ -625,7 +619,6 @@ class TestPerceptionRelevanceAssessment:
         settings = make_mock_settings()
 
         with (
-            patch("src.orchestrator.jarvis.get_anthropic_client") as mock_get_client,
             patch("src.services.relevance_assessor.assess_relevance") as mock_assess,
             patch(
                 "src.services.engagement_service.EngagementService.is_suppressed",
@@ -636,8 +629,6 @@ class TestPerceptionRelevanceAssessment:
                 new=AsyncMock(return_value=0.2),
             ),
         ):
-            mock_get_client.return_value = AsyncMock()
-
             from src.services.relevance_assessor import RelevanceAssessment
 
             mock_assess.return_value = RelevanceAssessment(
@@ -709,7 +700,6 @@ class TestNonActionableSynthesisSurfacing:
         )
 
         with (
-            patch("src.orchestrator.jarvis.get_anthropic_client"),
             patch("src.orchestrator.perception_runner.extract_plan", return_value=plan),
             patch("src.services.memory_service.MemoryService") as mock_mem,
         ):
@@ -750,7 +740,6 @@ class TestNonActionableSynthesisSurfacing:
         plan = PlanOutput(goal="", reasoning="", steps=[])
 
         with (
-            patch("src.orchestrator.jarvis.get_anthropic_client"),
             patch("src.orchestrator.perception_runner.extract_plan", return_value=plan),
             patch("src.services.memory_service.MemoryService") as mock_mem,
         ):
@@ -796,54 +785,53 @@ class TestCursorNonAdvanceOnPollError:
 
         settings = make_mock_settings()
 
-        with patch("src.orchestrator.jarvis.get_anthropic_client"):
-            mock_db = AsyncMock()
-            mock_db.commit = AsyncMock()
-            db_ctx = AsyncMock()
-            db_ctx.__aenter__ = AsyncMock(return_value=mock_db)
-            db_ctx.__aexit__ = AsyncMock(return_value=False)
-            db_factory = MagicMock(return_value=db_ctx)
+        mock_db = AsyncMock()
+        mock_db.commit = AsyncMock()
+        db_ctx = AsyncMock()
+        db_ctx.__aenter__ = AsyncMock(return_value=mock_db)
+        db_ctx.__aexit__ = AsyncMock(return_value=False)
+        db_factory = MagicMock(return_value=db_ctx)
 
-            from src.orchestrator.jarvis import JarvisOrchestrator
-            from src.orchestrator.services import ServiceContainer
+        from src.orchestrator.jarvis import JarvisOrchestrator
+        from src.orchestrator.services import ServiceContainer
 
-            orch = JarvisOrchestrator(
-                settings=settings, db_factory=db_factory, services=ServiceContainer()
+        orch = JarvisOrchestrator(
+            settings=settings, db_factory=db_factory, services=ServiceContainer()
+        )
+
+        pr = orch._perception
+        # Poll returns a FAILING result: empty events, unchanged cursor,
+        # and a truthy poll_error string (the 4-tuple seam used by the runner).
+        pr._poller.poll = AsyncMock(
+            return_value=(
+                [],
+                "old_cursor",
+                "auth_failed connector error (401 unauthorized)",
+                "opaque",
             )
+        )
+        pr._poller.ingest_raw_events = AsyncMock()
+        pr._poller.update_cursor = AsyncMock()
+        pr._invoker.call_agent = AsyncMock()
+        pr._events.publish_event = AsyncMock()
+        pr._trace_manager = MagicMock()
+        pr._trace_manager.start_trace.return_value = MagicMock(trace_id="t1")
+        pr._trace_manager.finish_trace = AsyncMock()
+        pr._budget = MagicMock()
+        pr._budget.get_budget_status = AsyncMock(return_value=MagicMock())
+        pr._budget.should_allow_perception.return_value = True
 
-            pr = orch._perception
-            # Poll returns a FAILING result: empty events, unchanged cursor,
-            # and a truthy poll_error string (the 4-tuple seam used by the runner).
-            pr._poller.poll = AsyncMock(
-                return_value=(
-                    [],
-                    "old_cursor",
-                    "auth_failed connector error (401 unauthorized)",
-                    "opaque",
-                )
-            )
-            pr._poller.ingest_raw_events = AsyncMock()
-            pr._poller.update_cursor = AsyncMock()
-            pr._invoker.call_agent = AsyncMock()
-            pr._events.publish_event = AsyncMock()
-            pr._trace_manager = MagicMock()
-            pr._trace_manager.start_trace.return_value = MagicMock(trace_id="t1")
-            pr._trace_manager.finish_trace = AsyncMock()
-            pr._budget = MagicMock()
-            pr._budget.get_budget_status = AsyncMock(return_value=MagicMock())
-            pr._budget.should_allow_perception.return_value = True
+        result = await orch.run_perception_cycle(
+            source="gmail",
+            user_id=TEST_USER_ID,
+            workspace_id=TEST_WORKSPACE_ID,
+        )
 
-            result = await orch.run_perception_cycle(
-                source="gmail",
-                user_id=TEST_USER_ID,
-                workspace_id=TEST_WORKSPACE_ID,
-            )
-
-            assert result["status"] == "error"
-            # The cursor must NOT be persisted on a failed poll.
-            pr._poller.update_cursor.assert_not_awaited()
-            # No events were ingested either (the cursor-fold ingest path).
-            pr._poller.ingest_raw_events.assert_not_awaited()
+        assert result["status"] == "error"
+        # The cursor must NOT be persisted on a failed poll.
+        pr._poller.update_cursor.assert_not_awaited()
+        # No events were ingested either (the cursor-fold ingest path).
+        pr._poller.ingest_raw_events.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_successful_empty_poll_does_advance_cursor(self):
@@ -853,45 +841,44 @@ class TestCursorNonAdvanceOnPollError:
 
         settings = make_mock_settings()
 
-        with patch("src.orchestrator.jarvis.get_anthropic_client"):
-            mock_db = AsyncMock()
-            mock_db.commit = AsyncMock()
-            db_ctx = AsyncMock()
-            db_ctx.__aenter__ = AsyncMock(return_value=mock_db)
-            db_ctx.__aexit__ = AsyncMock(return_value=False)
-            db_factory = MagicMock(return_value=db_ctx)
+        mock_db = AsyncMock()
+        mock_db.commit = AsyncMock()
+        db_ctx = AsyncMock()
+        db_ctx.__aenter__ = AsyncMock(return_value=mock_db)
+        db_ctx.__aexit__ = AsyncMock(return_value=False)
+        db_factory = MagicMock(return_value=db_ctx)
 
-            from src.orchestrator.jarvis import JarvisOrchestrator
-            from src.orchestrator.services import ServiceContainer
+        from src.orchestrator.jarvis import JarvisOrchestrator
+        from src.orchestrator.services import ServiceContainer
 
-            orch = JarvisOrchestrator(
-                settings=settings, db_factory=db_factory, services=ServiceContainer()
-            )
+        orch = JarvisOrchestrator(
+            settings=settings, db_factory=db_factory, services=ServiceContainer()
+        )
 
-            pr = orch._perception
-            pr._poller.poll = AsyncMock(return_value=([], "new_cursor", None, "opaque"))
-            pr._poller.ingest_raw_events = AsyncMock()
-            pr._poller.update_cursor = AsyncMock()
-            pr._invoker.call_agent = AsyncMock()
-            pr._events.publish_event = AsyncMock()
-            pr._trace_manager = MagicMock()
-            pr._trace_manager.start_trace.return_value = MagicMock(trace_id="t1")
-            pr._trace_manager.finish_trace = AsyncMock()
-            pr._budget = MagicMock()
-            pr._budget.get_budget_status = AsyncMock(return_value=MagicMock())
-            pr._budget.should_allow_perception.return_value = True
+        pr = orch._perception
+        pr._poller.poll = AsyncMock(return_value=([], "new_cursor", None, "opaque"))
+        pr._poller.ingest_raw_events = AsyncMock()
+        pr._poller.update_cursor = AsyncMock()
+        pr._invoker.call_agent = AsyncMock()
+        pr._events.publish_event = AsyncMock()
+        pr._trace_manager = MagicMock()
+        pr._trace_manager.start_trace.return_value = MagicMock(trace_id="t1")
+        pr._trace_manager.finish_trace = AsyncMock()
+        pr._budget = MagicMock()
+        pr._budget.get_budget_status = AsyncMock(return_value=MagicMock())
+        pr._budget.should_allow_perception.return_value = True
 
-            result = await orch.run_perception_cycle(
-                source="gmail",
-                user_id=TEST_USER_ID,
-                workspace_id=TEST_WORKSPACE_ID,
-            )
+        result = await orch.run_perception_cycle(
+            source="gmail",
+            user_id=TEST_USER_ID,
+            workspace_id=TEST_WORKSPACE_ID,
+        )
 
-            assert result["status"] == "completed"
-            assert result["events"] == 0
-            pr._poller.update_cursor.assert_awaited_once()
-            # Empty success path saves the cursor but does NOT ingest events.
-            pr._poller.ingest_raw_events.assert_not_awaited()
+        assert result["status"] == "completed"
+        assert result["events"] == 0
+        pr._poller.update_cursor.assert_awaited_once()
+        # Empty success path saves the cursor but does NOT ingest events.
+        pr._poller.ingest_raw_events.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------

@@ -11,13 +11,11 @@ from tests.conftest import TEST_USER_ID, TEST_WORKSPACE_ID, make_mock_settings
 class TestContextAssembly:
     """Test context assembly for enriched agents."""
 
-    @patch("src.orchestrator.jarvis.get_anthropic_client")
     @pytest.mark.asyncio
-    async def test_assemble_context_returns_empty_for_non_enriched_agents(self, mock_get_client):
+    async def test_assemble_context_returns_empty_for_non_enriched_agents(self):
         """Test _assemble_context returns empty string for non-enriched agents."""
         from src.orchestrator.jarvis import JarvisOrchestrator
 
-        mock_get_client.return_value = AsyncMock()
         settings = make_mock_settings(daily_token_budget_usd=5.0, use_bedrock=False)
         db_factory = MagicMock()
 
@@ -31,13 +29,11 @@ class TestContextAssembly:
         )
         assert context == ""
 
-    @patch("src.orchestrator.jarvis.get_anthropic_client")
     @pytest.mark.asyncio
-    async def test_assemble_context_returns_context_for_enriched_agents(self, mock_get_client):
+    async def test_assemble_context_returns_context_for_enriched_agents(self):
         """Test _assemble_context returns context for enriched agents with services."""
         from src.orchestrator.jarvis import JarvisOrchestrator
 
-        mock_get_client.return_value = AsyncMock()
         settings = make_mock_settings(daily_token_budget_usd=5.0, use_bedrock=False)
         db_factory = MagicMock()
 
@@ -78,13 +74,11 @@ class TestContextAssembly:
         # and memories split into preferences/recent context
         assert "Morning person" in context
 
-    @patch("src.orchestrator.jarvis.get_anthropic_client")
     @pytest.mark.asyncio
-    async def test_assemble_context_handles_missing_memory_service(self, mock_get_client):
+    async def test_assemble_context_handles_missing_memory_service(self):
         """Test _assemble_context gracefully handles missing memory service."""
         from src.orchestrator.jarvis import JarvisOrchestrator
 
-        mock_get_client.return_value = AsyncMock()
         settings = make_mock_settings(daily_token_budget_usd=5.0, use_bedrock=False)
         db_factory = MagicMock()
 
@@ -105,13 +99,11 @@ class TestContextAssembly:
         assert "Relevant Entities" in context
         assert "Bob" in context
 
-    @patch("src.orchestrator.jarvis.get_anthropic_client")
     @pytest.mark.asyncio
-    async def test_assemble_context_handles_empty_results(self, mock_get_client):
+    async def test_assemble_context_handles_empty_results(self):
         """Test _assemble_context returns empty when services return no results."""
         from src.orchestrator.jarvis import JarvisOrchestrator
 
-        mock_get_client.return_value = AsyncMock()
         settings = make_mock_settings(daily_token_budget_usd=5.0, use_bedrock=False)
         db_factory = MagicMock()
 
@@ -135,13 +127,11 @@ class TestContextAssembly:
             assert "Relevant Entities" not in context
             assert "User Preferences" not in context
 
-    @patch("src.orchestrator.jarvis.get_anthropic_client")
     @pytest.mark.asyncio
-    async def test_assemble_context_handles_service_exceptions(self, mock_get_client):
+    async def test_assemble_context_handles_service_exceptions(self):
         """Test _assemble_context handles service exceptions gracefully."""
         from src.orchestrator.jarvis import JarvisOrchestrator
 
-        mock_get_client.return_value = AsyncMock()
         settings = make_mock_settings(daily_token_budget_usd=5.0, use_bedrock=False)
         db_factory = MagicMock()
 
@@ -171,13 +161,11 @@ class TestContextAssembly:
 class TestSystemPromptBuilding:
     """Test system prompt building with cache control."""
 
-    @patch("src.orchestrator.jarvis.get_anthropic_client")
-    def test_build_system_prompt_returns_list_with_cache_control(self, mock_get_client):
+    def test_build_system_prompt_returns_list_with_cache_control(self):
         """Test _build_system_prompt returns list with cache_control."""
         from src.orchestrator.agents import AGENTS
         from src.orchestrator.jarvis import JarvisOrchestrator
 
-        mock_get_client.return_value = AsyncMock()
         settings = make_mock_settings(daily_token_budget_usd=5.0, use_bedrock=False)
 
         orchestrator = JarvisOrchestrator(
@@ -197,13 +185,11 @@ class TestSystemPromptBuilding:
         expected_prompt = agent.prompt.format(capability_summary="No capabilities connected yet.")
         assert expected_prompt in blocks[0]["text"]
 
-    @patch("src.orchestrator.jarvis.get_anthropic_client")
-    def test_build_system_prompt_includes_context_block(self, mock_get_client):
+    def test_build_system_prompt_includes_context_block(self):
         """Test _build_system_prompt adds context block when provided."""
         from src.orchestrator.agents import AGENTS
         from src.orchestrator.jarvis import JarvisOrchestrator
 
-        mock_get_client.return_value = AsyncMock()
         settings = make_mock_settings(daily_token_budget_usd=5.0, use_bedrock=False)
 
         orchestrator = JarvisOrchestrator(
@@ -226,12 +212,10 @@ class TestSystemPromptBuilding:
 class TestToolCacheControl:
     """Test tool cache control application."""
 
-    @patch("src.orchestrator.jarvis.get_anthropic_client")
-    def test_apply_cache_control_to_tools_marks_last_tool(self, mock_get_client):
+    def test_apply_cache_control_to_tools_marks_last_tool(self):
         """Test _apply_cache_control_to_tools adds cache_control to last tool."""
         from src.orchestrator.jarvis import JarvisOrchestrator
 
-        mock_get_client.return_value = AsyncMock()
         settings = make_mock_settings(daily_token_budget_usd=5.0, use_bedrock=False)
 
         orchestrator = JarvisOrchestrator(
@@ -259,12 +243,10 @@ class TestToolCacheControl:
         assert result[2]["cache_control"]["type"] == "ephemeral"
         assert result[2]["name"] == "tool_c"
 
-    @patch("src.orchestrator.jarvis.get_anthropic_client")
-    def test_apply_cache_control_to_empty_tools(self, mock_get_client):
+    def test_apply_cache_control_to_empty_tools(self):
         """Test _apply_cache_control_to_tools handles empty tool list."""
         from src.orchestrator.jarvis import JarvisOrchestrator
 
-        mock_get_client.return_value = AsyncMock()
         settings = make_mock_settings(daily_token_budget_usd=5.0, use_bedrock=False)
 
         orchestrator = JarvisOrchestrator(
@@ -274,12 +256,10 @@ class TestToolCacheControl:
         result = orchestrator._apply_cache_control_to_tools([])
         assert result == []
 
-    @patch("src.orchestrator.jarvis.get_anthropic_client")
-    def test_apply_cache_control_to_single_tool(self, mock_get_client):
+    def test_apply_cache_control_to_single_tool(self):
         """Test _apply_cache_control_to_tools with single tool."""
         from src.orchestrator.jarvis import JarvisOrchestrator
 
-        mock_get_client.return_value = AsyncMock()
         settings = make_mock_settings(daily_token_budget_usd=5.0, use_bedrock=False)
 
         orchestrator = JarvisOrchestrator(

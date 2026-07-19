@@ -230,15 +230,11 @@ async def test_learn_handles_planner_intent(mock_mem_cls, learner):
 # --- Integration tests: orchestrator wiring ---
 
 
-@patch("src.orchestrator.jarvis.get_anthropic_client")
 @pytest.mark.asyncio
-async def test_orchestrator_initializes_learner_when_memory_service_present(mock_get_client):
+async def test_orchestrator_initializes_learner_when_memory_service_present():
     """Verify JarvisOrchestrator creates InteractionLearner when memory_service exists."""
     from src.orchestrator.jarvis import JarvisOrchestrator
     from src.orchestrator.services import ServiceContainer
-
-    mock_client = MagicMock()
-    mock_get_client.return_value = mock_client
 
     services = ServiceContainer(memory_service=MagicMock())
     settings = make_mock_settings()
@@ -254,9 +250,8 @@ async def test_orchestrator_initializes_learner_when_memory_service_present(mock
     assert isinstance(orch._interaction_learner, InteractionLearner)
 
 
-@patch("src.orchestrator.jarvis.get_anthropic_client")
 @pytest.mark.asyncio
-async def test_orchestrator_creates_learner_without_container_memory_service(mock_get_client):
+async def test_orchestrator_creates_learner_without_container_memory_service():
     """Learner is created from db_factory alone (P2 #4).
 
     The learner extracts memories via db_factory (per-op sessions), so it must
@@ -265,9 +260,6 @@ async def test_orchestrator_creates_learner_without_container_memory_service(moc
     """
     from src.orchestrator.jarvis import JarvisOrchestrator
     from src.orchestrator.services import ServiceContainer
-
-    mock_client = MagicMock()
-    mock_get_client.return_value = mock_client
 
     services = ServiceContainer(memory_service=None)  # shared-container shape
     settings = make_mock_settings()

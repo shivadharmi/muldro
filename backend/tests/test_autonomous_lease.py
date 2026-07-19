@@ -21,7 +21,7 @@ Groups:
 
 import asyncio
 import uuid
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 import redis.asyncio as redis_async
@@ -138,12 +138,10 @@ async def test_owner_token_cas_release_does_not_delete_new_owners_key():
 
 
 def _make_executor(redis=None):
-    with patch("src.services.graph_executor.get_anthropic_client") as mock_client:
-        mock_client.return_value = MagicMock()
-        from src.services.graph_executor import GraphExecutor
-        from tests.conftest import make_mock_settings
+    from src.services.graph_executor import GraphExecutor
+    from tests.conftest import make_mock_settings
 
-        return GraphExecutor(make_mock_settings(), AsyncMock(), redis=redis)
+    return GraphExecutor(make_mock_settings(), AsyncMock(), redis=redis)
 
 
 def _stub_run(run_id):

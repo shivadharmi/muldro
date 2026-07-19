@@ -1,6 +1,6 @@
 """Tests for _handle_system_capability, plan persistence, and public orchestrator methods."""
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -23,8 +23,7 @@ def _make_orchestrator():
     services.memory_service.store_briefing_memory = AsyncMock(return_value="mem_brief789")
     services.redis = None
 
-    with patch("src.orchestrator.jarvis.get_anthropic_client"):
-        orch = JarvisOrchestrator(settings=settings, db_factory=db_factory, services=services)
+    orch = JarvisOrchestrator(settings=settings, db_factory=db_factory, services=services)
     return orch
 
 

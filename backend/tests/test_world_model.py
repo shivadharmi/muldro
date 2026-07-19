@@ -29,12 +29,9 @@ def mock_db():
     return db
 
 
-@patch("src.services.world_model.get_anthropic_client")
 @pytest.mark.asyncio
-async def test_upsert_creates_new_entity(mock_get_client, settings, mock_db):
+async def test_upsert_creates_new_entity(settings, mock_db):
     """Upserting a new entity should create it with an ent_ ID."""
-    mock_get_client.return_value = MagicMock()
-
     wm = WorldModel(settings=settings, db=mock_db)
     entity_id = await wm.upsert_entity(
         user_id=TEST_USER_ID,
@@ -49,9 +46,8 @@ async def test_upsert_creates_new_entity(mock_get_client, settings, mock_db):
     mock_db.commit.assert_called_once()
 
 
-@patch("src.services.world_model.get_anthropic_client")
 @pytest.mark.asyncio
-async def test_upsert_updates_existing_entity(mock_get_client, settings, mock_db):
+async def test_upsert_updates_existing_entity(settings, mock_db):
     """Upserting an existing entity should merge attributes."""
     # Simulate existing entity found
     existing_entity = MagicMock()
@@ -69,8 +65,6 @@ async def test_upsert_updates_existing_entity(mock_get_client, settings, mock_db
     alias_result = MagicMock()
     alias_result.scalars.return_value.all.return_value = []
     mock_db.execute = AsyncMock(side_effect=[result_mock, no_fact, alias_result])
-
-    mock_get_client.return_value = MagicMock()
 
     wm = WorldModel(settings=settings, db=mock_db)
     entity_id = await wm.upsert_entity(

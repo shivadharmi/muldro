@@ -321,29 +321,27 @@ def _executor_reaching_mismatch(run: MagicMock):
     """A GraphExecutor whose ``_resume_run_body`` reaches the checkpoint-mismatch gate
     with every heavy collaborator mocked out. ``_get_all_steps`` returns a single
     ``running`` step so ``actual_completed`` ({}) != ``cp_completed`` ({step_A})."""
-    with patch("src.services.graph_executor.get_anthropic_client") as mock_client:
-        mock_client.return_value = MagicMock()
-        from src.services.graph_executor import GraphExecutor
+    from src.services.graph_executor import GraphExecutor
 
-        db = AsyncMock()
-        db.add = MagicMock()
-        db.flush = AsyncMock()
-        db.commit = AsyncMock()
-        run_result = MagicMock()
-        run_result.scalar_one_or_none.return_value = run
-        db.execute = AsyncMock(return_value=run_result)
+    db = AsyncMock()
+    db.add = MagicMock()
+    db.flush = AsyncMock()
+    db.commit = AsyncMock()
+    run_result = MagicMock()
+    run_result.scalar_one_or_none.return_value = run
+    db.execute = AsyncMock(return_value=run_result)
 
-        executor = GraphExecutor(make_mock_settings(), db)
-        executor._execute_dag = AsyncMock()
-        executor._finalize_trace = AsyncMock()
-        executor._reconcile_plan_status = AsyncMock()
-        executor._checkpoint_trace = AsyncMock()
+    executor = GraphExecutor(make_mock_settings(), db)
+    executor._execute_dag = AsyncMock()
+    executor._finalize_trace = AsyncMock()
+    executor._reconcile_plan_status = AsyncMock()
+    executor._checkpoint_trace = AsyncMock()
 
-        step = MagicMock()
-        step.step_id = "step_B"
-        step.status = "running"
-        executor._get_all_steps = AsyncMock(return_value=[step])
-        return executor, db
+    step = MagicMock()
+    step.step_id = "step_B"
+    step.status = "running"
+    executor._get_all_steps = AsyncMock(return_value=[step])
+    return executor, db
 
 
 async def test_deep_gate_reconciles_on_resume():

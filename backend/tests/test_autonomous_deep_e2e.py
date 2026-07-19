@@ -413,17 +413,16 @@ def _build_graph_executor(*, db, factory, redis, deep_step_runner, execute_tool_
     overridden after construction. redis is real (lease + effective_runtime gate)."""
     from src.services.graph_executor import GraphExecutor
 
-    with patch("src.services.graph_executor.get_anthropic_client", return_value=MagicMock()):
-        gx = GraphExecutor(
-            make_mock_settings(runtime="legacy", resolved_model="claude-test"),
-            db,
-            db_factory=factory,
-            execute_tool_fn=execute_tool_fn,
-            budget=MagicMock(),
-            circuit_breaker=MagicMock(),
-            redis=redis,
-            deep_step_runner=deep_step_runner,
-        )
+    gx = GraphExecutor(
+        make_mock_settings(runtime="legacy", resolved_model="claude-test"),
+        db,
+        db_factory=factory,
+        execute_tool_fn=execute_tool_fn,
+        budget=MagicMock(),
+        circuit_breaker=MagicMock(),
+        redis=redis,
+        deep_step_runner=deep_step_runner,
+    )
     gx._trust_engine = _auto_execute_engine()
     # Audit logging is an orthogonal side-record; stub it so the e2e never depends on the
     # audit_log table shape (the P1–P6 seams under test are unaffected).
@@ -814,10 +813,9 @@ async def test_nc3_lease_single_flight_double_drive_guard():
     run_id = f"run_{ULID()}"
     key = run_lease_key(run_id)
     try:
-        with patch("src.services.graph_executor.get_anthropic_client", return_value=MagicMock()):
-            from src.services.graph_executor import GraphExecutor
+        from src.services.graph_executor import GraphExecutor
 
-            gx = GraphExecutor(make_mock_settings(runtime="legacy"), AsyncMock(), redis=r)
+        gx = GraphExecutor(make_mock_settings(runtime="legacy"), AsyncMock(), redis=r)
 
         run = MagicMock()
         run.run_id = run_id

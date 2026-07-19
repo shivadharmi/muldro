@@ -19,7 +19,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from ulid import ULID
 
-from src.config.settings import Settings, get_anthropic_client
+from src.config.settings import Settings
 from src.llm.utility import complete_text
 from src.models.approvals import Approval
 from src.models.briefings import Briefing
@@ -146,7 +146,6 @@ class Presenter:
     def __init__(self, settings: Settings, db: AsyncSession, notifier=None):
         self._settings = settings
         self._db = db
-        self._client = get_anthropic_client(settings)
         self._notifier = notifier
 
     @staticmethod

@@ -16,7 +16,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from ulid import ULID
 
-from src.config.settings import Settings, get_anthropic_client
+from src.config.settings import Settings
 from src.connectors.mcp_bridge import close_turn_sessions
 from src.contracts import PolicyDecision
 from src.integrations.turn_scope import turn_scope
@@ -87,7 +87,6 @@ class GraphExecutor:
     ):
         self._settings = settings
         self._db = db
-        self._client = get_anthropic_client(settings)
         self._audit = AuditService(db)
         self._event_bus = event_bus
         self._notifier = notifier
@@ -130,7 +129,7 @@ class GraphExecutor:
         # source of truth (tests reassign _db_factory; _active_traces is owned here).
         self._runner = StepRunner(
             settings=settings,
-            client=self._client,
+            client=None,
             store=self._store,
             emitter=self._surface_emitter,
             db_factory_provider=lambda: self._db_factory,
@@ -148,7 +147,7 @@ class GraphExecutor:
         # step pipeline below; this holds the helpers it calls.
         self._trust_gate = TrustGate(
             db=db,
-            client=self._client,
+            client=None,
             redis=redis,
             notifier_provider=lambda: self._notifier,
             store=self._store,

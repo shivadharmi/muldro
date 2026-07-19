@@ -151,10 +151,9 @@ def _connected(server_name: str, display_name: str, connected: bool) -> Integrat
 
 
 @patch("src.services.presenter.get_integration_statuses")
-@patch("src.services.presenter.get_anthropic_client")
 @pytest.mark.asyncio
 async def test_briefing_context_includes_connected_when_zero_events(
-    mock_get_client, mock_statuses, settings, mock_db
+    mock_statuses, settings, mock_db
 ):
     """Bug A: when integrations are connected but events=0, the LLM context must
     carry a 'connected' signal so the model does not free-associate disconnection.
@@ -163,7 +162,6 @@ async def test_briefing_context_includes_connected_when_zero_events(
         _connected("google-workspace", "Gmail", connected=True),
         _connected("google-calendar", "Calendar", connected=True),
     ]
-    mock_get_client.return_value = MagicMock()
 
     presenter = Presenter(settings=settings, db=mock_db)
     # mock_db default returns no events / plans / approvals → quiet day
@@ -179,11 +177,8 @@ async def test_briefing_context_includes_connected_when_zero_events(
 
 
 @patch("src.services.presenter.get_integration_statuses")
-@patch("src.services.presenter.get_anthropic_client")
 @pytest.mark.asyncio
-async def test_briefing_context_flags_disconnected_integration(
-    mock_get_client, mock_statuses, settings, mock_db
-):
+async def test_briefing_context_flags_disconnected_integration(mock_statuses, settings, mock_db):
     """A genuinely disconnected integration should be surfaced as not connected
     so a 'verify integrations' suggestion is appropriate.
     """
@@ -191,7 +186,6 @@ async def test_briefing_context_flags_disconnected_integration(
         _connected("google-workspace", "Gmail", connected=True),
         _connected("slack", "Slack", connected=False),
     ]
-    mock_get_client.return_value = MagicMock()
 
     presenter = Presenter(settings=settings, db=mock_db)
     context = await presenter._gather_briefing_data(

@@ -28,11 +28,8 @@ def mock_db():
 
 @patch("src.services.memory_service.extraction.complete_text")
 @patch("src.services.memory_service._base.EmbeddingService")
-@patch("src.services.memory_service._base.get_anthropic_client")
 @pytest.mark.asyncio
-async def test_extract_stores_with_embedding(
-    mock_get_client, mock_embed_cls, mock_complete, settings, mock_db
-):
+async def test_extract_stores_with_embedding(mock_embed_cls, mock_complete, settings, mock_db):
     """Should store memories with embeddings when available."""
     extraction = {
         "memories": [
@@ -68,12 +65,9 @@ async def test_extract_stores_with_embedding(
 
 
 @patch("src.services.memory_service._base.EmbeddingService")
-@patch("src.services.memory_service._base.get_anthropic_client")
 @pytest.mark.asyncio
-async def test_semantic_retrieve_with_embedding(mock_get_client, mock_embed_cls, settings, mock_db):
+async def test_semantic_retrieve_with_embedding(mock_embed_cls, settings, mock_db):
     """Should use Qdrant semantic search when query embedding succeeds."""
-    mock_get_client.return_value = MagicMock()
-
     fake_embedding = [0.2] * 1024
     mock_embedder = MagicMock()
     mock_embedder.embed_text = AsyncMock(return_value=fake_embedding)
@@ -121,14 +115,9 @@ async def test_semantic_retrieve_with_embedding(mock_get_client, mock_embed_cls,
 
 
 @patch("src.services.memory_service._base.EmbeddingService")
-@patch("src.services.memory_service._base.get_anthropic_client")
 @pytest.mark.asyncio
-async def test_text_fallback_when_embedding_fails(
-    mock_get_client, mock_embed_cls, settings, mock_db
-):
+async def test_text_fallback_when_embedding_fails(mock_embed_cls, settings, mock_db):
     """Should fall back to ILIKE search when embedding fails."""
-    mock_get_client.return_value = MagicMock()
-
     mock_embedder = MagicMock()
     mock_embedder.embed_text = AsyncMock(return_value=None)  # Embedding fails
     mock_embed_cls.return_value = mock_embedder
@@ -154,11 +143,8 @@ async def test_text_fallback_when_embedding_fails(
 
 @patch("src.services.memory_service.extraction.complete_text")
 @patch("src.services.memory_service._base.EmbeddingService")
-@patch("src.services.memory_service._base.get_anthropic_client")
 @pytest.mark.asyncio
-async def test_extract_preferences(
-    mock_get_client, mock_embed_cls, mock_complete, settings, mock_db
-):
+async def test_extract_preferences(mock_embed_cls, mock_complete, settings, mock_db):
     """Should extract and store user preferences."""
     extraction = {
         "preferences": [
@@ -193,11 +179,9 @@ async def test_extract_preferences(
 
 
 @patch("src.services.memory_service._base.EmbeddingService")
-@patch("src.services.memory_service._base.get_anthropic_client")
 @pytest.mark.asyncio
-async def test_get_user_preferences(mock_get_client, mock_embed_cls, settings, mock_db):
+async def test_get_user_preferences(mock_embed_cls, settings, mock_db):
     """Should retrieve user preferences filtered by category."""
-    mock_get_client.return_value = MagicMock()
     mock_embed_cls.return_value = MagicMock()
 
     mock_pref = MagicMock()

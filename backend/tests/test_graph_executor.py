@@ -41,11 +41,9 @@ def _make_plan(plan_id="plan_001", tasks=None):
 
 
 def _make_executor(settings, mock_db):
-    with patch("src.services.graph_executor.get_anthropic_client") as mock_client:
-        mock_client.return_value = MagicMock()
-        from src.services.graph_executor import GraphExecutor
+    from src.services.graph_executor import GraphExecutor
 
-        return GraphExecutor(settings, mock_db)
+    return GraphExecutor(settings, mock_db)
 
 
 class TestBuildGraphDefinition:
@@ -71,9 +69,7 @@ class TestBuildGraphDefinition:
 
 
 class TestCreateRun:
-    @patch("src.services.graph_executor.get_anthropic_client")
-    async def test_creates_run_with_steps(self, mock_client, settings, mock_db):
-        mock_client.return_value = MagicMock()
+    async def test_creates_run_with_steps(self, settings, mock_db):
         from src.services.graph_executor import GraphExecutor
 
         plan = _make_plan(
@@ -100,9 +96,7 @@ class TestCreateRun:
 
 
 class TestCancelRun:
-    @patch("src.services.graph_executor.get_anthropic_client")
-    async def test_cancels_and_skips_pending(self, mock_client, settings, mock_db):
-        mock_client.return_value = MagicMock()
+    async def test_cancels_and_skips_pending(self, settings, mock_db):
         from src.services.graph_executor import GraphExecutor
 
         run = MagicMock()
@@ -139,9 +133,7 @@ class TestCancelRun:
 
 
 class TestPauseRun:
-    @patch("src.services.graph_executor.get_anthropic_client")
-    async def test_pauses_running(self, mock_client, settings, mock_db):
-        mock_client.return_value = MagicMock()
+    async def test_pauses_running(self, settings, mock_db):
         from src.services.graph_executor import GraphExecutor
 
         run = MagicMock()
@@ -161,9 +153,7 @@ class TestPauseRun:
 
 
 class TestResumeRun:
-    @patch("src.services.graph_executor.get_anthropic_client")
-    async def test_rejects_non_paused(self, mock_client, settings, mock_db):
-        mock_client.return_value = MagicMock()
+    async def test_rejects_non_paused(self, settings, mock_db):
         from src.services.graph_executor import GraphExecutor
 
         run = MagicMock()
@@ -178,8 +168,7 @@ class TestResumeRun:
         with pytest.raises(ValueError, match="not resumable"):
             await executor.resume_run("run_001")
 
-    @patch("src.services.graph_executor.get_anthropic_client")
-    async def test_resume_uses_fresh_trace_id(self, mock_client, settings, mock_db):
+    async def test_resume_uses_fresh_trace_id(self, settings, mock_db):
         """Regression: each resume segment must get a fresh trace_id.
 
         TraceStore._store_to_db does INSERT (not upsert). If resume reused
@@ -191,8 +180,6 @@ class TestResumeRun:
         from datetime import datetime, timezone
 
         from src.services.graph_executor import GraphExecutor
-
-        mock_client.return_value = MagicMock()
 
         now = datetime.now(timezone.utc)
         run = MagicMock()
@@ -233,12 +220,8 @@ class TestResumeRun:
 class TestPopulateStepsCapabilityMapping:
     """Integration tests for _populate_steps preserving capability through input_data."""
 
-    @patch("src.services.graph_executor.get_anthropic_client")
-    async def test_populate_steps_maps_capability_from_plan_task(
-        self, mock_client, settings, mock_db
-    ):
+    async def test_populate_steps_maps_capability_from_plan_task(self, settings, mock_db):
         """_populate_steps copies capability from PlanTask.input_data into TaskStep.input_data."""
-        mock_client.return_value = MagicMock()
         from src.services.graph_executor import GraphExecutor
 
         # Build a PlanTask with capability in input_data
@@ -283,12 +266,8 @@ class TestPopulateStepsCapabilityMapping:
         assert step.input_data.get("capability") == "email.draft"
         assert step.input_data.get("task_type") == "draft_email"
 
-    @patch("src.services.graph_executor.get_anthropic_client")
-    async def test_populate_steps_capability_preserved_without_task_type(
-        self, mock_client, settings, mock_db
-    ):
+    async def test_populate_steps_capability_preserved_without_task_type(self, settings, mock_db):
         """_populate_steps preserves capability even when task_type is absent from input_data."""
-        mock_client.return_value = MagicMock()
         from src.services.graph_executor import GraphExecutor
 
         plan_task = _make_plan_task(
@@ -331,12 +310,8 @@ class TestPopulateStepsCapabilityMapping:
 class TestExecuteStepCapabilityReading:
     """Integration tests for _execute_step reading capability from step.input_data."""
 
-    @patch("src.services.graph_executor.get_anthropic_client")
-    async def test_execute_step_calls_trust_engine_with_capability(
-        self, mock_client, settings, mock_db
-    ):
+    async def test_execute_step_calls_trust_engine_with_capability(self, settings, mock_db):
         """_execute_step extracts capability from step.input_data and passes it to trust engine."""
-        mock_client.return_value = MagicMock()
         from src.services.graph_executor import GraphExecutor
 
         executor = GraphExecutor(settings, mock_db)
@@ -384,12 +359,8 @@ class TestExecuteStepCapabilityReading:
         # Verify trust engine was called with the correct capability
         trust_engine.evaluate.assert_called_once_with("email.draft", "low", workspace_id="ws_test")
 
-    @patch("src.services.graph_executor.get_anthropic_client")
-    async def test_execute_step_falls_back_to_task_type_when_no_capability(
-        self, mock_client, settings, mock_db
-    ):
+    async def test_execute_step_falls_back_to_task_type_when_no_capability(self, settings, mock_db):
         """_execute_step falls back to task_type when capability is absent from input_data."""
-        mock_client.return_value = MagicMock()
         from src.services.graph_executor import GraphExecutor
 
         executor = GraphExecutor(settings, mock_db)
@@ -463,11 +434,7 @@ class TestExecuteStepEmptyCapabilityFailsClosed:
     auto-execute path (no risk assessment, no tool action).
     """
 
-    @patch("src.services.graph_executor.get_anthropic_client")
-    async def test_empty_capability_with_trust_engine_does_not_execute(
-        self, mock_client, settings, mock_db
-    ):
-        mock_client.return_value = MagicMock()
+    async def test_empty_capability_with_trust_engine_does_not_execute(self, settings, mock_db):
         from src.services.graph_executor import GraphExecutor
 
         executor = GraphExecutor(settings, mock_db)
@@ -510,12 +477,8 @@ class TestExecuteStepEmptyCapabilityFailsClosed:
         # Step ended in a terminal non-execution state (failed contract violation).
         assert step.status == "failed"
 
-    @patch("src.services.graph_executor.get_anthropic_client")
-    async def test_empty_capability_missing_input_data_does_not_execute(
-        self, mock_client, settings, mock_db
-    ):
+    async def test_empty_capability_missing_input_data_does_not_execute(self, settings, mock_db):
         """input_data is None entirely → still fail-closed, not ungated execution."""
-        mock_client.return_value = MagicMock()
         from src.services.graph_executor import GraphExecutor
 
         executor = GraphExecutor(settings, mock_db)
@@ -549,11 +512,9 @@ class TestExecuteStepEmptyCapabilityFailsClosed:
         executor._dag_runner.finalize_step.assert_not_called()
         assert step.status == "failed"
 
-    @patch("src.services.graph_executor.get_anthropic_client")
-    async def test_resumed_step_skips_gate(self, mock_client, settings, mock_db):
+    async def test_resumed_step_skips_gate(self, settings, mock_db):
         """Already-approved (status == 'running') steps bypass the gate entirely and
         execute via the common path — the fail-closed guard must not break resume."""
-        mock_client.return_value = MagicMock()
         from src.services.graph_executor import GraphExecutor
 
         executor = GraphExecutor(settings, mock_db)
@@ -622,9 +583,7 @@ class TestAuthRequiredDeferral:
         run.checkpoint = {}
         return step, run
 
-    @patch("src.services.graph_executor.get_anthropic_client")
-    async def test_auth_required_output_defers_run(self, mock_client, settings, mock_db):
-        mock_client.return_value = MagicMock()
+    async def test_auth_required_output_defers_run(self, settings, mock_db):
         from src.services.graph_executor import GraphExecutor
 
         executor = GraphExecutor(settings, mock_db)
@@ -691,11 +650,9 @@ class TestAuthRequiredDeferral:
         executor._dag_runner.finalize_step.assert_not_called()
         executor._dag_runner.handle_step_failure.assert_not_called()
 
-    @patch("src.services.graph_executor.get_anthropic_client")
-    async def test_auth_required_top_level_error_code_defers(self, mock_client, settings, mock_db):
+    async def test_auth_required_top_level_error_code_defers(self, settings, mock_db):
         """Even without a nested ``auth_required`` key, a top-level
         ``error_code == 'auth_required'`` output defers the run."""
-        mock_client.return_value = MagicMock()
         from src.services.graph_executor import GraphExecutor
 
         executor = GraphExecutor(settings, mock_db)
@@ -736,10 +693,8 @@ class TestAuthRequiredDeferral:
         executor._dag_runner.finalize_step.assert_not_called()
         executor._dag_runner.handle_step_failure.assert_not_called()
 
-    @patch("src.services.graph_executor.get_anthropic_client")
-    async def test_normal_output_still_finalizes(self, mock_client, settings, mock_db):
+    async def test_normal_output_still_finalizes(self, settings, mock_db):
         """A non-auth output is finalized normally (deferral does not interfere)."""
-        mock_client.return_value = MagicMock()
         from src.services.graph_executor import GraphExecutor
 
         executor = GraphExecutor(settings, mock_db)

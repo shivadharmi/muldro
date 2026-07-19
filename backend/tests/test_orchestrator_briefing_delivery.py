@@ -5,7 +5,7 @@ push. A second run for the same date (slow tick / worker restart) must NOT
 re-deliver — the per-day briefing row is the idempotency key.
 """
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -43,12 +43,11 @@ def _build_orchestrator(notifier, *, briefing_exists: bool):
 
     services = ServiceContainer(notifier=notifier)
 
-    with patch("src.orchestrator.jarvis.get_anthropic_client", return_value=AsyncMock()):
-        orch = JarvisOrchestrator(
-            settings=settings,
-            db_factory=db_factory,
-            services=services,
-        )
+    orch = JarvisOrchestrator(
+        settings=settings,
+        db_factory=db_factory,
+        services=services,
+    )
 
     # Avoid real tool execution + agent calls.
     orch._execute_tool = AsyncMock(return_value={"headline": "quiet"})

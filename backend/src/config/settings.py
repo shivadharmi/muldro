@@ -1,6 +1,5 @@
 from functools import lru_cache
 
-import anthropic
 from pydantic_settings import BaseSettings
 
 
@@ -52,8 +51,6 @@ class Settings(BaseSettings):
     # Anthropic
     anthropic_api_key: str = ""
     anthropic_model: str = "claude-sonnet-4-6"
-    use_bedrock: bool = False
-    bedrock_region: str = "us-east-1"
 
     # Server
     host: str = "0.0.0.0"
@@ -237,9 +234,7 @@ class Settings(BaseSettings):
 
     @property
     def resolved_model(self) -> str:
-        """Return the model ID appropriate for the configured backend (direct API or Bedrock)."""
-        if self.use_bedrock:
-            return _to_bedrock_model_id(self.anthropic_model)
+        """Return the configured direct-Anthropic model ID."""
         return self.anthropic_model
 
     @property
@@ -254,11 +249,10 @@ class Settings(BaseSettings):
 
         Raises RuntimeError with an actionable message. Called once at app startup.
         """
-        if not self.use_bedrock and not self.anthropic_api_key:
+        if not self.anthropic_api_key:
             raise RuntimeError(
                 "JARVIS_ANTHROPIC_API_KEY is not set. Jarvis cannot talk to any agent "
-                "without it. Set it in your .env (get a key at https://console.anthropic.com), "
-                "or set JARVIS_USE_BEDROCK=true to use AWS Bedrock credentials instead."
+                "without it. Set it in your .env (get a key at https://console.anthropic.com)."
             )
 
         if self.is_production and not self.oauth_encryption_key:
@@ -270,63 +264,6 @@ class Settings(BaseSettings):
             )
 
 
-# Mapping from direct API model IDs to Bedrock inference profile IDs
-# Uses cross-region profiles (apac/global) that work in ap-south-1
-_BEDROCK_MODEL_MAP = {
-    # Claude 4 (legacy)
-    "claude-opus-4-20250514": "us.anthropic.claude-opus-4-5-20251101-v1:0",
-    "claude-sonnet-4-20250514": "us.anthropic.claude-sonnet-4-20250514-v1:0",
-    "claude-haiku-4-20250514": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
-    # Claude 4.5 (legacy)
-    "claude-sonnet-4-5-20250929": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
-    "claude-haiku-4-5-20251001": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
-    "claude-opus-4-5-20251101": "us.anthropic.claude-opus-4-5-20251101-v1:0",
-    # Claude 4.6 / 4.8 (latest)
-    "claude-sonnet-4-6": "us.anthropic.claude-sonnet-4-6",
-    "claude-opus-4-6": "us.anthropic.claude-opus-4-6-v1",
-    "claude-opus-4-8": "us.anthropic.claude-opus-4-8",
-}
-
-
-def _to_bedrock_model_id(model: str) -> str:
-    """Convert a direct API model ID to its Bedrock equivalent."""
-    if model in _BEDROCK_MODEL_MAP:
-        return _BEDROCK_MODEL_MAP[model]
-    # Already a Bedrock model ID
-    if model.startswith("anthropic."):
-        return model
-    # Fallback: wrap with Bedrock convention
-    return f"anthropic.{model}-v1:0"
-
-
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
-
-
-_anthropic_client: anthropic.AsyncAnthropic | None = None
-
-
-def get_anthropic_client(settings: Settings) -> anthropic.AsyncAnthropic:
-    """Return a shared Anthropic client (singleton).
-
-    Reusing a single client avoids leaking aiohttp/httpx sessions that each
-    new AsyncAnthropic() instance creates internally.
-    """
-    global _anthropic_client
-    if _anthropic_client is None:
-        if settings.use_bedrock:
-            from anthropic import AsyncAnthropicBedrock
-
-            _anthropic_client = AsyncAnthropicBedrock(aws_region=settings.bedrock_region)  # type: ignore[assignment]
-        else:
-            _anthropic_client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
-    return _anthropic_client
-
-
-async def close_anthropic_client() -> None:
-    """Close the shared Anthropic client. Call at app shutdown."""
-    global _anthropic_client
-    if _anthropic_client is not None:
-        await _anthropic_client.close()
-        _anthropic_client = None

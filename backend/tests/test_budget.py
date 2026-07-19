@@ -107,19 +107,6 @@ class TestCalculateCost:
         )
         assert cost == 0.0
 
-    def test_bedrock_pricing(self):
-        cost = self.tracker.calculate_cost(
-            model="anthropic.claude-opus-4-20250514-v1:0",
-            input_tokens=1000,
-            output_tokens=500,
-        )
-        expected = self.tracker.calculate_cost(
-            model="claude-opus-4-20250514",
-            input_tokens=1000,
-            output_tokens=500,
-        )
-        assert cost == expected
-
 
 class TestUnknownModelWarning:
     """The 'unknown model' warning must only fire when there are billable tokens.

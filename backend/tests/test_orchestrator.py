@@ -229,7 +229,6 @@ class TestAgents:
             return tool
 
         # Mock registry
-        from unittest.mock import patch
 
         with patch("src.services.tool_registry.ToolRegistry") as mock_reg_cls:
             mock_reg = MagicMock()
@@ -349,14 +348,12 @@ class TestPrompts:
 
 
 class TestOrchestrator:
-    @patch("src.orchestrator.jarvis.get_anthropic_client")
-    async def test_process_message_routes_to_planner(self, mock_get_client):
+    async def test_process_message_routes_to_planner(self):
         from unittest.mock import AsyncMock
 
         from src.orchestrator.jarvis import JarvisOrchestrator
 
         mock_client = AsyncMock()
-        mock_get_client.return_value = mock_client
 
         # Mock Claude response (text only, no tool use)
         mock_response = MagicMock()
@@ -414,8 +411,7 @@ class TestOrchestrator:
         assert "plan" in result or "trace_id" in result
         assert result["trace_id"].startswith("trace_")
 
-    @patch("src.orchestrator.jarvis.get_anthropic_client")
-    async def test_extract_plan_from_json(self, mock_get_client):
+    async def test_extract_plan_from_json(self):
         from src.orchestrator.intent_classifier import extract_plan
 
         # Test JSON extraction — returns PlanOutput
@@ -428,8 +424,7 @@ class TestOrchestrator:
         assert result.goal == "Create task"
         assert result.priority == "high"
 
-    @patch("src.orchestrator.jarvis.get_anthropic_client")
-    async def test_extract_plan_fallback(self, mock_get_client):
+    async def test_extract_plan_fallback(self):
         from src.orchestrator.intent_classifier import extract_plan
 
         # No JSON in response — fallback to PlanOutput defaults

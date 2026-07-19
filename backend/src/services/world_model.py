@@ -21,7 +21,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from ulid import ULID
 
-from src.config.settings import Settings, get_anthropic_client
+from src.config.settings import Settings
 from src.llm.utility import complete_text
 from src.models.entities import Entity, EntityAlias, EntityRelationship
 from src.models.events import NormalizedEvent
@@ -263,7 +263,6 @@ class WorldModel:
     ):
         self._settings = settings
         self._db = db
-        self._client = get_anthropic_client(settings)
         self._event_bus = event_bus
         self._embedding_service = embedding_service
         self._vector_store = vector_store

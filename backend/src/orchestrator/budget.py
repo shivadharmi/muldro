@@ -27,13 +27,6 @@ MODEL_PRICING = {
     "claude-opus-4-20250514": {"input": 15.0, "output": 75.0},
     "claude-sonnet-4-20250514": {"input": 3.0, "output": 15.0},
     "claude-haiku-4-20250514": {"input": 0.80, "output": 4.0},
-    # Bedrock us.* inference profiles
-    "us.anthropic.claude-opus-4-8": {"input": 15.0, "output": 75.0},
-    "us.anthropic.claude-sonnet-4-6": {"input": 3.0, "output": 15.0},
-    "us.anthropic.claude-haiku-4-5-20251001-v1:0": {"input": 0.80, "output": 4.0},
-    # Legacy Bedrock
-    "anthropic.claude-opus-4-20250514-v1:0": {"input": 15.0, "output": 75.0},
-    "anthropic.claude-sonnet-4-20250514-v1:0": {"input": 3.0, "output": 15.0},
 }
 CACHE_WRITE_MULTIPLIER = 1.25
 CACHE_READ_MULTIPLIER = 0.10
@@ -93,7 +86,7 @@ class BudgetTracker:
         if not pricing:
             logger.warning(
                 "Unknown model %r not in MODEL_PRICING — billing at Sonnet rates; "
-                "Opus/Bedrock would be under-billed. Add it to MODEL_PRICING.",
+                "Opus would be under-billed. Add it to MODEL_PRICING.",
                 model,
             )
             pricing = MODEL_PRICING["claude-sonnet-4-6"]

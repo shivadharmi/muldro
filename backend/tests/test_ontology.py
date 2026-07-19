@@ -156,13 +156,10 @@ class TestBriefingStylePrompts:
             '{"headline":"test","top_priorities":[],"changes_since_last":[],'
             '"recommended_actions":[],"full_text":"test"}'
         )
-        with (
-            patch("src.services.presenter.get_anthropic_client", return_value=MagicMock()),
-            patch(
-                "src.services.presenter.complete_text",
-                new=AsyncMock(return_value=json_text),
-            ) as mock_complete,
-        ):
+        with patch(
+            "src.services.presenter.complete_text",
+            new=AsyncMock(return_value=json_text),
+        ) as mock_complete:
             p = Presenter(mock_settings, mock_db)
             await p._call_claude("test context", style="founder")
 

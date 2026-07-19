@@ -21,10 +21,7 @@ def mock_settings():
 
 @pytest.fixture
 def verifier(mock_settings, mock_db):
-    with patch("src.services.verifier.get_anthropic_client") as mock_client:
-        mock_client.return_value = AsyncMock()
-        v = Verifier(mock_settings, mock_db)
-    return v
+    return Verifier(mock_settings, mock_db)
 
 
 def _make_run(

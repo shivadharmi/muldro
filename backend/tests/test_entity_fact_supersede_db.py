@@ -4,7 +4,6 @@ and both entity->dict builders carry confidence + provenance. Real Postgres."""
 
 import asyncio
 from contextlib import asynccontextmanager
-from unittest.mock import patch
 
 import pytest
 from sqlalchemy import delete, select
@@ -67,8 +66,7 @@ async def _env():
 
 
 def _wm(db):
-    with patch("src.services.world_model.get_anthropic_client"):
-        return WorldModel(settings=make_mock_settings(), db=db)
+    return WorldModel(settings=make_mock_settings(), db=db)
 
 
 async def test_contradicting_attribute_is_superseded_not_clobbered():

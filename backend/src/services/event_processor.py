@@ -22,7 +22,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from ulid import ULID
 
-from src.config.settings import Settings, get_anthropic_client
+from src.config.settings import Settings
 from src.llm.utility import complete_text
 from src.models.events import NormalizedEvent
 
@@ -138,7 +138,6 @@ class EventProcessor:
     ):
         self._settings = settings
         self._db = db
-        self._client = get_anthropic_client(settings)
         # Optional context providers for enriched scoring
         self._world_model = world_model
         self._memory_service = memory_service

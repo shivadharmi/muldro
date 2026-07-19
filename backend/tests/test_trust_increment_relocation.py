@@ -70,11 +70,9 @@ def test_confirmed_write_needs_no_deferred_recheck():
 
 
 def _make_executor(settings, db):
-    with patch("src.services.graph_executor.get_anthropic_client") as mock_client:
-        mock_client.return_value = MagicMock()
-        from src.services.graph_executor import GraphExecutor
+    from src.services.graph_executor import GraphExecutor
 
-        return GraphExecutor(settings, db)
+    return GraphExecutor(settings, db)
 
 
 def _wire_common(executor, capability="email.draft"):

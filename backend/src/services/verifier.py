@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.config.settings import Settings, get_anthropic_client
+from src.config.settings import Settings
 from src.llm.utility import complete_text
 from src.models.task_graph import TaskRun, TaskStep
 from src.services.execution_state import TERMINAL_SUCCESS
@@ -38,7 +38,6 @@ class Verifier:
     def __init__(self, settings: Settings, db: AsyncSession):
         self._settings = settings
         self._db = db
-        self._client = get_anthropic_client(settings)
 
     async def verify_run(
         self,

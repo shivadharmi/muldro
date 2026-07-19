@@ -18,12 +18,9 @@ async def test_summarize_history_returns_summary():
     settings = make_mock_settings()
     settings.use_bedrock = False
 
-    with (
-        patch("src.orchestrator.jarvis.get_anthropic_client"),
-        patch(
-            "src.orchestrator.context_assembler.complete_text",
-            AsyncMock(return_value="Summary of conversation."),
-        ),
+    with patch(
+        "src.orchestrator.context_assembler.complete_text",
+        AsyncMock(return_value="Summary of conversation."),
     ):
         from src.orchestrator.jarvis import JarvisOrchestrator
 
@@ -43,12 +40,9 @@ async def test_summarize_history_without_conversation_id():
     settings = make_mock_settings()
     settings.use_bedrock = False
 
-    with (
-        patch("src.orchestrator.jarvis.get_anthropic_client"),
-        patch(
-            "src.orchestrator.context_assembler.complete_text",
-            AsyncMock(return_value="Summary."),
-        ),
+    with patch(
+        "src.orchestrator.context_assembler.complete_text",
+        AsyncMock(return_value="Summary."),
     ):
         from src.orchestrator.jarvis import JarvisOrchestrator
 

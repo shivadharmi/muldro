@@ -19,7 +19,6 @@ from src.config.settings import Settings
 def test_validate_startup_raises_when_anthropic_key_missing():
     s = Settings(
         anthropic_api_key="",
-        use_bedrock=False,
         environment="development",
         oauth_encryption_key="",
     )
@@ -28,21 +27,9 @@ def test_validate_startup_raises_when_anthropic_key_missing():
     assert "JARVIS_ANTHROPIC_API_KEY" in str(exc.value)
 
 
-def test_validate_startup_allows_bedrock_without_anthropic_key():
-    s = Settings(
-        anthropic_api_key="",
-        use_bedrock=True,
-        environment="development",
-        oauth_encryption_key="",
-    )
-    # Bedrock uses AWS credentials, not an Anthropic API key — must not raise.
-    s.validate_startup()
-
-
 def test_validate_startup_raises_when_oauth_key_missing_in_production():
     s = Settings(
         anthropic_api_key="anthropic-key-present",
-        use_bedrock=False,
         environment="production",
         oauth_encryption_key="",
     )
@@ -54,7 +41,6 @@ def test_validate_startup_raises_when_oauth_key_missing_in_production():
 def test_validate_startup_passes_in_production_with_all_secrets():
     s = Settings(
         anthropic_api_key="anthropic-key-present",
-        use_bedrock=False,
         environment="production",
         oauth_encryption_key="oauth-key-present",
     )

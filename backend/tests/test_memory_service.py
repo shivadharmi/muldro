@@ -29,11 +29,8 @@ def mock_db():
 
 @patch("src.services.memory_service.extraction.complete_text")
 @patch("src.services.memory_service._base.EmbeddingService")
-@patch("src.services.memory_service._base.get_anthropic_client")
 @pytest.mark.asyncio
-async def test_extract_stores_memories(
-    mock_get_client, mock_embed_cls, mock_complete, settings, mock_db
-):
+async def test_extract_stores_memories(mock_embed_cls, mock_complete, settings, mock_db):
     """Should extract and store memories from text."""
     extraction = {
         "memories": [
@@ -72,11 +69,8 @@ async def test_extract_stores_memories(
 
 @patch("src.services.memory_service.extraction.complete_text")
 @patch("src.services.memory_service._base.EmbeddingService")
-@patch("src.services.memory_service._base.get_anthropic_client")
 @pytest.mark.asyncio
-async def test_extract_skips_duplicates(
-    mock_get_client, mock_embed_cls, mock_complete, settings, mock_db
-):
+async def test_extract_skips_duplicates(mock_embed_cls, mock_complete, settings, mock_db):
     """Should not store duplicate memories."""
     extraction = {
         "memories": [
@@ -107,10 +101,9 @@ async def test_extract_skips_duplicates(
 
 @patch("src.services.memory_service.extraction.complete_text")
 @patch("src.services.memory_service._base.EmbeddingService")
-@patch("src.services.memory_service._base.get_anthropic_client")
 @pytest.mark.asyncio
 async def test_extract_and_store_uses_prompt_addendum(
-    mock_get_client, mock_embed_cls, mock_complete, settings, mock_db
+    mock_embed_cls, mock_complete, settings, mock_db
 ):
     """Should append prompt_addendum to system prompt when provided."""
     extraction = {"memories": []}
@@ -137,9 +130,8 @@ async def test_extract_and_store_uses_prompt_addendum(
 
 
 @patch("src.services.memory_service._base.EmbeddingService")
-@patch("src.services.memory_service._base.get_anthropic_client")
 @pytest.mark.asyncio
-async def test_retrieve_returns_matching(mock_get_client, mock_embed_cls, settings, mock_db):
+async def test_retrieve_returns_matching(mock_embed_cls, settings, mock_db):
     """Should return memories matching the query."""
     mock_memory = MagicMock()
     mock_memory.memory_id = "mem_001"
@@ -152,7 +144,6 @@ async def test_retrieve_returns_matching(mock_get_client, mock_embed_cls, settin
     result_mock.scalars.return_value.all.return_value = [mock_memory]
     mock_db.execute = AsyncMock(return_value=result_mock)
 
-    mock_get_client.return_value = MagicMock()
     mock_embedder = MagicMock()
     # Return None to use text-based fallback (matching the mock_db setup)
     mock_embedder.embed_text = AsyncMock(return_value=None)
@@ -167,11 +158,8 @@ async def test_retrieve_returns_matching(mock_get_client, mock_embed_cls, settin
 
 @patch("src.services.memory_service.extraction.complete_text")
 @patch("src.services.memory_service._base.EmbeddingService")
-@patch("src.services.memory_service._base.get_anthropic_client")
 @pytest.mark.asyncio
-async def test_extract_auto_checks_contradictions(
-    mock_get_client, mock_embed_cls, mock_complete, settings, mock_db
-):
+async def test_extract_auto_checks_contradictions(mock_embed_cls, mock_complete, settings, mock_db):
     """extract_and_store should defer contradiction checks via event bus."""
     extraction = {
         "memories": [
@@ -218,13 +206,10 @@ async def test_extract_auto_checks_contradictions(
     assert contradiction_calls[0][0][2]["memory_id"] == memory_ids[0]
 
 
-@patch("src.services.memory_service._base.get_anthropic_client")
 @pytest.mark.asyncio
-async def test_memory_upsert_includes_enriched_payload(mock_get_client):
+async def test_memory_upsert_includes_enriched_payload():
     """Memory Qdrant payloads should include confidence, stability, entity_ids, scope."""
     settings = make_mock_settings()
-    mock_client = MagicMock()
-    mock_get_client.return_value = mock_client
 
     mock_db = MagicMock()
     mock_db.add = MagicMock()
@@ -268,10 +253,9 @@ async def test_memory_upsert_includes_enriched_payload(mock_get_client):
 
 @patch("src.services.memory_service.extraction.complete_text")
 @patch("src.services.memory_service._base.EmbeddingService")
-@patch("src.services.memory_service._base.get_anthropic_client")
 @pytest.mark.asyncio
 async def test_contradiction_failure_does_not_block_storage(
-    mock_get_client, mock_embed_cls, mock_complete, settings, mock_db
+    mock_embed_cls, mock_complete, settings, mock_db
 ):
     """If check_contradictions fails, memory should still be stored."""
     extraction = {

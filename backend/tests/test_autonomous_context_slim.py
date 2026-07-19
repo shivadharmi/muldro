@@ -110,11 +110,9 @@ def _store_with_capture(context_builder) -> tuple[StepGraphStore, dict]:
 
 
 def _make_executor(settings, db, *, context_builder=None, redis=None):
-    with patch("src.services.graph_executor.get_anthropic_client") as mc:
-        mc.return_value = MagicMock()
-        from src.services.graph_executor import GraphExecutor
+    from src.services.graph_executor import GraphExecutor
 
-        return GraphExecutor(settings, db, context_builder=context_builder, redis=redis)
+    return GraphExecutor(settings, db, context_builder=context_builder, redis=redis)
 
 
 async def _render_plan_context_from(pack_dict: dict):

@@ -2,7 +2,7 @@
 the injected saver, or None (→ MemorySaver at the seam) by default.
 """
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 from src.orchestrator.services import ServiceContainer
 from tests.conftest import make_mock_settings
@@ -17,18 +17,14 @@ def _make_orchestrator(**kwargs):
     settings = make_mock_settings()
     settings.use_bedrock = False
 
-    with patch("src.orchestrator.jarvis.get_anthropic_client") as mock_get_client:
-        mock_client = MagicMock()
-        mock_get_client.return_value = mock_client
+    from src.orchestrator.jarvis import JarvisOrchestrator
 
-        from src.orchestrator.jarvis import JarvisOrchestrator
-
-        return JarvisOrchestrator(
-            settings=settings,
-            db_factory=MagicMock(),
-            services=ServiceContainer(),
-            **kwargs,
-        )
+    return JarvisOrchestrator(
+        settings=settings,
+        db_factory=MagicMock(),
+        services=ServiceContainer(),
+        **kwargs,
+    )
 
 
 def test_orchestrator_threads_checkpointer_provider():

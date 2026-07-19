@@ -116,11 +116,9 @@ class TestEntityRelationTypes:
 
 
 class TestTemporalTracking:
-    @patch("src.services.world_model.get_anthropic_client")
     @pytest.mark.asyncio
-    async def test_new_entity_gets_temporal_fields(self, mock_get_client, settings, mock_db):
+    async def test_new_entity_gets_temporal_fields(self, settings, mock_db):
         """New entities should have last_seen_at, interaction_count=1, importance."""
-        mock_get_client.return_value = MagicMock()
         wm = WorldModel(settings=settings, db=mock_db)
 
         entity_id = await wm.upsert_entity(
@@ -136,9 +134,8 @@ class TestTemporalTracking:
         assert added.interaction_count == 1
         assert added.importance_score == 0.8
 
-    @patch("src.services.world_model.get_anthropic_client")
     @pytest.mark.asyncio
-    async def test_existing_entity_increments_interaction(self, mock_get_client, settings, mock_db):
+    async def test_existing_entity_increments_interaction(self, settings, mock_db):
         """Upserting existing entity should increment interaction_count."""
         existing = MagicMock()
         existing.entity_id = "ent_existing"
@@ -150,7 +147,6 @@ class TestTemporalTracking:
         result_mock = MagicMock()
         result_mock.scalar_one_or_none.return_value = existing
         mock_db.execute = AsyncMock(return_value=result_mock)
-        mock_get_client.return_value = MagicMock()
 
         wm = WorldModel(settings=settings, db=mock_db)
         entity_id = await wm.upsert_entity(
@@ -165,9 +161,8 @@ class TestTemporalTracking:
         assert existing.importance_score == 0.9  # max(0.5, 0.9)
         assert existing.last_seen_at is not None
 
-    @patch("src.services.world_model.get_anthropic_client")
     @pytest.mark.asyncio
-    async def test_importance_keeps_maximum(self, mock_get_client, settings, mock_db):
+    async def test_importance_keeps_maximum(self, settings, mock_db):
         """Importance should keep the higher value."""
         existing = MagicMock()
         existing.entity_id = "ent_existing"
@@ -179,7 +174,6 @@ class TestTemporalTracking:
         result_mock = MagicMock()
         result_mock.scalar_one_or_none.return_value = existing
         mock_db.execute = AsyncMock(return_value=result_mock)
-        mock_get_client.return_value = MagicMock()
 
         wm = WorldModel(settings=settings, db=mock_db)
         await wm.upsert_entity(
@@ -446,9 +440,8 @@ class TestEntityMemoryLinking:
 
 
 class TestFindEntityTemporal:
-    @patch("src.services.world_model.get_anthropic_client")
     @pytest.mark.asyncio
-    async def test_find_returns_temporal_fields(self, mock_get_client, settings, mock_db):
+    async def test_find_returns_temporal_fields(self, settings, mock_db):
         """find_entity should return importance, interaction_count, last_seen_at."""
         from datetime import datetime, timezone
 
@@ -467,7 +460,6 @@ class TestFindEntityTemporal:
         result_mock.scalars.return_value.all.return_value = [mock_entity]
         mock_db.execute = AsyncMock(return_value=result_mock)
 
-        mock_get_client.return_value = MagicMock()
         wm = WorldModel(settings=settings, db=mock_db)
         results = await wm.find_entity(TEST_USER_ID, "Alice")
 
@@ -481,9 +473,8 @@ class TestFindEntityTemporal:
 
 
 class TestFinancialEntities:
-    @patch("src.services.world_model.get_anthropic_client")
     @pytest.mark.asyncio
-    async def test_financial_transaction_type_preserved(self, mock_get_client, settings, mock_db):
+    async def test_financial_transaction_type_preserved(self, settings, mock_db):
         """A financial_transaction type from the extractor must NOT be coerced to person."""
         extracted = {
             "entities": [
@@ -508,7 +499,6 @@ class TestFinancialEntities:
             "relationships": [],
         }
 
-        mock_get_client.return_value = MagicMock()
         wm = WorldModel(settings=settings, db=mock_db)
 
         event = MagicMock(
@@ -582,11 +572,9 @@ class TestSanitizeCanonicalName:
         name, aliases = sanitize_canonical_name("", None)
         assert name == "Unknown"
 
-    @patch("src.services.world_model.get_anthropic_client")
     @pytest.mark.asyncio
-    async def test_upsert_entity_enforces_pii_guard(self, mock_get_client, settings, mock_db):
+    async def test_upsert_entity_enforces_pii_guard(self, settings, mock_db):
         """upsert_entity stores a non-email canonical name and aliases the raw email."""
-        mock_get_client.return_value = MagicMock()
         wm = WorldModel(settings=settings, db=mock_db)
 
         await wm.upsert_entity(

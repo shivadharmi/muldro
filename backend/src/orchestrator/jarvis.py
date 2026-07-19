@@ -15,8 +15,8 @@ if TYPE_CHECKING:
     from src.services.relevance_assessor import PerceptionSignal, RelevanceAssessment
 
 
-from src.config.models import BEDROCK_MODEL_TIERS, MODEL_TIERS
-from src.config.settings import Settings, get_anthropic_client
+from src.config.models import MODEL_TIERS
+from src.config.settings import Settings
 from src.contracts import PlanOutput, PlanStep
 from src.errors import (
     classify,
@@ -55,9 +55,8 @@ AGENT_EVENT_TYPES = {
     "perception_completed",
 }
 
-# MODEL_TIERS / BEDROCK_MODEL_TIERS now live in src.config.models (imported above)
-# so assessor services can depend on them downward instead of importing upward
-# from this orchestrator module.
+# MODEL_TIERS now lives in src.config.models (imported above) so assessor services
+# can depend on it downward instead of importing upward from this orchestrator module.
 
 
 # CONTEXT_ENRICHED_AGENTS now lives in context_assembler.py (its only consumer).
@@ -88,7 +87,6 @@ class JarvisOrchestrator:
         self._db_factory = db_factory
         self._services = services
         self._system_capability_handler = SystemCapabilityHandler(db_factory, services, settings)
-        self._client = get_anthropic_client(settings)
         self._trace_store = TraceStore(db_factory=db_factory)
         self._trace_manager = TraceManager(trace_store=self._trace_store)
         self._budget = BudgetTracker(
@@ -108,7 +106,7 @@ class JarvisOrchestrator:
         # EventPublisher owns the lazy event bus + runtime-event emission (C5).
         self._events = EventPublisher(settings, services, _db_factory_provider)
         # ContextAssembler builds conversation-history + ambient context blocks.
-        self._context = ContextAssembler(settings, services, _db_factory_provider, self._client)
+        self._context = ContextAssembler(settings, services, _db_factory_provider, None)
         # PlanStore persists plans + interaction logs to the DB.
         self._plans = PlanStore(_db_factory_provider)
         # ToolExecutor builds tool definitions and dispatches tool calls.
@@ -127,7 +125,7 @@ class JarvisOrchestrator:
         # (Step 6A.5); None/default falls back to MemorySaver inside the invoker.
         self._invoker = AgentInvoker(
             settings,
-            self._client,
+            None,
             services,
             self._budget,
             self._circuit_breaker,
@@ -151,7 +149,7 @@ class JarvisOrchestrator:
         # chat<->perception relationship acyclic.
         self._perception = PerceptionRunner(
             settings,
-            self._client,
+            None,
             self._budget,
             self._trace_manager,
             _db_factory_provider,
@@ -176,10 +174,7 @@ class JarvisOrchestrator:
                 redis=None,  # Populated lazily when event bus Redis is available
             )
         # Precompute haiku model ID for intent classification
-        if settings.use_bedrock:
-            self._haiku_model = BEDROCK_MODEL_TIERS["haiku"]
-        else:
-            self._haiku_model = MODEL_TIERS["haiku"]
+        self._haiku_model = MODEL_TIERS["haiku"]
 
         # ChatProcessor owns the user-facing chat pipeline (intent → plan → route
         # → execute → present → surface → learn). Constructed last so all of its
@@ -189,7 +184,7 @@ class JarvisOrchestrator:
         # orchestrator keeps thin facades delegating to it.
         self._chat = ChatProcessor(
             settings,
-            self._client,
+            None,
             self._haiku_model,
             self._trace_manager,
             _db_factory_provider,

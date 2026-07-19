@@ -85,14 +85,12 @@ async def test_process_records_processing_latency(mock_complete, settings, mock_
     assert call.args[1] >= 0  # duration_ms
 
 
-@patch("src.services.event_processor.get_anthropic_client")
 @pytest.mark.asyncio
-async def test_duplicate_does_not_record_latency(mock_get_client, settings, mock_db):
+async def test_duplicate_does_not_record_latency(settings, mock_db):
     """A duplicate (no event stored) must not record processing latency."""
     result_mock = MagicMock()
     result_mock.scalar_one_or_none.return_value = "evt_existing"
     mock_db.execute = AsyncMock(return_value=result_mock)
-    mock_get_client.return_value = MagicMock()
 
     processor = EventProcessor(settings=settings, db=mock_db)
     raw = make_raw_event()
@@ -104,16 +102,13 @@ async def test_duplicate_does_not_record_latency(mock_get_client, settings, mock
     mock_metrics.record_event_processing.assert_not_called()
 
 
-@patch("src.services.event_processor.get_anthropic_client")
 @pytest.mark.asyncio
-async def test_process_deduplicates(mock_get_client, settings, mock_db):
+async def test_process_deduplicates(settings, mock_db):
     """Duplicate events (same idempotency key) should return None."""
     # Simulate existing event found
     result_mock = MagicMock()
     result_mock.scalar_one_or_none.return_value = "evt_existing"
     mock_db.execute = AsyncMock(return_value=result_mock)
-
-    mock_get_client.return_value = MagicMock()
 
     processor = EventProcessor(settings=settings, db=mock_db)
     raw = make_raw_event()
