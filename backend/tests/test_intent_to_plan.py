@@ -18,9 +18,7 @@ from src.orchestrator.intent_classifier import (
 
 def _patch_complete(text: str):
     """Patch the UtilityLLM seam so classify_intent's Haiku call yields *text*."""
-    return patch(
-        "src.orchestrator.intent_classifier.complete_text", AsyncMock(return_value=text)
-    )
+    return patch("src.orchestrator.intent_classifier.complete_text", AsyncMock(return_value=text))
 
 
 class TestClassifyIntentParsing:
