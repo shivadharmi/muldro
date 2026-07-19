@@ -86,9 +86,9 @@ async def test_upsert_updates_existing_entity(mock_get_client, settings, mock_db
     assert existing_entity.attributes == {"role": "investor", "company": "BigFund"}
 
 
-@patch("src.services.world_model.get_anthropic_client")
+@patch("src.services.world_model.complete_text")
 @pytest.mark.asyncio
-async def test_extract_from_event_calls_claude(mock_get_client, settings, mock_db):
+async def test_extract_from_event_calls_claude(mock_complete, settings, mock_db):
     """extract_from_event should call Claude and create entities."""
     # Mock the event fetch
     mock_event = MagicMock()
@@ -110,11 +110,7 @@ async def test_extract_from_event_calls_claude(mock_get_client, settings, mock_d
         "relationships": [],
     }
 
-    mock_client = MagicMock()
-    response = MagicMock()
-    response.content = [MagicMock(text=json.dumps(extraction_result))]
-    mock_client.messages.create = AsyncMock(return_value=response)
-    mock_get_client.return_value = mock_client
+    mock_complete.return_value = json.dumps(extraction_result)
 
     # First execute returns the event, subsequent return no-entity-found for upsert
     event_result = MagicMock()
@@ -131,7 +127,7 @@ async def test_extract_from_event_calls_claude(mock_get_client, settings, mock_d
 
     assert len(entity_ids) == 1
     assert entity_ids[0].startswith("ent_")
-    mock_client.messages.create.assert_called_once()
+    mock_complete.assert_awaited_once()
 
 
 def test_guess_alias_type():

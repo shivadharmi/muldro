@@ -378,7 +378,6 @@ class PerceptionRunner:
                 assessment = await assess_relevance(
                     signal,
                     user_context,
-                    self._client,
                     engagement_context=engagement_context,
                     relevance_penalty=relevance_penalty,
                 )

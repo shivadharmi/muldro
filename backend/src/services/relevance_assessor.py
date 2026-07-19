@@ -9,7 +9,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from src.config.models import get_haiku_model
+from src.llm.utility import complete_text
 from src.llm_utils import parse_llm_json
 
 logger = logging.getLogger(__name__)
@@ -136,8 +136,6 @@ Summary: {summary}
 async def assess_relevance(
     signal: PerceptionSignal,
     user_context: UserContext,
-    client: Any,
-    model: str | None = None,
     engagement_context: str = "",
     relevance_penalty: float = 0.0,
 ) -> RelevanceAssessment:
@@ -148,8 +146,6 @@ async def assess_relevance(
     subtracted from the LLM's score before the tier is determined, so repeatedly
     dismissed signal types are demoted even when the LLM rates them highly.
     """
-    if model is None:
-        model = get_haiku_model()
     try:
         prompt = _RELEVANCE_PROMPT.format(
             goals=", ".join(user_context.goals) or "none specified",
@@ -161,12 +157,12 @@ async def assess_relevance(
         )
         if engagement_context:
             prompt += f"\n\nEngagement history:\n{engagement_context}"
-        response = await client.messages.create(
-            model=model,
+        text = await complete_text(
+            system=None,
+            user=prompt,
+            tier="haiku",
             max_tokens=512,
-            messages=[{"role": "user", "content": prompt}],
         )
-        text = response.content[0].text
         data = parse_llm_json(text)
         assessment = RelevanceAssessment.model_validate(data)
         adjusted_score = max(0.0, assessment.relevance_score - relevance_penalty)

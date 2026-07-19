@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ulid import ULID
 
 from src.config.settings import Settings, get_anthropic_client
+from src.llm.utility import complete_text
 from src.models.events import NormalizedEvent
 
 if TYPE_CHECKING:
@@ -517,15 +518,15 @@ class EventProcessor:
         user_message = await self._build_scoring_message(raw, user_id)
 
         try:
-            response = await self._client.messages.create(
-                model=self._settings.resolved_model,
-                max_tokens=512,
+            text = await complete_text(
                 system=SCORING_SYSTEM_PROMPT,
-                messages=[{"role": "user", "content": user_message}],
+                user=user_message,
+                tier="resolved",
+                max_tokens=512,
             )
             from src.llm_utils import parse_llm_json
 
-            return parse_llm_json(response.content[0].text)
+            return parse_llm_json(text)
         except Exception:
             logger.warning("Event scoring failed, using defaults", exc_info=True)
             return {**DEFAULT_SCORES, "summary": raw.summary}
@@ -705,15 +706,15 @@ class EventProcessor:
         )
 
         try:
-            response = await self._client.messages.create(
-                model=self._settings.resolved_model,
-                max_tokens=256 * len(events),
+            text = await complete_text(
                 system=SCORING_SYSTEM_PROMPT,
-                messages=[{"role": "user", "content": batch_prompt}],
+                user=batch_prompt,
+                tier="resolved",
+                max_tokens=256 * len(events),
             )
             from src.llm_utils import parse_llm_json
 
-            parsed = parse_llm_json(response.content[0].text)
+            parsed = parse_llm_json(text)
             if isinstance(parsed, list) and len(parsed) == len(events):
                 return parsed
             logger.warning(

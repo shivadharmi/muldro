@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ulid import ULID
 
 from src.config.settings import Settings, get_anthropic_client
+from src.llm.utility import complete_text
 from src.models.entities import Entity, EntityAlias, EntityRelationship
 from src.models.events import NormalizedEvent
 from src.services.entity_facts.confidence import (
@@ -687,16 +688,16 @@ class WorldModel:
     async def extract_from_text(self, text: str, user_id: str, workspace_id: str = "") -> list[str]:
         """Extract entities from free text (e.g. user messages). Returns entity_ids."""
         try:
-            response = await self._client.messages.create(
-                model=self._settings.resolved_model,
-                max_tokens=1024,
+            llm_text = await complete_text(
                 system=ENTITY_EXTRACTION_PROMPT,
-                messages=[{"role": "user", "content": f"Source: user_message\nSummary: {text}"}],
+                user=f"Source: user_message\nSummary: {text}",
+                tier="resolved",
+                max_tokens=1024,
             )
             from src.llm_utils import parse_llm_json
 
             extracted = parse_llm_json(
-                response.content[0].text,
+                llm_text,
                 default={"entities": [], "relationships": []},
             )
         except Exception:
@@ -746,16 +747,16 @@ class WorldModel:
         user_message = "\n".join(parts)
 
         try:
-            response = await self._client.messages.create(
-                model=self._settings.resolved_model,
-                max_tokens=1024,
+            llm_text = await complete_text(
                 system=ENTITY_EXTRACTION_PROMPT,
-                messages=[{"role": "user", "content": user_message}],
+                user=user_message,
+                tier="resolved",
+                max_tokens=1024,
             )
             from src.llm_utils import parse_llm_json
 
             return parse_llm_json(
-                response.content[0].text,
+                llm_text,
                 default={"entities": [], "relationships": []},
             )
         except Exception:

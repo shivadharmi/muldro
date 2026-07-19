@@ -27,16 +27,9 @@ def settings():
     return make_mock_settings()
 
 
-def _make_claude_response(scores: dict) -> MagicMock:
-    """Build a mock Anthropic response with JSON content."""
-    response = MagicMock()
-    response.content = [MagicMock(text=json.dumps(scores))]
-    return response
-
-
-@patch("src.services.event_processor.get_anthropic_client")
+@patch("src.services.event_processor.complete_text")
 @pytest.mark.asyncio
-async def test_process_stores_event(mock_get_client, settings, mock_db):
+async def test_process_stores_event(mock_complete, settings, mock_db):
     """Processing a new event should score it and store it."""
     scores = {
         "importance_score": 0.85,
@@ -50,9 +43,7 @@ async def test_process_stores_event(mock_get_client, settings, mock_db):
         },
         "summary": "Investor wants to discuss the deck",
     }
-    mock_client = MagicMock()
-    mock_client.messages.create = AsyncMock(return_value=_make_claude_response(scores))
-    mock_get_client.return_value = mock_client
+    mock_complete.return_value = json.dumps(scores)
 
     processor = EventProcessor(settings=settings, db=mock_db)
     raw = make_raw_event()
@@ -69,9 +60,9 @@ async def test_process_stores_event(mock_get_client, settings, mock_db):
     assert stored_event.status == "processed"
 
 
-@patch("src.services.event_processor.get_anthropic_client")
+@patch("src.services.event_processor.complete_text")
 @pytest.mark.asyncio
-async def test_process_records_processing_latency(mock_get_client, settings, mock_db):
+async def test_process_records_processing_latency(mock_complete, settings, mock_db):
     """A stored event records perception-throughput latency for the source."""
     scores = {
         "importance_score": 0.5,
@@ -79,9 +70,7 @@ async def test_process_records_processing_latency(mock_get_client, settings, moc
         "confidence_score": 0.9,
         "summary": "x",
     }
-    mock_client = MagicMock()
-    mock_client.messages.create = AsyncMock(return_value=_make_claude_response(scores))
-    mock_get_client.return_value = mock_client
+    mock_complete.return_value = json.dumps(scores)
 
     processor = EventProcessor(settings=settings, db=mock_db)
     raw = make_raw_event()
@@ -134,9 +123,9 @@ async def test_process_deduplicates(mock_get_client, settings, mock_db):
     mock_db.add.assert_not_called()
 
 
-@patch("src.services.event_processor.get_anthropic_client")
+@patch("src.services.event_processor.complete_text")
 @pytest.mark.asyncio
-async def test_process_handles_concurrent_unique_violation(mock_get_client, settings, mock_db):
+async def test_process_handles_concurrent_unique_violation(mock_complete, settings, mock_db):
     """Concurrent ingestion that loses the race on idempotency_key must be
     treated as a duplicate, not raised to the caller.
 
@@ -156,9 +145,7 @@ async def test_process_handles_concurrent_unique_violation(mock_get_client, sett
         "importance_signals": {},
         "summary": "duplicate from race",
     }
-    mock_client = MagicMock()
-    mock_client.messages.create = AsyncMock(return_value=_make_claude_response(scores))
-    mock_get_client.return_value = mock_client
+    mock_complete.return_value = json.dumps(scores)
 
     # Pre-check SELECT returns no existing row (race: both cycles miss).
     # commit() then raises IntegrityError — the other cycle won the race.
@@ -176,13 +163,11 @@ async def test_process_handles_concurrent_unique_violation(mock_get_client, sett
     mock_db.add.assert_called_once()  # attempted, not silently skipped
 
 
-@patch("src.services.event_processor.get_anthropic_client")
+@patch("src.services.event_processor.complete_text")
 @pytest.mark.asyncio
-async def test_score_fallback_on_error(mock_get_client, settings, mock_db):
+async def test_score_fallback_on_error(mock_complete, settings, mock_db):
     """If Claude scoring fails, default scores should be used."""
-    mock_client = MagicMock()
-    mock_client.messages.create = AsyncMock(side_effect=RuntimeError("API down"))
-    mock_get_client.return_value = mock_client
+    mock_complete.side_effect = RuntimeError("API down")
 
     processor = EventProcessor(settings=settings, db=mock_db)
     raw = make_raw_event()
@@ -194,9 +179,9 @@ async def test_score_fallback_on_error(mock_get_client, settings, mock_db):
     assert stored_event.urgency_score == DEFAULT_SCORES["urgency_score"]
 
 
-@patch("src.services.event_processor.get_anthropic_client")
+@patch("src.services.event_processor.complete_text")
 @pytest.mark.asyncio
-async def test_thread_reply_not_deduplicated(mock_get_client, settings, mock_db):
+async def test_thread_reply_not_deduplicated(mock_complete, settings, mock_db):
     """Two messages in same thread (same entity_id) but different message_id both store."""
     scores = {
         "importance_score": 0.8,
@@ -210,9 +195,7 @@ async def test_thread_reply_not_deduplicated(mock_get_client, settings, mock_db)
         },
         "summary": "thread message",
     }
-    mock_client = MagicMock()
-    mock_client.messages.create = AsyncMock(return_value=_make_claude_response(scores))
-    mock_get_client.return_value = mock_client
+    mock_complete.return_value = json.dumps(scores)
 
     processor = EventProcessor(settings=settings, db=mock_db)
 
@@ -496,9 +479,9 @@ def _idempotency_query_sqls(db_mock: MagicMock) -> list[str]:
     return sqls
 
 
-@patch("src.services.event_processor.get_anthropic_client")
+@patch("src.services.event_processor.complete_text")
 @pytest.mark.asyncio
-async def test_process_inner_dedup_query_is_workspace_scoped(mock_get_client, settings):
+async def test_process_inner_dedup_query_is_workspace_scoped(mock_complete, settings):
     """The single-event dedup lookup must filter by workspace_id, not key alone."""
     db = MagicMock()
     db.add = MagicMock()
@@ -507,9 +490,7 @@ async def test_process_inner_dedup_query_is_workspace_scoped(mock_get_client, se
     db.execute = AsyncMock(return_value=_safe_result_mock())
 
     scores = {"importance_score": 0.5, "urgency_score": 0.5, "confidence_score": 0.9}
-    mock_client = MagicMock()
-    mock_client.messages.create = AsyncMock(return_value=_make_claude_response(scores))
-    mock_get_client.return_value = mock_client
+    mock_complete.return_value = json.dumps(scores)
 
     processor = EventProcessor(settings=settings, db=db)
     await processor.process(make_raw_event(), TEST_USER_ID, workspace_id="ws_a")
@@ -521,9 +502,9 @@ async def test_process_inner_dedup_query_is_workspace_scoped(mock_get_client, se
         assert "ws_a" in sql, f"dedup query did not bind the workspace: {sql}"
 
 
-@patch("src.services.event_processor.get_anthropic_client")
+@patch("src.services.event_processor.complete_text")
 @pytest.mark.asyncio
-async def test_batch_dedup_and_refetch_queries_are_workspace_scoped(mock_get_client, settings):
+async def test_batch_dedup_and_refetch_queries_are_workspace_scoped(mock_complete, settings):
     """Both the batch dedup lookup and the post-process re-fetch must be
     workspace-scoped — they filter NormalizedEvent by idempotency_key."""
     db = MagicMock()
@@ -533,9 +514,7 @@ async def test_batch_dedup_and_refetch_queries_are_workspace_scoped(mock_get_cli
     db.execute = AsyncMock(return_value=_safe_result_mock())
 
     scores = {"importance_score": 0.5, "urgency_score": 0.5, "confidence_score": 0.9}
-    mock_client = MagicMock()
-    mock_client.messages.create = AsyncMock(return_value=_make_claude_response(scores))
-    mock_get_client.return_value = mock_client
+    mock_complete.return_value = json.dumps(scores)
 
     processor = EventProcessor(settings=settings, db=db)
     await processor._process_batch_chunk([make_raw_event()], TEST_USER_ID, "ws_a")
