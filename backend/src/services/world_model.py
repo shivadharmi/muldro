@@ -221,15 +221,22 @@ def _find_by_alias_stmt(user_id: str, alias: str, workspace_id: str):
     Extracted so the isolation test can compile it and guard the alias
     subquery's workspace_id scoping against regression.
     """
-    return select(Entity).where(
-        Entity.user_id == user_id,
-        Entity.workspace_id == workspace_id,
-        Entity.entity_id.in_(
-            select(EntityAlias.entity_id).where(
-                EntityAlias.alias == alias,
-                EntityAlias.workspace_id == workspace_id,
-            )
-        ),
+    return (
+        select(Entity)
+        .where(
+            Entity.user_id == user_id,
+            Entity.workspace_id == workspace_id,
+            Entity.entity_id.in_(
+                select(EntityAlias.entity_id).where(
+                    EntityAlias.alias == alias,
+                    EntityAlias.workspace_id == workspace_id,
+                )
+            ),
+        )
+        # Oldest-first + limit(1): an alias can resolve to multiple (duplicate) entities;
+        # converge deterministically and keep scalar_one_or_none from raising.
+        .order_by(Entity.created_at)
+        .limit(1)
     )
 
 
@@ -527,11 +534,15 @@ class WorldModel:
     ) -> str:
         """Add a relationship between entities. Returns relation_id."""
         existing = await self._db.execute(
-            select(EntityRelationship).where(
+            select(EntityRelationship)
+            .where(
                 EntityRelationship.from_entity_id == from_entity_id,
                 EntityRelationship.relation_type == relation_type,
                 EntityRelationship.to_entity_id == to_entity_id,
             )
+            # Existence check — limit(1) tolerates duplicate triples (no unique constraint;
+            # concurrent adds can race) instead of crashing on scalar_one_or_none.
+            .limit(1)
         )
         if existing.scalar_one_or_none():
             return ""
@@ -600,11 +611,18 @@ class WorldModel:
     ) -> Entity | None:
         """Find an existing entity by canonical name or any alias."""
         result = await self._db.execute(
-            select(Entity).where(
+            select(Entity)
+            .where(
                 Entity.user_id == user_id,
                 Entity.workspace_id == workspace_id,
                 Entity.canonical_name == canonical_name,
             )
+            # Entity dedup is best-effort — concurrent extraction can create duplicate
+            # name/alias entities. order_by + limit(1) picks the OLDEST deterministically
+            # (repeated upserts converge on one canonical entity) and keeps
+            # scalar_one_or_none from raising MultipleResultsFound.
+            .order_by(Entity.created_at)
+            .limit(1)
         )
         entity = result.scalar_one_or_none()
         if entity:
