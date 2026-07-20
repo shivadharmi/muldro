@@ -99,7 +99,8 @@ class DeadLetterService:
 
         entry.status = "retrying"
         entry.attempt_count += 1
-        entry.last_attempted_at = datetime.now(timezone.utc).isoformat()
+        # DateTime column needs a datetime, not an ISO string (asyncpg is strict).
+        entry.last_attempted_at = datetime.now(timezone.utc)
         await self._db.flush()
         return True
 
