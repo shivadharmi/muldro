@@ -308,4 +308,4 @@ wrappers over the shared singletons — negligible next to a Claude API call.
 
 **Trade-off:** Lower ceiling than the largest hosted rerankers/embedders and English-primary (bge-base / MiniLM). Acceptable for retrieval/dedup ranking; upgrade path is a heavier fastembed model (e.g. `bge-reranker-v2-m3`) if quality/multilingual coverage falls short.
 
-**Deploy note:** model weights (~0.2 GB embed + ~0.12 GB rerank) download on first use to the fastembed cache — pre-download at build/deploy so the first request doesn't stall.
+**Deploy note:** model weights (~0.2 GB embed + ~0.12 GB rerank) download on first use to the fastembed cache, which defaults to an **OS temp dir** (e.g. `/tmp/fastembed_cache`) that can be purged — set a persistent `cache_dir` (`FASTEMBED_CACHE_PATH`) and pre-download at build/deploy so a temp-purge doesn't silently force a re-download and the first request doesn't stall.
