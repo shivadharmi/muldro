@@ -64,7 +64,10 @@ async def test_upsert_updates_existing_entity(settings, mock_db):
     # For _add_aliases: return empty existing aliases
     alias_result = MagicMock()
     alias_result.scalars.return_value.all.return_value = []
-    mock_db.execute = AsyncMock(side_effect=[result_mock, no_fact, alias_result])
+    # For _add_aliases strong-alias ownership check (john@fund.com is an email): unowned
+    owner_result = MagicMock()
+    owner_result.scalar_one_or_none.return_value = None
+    mock_db.execute = AsyncMock(side_effect=[result_mock, no_fact, alias_result, owner_result])
 
     wm = WorldModel(settings=settings, db=mock_db)
     entity_id = await wm.upsert_entity(

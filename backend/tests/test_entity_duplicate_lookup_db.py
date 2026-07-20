@@ -1,6 +1,6 @@
-"""Real-DB regression: entity dedup is best-effort, so duplicate entities with the
-same canonical_name/alias can exist in a workspace. _find_by_name_or_alias must
-tolerate >1 match (pick the oldest) instead of crashing with MultipleResultsFound."""
+"""Real-DB regression: email/handle aliases are now unique per workspace, but NAME-type
+aliases can still be shared across entities — so _find_by_name_or_alias must tolerate
+>1 match (pick the oldest) instead of crashing with MultipleResultsFound."""
 
 import asyncio
 from contextlib import asynccontextmanager
@@ -13,7 +13,7 @@ from sqlalchemy.pool import NullPool
 from ulid import ULID
 
 from src.config.settings import get_settings
-from src.models.entities import Entity
+from src.models.entities import Entity, EntityAlias
 from src.models.users import User, Workspace
 from src.services.world_model import WorldModel
 
@@ -64,7 +64,7 @@ async def _env():
         await engine.dispose()
 
 
-async def test_find_by_name_returns_oldest_of_duplicates_without_crashing():
+async def test_find_by_shared_name_alias_returns_oldest_without_crashing():
     async with _env() as (factory, wid, uid):
         older_id = f"ent_{ULID()}"
         newer_id = f"ent_{ULID()}"
@@ -76,7 +76,7 @@ async def test_find_by_name_returns_oldest_of_duplicates_without_crashing():
                     user_id=uid,
                     workspace_id=wid,
                     entity_type="person",
-                    canonical_name="Duplicate Person",
+                    canonical_name="Person One",
                     created_at=t0,
                 )
             )
@@ -86,15 +86,28 @@ async def test_find_by_name_returns_oldest_of_duplicates_without_crashing():
                     user_id=uid,
                     workspace_id=wid,
                     entity_type="person",
-                    canonical_name="Duplicate Person",
+                    canonical_name="Person Two",
                     created_at=t0 + timedelta(minutes=30),
+                )
+            )
+            # A NAME-type alias is unconstrained, so two entities can share it.
+            db.add(
+                EntityAlias(
+                    entity_id=older_id, workspace_id=wid, alias="Shared Nick", alias_type="name"
+                )
+            )
+            db.add(
+                EntityAlias(
+                    entity_id=newer_id, workspace_id=wid, alias="Shared Nick", alias_type="name"
                 )
             )
             await db.commit()
 
         async with factory() as db:
             wm = WorldModel(settings=get_settings(), db=db)
-            # Previously raised sqlalchemy.exc.MultipleResultsFound.
-            found = await wm._find_by_name_or_alias(uid, "Duplicate Person", None, workspace_id=wid)
+            # The shared alias resolves to >1 entity; previously raised MultipleResultsFound.
+            found = await wm._find_by_name_or_alias(
+                uid, "No Such Name", ["Shared Nick"], workspace_id=wid
+            )
             assert found is not None
             assert found.entity_id == older_id  # deterministic: oldest wins

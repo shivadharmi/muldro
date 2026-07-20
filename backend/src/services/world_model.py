@@ -439,8 +439,11 @@ class WorldModel:
                 "Entity race condition, retrying lookup: name=%s",
                 canonical_name,
             )
+            # Pass aliases too: the conflict may be a strong-identifier (email/handle)
+            # unique-index violation rather than a name collision, so resolve to whoever
+            # already owns the name OR the alias.
             retry = await self._find_by_name_or_alias(
-                user_id, canonical_name, None, workspace_id=workspace_id
+                user_id, canonical_name, aliases, workspace_id=workspace_id
             )
             if retry:
                 return retry.entity_id
@@ -665,22 +668,42 @@ class WorldModel:
     async def _add_aliases(
         self, entity_id: str, aliases: list[str], workspace_id: str = ""
     ) -> None:
-        """Add new aliases to an entity (skip existing)."""
+        """Add new aliases to an entity, skipping aliases already on this entity and any
+        strong identifier (email/handle) already owned by a *different* entity — the
+        partial unique index would reject the latter, and the existing ownership means
+        dedup should target that other entity, not duplicate the mapping here."""
         result = await self._db.execute(
             select(EntityAlias.alias).where(EntityAlias.entity_id == entity_id)
         )
         existing_aliases = set(result.scalars().all())
 
         for alias in aliases:
-            if alias not in existing_aliases:
-                self._db.add(
-                    EntityAlias(
-                        entity_id=entity_id,
-                        alias=alias,
-                        alias_type=self._guess_alias_type(alias),
-                        workspace_id=workspace_id,
+            if alias in existing_aliases:
+                continue
+            alias_type = self._guess_alias_type(alias)
+            if alias_type in ("email", "handle"):
+                owner = await self._db.execute(
+                    select(EntityAlias.entity_id)
+                    .where(
+                        EntityAlias.workspace_id == workspace_id,
+                        EntityAlias.alias == alias,
+                        EntityAlias.alias_type == alias_type,
                     )
+                    .limit(1)
                 )
+                if owner.scalar_one_or_none() not in (None, entity_id):
+                    logger.debug(
+                        "Strong alias already owned by another entity; skipping: %s", alias
+                    )
+                    continue
+            self._db.add(
+                EntityAlias(
+                    entity_id=entity_id,
+                    alias=alias,
+                    alias_type=alias_type,
+                    workspace_id=workspace_id,
+                )
+            )
 
     async def _create_relationship_by_name(
         self,

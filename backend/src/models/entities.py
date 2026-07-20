@@ -1,6 +1,17 @@
 from datetime import date, datetime
 
-from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Index, Integer, String
+from sqlalchemy import (
+    Boolean,
+    Date,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -33,6 +44,11 @@ class Entity(Base, TimestampMixin):
     __table_args__ = (
         Index("ix_entities_user_type_name", "user_id", "entity_type", "canonical_name"),
         Index("ix_entities_search_vector", "search_vector", postgresql_using="gin"),
+        # One entity per (workspace, type, name) — closes the concurrent-extraction
+        # insert race (the pre-existing IntegrityError retry in upsert_entity activates).
+        UniqueConstraint(
+            "workspace_id", "entity_type", "canonical_name", name="uq_entities_ws_type_name"
+        ),
     )
 
 
@@ -54,6 +70,16 @@ class EntityAlias(Base):
     __table_args__ = (
         Index("ix_aliases_entity", "entity_id"),
         Index("ix_aliases_lookup", "alias"),
+        # A strong identifier (email/handle) maps to exactly ONE entity per workspace —
+        # this is what actually prevents the shared-alias duplication. Name-type aliases
+        # legitimately collide (many "John"s) and are intentionally left unconstrained.
+        Index(
+            "uq_aliases_strong_ident",
+            "workspace_id",
+            "alias",
+            unique=True,
+            postgresql_where=text("alias_type IN ('email', 'handle')"),
+        ),
     )
 
 
