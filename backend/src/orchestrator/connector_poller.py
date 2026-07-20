@@ -341,6 +341,10 @@ class ConnectorPoller:
                             workspace_id=workspace_id,
                         )
                     except Exception:
+                        # A failed DLQ insert poisons the session — roll back so the
+                        # cursor upsert below (and the rest of the cycle) can proceed
+                        # instead of dying with PendingRollbackError.
+                        await db.rollback()
                         logger.debug("DLQ enqueue failed", exc_info=True)
 
             # Advance the cursor on the same session so it is not written

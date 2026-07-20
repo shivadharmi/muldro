@@ -19,7 +19,9 @@ class NormalizedEvent(Base, TimestampMixin):
     source_account_id: Mapped[str] = mapped_column(String(128), nullable=False)
     event_type: Mapped[str] = mapped_column(String(64), nullable=False)  # email_received, etc.
     entity_type: Mapped[str] = mapped_column(String(64), nullable=False)  # email_thread, etc.
-    entity_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    # External connector IDs are opaque and unbounded (a Google Calendar event id
+    # can reach ~1024 chars, esp. recurring-instance ids) — Text, not a fixed varchar.
+    entity_id: Mapped[str] = mapped_column(Text, nullable=False)
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     ingested_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
@@ -39,7 +41,8 @@ class NormalizedEvent(Base, TimestampMixin):
     # account mint identical keys. A global unique constraint would reject the
     # second workspace's event as a cross-tenant duplicate — the composite
     # constraint below (uq_norm_events_ws_idem) isolates them.
-    idempotency_key: Mapped[str] = mapped_column(String(256), nullable=False)
+    # Embeds the (unbounded) external entity_id via make_idempotency_key — Text.
+    idempotency_key: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(
         String(32), default="pending"
     )  # pending, processed, ignored

@@ -24,9 +24,9 @@ class DeadLetterEntry(Base, TimestampMixin):
     # event_processing, entity_extraction, memory_extraction,
     # plan_execution, notification, embedding
 
-    # Reference to the source
-    source_id: Mapped[str | None] = mapped_column(String(128))
-    # e.g., event_id, execution_id, plan_id
+    # Reference to the source — may be an opaque external connector id (unbounded).
+    source_id: Mapped[str | None] = mapped_column(Text)
+    # e.g., event_id, execution_id, plan_id, external calendar/email id
 
     # Error details
     error_type: Mapped[str] = mapped_column(String(128), nullable=False)
