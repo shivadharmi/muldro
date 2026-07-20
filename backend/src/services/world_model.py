@@ -693,11 +693,14 @@ class WorldModel:
                 tier="resolved",
                 max_tokens=1024,
             )
-            from src.llm_utils import parse_llm_json
+            from src.llm_utils import coerce_to_object, parse_llm_json
 
-            extracted = parse_llm_json(
-                llm_text,
-                default={"entities": [], "relationships": []},
+            extracted = coerce_to_object(
+                parse_llm_json(
+                    llm_text,
+                    default={"entities": [], "relationships": []},
+                ),
+                list_key="entities",
             )
         except Exception:
             logger.warning("Text entity extraction failed", exc_info=True)
@@ -752,12 +755,13 @@ class WorldModel:
                 tier="resolved",
                 max_tokens=1024,
             )
-            from src.llm_utils import parse_llm_json
+            from src.llm_utils import coerce_to_object, parse_llm_json
 
-            return parse_llm_json(
+            parsed = parse_llm_json(
                 llm_text,
                 default={"entities": [], "relationships": []},
             )
+            return coerce_to_object(parsed, list_key="entities")
         except Exception:
             logger.warning("Entity extraction failed", exc_info=True)
             return {"entities": [], "relationships": []}

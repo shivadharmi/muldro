@@ -264,9 +264,9 @@ class MemoryExtraction:
                 tier="resolved",
                 max_tokens=1024,
             )
-            from src.llm_utils import parse_llm_json
+            from src.llm_utils import coerce_to_object, parse_llm_json
 
-            return parse_llm_json(text)
+            return coerce_to_object(parse_llm_json(text), list_key="memories")
         except Exception:
             logger.debug("Memory extraction returned non-JSON", exc_info=True)
             return {"memories": []}
@@ -280,9 +280,9 @@ class MemoryExtraction:
                 tier="resolved",
                 max_tokens=1024,
             )
-            from src.llm_utils import parse_llm_json
+            from src.llm_utils import coerce_to_object, parse_llm_json
 
-            return parse_llm_json(text)
+            return coerce_to_object(parse_llm_json(text), list_key="preferences")
         except Exception:
             logger.debug("Preference extraction returned non-JSON", exc_info=True)
             return {"preferences": []}

@@ -4,7 +4,22 @@ import json
 
 import pytest
 
-from src.llm_utils import parse_llm_json
+from src.llm_utils import coerce_to_object, parse_llm_json
+
+
+class TestCoerceToObject:
+    """Guarantee a dict for object-expecting extraction callers."""
+
+    def test_dict_passthrough(self):
+        assert coerce_to_object({"entities": [1]}, list_key="entities") == {"entities": [1]}
+
+    def test_bare_list_is_wrapped(self):
+        # The shape that crashed world_model.extract_from_event with .get() on a list.
+        assert coerce_to_object([{"x": 1}], list_key="entities") == {"entities": [{"x": 1}]}
+
+    def test_non_dict_non_list_becomes_empty(self):
+        assert coerce_to_object("nope", list_key="memories") == {"memories": []}
+        assert coerce_to_object(None, list_key="preferences") == {"preferences": []}
 
 
 class TestParseLlmJson:

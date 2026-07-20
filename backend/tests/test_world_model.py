@@ -124,6 +124,35 @@ async def test_extract_from_event_calls_claude(mock_complete, settings, mock_db)
     mock_complete.assert_awaited_once()
 
 
+@patch("src.services.world_model.complete_text")
+@pytest.mark.asyncio
+async def test_extract_from_event_tolerates_bare_list(mock_complete, settings, mock_db):
+    """The LLM sometimes returns a bare entities array instead of
+    {"entities": [...]}; extraction must coerce it, not crash on .get()."""
+    mock_event = MagicMock()
+    mock_event.event_type = "email_received"
+    mock_event.source = "gmail"
+    mock_event.title = "Investor follow-up"
+    mock_event.summary = "John from BigFund"
+    mock_event.actor_entities = []
+
+    # Bare array — the exact shape that raised AttributeError: 'list' has no 'get'.
+    bare_list = [{"entity_type": "person", "canonical_name": "John Doe"}]
+    mock_complete.return_value = json.dumps(bare_list)
+
+    event_result = MagicMock()
+    event_result.scalar_one_or_none.return_value = mock_event
+    no_result = MagicMock()
+    no_result.scalar_one_or_none.return_value = None
+    no_result.scalars.return_value.all.return_value = []
+    mock_db.execute = AsyncMock(side_effect=[event_result, no_result, no_result])
+
+    wm = WorldModel(settings=settings, db=mock_db)
+    entity_ids = await wm.extract_from_event("evt_001", TEST_USER_ID)
+
+    assert len(entity_ids) == 1  # the bare-list entity was processed, no crash
+
+
 def test_guess_alias_type():
     """Should correctly identify email, handle, and name aliases."""
     assert WorldModel._guess_alias_type("john@fund.com") == "email"
