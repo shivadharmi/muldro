@@ -54,7 +54,7 @@ async def test_extract_stores_memories(mock_embed_cls, mock_complete, settings, 
     mock_complete.return_value = json.dumps(extraction)
 
     mock_embedder = MagicMock()
-    mock_embedder.embed_text = AsyncMock(return_value=[0.1] * 1024)
+    mock_embedder.embed_text = AsyncMock(return_value=[0.1] * 768)
     mock_embed_cls.return_value = mock_embedder
 
     service = MemoryService(settings=settings, db=mock_db)
@@ -85,7 +85,7 @@ async def test_extract_skips_duplicates(mock_embed_cls, mock_complete, settings,
     mock_complete.return_value = json.dumps(extraction)
 
     mock_embedder = MagicMock()
-    mock_embedder.embed_text = AsyncMock(return_value=[0.1] * 1024)
+    mock_embedder.embed_text = AsyncMock(return_value=[0.1] * 768)
     mock_embed_cls.return_value = mock_embedder
 
     # First execute: extraction call, second: duplicate check returns existing
@@ -111,7 +111,7 @@ async def test_extract_and_store_uses_prompt_addendum(
     mock_complete.return_value = json.dumps(extraction)
 
     mock_embedder = MagicMock()
-    mock_embedder.embed_text = AsyncMock(return_value=[0.1] * 1024)
+    mock_embedder.embed_text = AsyncMock(return_value=[0.1] * 768)
     mock_embed_cls.return_value = mock_embedder
 
     svc = MemoryService(settings=settings, db=mock_db)
@@ -176,7 +176,7 @@ async def test_extract_auto_checks_contradictions(mock_embed_cls, mock_complete,
     mock_complete.return_value = json.dumps(extraction)
 
     mock_embedder = MagicMock()
-    mock_embedder.embed_text = AsyncMock(return_value=[0.1] * 1024)
+    mock_embedder.embed_text = AsyncMock(return_value=[0.1] * 768)
     mock_embed_cls.return_value = mock_embedder
 
     event_bus = AsyncMock()
@@ -226,7 +226,7 @@ async def test_memory_upsert_includes_enriched_payload():
         vector_store=mock_vector_store,
     )
     svc._embedder = AsyncMock()
-    svc._embedder.embed_text = AsyncMock(return_value=[0.1] * 1024)
+    svc._embedder.embed_text = AsyncMock(return_value=[0.1] * 768)
 
     await svc.store_memory(
         user_id="usr_test",
@@ -273,7 +273,7 @@ async def test_contradiction_failure_does_not_block_storage(
     mock_complete.return_value = json.dumps(extraction)
 
     mock_embedder = MagicMock()
-    mock_embedder.embed_text = AsyncMock(return_value=[0.1] * 1024)
+    mock_embedder.embed_text = AsyncMock(return_value=[0.1] * 768)
     mock_embed_cls.return_value = mock_embedder
 
     service = MemoryService(settings=settings, db=mock_db)

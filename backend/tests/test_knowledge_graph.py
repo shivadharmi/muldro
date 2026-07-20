@@ -399,7 +399,7 @@ class TestEntityMemoryLinking:
     ):
         """Memories should store entity_ids when provided."""
         mock_embedder = MagicMock()
-        mock_embedder.embed_text = AsyncMock(return_value=[0.1] * 1024)
+        mock_embedder.embed_text = AsyncMock(return_value=[0.1] * 768)
         mock_embedder_cls.return_value = mock_embedder
 
         extraction_result = {

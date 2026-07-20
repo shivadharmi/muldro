@@ -36,7 +36,7 @@ async def test_event_embedding_called_for_important_events(mock_complete):
 
     mock_vs = AsyncMock()
     mock_es = AsyncMock()
-    mock_es.embed_text = AsyncMock(return_value=[0.1] * 1024)
+    mock_es.embed_text = AsyncMock(return_value=[0.1] * 768)
 
     settings = make_mock_settings()
     processor = EventProcessor(
@@ -124,7 +124,7 @@ async def test_event_embedding_failure_does_not_block(mock_complete):
     mock_vs = AsyncMock()
     mock_vs.upsert = AsyncMock(side_effect=RuntimeError("Qdrant down"))
     mock_es = AsyncMock()
-    mock_es.embed_text = AsyncMock(return_value=[0.1] * 1024)
+    mock_es.embed_text = AsyncMock(return_value=[0.1] * 768)
 
     settings = make_mock_settings()
     processor = EventProcessor(
@@ -154,7 +154,7 @@ async def test_conversation_summary_embedded():
 
     mock_vs = AsyncMock()
     mock_es = AsyncMock()
-    mock_es.embed_text = AsyncMock(return_value=[0.1] * 1024)
+    mock_es.embed_text = AsyncMock(return_value=[0.1] * 768)
 
     lines = ["User: Hello", "Assistant: Hi there", "User: What's my schedule?"]
 
@@ -230,7 +230,7 @@ async def test_approval_embed_includes_required_fields():
     from src.api.routes_approvals import _embed_approval_decision
 
     mock_es = AsyncMock()
-    mock_es.embed_text = AsyncMock(return_value=[0.1] * 1024)
+    mock_es.embed_text = AsyncMock(return_value=[0.1] * 768)
     mock_vs = AsyncMock()
 
     await _embed_approval_decision(
@@ -289,7 +289,7 @@ async def test_artifact_embed_includes_required_fields():
     from src.api.routes_artifacts import _embed_artifact
 
     mock_es = AsyncMock()
-    mock_es.embed_text = AsyncMock(return_value=[0.1] * 1024)
+    mock_es.embed_text = AsyncMock(return_value=[0.1] * 768)
     mock_vs = AsyncMock()
 
     await _embed_artifact(

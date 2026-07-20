@@ -52,7 +52,7 @@ async def test_superseded_memory_deleted_from_qdrant(
     """When a contradiction is detected, the superseded memory must be deleted from Qdrant."""
     # Stub embedder
     mock_embedder = MagicMock()
-    mock_embedder.embed_text = AsyncMock(return_value=[0.1] * 1024)
+    mock_embedder.embed_text = AsyncMock(return_value=[0.1] * 768)
     mock_embed_cls.return_value = mock_embedder
 
     # find_similar returns the candidate that will be superseded
@@ -94,7 +94,7 @@ async def test_no_qdrant_delete_when_no_contradiction(
 ):
     """When no contradiction is found, Qdrant delete must NOT be called."""
     mock_embedder = MagicMock()
-    mock_embedder.embed_text = AsyncMock(return_value=[0.1] * 1024)
+    mock_embedder.embed_text = AsyncMock(return_value=[0.1] * 768)
     mock_embed_cls.return_value = mock_embedder
 
     mock_vector_store.find_similar = AsyncMock(
@@ -138,7 +138,7 @@ async def test_merged_memory_deleted_from_qdrant(
 ):
     """When a duplicate memory is merged, its vector must be deleted from Qdrant."""
     mock_embedder = MagicMock()
-    mock_embedder.embed_text = AsyncMock(return_value=[0.1] * 1024)
+    mock_embedder.embed_text = AsyncMock(return_value=[0.1] * 768)
     mock_embed_cls.return_value = mock_embedder
 
     # Build two in-memory Memory-like objects
@@ -205,7 +205,7 @@ async def test_cascade_delete_graceful_on_qdrant_failure(
 ):
     """A Qdrant delete failure must not crash check_contradictions."""
     mock_embedder = MagicMock()
-    mock_embedder.embed_text = AsyncMock(return_value=[0.1] * 1024)
+    mock_embedder.embed_text = AsyncMock(return_value=[0.1] * 768)
     mock_embed_cls.return_value = mock_embedder
 
     mock_vector_store.find_similar = AsyncMock(
@@ -248,7 +248,7 @@ async def test_cascade_delete_graceful_on_merge_qdrant_failure(
 ):
     """A Qdrant delete failure during consolidation must not crash consolidate_memories."""
     mock_embedder = MagicMock()
-    mock_embedder.embed_text = AsyncMock(return_value=[0.1] * 1024)
+    mock_embedder.embed_text = AsyncMock(return_value=[0.1] * 768)
     mock_embed_cls.return_value = mock_embedder
 
     keeper_mem = MagicMock()

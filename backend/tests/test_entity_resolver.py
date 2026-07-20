@@ -85,7 +85,7 @@ async def test_vector_candidate_is_merged_when_services_present():
     db = MagicMock()
     db.execute = AsyncMock(side_effect=[exact, hydrate])
     embed = AsyncMock()
-    embed.embed_text = AsyncMock(return_value=[0.1] * 1024)
+    embed.embed_text = AsyncMock(return_value=[0.1] * 768)
     vec = AsyncMock()
     vec.search = AsyncMock(return_value=[{"id": "ent_3", "score": 0.95, "payload": {}}])
     with patch("src.services.entity_resolver.FTSService") as fts_cls:

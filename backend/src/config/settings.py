@@ -59,19 +59,13 @@ class Settings(BaseSettings):
     environment: str = "development"  # Environment discriminator (development, staging, production)
     log_json: bool = False  # Use JSON structured logging
 
-    # Embeddings — Voyage AI (primary) or Bedrock Titan (fallback when no voyage_api_key).
-    # NOTE: the MongoDB-hosted Voyage endpoint (ai.mongodb.com) retired voyage-3; use a
-    # supported 1024-dim model (voyage-3.5 / voyage-3.5-lite / voyage-3-large).
-    embedding_model: str = "voyage-3.5"
-    voyage_api_key: str = ""
-    voyage_base_url: str = "https://api.voyageai.com/v1"
-    # AWS region for the Bedrock Titan embedding fallback (NOT the retired LLM Bedrock).
-    bedrock_region: str = "us-east-1"
+    # Embeddings — local fastembed (ONNX, no external API). Model determines the vector
+    # dimension; keep it in sync with vector_store.VECTOR_SIZE (bge-base-en-v1.5 = 768).
+    embedding_model: str = "BAAI/bge-base-en-v1.5"
 
-    # Reranker (Bedrock) — available in: us-west-2, eu-central-1, ap-northeast-1, ca-central-1
-    reranker_model: str = "amazon.rerank-v1:0"
+    # Reranker — local fastembed cross-encoder (ONNX, no external API).
+    reranker_model: str = "Xenova/ms-marco-MiniLM-L-12-v2"
     reranker_enabled: bool = True
-    reranker_region: str = "us-west-2"
 
     # Thresholds
     importance_threshold: float = 0.7  # Events above this score trigger planning

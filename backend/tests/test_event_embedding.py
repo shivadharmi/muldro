@@ -50,7 +50,7 @@ async def test_event_embedding_above_threshold(mock_complete, settings, mock_db)
     mock_complete.return_value = _scores_json(importance=0.85)
 
     embedding_service = MagicMock()
-    embedding_service.embed_text = AsyncMock(return_value=[0.1] * 1024)
+    embedding_service.embed_text = AsyncMock(return_value=[0.1] * 768)
 
     vector_store = MagicMock()
     vector_store.upsert = AsyncMock()
@@ -82,7 +82,7 @@ async def test_event_embedding_below_threshold_skipped(mock_complete, settings, 
     mock_complete.return_value = _scores_json(importance=0.2)
 
     embedding_service = MagicMock()
-    embedding_service.embed_text = AsyncMock(return_value=[0.1] * 1024)
+    embedding_service.embed_text = AsyncMock(return_value=[0.1] * 768)
 
     vector_store = MagicMock()
     vector_store.upsert = AsyncMock()

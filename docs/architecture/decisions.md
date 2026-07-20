@@ -64,9 +64,11 @@
 
 **Trade-off:** Slightly larger than auto-incrementing integers. Negligible for this scale.
 
-## 5. Bedrock Titan V2 for Embeddings
+## 5. Bedrock Titan V2 for Embeddings — SUPERSEDED by #21
 
-**Decision:** Use AWS Bedrock Titan V2 (1024 dimensions) for all vector embeddings, stored exclusively in Qdrant.
+> **Superseded (2026-07-20)** by [#21 Local embeddings + reranking (fastembed)](#21-local-embeddings--reranking-fastembed). Later reality also diverged from the "consistent with Bedrock for Claude API" rationale — Step 11 moved the LLM off Bedrock to the direct Claude API. Kept as history.
+
+**Decision (original):** Use AWS Bedrock Titan V2 (1024 dimensions) for all vector embeddings, stored exclusively in Qdrant.
 
 **Rationale:**
 - **Cost-effective** - Significantly cheaper than OpenAI or Voyage for embedding generation
@@ -75,6 +77,8 @@
 - **Qdrant-only storage** - Dedicated vector DB outperforms pgvector; pgvector columns removed in migration 046
 
 **Trade-off:** Slightly lower embedding quality than some specialized providers. Acceptable because embeddings are used for similarity search (dedup, retrieval ranking), not as primary classification.
+
+**Interim (superseded within this project):** embeddings briefly moved to Voyage AI (via the MongoDB-hosted `ai.mongodb.com` endpoint) with Titan as fallback, after Bedrock Titan was SCP-blocked. That external dependency proved brittle (the endpoint retired `voyage-3`), leading to #12.
 
 ## 6. Unified Registry Dispatch
 
@@ -287,3 +291,21 @@ wrappers over the shared singletons — negligible next to a Claude API call.
 **New services:** `relevance_assessor.py`, `engagement_service.py`, `eviction_service.py`, `briefing_read_model.py`, `surface_detail_builders.py`.
 
 **Trade-off:** More complex perception pipeline. Mitigated by clear service boundaries and the Perceiver agent (merged from Observer + Researcher) having a single `PERCEIVER_PROMPT` with 7-step read-only processing.
+
+## 21. Local Embeddings + Reranking (fastembed)
+
+**Decision (2026-07-20):** Generate embeddings and rerank search results **entirely on-host** via [fastembed](https://github.com/qdrant/fastembed) (ONNX runtime, no torch, no external API). Supersedes [#5](#5-bedrock-titan-v2-for-embeddings--superseded-by-21).
+- **Embeddings:** `BAAI/bge-base-en-v1.5` (768-dim, MIT). `EmbeddingService` (`src/services/embedding_service.py`).
+- **Reranking:** `Xenova/ms-marco-MiniLM-L-12-v2` cross-encoder (Apache-2.0). `RerankerService` (`src/services/reranker_service.py`).
+- Both services load the model **lazily once** (thread-safe singleton) and run inference inside `asyncio.to_thread`. Model choices are configurable via `JARVIS_EMBEDDING_MODEL` / `JARVIS_RERANKER_MODEL`.
+
+**Rationale:**
+- **No external AI-API dependency** - removes AWS Bedrock (Titan embeddings, `amazon.rerank-v1:0`) and the MongoDB-hosted Voyage endpoint. No API keys, no per-call cost, no outage/deprecation surface (the immediate trigger: MongoDB's Voyage endpoint retired `voyage-3`, and Bedrock Titan was SCP-blocked).
+- **Lightweight footprint** - fastembed pulls only `onnxruntime` + `tokenizers` (tens of MB), **not torch** (~2 GB). Fits the single-EC2 deploy; fastembed is the Qdrant ecosystem's library, already adjacent to our vector store.
+- **CPU-adequate** - bge-base embeddings and the MiniLM-L-12 cross-encoder run in sub-second-to-few-seconds on CPU for typical batches; reranking is a nice-to-have re-scoring step with a graceful fallback to original ordering.
+
+**Consequence:** the embedding vector dimension changed 1024 → **768**; `vector_store.VECTOR_SIZE = 768` and the Qdrant collections must be created at 768. Switching embedding models is a breaking change for stored vectors (different space + dim) — recreate the collections. `ensure_collections` logs a loud error if an existing collection's dim ≠ the model's.
+
+**Trade-off:** Lower ceiling than the largest hosted rerankers/embedders and English-primary (bge-base / MiniLM). Acceptable for retrieval/dedup ranking; upgrade path is a heavier fastembed model (e.g. `bge-reranker-v2-m3`) if quality/multilingual coverage falls short.
+
+**Deploy note:** model weights (~0.2 GB embed + ~0.12 GB rerank) download on first use to the fastembed cache — pre-download at build/deploy so the first request doesn't stall.

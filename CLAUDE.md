@@ -82,7 +82,7 @@ npm run lint    # eslint
 
 ## Configuration
 
-All backend settings via env vars with `JARVIS_` prefix (pydantic-settings in `src/config/settings.py`). Key vars: `JARVIS_DATABASE_URL`, `JARVIS_REDIS_URL`, `JARVIS_ANTHROPIC_API_KEY`, `JARVIS_USE_BEDROCK`, `JARVIS_LOG_JSON`, `JARVIS_DAILY_TOKEN_BUDGET_USD`, `JARVIS_RERANKER_MODEL`, `JARVIS_RERANKER_ENABLED`, `JARVIS_SKIP_REGISTRY_VALIDATION`. Uses `.env` file.
+All backend settings via env vars with `JARVIS_` prefix (pydantic-settings in `src/config/settings.py`). Key vars: `JARVIS_DATABASE_URL`, `JARVIS_REDIS_URL`, `JARVIS_ANTHROPIC_API_KEY`, `JARVIS_LOG_JSON`, `JARVIS_DAILY_TOKEN_BUDGET_USD`, `JARVIS_EMBEDDING_MODEL`, `JARVIS_RERANKER_MODEL`, `JARVIS_RERANKER_ENABLED`, `JARVIS_SKIP_REGISTRY_VALIDATION`. Embeddings and reranking run locally via fastembed (ONNX, no external API). Uses `.env` file.
 
 ## Coding Standards
 

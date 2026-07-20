@@ -82,7 +82,7 @@ class TestEntityFuzzyDedup:
         db.execute = AsyncMock(side_effect=[no_match, entity_result])
 
         embed_svc = AsyncMock()
-        embed_svc.embed_text = AsyncMock(return_value=[0.1] * 1024)
+        embed_svc.embed_text = AsyncMock(return_value=[0.1] * 768)
 
         # Mock Qdrant vector_store.find_similar
         mock_vector_store = AsyncMock()
@@ -142,7 +142,7 @@ class TestEntityFuzzyDedup:
         db.execute = AsyncMock(return_value=no_match)
 
         embed_svc = AsyncMock()
-        embed_svc.embed_text = AsyncMock(return_value=[0.1] * 1024)
+        embed_svc.embed_text = AsyncMock(return_value=[0.1] * 768)
 
         wm = _make_world_model(db=db, embedding_service=embed_svc)
         found = await wm._find_by_name_or_alias("usr_1", "Totally New Person", None)
@@ -163,7 +163,7 @@ class TestEntityEmbeddingOnUpsert:
         db.execute = AsyncMock(return_value=no_match)
 
         embed_svc = AsyncMock()
-        embed_svc.embed_text = AsyncMock(return_value=[0.5] * 1024)
+        embed_svc.embed_text = AsyncMock(return_value=[0.5] * 768)
 
         vs = AsyncMock()
         vs.upsert = AsyncMock()

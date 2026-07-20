@@ -729,7 +729,7 @@ class TestMemoryContradictionDeferral:
         svc = MemoryService(settings=settings, db=db, event_bus=event_bus)
         svc._client = MagicMock()
         svc._embedder = AsyncMock()
-        svc._embedder.embed_text = AsyncMock(return_value=[0.1] * 1024)
+        svc._embedder.embed_text = AsyncMock(return_value=[0.1] * 768)
 
         # Mock _call_extraction to return a candidate memory
         svc._call_extraction = AsyncMock(

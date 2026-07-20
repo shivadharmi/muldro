@@ -25,7 +25,7 @@ class TestCompositeRetrieveScopedByWorkspace:
 
         await svc._composite_retrieve(
             user_id="usr_1",
-            query_embedding=[0.1] * 1024,
+            query_embedding=[0.1] * 768,
             memory_types=None,
             entity_refs=None,
             max_results=10,
@@ -59,7 +59,7 @@ class TestCompositeRetrieveScopedByWorkspace:
 
         await svc._composite_retrieve(
             user_id="usr_1",
-            query_embedding=[0.1] * 1024,
+            query_embedding=[0.1] * 768,
             memory_types=None,
             entity_refs=None,
             max_results=10,
@@ -85,7 +85,7 @@ class TestFindByNameOrAliasQdrantScoped:
         mock_vs.find_similar = AsyncMock(return_value=[])
 
         mock_emb = AsyncMock()
-        mock_emb.embed = AsyncMock(return_value=[0.1] * 1024)
+        mock_emb.embed = AsyncMock(return_value=[0.1] * 768)
 
         settings = make_mock_settings()
         wm = WorldModel(
@@ -131,7 +131,7 @@ class TestFindByNameOrAliasQdrantScoped:
         )
 
         mock_emb = AsyncMock()
-        mock_emb.embed = AsyncMock(return_value=[0.1] * 1024)
+        mock_emb.embed = AsyncMock(return_value=[0.1] * 768)
 
         settings = make_mock_settings()
         wm = WorldModel(
@@ -275,7 +275,7 @@ class TestVectorStoreFindSimilarFilters:
 
         result = await vs.find_similar(
             "memories",
-            [0.1] * 1024,
+            [0.1] * 768,
             "usr_1",
             threshold=0.9,
             limit=5,
@@ -284,7 +284,7 @@ class TestVectorStoreFindSimilarFilters:
 
         vs.search.assert_called_once_with(
             "memories",
-            [0.1] * 1024,
+            [0.1] * 768,
             "usr_1",
             filters={"workspace_id": "ws_abc"},
             limit=5,

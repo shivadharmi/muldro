@@ -12,7 +12,7 @@ from tests.conftest import TEST_USER_ID, make_mock_settings
 @pytest.fixture
 def settings():
     s = make_mock_settings()
-    s.embedding_model = "amazon.titan-embed-text-v2:0"
+    s.embedding_model = "BAAI/bge-base-en-v1.5"
     return s
 
 
@@ -43,7 +43,7 @@ async def test_extract_stores_with_embedding(mock_embed_cls, mock_complete, sett
     }
     mock_complete.return_value = json.dumps(extraction)
 
-    fake_embedding = [0.1] * 1024
+    fake_embedding = [0.1] * 768
     mock_embedder = MagicMock()
     mock_embedder.embed_text = AsyncMock(return_value=fake_embedding)
     mock_embed_cls.return_value = mock_embedder
@@ -67,7 +67,7 @@ async def test_extract_stores_with_embedding(mock_embed_cls, mock_complete, sett
 @pytest.mark.asyncio
 async def test_semantic_retrieve_with_embedding(mock_embed_cls, settings, mock_db):
     """Should use Qdrant semantic search when query embedding succeeds."""
-    fake_embedding = [0.2] * 1024
+    fake_embedding = [0.2] * 768
     mock_embedder = MagicMock()
     mock_embedder.embed_text = AsyncMock(return_value=fake_embedding)
     mock_embed_cls.return_value = mock_embedder
@@ -158,7 +158,7 @@ async def test_extract_preferences(mock_embed_cls, mock_complete, settings, mock
     mock_complete.return_value = json.dumps(extraction)
 
     mock_embedder = MagicMock()
-    mock_embedder.embed_text = AsyncMock(return_value=[0.1] * 1024)
+    mock_embedder.embed_text = AsyncMock(return_value=[0.1] * 768)
     mock_embed_cls.return_value = mock_embedder
 
     no_result = MagicMock()

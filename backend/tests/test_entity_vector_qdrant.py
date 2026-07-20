@@ -41,7 +41,7 @@ async def test_workspace_scoped_entity_vector_search_returns_the_point():
     user_id = f"usr_{ULID()}"
     workspace_id = f"ws_{ULID()}"
     entity_id = f"ent_{ULID()}"
-    vector = [0.0] * 1024
+    vector = [0.0] * 768
     vector[0] = 1.0  # deterministic, no embedding provider needed
 
     from src.services.world_model import _entity_vector_payload

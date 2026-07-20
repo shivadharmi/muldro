@@ -530,7 +530,7 @@ Invalid transitions raise `InvalidTransitionError`. All status changes in GraphE
 | `hybrid_search(collections, query_vector, filters)` | Cross-collection retrieval, merge by score |
 | `delete(collection, id)` | Remove vector |
 
-**Collections:** `memories` (1024-dim), `entities`, `events`, `artifacts`, `conversations`, `approvals`
+**Collections:** `memories` (768-dim), `entities`, `events`, `artifacts`, `conversations`, `approvals`
 
 **Fallback:** Silent no-op if Qdrant unavailable; Postgres FTS provides keyword search.
 
@@ -540,7 +540,7 @@ Invalid transitions raise `InvalidTransitionError`. All status changes in GraphE
 
 **File:** `src/services/tri_search.py`
 
-**Purpose:** Unified search across Qdrant (vector) + Postgres FTS (keyword) + Neo4j (graph) with Bedrock reranking.
+**Purpose:** Unified search across Qdrant (vector) + Postgres FTS (keyword) + Neo4j (graph) with local cross-encoder reranking.
 
 **Constructor:**
 - `settings`, `vector_store?`, `graph_engine?`, `reranker?`, `embedder?`
@@ -572,7 +572,7 @@ Invalid transitions raise `InvalidTransitionError`. All status changes in GraphE
 
 **File:** `src/services/reranker_service.py`
 
-**Purpose:** Reranks merged search results using Bedrock `amazon.rerank-v1:0`.
+**Purpose:** Reranks merged search results using a local fastembed cross-encoder (`Xenova/ms-marco-MiniLM-L-12-v2`, ONNX, no external API).
 
 **Constructor:**
 - `settings`
@@ -757,7 +757,7 @@ graph TD
     TS_SEARCH --> VS[VectorStore/Qdrant]
     TS_SEARCH --> FTS[FTSService/Postgres]
     TS_SEARCH --> N4J_E[GraphEngine/Neo4j]
-    TS_SEARCH --> RR[RerankerService/Bedrock]
+    TS_SEARCH --> RR[RerankerService/local]
     WM --> VS
     WM --> GSS[GraphSyncService]
     MS --> VS

@@ -37,7 +37,7 @@ async def test_qdrant_memory_results_use_enriched_payload():
     )
 
     mock_embedder = AsyncMock()
-    mock_embedder.embed_text = AsyncMock(return_value=[0.1] * 1024)
+    mock_embedder.embed_text = AsyncMock(return_value=[0.1] * 768)
 
     svc = TriSearchService(
         settings=settings,
@@ -75,7 +75,7 @@ async def test_qdrant_search_includes_all_5_collections():
     mock_vector_store.hybrid_search = AsyncMock(return_value=[])
 
     mock_embedder = AsyncMock()
-    mock_embedder.embed_text = AsyncMock(return_value=[0.1] * 1024)
+    mock_embedder.embed_text = AsyncMock(return_value=[0.1] * 768)
 
     svc = TriSearchService(
         settings=settings,

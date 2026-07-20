@@ -14,7 +14,7 @@ async def test_approve_embeds_to_qdrant():
 
     mock_vector_store = AsyncMock()
     mock_embedding_service = AsyncMock()
-    mock_embedding_service.embed_text = AsyncMock(return_value=[0.1] * 1024)
+    mock_embedding_service.embed_text = AsyncMock(return_value=[0.1] * 768)
 
     await _embed_approval_decision(
         approval_id="apr_test123",

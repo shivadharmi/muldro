@@ -29,8 +29,8 @@ COLLECTION_ARTIFACTS = "artifacts"
 COLLECTION_CONVERSATIONS = "conversations"
 COLLECTION_APPROVALS = "approvals"
 
-# Vector dimensions (Bedrock Titan V2)
-VECTOR_SIZE = 1024
+# Vector dimensions — must match the embedding model (BAAI/bge-base-en-v1.5 = 768)
+VECTOR_SIZE = 768
 
 
 class VectorStore:
@@ -122,7 +122,19 @@ class VectorStore:
 
         for name in collections:
             try:
-                await client.get_collection(name)
+                info = await client.get_collection(name)
+                # An existing collection is never resized. If its dim no longer matches
+                # the embedding model (e.g. after switching models), inserts fail silently
+                # at runtime — surface it loudly at startup instead.
+                size = getattr(getattr(info.config.params, "vectors", None), "size", None)
+                if size is not None and size != VECTOR_SIZE:
+                    logger.error(
+                        "Qdrant collection %s has dim %s but embeddings are %s-dim; "
+                        "drop/recreate the collection after an embedding-model change.",
+                        name,
+                        size,
+                        VECTOR_SIZE,
+                    )
             except UnexpectedResponse:
                 await client.create_collection(
                     collection_name=name,
