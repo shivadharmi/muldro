@@ -7,7 +7,15 @@ afterEach(() => {
 
 test("known kind passes through unchanged", () => {
   expect(normalizeSurfaceKind("briefing", "srf_1")).toBe("briefing");
-  expect(normalizeSurfaceKind("table", "srf_1")).toBe("table");
+  expect(normalizeSurfaceKind("run", "srf_1")).toBe("run");
+});
+
+test("removed legacy kinds now degrade to summary with a warning", () => {
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  for (const k of ["checklist", "comparison", "timeline", "table", "activity"]) {
+    expect(normalizeSurfaceKind(k, "srf_1")).toBe("summary");
+  }
+  expect(warn).toHaveBeenCalled();
 });
 
 test("missing/empty kind defaults to summary without warning", () => {
