@@ -13,30 +13,41 @@ behavior lives on injected collaborators, never as methods on the hub.
 
 import logging
 
+from pydantic import ValidationError
 from ulid import ULID
 
 from src.contracts import PlanOutput, PlanStep
 from src.errors import classify, new_correlation_id
 from src.middleware.observability import get_correlation_id
 from src.orchestrator.services import ServiceContainer
+from src.tools.schemas import SetInstructionInput
 
 logger = logging.getLogger(__name__)
 
 
-def _coerce_instruction_spec(raw: object) -> dict:
-    """Normalize the LLM-produced ``input['instruction']`` value to a dict.
+def _coerce_instruction_input(raw: object) -> dict:
+    """Normalize LLM shape variance for set_instruction into the flat model shape.
 
-    The planner (LLM) sometimes emits the instruction as a bare string (the
-    instruction text) rather than the structured ``{instruction_text,
-    instruction_type, ...}`` object the handler expects. Validate the shape at
-    this system boundary: a string becomes ``{'instruction_text': raw}``, a dict
-    passes through, and anything else (None/list/number) is treated as an empty
-    spec (handled downstream as 'no instruction spec provided').
+    Accepts: the canonical flat dict (``step.input`` itself already shaped like
+    ``SetInstructionInput``); a nested ``{"instruction": {...}}`` wrapper; a
+    nested ``{"instruction": "text"}`` or bare top-level string; anything else
+    normalizes to ``{}`` (handled downstream as "no instruction spec provided").
+    Returns a dict suitable for ``SetInstructionInput.model_validate``.
     """
-    if isinstance(raw, dict):
-        return raw
-    if isinstance(raw, str):
-        return {"instruction_text": raw}
+    if not isinstance(raw, dict):
+        return {}
+    inner = raw.get("instruction", raw)
+    if isinstance(inner, str):
+        return {"instruction_text": inner}
+    if isinstance(inner, dict):
+        # lift nested keys; tolerate the flat shape (inner is raw itself)
+        return {
+            "instruction_text": inner.get("instruction_text") or raw.get("instruction_text", ""),
+            "instruction_type": inner.get("instruction_type")
+            or raw.get("instruction_type", "preference"),
+            "trigger_conditions": inner.get("trigger_conditions"),
+            "schedule_config": inner.get("schedule_config"),
+        }
     return {}
 
 
@@ -87,16 +98,15 @@ class SystemCapabilityHandler:
         self,
         instruction_text: str,
         reasoning: str,
-        instruction: dict,
+        instruction: SetInstructionInput,
         user_id: str,
         workspace_id: str,
     ) -> dict:
         """Handle set_instruction: create trigger/schedule/preference memory."""
-        if not instruction:
+        inst_text = instruction.instruction_text or instruction_text
+        if not inst_text:
             return {"status": "error", "error": "No instruction spec provided"}
-
-        inst_text = instruction.get("instruction_text", instruction_text)
-        inst_type = instruction.get("instruction_type", "preference")
+        inst_type = instruction.instruction_type or "preference"
 
         # Store as a preference memory via public API
         async with self._db_factory() as db:
@@ -118,8 +128,8 @@ class SystemCapabilityHandler:
             "text": inst_text,
         }
 
-        trigger_conditions = instruction.get("trigger_conditions")
-        schedule_config = instruction.get("schedule_config")
+        trigger_conditions = instruction.trigger_conditions
+        schedule_config = instruction.schedule_config
 
         # Create trigger if applicable
         if inst_type == "trigger" and trigger_conditions:
@@ -284,9 +294,14 @@ class SystemCapabilityHandler:
                 goal_text, reasoning, plan.priority, user_id, workspace_id
             )
         elif cap == "system.set_instruction":
-            instruction = _coerce_instruction_spec(step.input.get("instruction"))
+            coerced = _coerce_instruction_input(step.input)
+            try:
+                spec = SetInstructionInput.model_validate(coerced)
+            except ValidationError:
+                logger.warning("set_instruction input failed validation: %s", step.input)
+                return {"status": "error", "error": "invalid set_instruction input"}
             result = await self._handle_set_instruction(
-                goal_text, reasoning, instruction, user_id, workspace_id
+                goal_text, reasoning, spec, user_id, workspace_id
             )
         elif cap == "system.schedule_reminder":
             tasks = step.input.get("tasks", [])

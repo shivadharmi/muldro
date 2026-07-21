@@ -6,7 +6,7 @@ Schemas are generated via .model_json_schema() — single source of truth.
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 # ── Tool Input Models ──────────────────────────────────────────────
 
@@ -276,12 +276,18 @@ class SetInstructionInput(BaseModel):
     reminders use ``schedule_reminder`` instead — this tool stores a durable preference, it does
     not create schedules or triggers."""
 
+    model_config = ConfigDict(extra="ignore")
+
     instruction_text: str = Field(description="The instruction or preference, verbatim")
     instruction_type: str = Field(
         default="preference",
         description="Instruction category label (stored on the preference memory), e.g. "
         "'preference'",
     )
+    trigger_conditions: dict | None = Field(
+        default=None, description="Optional trigger match conditions"
+    )
+    schedule_config: dict | None = Field(default=None, description="Optional schedule config")
 
 
 class ScheduleReminderInput(BaseModel):

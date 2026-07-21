@@ -26,28 +26,51 @@ def _make_orchestrator():
     return orch
 
 
-class TestCoerceInstructionSpec:
-    """The LLM's ``input['instruction']`` value is normalized to a dict."""
+class TestCoerceInstructionInput:
+    """``step.input`` shape variance for set_instruction is normalized to a flat dict."""
 
-    def test_string_becomes_instruction_text(self):
-        from src.orchestrator.system_capability_handler import _coerce_instruction_spec
+    def test_nested_string_becomes_instruction_text(self):
+        from src.orchestrator.system_capability_handler import _coerce_instruction_input
 
-        assert _coerce_instruction_spec("Remind me daily") == {
+        assert _coerce_instruction_input({"instruction": "Remind me daily"}) == {
             "instruction_text": "Remind me daily"
         }
 
-    def test_dict_passes_through(self):
-        from src.orchestrator.system_capability_handler import _coerce_instruction_spec
+    def test_nested_dict_lifts_keys(self):
+        from src.orchestrator.system_capability_handler import _coerce_instruction_input
 
-        spec = {"instruction_text": "x", "instruction_type": "trigger"}
-        assert _coerce_instruction_spec(spec) == spec
+        raw = {
+            "instruction": {
+                "instruction_text": "x",
+                "instruction_type": "trigger",
+                "trigger_conditions": {"event": "calendar.created"},
+            }
+        }
+        coerced = _coerce_instruction_input(raw)
+        assert coerced["instruction_text"] == "x"
+        assert coerced["instruction_type"] == "trigger"
+        assert coerced["trigger_conditions"] == {"event": "calendar.created"}
 
-    def test_none_and_other_types_become_empty_dict(self):
-        from src.orchestrator.system_capability_handler import _coerce_instruction_spec
+    def test_flat_dict_passes_through(self):
+        from src.orchestrator.system_capability_handler import _coerce_instruction_input
 
-        assert _coerce_instruction_spec(None) == {}
-        assert _coerce_instruction_spec(["a", "b"]) == {}
-        assert _coerce_instruction_spec(42) == {}
+        raw = {"instruction_text": "x", "instruction_type": "trigger"}
+        coerced = _coerce_instruction_input(raw)
+        assert coerced["instruction_text"] == "x"
+        assert coerced["instruction_type"] == "trigger"
+
+    def test_non_dict_top_level_becomes_empty_dict(self):
+        from src.orchestrator.system_capability_handler import _coerce_instruction_input
+
+        assert _coerce_instruction_input(None) == {}
+        assert _coerce_instruction_input(["a", "b"]) == {}
+        assert _coerce_instruction_input(42) == {}
+        assert _coerce_instruction_input("Remind me daily") == {}
+
+    def test_nested_non_string_non_dict_becomes_empty_dict(self):
+        from src.orchestrator.system_capability_handler import _coerce_instruction_input
+
+        assert _coerce_instruction_input({"instruction": 42}) == {}
 
 
 class TestHandleSystemCapability:
@@ -114,6 +137,49 @@ class TestHandleSystemCapability:
         assert result["status"] == "created"
         assert result["text"] == "Notify me when calendar events are created"
         assert result["instruction_type"] == "preference"
+
+    @pytest.mark.asyncio
+    async def test_system_set_instruction_nested_trigger_creates_trigger(self):
+        orch = _make_orchestrator()
+        mock_db = AsyncMock()
+        mock_db.commit = AsyncMock()
+        mock_db.add = MagicMock()
+        ctx = AsyncMock()
+        ctx.__aenter__ = AsyncMock(return_value=mock_db)
+        ctx.__aexit__ = AsyncMock(return_value=False)
+        orch._db_factory = MagicMock(return_value=ctx)
+
+        step = PlanStep(
+            step_id="s1",
+            description="Notify me when calendar events are created",
+            capability="system.set_instruction",
+            input={
+                "instruction": {
+                    "instruction_text": "Notify me when calendar events are created",
+                    "instruction_type": "trigger",
+                    "trigger_conditions": {"event": "calendar.event.created"},
+                }
+            },
+        )
+        plan = PlanOutput(goal="Set trigger instruction", steps=[step])
+        result = await orch._handle_system_capability(step, plan, "usr_1", "ws_1")
+        assert result["status"] == "created"
+        assert "trigger_id" in result
+
+    @pytest.mark.asyncio
+    async def test_system_set_instruction_garbage_input_returns_error(self):
+        # A malformed instruction value (neither string nor dict) must not crash
+        # the handler — it fails validation and returns a structured error.
+        orch = _make_orchestrator()
+        step = PlanStep(
+            step_id="s1",
+            description="?",
+            capability="system.set_instruction",
+            input={"instruction": 42},
+        )
+        plan = PlanOutput(goal="?", steps=[step])
+        result = await orch._handle_system_capability(step, plan, "usr_1", "ws_1")
+        assert result["status"] == "error"
 
     @pytest.mark.asyncio
     async def test_system_add_to_brief(self):
