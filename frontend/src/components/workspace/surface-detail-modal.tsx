@@ -64,11 +64,13 @@ export function SurfaceDetailModal({ surface, open, onClose }: Props) {
   // with a live phase renders its own step list, so suppress the tabs to avoid a
   // double step list in one pane.
   const showLiveExec = !hasPresenterContent && !!surface.phase;
-  const tabs = hasPresenterContent || showLiveExec ? [] : (surface.detail_config?.tabs ?? []);
-  const defaultTabId =
-    hasPresenterContent || showLiveExec
-      ? null
-      : (surface.detail_config?.default_tab ?? tabs[0]?.id ?? null);
+  // The DB-derived detail tabs (loading/error/data/empty states below) render only
+  // when neither Presenter content nor a live execution surface owns the pane.
+  const showTabs = !hasPresenterContent && !showLiveExec;
+  const tabs = showTabs ? (surface.detail_config?.tabs ?? []) : [];
+  const defaultTabId = showTabs
+    ? (surface.detail_config?.default_tab ?? tabs[0]?.id ?? null)
+    : null;
 
   const [activeTabId, setActiveTabId] = useState<string | null>(defaultTabId);
   const [tabCache, setTabCache] = useState<Record<string, DetailTabResponse>>({});
@@ -211,20 +213,20 @@ export function SurfaceDetailModal({ surface, open, onClose }: Props) {
             />
           )}
 
-          {!hasPresenterContent && !showLiveExec && loading && (
+          {showTabs && loading && (
             <div className="flex items-center justify-center py-8">
               <div className="w-5 h-5 border-2 border-accent-primary/30 border-t-accent-primary rounded-full animate-spin" />
               <span className="ml-2 text-sm text-t-tertiary">Loading {activeTab?.label}...</span>
             </div>
           )}
 
-          {!hasPresenterContent && !showLiveExec && error && !loading && (
+          {showTabs && error && !loading && (
             <div className="rounded-[var(--radius-md)] bg-j-error-soft border border-j-error/20 p-4">
               <p className="text-sm text-j-error">{error}</p>
             </div>
           )}
 
-          {!hasPresenterContent && !showLiveExec && activeData && !loading && (
+          {showTabs && activeData && !loading && (
             <div className="space-y-3">
               {activeData.sections.map((section) => (
                 <CollapsibleSection
@@ -267,7 +269,7 @@ export function SurfaceDetailModal({ surface, open, onClose }: Props) {
             />
           )}
 
-          {!hasPresenterContent && !showLiveExec && !loading && !error && !activeData && tabs.length === 0 && (
+          {showTabs && !loading && !error && !activeData && tabs.length === 0 && (
             <p className="text-sm text-t-tertiary text-center py-8">
               No detail tabs available for this surface.
             </p>
