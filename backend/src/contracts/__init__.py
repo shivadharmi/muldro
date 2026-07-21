@@ -361,7 +361,16 @@ class StepState(BaseModel):
 
     step_id: str
     description: str
-    status: Literal["pending", "executing", "completed", "failed", "approval_needed", "user_action"]
+    status: Literal[
+        "pending",
+        "executing",
+        "completed",
+        "completed_unverified",
+        "partially_completed",
+        "failed",
+        "approval_needed",
+        "user_action",
+    ]
     output_summary: str | None = None
     duration_ms: int | None = None
     started_at: str | None = None
@@ -381,17 +390,21 @@ class StepState(BaseModel):
 # the two — anything building a ``StepState`` from a persisted ``TaskStep`` MUST map
 # through ``step_status_to_ui`` instead of passing the raw DB status, or the strict
 # Literal will raise a ValidationError (see the surfaces detail-tab 500 regression).
+#
+# ``completed_unverified``/``partially_completed`` are passed through unchanged —
+# the verification nuance now reaches the UI (frontend step-presentation.tsx renders
+# ✓? for completed_unverified and ⚠ for partially_completed), so the backend no
+# longer collapses them into completed/failed.
 _STEP_STATUS_TO_UI: dict[str, str] = {
     "pending": "pending",
     "ready": "pending",
     "running": "executing",
     "completed": "completed",
-    # A fired-but-unconfirmed write IS a success at this coarse phase map — the
-    # "unconfirmed" nuance is rendered by the frontend ``✓?`` icon layer, not here.
-    "completed_unverified": "completed",
-    # A read-back-contradicted write did NOT fully succeed — map to the nearest
-    # problem literal in the UI set (``failed``); the ``⚠`` icon carries the nuance.
-    "partially_completed": "failed",
+    # Verification nuance now reaches the UI (frontend step-presentation.tsx
+    # renders ✓? for completed_unverified and ⚠ for partially_completed), so we
+    # pass these through instead of collapsing to completed/failed.
+    "completed_unverified": "completed_unverified",
+    "partially_completed": "partially_completed",
     "failed": "failed",
     "skipped": "completed",
     "waiting_approval": "approval_needed",
