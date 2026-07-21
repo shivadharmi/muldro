@@ -674,6 +674,27 @@ class EventProcessor:
                     )
                     ev = result_.scalar_one_or_none()
                     if ev:
+                        # Publish to event bus for decoupled downstream processing
+                        # (mirrors process()/_process_inner — worker extraction
+                        # consumers key off this exact event/stream shape).
+                        if self._event_bus:
+                            try:
+                                await self._event_bus.publish(
+                                    self._event_bus.event_stream(workspace_id),
+                                    "event_processed",
+                                    {
+                                        "event_id": ev.event_id,
+                                        "source": raw.source,
+                                        "event_type": raw.event_type,
+                                        "importance_score": ev.importance_score or 0,
+                                        "urgency_score": ev.urgency_score or 0,
+                                    },
+                                    user_id=user_id,
+                                    workspace_id=workspace_id,
+                                )
+                            except Exception:
+                                logger.warning("Failed to publish to event bus", exc_info=True)
+
                         await self._evaluate_triggers(ev, user_id, workspace_id=workspace_id)
                         await self._evaluate_initiative(ev, user_id, workspace_id=workspace_id)
                 except Exception:
@@ -682,45 +703,22 @@ class EventProcessor:
         return results
 
     async def _score_events_batch(self, events: list[RawEvent], user_id: str) -> list[dict]:
-        """Score multiple events in a single Claude call. Falls back to individual scoring."""
-        if len(events) == 1:
-            return [await self._score_event(events[0], user_id)]
+        """Triage + score events in one batched call. Returns a per-event dict
+        carrying scores AND triage fields (category/tier/actionable) in
+        importance_signals. Triage is rules-first; only the ambiguous remainder
+        hits Haiku."""
+        from src.services.triage import TriageService
 
-        # Build numbered event list
-        parts = []
-        for i, raw in enumerate(events, 1):
-            lines = [f"Event {i}:", f"  Source: {raw.source}", f"  Type: {raw.event_type}"]
-            if raw.title:
-                lines.append(f"  Title: {raw.title}")
-            if raw.summary:
-                lines.append(f"  Summary: {raw.summary}")
-            if raw.actor:
-                actor_str = raw.actor.get("name", raw.actor.get("email", "unknown"))
-                lines.append(f"  From: {actor_str}")
-            parts.append("\n".join(lines))
-
-        batch_prompt = (
-            "Score the following events. Respond with a JSON array of score objects, "
-            "one per event, in the same order.\n\n" + "\n\n".join(parts)
-        )
-
-        try:
-            text = await complete_text(
-                system=SCORING_SYSTEM_PROMPT,
-                user=batch_prompt,
-                tier="resolved",
-                max_tokens=256 * len(events),
+        triage_results = await TriageService().triage_batch(events, user_id)
+        out: list[dict] = []
+        for raw, tr in zip(events, triage_results):
+            out.append(
+                {
+                    "importance_score": tr.importance_score,
+                    "urgency_score": tr.urgency_score,
+                    "confidence_score": tr.confidence_score,
+                    "importance_signals": tr.to_signals(),
+                    "summary": raw.summary,
+                }
             )
-            from src.llm_utils import parse_llm_json
-
-            parsed = parse_llm_json(text)
-            if isinstance(parsed, list) and len(parsed) == len(events):
-                return parsed
-            logger.warning(
-                "Batch scoring returned %d results for %d events", len(parsed), len(events)
-            )
-        except Exception:
-            logger.warning("Batch scoring failed, falling back to individual", exc_info=True)
-
-        # Fallback: score individually
-        return [await self._score_event(raw, user_id) for raw in events]
+        return out
