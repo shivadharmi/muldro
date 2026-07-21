@@ -208,3 +208,41 @@ async def test_upsert_entity_records_and_accumulates_source_refs():
                 (f.provenance or {}).get("source_ref") == {"source": "gmail", "event_id": "evt_2"}
                 for f in facts
             )
+
+
+def test_extract_from_event_passes_event_sourceref():
+    from unittest.mock import MagicMock
+
+    from src.services.world_model import WorldModel
+    from tests.conftest import make_mock_settings
+
+    ev = MagicMock()
+    ev.event_id = "evt_42"
+    ev.source = "gmail"
+    ev.title = "t"
+    ev.summary = "s"
+    ev.event_type = "email_received"
+    ev.actor_entities = None
+
+    wm = WorldModel(settings=make_mock_settings(), db=AsyncMock())
+    wm._db.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=lambda: ev))
+    with (
+        patch.object(
+            wm,
+            "_call_extraction",
+            new=AsyncMock(
+                return_value={
+                    "entities": [
+                        {"entity_type": "person", "canonical_name": "Jane", "attributes": {}}
+                    ],
+                    "relationships": [],
+                }
+            ),
+        ),
+        patch.object(wm, "upsert_entity", new=AsyncMock(return_value="ent_1")) as up,
+        patch.object(wm, "_create_relationship_by_name", new=AsyncMock()),
+    ):
+        asyncio.run(wm.extract_from_event("evt_42", "user_1", workspace_id="ws_1"))
+    assert up.await_count == 1
+    passed = up.call_args.kwargs["source_ref"]
+    assert passed.source == "gmail" and passed.event_id == "evt_42"

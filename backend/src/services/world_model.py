@@ -315,6 +315,7 @@ class WorldModel:
 
         extracted = await self._call_extraction(event)
         entity_ids = []
+        ref = SourceRef(source=event.source, event_id=event_id)
 
         for ent_data in extracted.get("entities", []):
             raw_type = ent_data.get("entity_type", "person")
@@ -330,6 +331,7 @@ class WorldModel:
                 importance=importance,
                 workspace_id=workspace_id,
                 origin="perception",
+                source_ref=ref,
             )
             if entity_id:
                 entity_ids.append(entity_id)
