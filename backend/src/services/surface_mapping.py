@@ -20,6 +20,30 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+_MD_LINK_RE = re.compile(r"\[([^\]]*)\]\([^)]*\)")  # [label](url) -> label (drop URL)
+_MD_STRIP_RE = re.compile(r"(\*\*|__|~~|`|^#{1,6}\s*|^>\s*|^[-*+]\s+|-{3,})", re.MULTILINE)
+_MD_EMPHASIS_RE = re.compile(r"(?<=\S)\*|\*(?=\S)")  # emphasis asterisks adjacent to text
+
+
+def _plain_subtitle(text: str | None) -> str | None:
+    """Reduce markdown-ish text to a plain one-line subtitle.
+
+    Strips markdown links (keeping the link label), heading/emphasis/strong/
+    strikethrough/code/rule/bullet syntax, and collapses whitespace so a surface
+    subtitle is never a markdown blob. Returns the input unchanged when falsy
+    (None stays None, "" stays "").
+
+    Intentionally NOT exhaustive GFM: single-underscore emphasis is left alone
+    (would corrupt snake_case), and setext headings / autolinks are out of scope.
+    """
+    if not text:
+        return text
+    cleaned = _MD_LINK_RE.sub(r"\1", text)
+    cleaned = _MD_STRIP_RE.sub("", cleaned)
+    cleaned = _MD_EMPHASIS_RE.sub("", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned or None
+
 
 def derive_surface_kind(plan: "PlanOutput") -> tuple[str, str] | None:
     """Derive workspace surface kind from PlanOutput step capabilities.
@@ -59,7 +83,9 @@ def build_surface_preview_from_plan(
     from src.ui.contracts import SurfaceMetric, SurfacePreview
 
     title = plan.goal[:80] if plan.goal else default_title
-    subtitle = plan.reasoning[:120] if plan.reasoning else None
+    subtitle = _plain_subtitle(plan.reasoning)
+    if subtitle:
+        subtitle = subtitle[:120]
     metrics: list[SurfaceMetric] = []
     tags: list[str] = []
 
