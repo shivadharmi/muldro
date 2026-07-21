@@ -21,6 +21,10 @@ def _wire_common_mocks(pr):
     pr._poller.update_cursor = AsyncMock()
     pr._apply_perception_policy_from_planner = AsyncMock()
     pr._queue_perception_plan = AsyncMock(return_value=None)
+    # Task 11 fast-path: gate is orthogonal to what this file tests (the
+    # librarian call), so force it "actionable" so the planner still runs
+    # under perception_triage_enabled=True as it did before Task 11.
+    pr._has_actionable = AsyncMock(return_value=True)
     pr._events.publish_event = AsyncMock()
     pr._trace_manager = MagicMock()
     pr._trace_manager.start_trace.return_value = MagicMock(trace_id="trace_1")
