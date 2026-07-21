@@ -531,6 +531,7 @@ interface WorkspaceSurfaceResponse {
   approval?: import("@/lib/a2ui-types").ApprovalContext | null;
   results?: import("@/lib/a2ui-types").ResultSummary | null;
   surface_data?: import("@/lib/a2ui-types").SurfaceDataPayload | null;
+  trust_context?: Record<string, string> | null;
 }
 
 export function fetchWorkspaceSurfaces(): Promise<{ surfaces: WorkspaceSurfaceResponse[]; count: number }> {
