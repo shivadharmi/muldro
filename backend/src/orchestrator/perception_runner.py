@@ -273,15 +273,18 @@ class PerceptionRunner:
                             sender = msg.get("from", "unknown")
                             observer_summary += f"\n  [{sender}]: {snippet}"
 
-            # Step 2: Librarian extracts entities and memories
-            librarian_result = await self._invoker.call_agent(
-                "librarian",
-                message=f"Process these observations from {source} and extract "
-                f"entities and memories:\n{observer_summary}",
-                user_id=user_id,
-                trace=trace,
-                workspace_id=workspace_id,
-            )
+            # Step 2: entity/memory extraction is owned by the tier-gated worker
+            # consumers when triage is enabled; skip the redundant Librarian pass.
+            librarian_result = None
+            if not self._settings.perception_triage_enabled:
+                librarian_result = await self._invoker.call_agent(
+                    "librarian",
+                    message=f"Process these observations from {source} and extract "
+                    f"entities and memories:\n{observer_summary}",
+                    user_id=user_id,
+                    trace=trace,
+                    workspace_id=workspace_id,
+                )
 
             # Enrich with correlation context for thread-aware planning
             correlation_context = ""
