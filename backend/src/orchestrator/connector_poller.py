@@ -265,20 +265,26 @@ class ConnectorPoller:
     ) -> list[str]:
         """Ingest raw events into the event processor. Returns summary strings.
 
-        ``EventProcessor.process()`` commits **per event** internally, so by
-        the time the loop finishes the session may have issued many commits.
-        When *new_cursor* is also provided, the cursor upsert is executed on
-        the **same** session after the loop and committed by the single trailing
-        ``await db.commit()`` at the end of this method.
+        Feeds the whole batch through a single ``EventProcessor.process_batch()``
+        call rather than looping ``process()`` per event, so scoring happens via
+        one batched Claude call per ``EventProcessor.BATCH_SIZE`` chunk (rules-first
+        triage + a single Haiku call) instead of one scoring call per event. When
+        *new_cursor* is also provided, the cursor upsert is executed on the
+        **same** session after ``process_batch`` returns and committed by the
+        single trailing ``await db.commit()`` at the end of this method.
 
         The invariant guaranteed here is narrower than a single transaction:
-        **the cursor is not advanced unless the event loop ran to completion**
-        (i.e. no ``new_cursor`` write happens if the session or
-        ``EventProcessor`` construction raises before the loop starts).
-        Per-event commit failures are caught and forwarded to the DLQ; they do
-        not prevent the cursor from advancing for the events that succeeded.
+        **the cursor is not advanced unless ``process_batch`` ran to completion**
+        (i.e. no ``new_cursor`` write happens if the session, ``EventProcessor``
+        construction, or ``process_batch`` itself raises). Because a chunk's
+        scoring call is shared across up to ``BATCH_SIZE`` events, a failure
+        part-way through is no longer isolated to the one failing event the way
+        the old per-event loop's try/except was — it propagates out of this
+        method instead of being caught and forwarded to the DLQ. The next poll
+        cycle re-fetches the same window (the cursor did not advance);
+        ``process_batch``'s own idempotency-key dedup skips anything already
+        stored by an earlier, successful chunk, so nothing is double-stored.
         """
-        summaries = []
         async with self._db_factory() as db:
             from src.services.dead_letter import DeadLetterService
             from src.services.event_processor import EventProcessor
@@ -298,57 +304,24 @@ class ConnectorPoller:
                 embedding_service=req.extras.get("embedding_service"),
                 vector_store=req.vector_store,
             )
-            for raw in raw_events:
-                try:
-                    # Ingest the event (persists to normalized_events with its
-                    # own event_id). The returned id is intentionally not woven
-                    # into the human-readable summary below — see comment there.
-                    await processor.process(
-                        raw,
-                        user_id=user_id,
-                        workspace_id=workspace_id,
-                    )
-                    title = raw.title or getattr(raw, "raw_data", {}).get("subject", "")
-                    # Agent-facing observation line. Carries source/type/subject so
-                    # the Librarian/Planner can reason about it, but NOT the internal
-                    # event_id ULID — that leaks into user-facing surface titles and
-                    # briefing memory. event_id is persisted in normalized_events.
-                    summary = f"[{raw.source}] {raw.event_type}: {title}"
-                    summaries.append(summary)
-                except Exception as e:
-                    await db.rollback()
-                    logger.warning(
-                        "event_ingest_failed",
-                        extra={
-                            "source": raw.source,
-                            "event_type": raw.event_type,
-                            "error": str(e)[:500],
-                        },
-                    )
-                    summaries.append(f"[{raw.source}] {raw.event_type} (ingest error)")
-                    try:
-                        await dead_letter.enqueue(
-                            user_id=user_id,
-                            operation_type="event_ingest",
-                            error_type=type(e).__name__,
-                            error_message=str(e),
-                            source_id=raw.entity_id,
-                            payload={
-                                "source": raw.source,
-                                "event_type": raw.event_type,
-                                "entity_id": raw.entity_id,
-                            },
-                            workspace_id=workspace_id,
-                        )
-                    except Exception:
-                        # A failed DLQ insert poisons the session — roll back so the
-                        # cursor upsert below (and the rest of the cycle) can proceed
-                        # instead of dying with PendingRollbackError.
-                        await db.rollback()
-                        logger.debug("DLQ enqueue failed", exc_info=True)
+
+            event_ids = await processor.process_batch(raw_events, user_id, workspace_id)
+
+            summaries = []
+            for raw, event_id in zip(raw_events, event_ids, strict=True):
+                if event_id is None:
+                    # Duplicate (idempotency-key dedup) — not newly ingested
+                    # this cycle, so it doesn't appear in the observation list.
+                    continue
+                title = raw.title or getattr(raw, "raw_data", {}).get("subject", "")
+                # Agent-facing observation line. Carries source/type/subject so
+                # the Librarian/Planner can reason about it, but NOT the internal
+                # event_id ULID — that leaks into user-facing surface titles and
+                # briefing memory. event_id is persisted in normalized_events.
+                summaries.append(f"[{raw.source}] {raw.event_type}: {title}")
 
             # Advance the cursor on the same session so it is not written
-            # unless the event loop ran to completion.
+            # unless process_batch ran to completion.
             if new_cursor and source:
                 stmt = self.build_cursor_upsert_stmt(
                     source, user_id, workspace_id, new_cursor, cursor_type
