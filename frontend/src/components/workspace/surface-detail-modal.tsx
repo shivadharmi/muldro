@@ -60,10 +60,15 @@ export function SurfaceDetailModal({ surface, open, onClose }: Props) {
   // like plan/approval that don't carry Presenter content.
   const presenterSections = surface.surface_data?.sections ?? [];
   const hasPresenterContent = presenterSections.length > 0;
-  const tabs = hasPresenterContent ? [] : (surface.detail_config?.tabs ?? []);
-  const defaultTabId = hasPresenterContent
-    ? null
-    : (surface.detail_config?.default_tab ?? tabs[0]?.id ?? null);
+  // Live execution surface takes precedence over DB-derived detail tabs — a run
+  // with a live phase renders its own step list, so suppress the tabs to avoid a
+  // double step list in one pane.
+  const showLiveExec = !hasPresenterContent && !!surface.phase;
+  const tabs = hasPresenterContent || showLiveExec ? [] : (surface.detail_config?.tabs ?? []);
+  const defaultTabId =
+    hasPresenterContent || showLiveExec
+      ? null
+      : (surface.detail_config?.default_tab ?? tabs[0]?.id ?? null);
 
   const [activeTabId, setActiveTabId] = useState<string | null>(defaultTabId);
   const [tabCache, setTabCache] = useState<Record<string, DetailTabResponse>>({});
@@ -242,7 +247,7 @@ export function SurfaceDetailModal({ surface, open, onClose }: Props) {
           )}
 
           {/* Live execution surface */}
-          {surface.phase && (
+          {showLiveExec && (
             <A2UIExecutionSurface
               component={{
                 type: "ExecutionSurface",
@@ -262,7 +267,7 @@ export function SurfaceDetailModal({ surface, open, onClose }: Props) {
             />
           )}
 
-          {!hasPresenterContent && !loading && !error && !activeData && tabs.length === 0 && (
+          {!hasPresenterContent && !showLiveExec && !loading && !error && !activeData && tabs.length === 0 && (
             <p className="text-sm text-t-tertiary text-center py-8">
               No detail tabs available for this surface.
             </p>
