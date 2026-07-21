@@ -31,6 +31,7 @@ from src.services.entity_facts.confidence import (
     days_since,
 )
 from src.services.entity_resolver import EntityResolver
+from src.services.provenance import SourceRef
 
 logger = logging.getLogger(__name__)
 
@@ -501,12 +502,14 @@ class WorldModel:
         attributes: dict,
         origin: str,
         now: datetime,
+        source_ref: SourceRef | None = None,
     ) -> None:
         """Record each attribute as a bi-temporal fact (supersede-on-change). The
         entities.attributes JSONB stays the denormalized current snapshot (D2)."""
         from src.services.entity_facts.store import EntityFactStore
 
         store = EntityFactStore(self._db)
+        ref_dict = source_ref.to_dict() if source_ref else None
         for attr_key, attr_value in attributes.items():
             try:
                 await store.record_fact(
@@ -516,6 +519,7 @@ class WorldModel:
                     attr_key=str(attr_key),
                     attr_value=attr_value,
                     origin=origin,
+                    source_ref=ref_dict,
                     now=now,
                 )
             except Exception:
