@@ -6,6 +6,7 @@ the two-layer surface model. No legacy A2UISurface children.
 
 import logging
 from datetime import date, datetime, timedelta, timezone
+from typing import TYPE_CHECKING
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,6 +21,9 @@ from src.services.execution_state import TERMINAL_SUCCESS
 from src.services.surface_mapping import apply_surface_cap
 from src.ui.contracts import SurfaceMetric, SurfacePreview
 from src.ui.renderer import build_detail_config
+
+if TYPE_CHECKING:
+    from src.models.approvals import Approval
 
 logger = logging.getLogger(__name__)
 
@@ -106,7 +110,7 @@ class SurfaceService:
             "variant": "success" if level in ("trusted", "autonomous") else "default",
         }
 
-    async def _latest_pending_approval(self, run_id: str):
+    async def _latest_pending_approval(self, run_id: str) -> "Approval | None":
         """Most recent pending Approval for a run (or None)."""
         from src.models.approvals import Approval
 
@@ -122,24 +126,21 @@ class SurfaceService:
         )
         return result.scalar_one_or_none()
 
-    async def _run_trust_context(self, run_id: str) -> dict[str, str] | None:
-        """Full trust-context dict for an awaiting-approval run (was discarded)."""
-        approval = await self._latest_pending_approval(run_id)
-        if not approval:
-            return None
-        return await self._get_trust_context(approval)
-
-    async def _approval_risk_and_flags(self, run_id: str) -> tuple[str | None, list[str]]:
-        """Resolve risk level + flags for a run awaiting approval.
+    async def _approval_risk_and_flags(
+        self, run_id: str
+    ) -> tuple[str | None, list[str], dict[str, str] | None]:
+        """Resolve risk level + flags + trust context for a run awaiting approval.
 
         Looks up the most recent pending Approval for the run. ``risk`` comes
         from the approval's risk_level (clamped to the SurfacePreview literal);
         ``flags`` carries "Irreversible" when the action is not reversible plus
         the capability's trust level uppercased (e.g. "LEARNING") when known.
+        ``trust_context`` is the full dict computed for that flag, returned so
+        callers don't need a second pending-approval + trust-state round trip.
         """
         approval = await self._latest_pending_approval(run_id)
         if not approval:
-            return None, []
+            return None, [], None
 
         raw_risk = (approval.risk_level or "").lower()
         risk_value = raw_risk if raw_risk in ("low", "medium", "high", "critical") else None
@@ -155,7 +156,7 @@ class SurfaceService:
             if level and level != "first_use":
                 flags.append(level.upper())
 
-        return risk_value, flags
+        return risk_value, flags, trust_context
 
     async def _build_briefing_surface(self, user_id: str) -> WorkspaceSurfacePush | None:
         # Prefer today's briefing; if it hasn't been generated yet, fall back to
@@ -285,8 +286,7 @@ class SurfaceService:
             flags: list[str] = []
             trust_context: dict[str, str] | None = None
             if awaiting:
-                risk_value, flags = await self._approval_risk_and_flags(run.run_id)
-                trust_context = await self._run_trust_context(run.run_id)
+                risk_value, flags, trust_context = await self._approval_risk_and_flags(run.run_id)
 
             preview = SurfacePreview(
                 title=title,
