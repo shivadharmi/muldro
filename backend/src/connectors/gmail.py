@@ -256,6 +256,9 @@ class GmailConnector(BaseConnector):
                     "Message-ID",
                     "In-Reply-To",
                     "References",
+                    "List-Unsubscribe",
+                    "List-Id",
+                    "Precedence",
                 ],
             },
             headers={"Authorization": f"Bearer {access_token}"},
@@ -270,6 +273,15 @@ class GmailConnector(BaseConnector):
         sender = headers.get("From", "unknown")
         subject = headers.get("Subject", "(no subject)")
         snippet = msg.get("snippet", "")
+
+        # Bulk-mail signal headers for triage's deterministic pre-pass
+        # (classify_by_rules in src/services/triage.py) — captured separately
+        # (not the whole header list) so marketing/newsletter mail can be
+        # skipped for free, without an LLM call.
+        bulk_mail_header_names = {"list-unsubscribe", "list-id", "precedence"}
+        captured_headers = {
+            name: value for name, value in headers.items() if name.lower() in bulk_mail_header_names
+        }
 
         return RawEvent(
             source="gmail",
@@ -288,6 +300,7 @@ class GmailConnector(BaseConnector):
                 "rfc_message_id": headers.get("Message-ID", ""),
                 "in_reply_to": headers.get("In-Reply-To", ""),
                 "references": headers.get("References", ""),
+                "headers": captured_headers,
             },
         )
 

@@ -186,6 +186,66 @@ async def test_fetch_message_detail_missing_optional_headers():
 
 
 @pytest.mark.asyncio
+async def test_fetch_message_as_event_captures_bulk_mail_headers():
+    """RawEvent.raw_payload["headers"] must capture List-Unsubscribe/List-Id/Precedence
+    so triage.classify_by_rules can skip bulk mail for free (no LLM call)."""
+    connector = GmailConnector(make_mock_settings())
+    msg = _make_gmail_message(
+        headers={
+            "List-Unsubscribe": "<mailto:unsub@shop.com>",
+            "List-Id": "newsletter.shop.com",
+            "Precedence": "bulk",
+        },
+    )
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = msg
+
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(return_value=mock_response)
+
+    event = await connector._fetch_message_as_event(
+        mock_client, "fake-token", "usr_test", "msg_001"
+    )
+
+    assert event is not None
+    rp = event.raw_payload
+    # Existing keys preserved.
+    assert rp["message_id"] == "msg_001"
+    assert rp["labels"] == ["INBOX", "UNREAD"]
+
+    # New bulk-mail headers captured for triage's deterministic pre-pass.
+    assert rp["headers"]["List-Unsubscribe"] == "<mailto:unsub@shop.com>"
+    assert rp["headers"]["List-Id"] == "newsletter.shop.com"
+    assert rp["headers"]["Precedence"] == "bulk"
+
+    # format=metadata only returns headers listed in metadataHeaders, so the
+    # connector must actually request these from the Gmail API.
+    _, kwargs = mock_client.get.call_args
+    requested_headers = set(kwargs["params"]["metadataHeaders"])
+    assert {"List-Unsubscribe", "List-Id", "Precedence"} <= requested_headers
+
+
+@pytest.mark.asyncio
+async def test_fetch_message_as_event_headers_empty_when_absent():
+    """No bulk-mail headers present -> empty (not missing) headers dict."""
+    connector = GmailConnector(make_mock_settings())
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = _make_gmail_message()
+
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(return_value=mock_response)
+
+    event = await connector._fetch_message_as_event(
+        mock_client, "fake-token", "usr_test", "msg_001"
+    )
+
+    assert event is not None
+    assert event.raw_payload["headers"] == {}
+
+
+@pytest.mark.asyncio
 async def test_poll_expired_history_recovers_via_full_sync():
     """A 404 on history.list (expired historyId cursor) must recover via full sync.
 
