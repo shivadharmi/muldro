@@ -393,16 +393,14 @@ class StepState(BaseModel):
 #
 # ``completed_unverified``/``partially_completed`` are passed through unchanged —
 # the verification nuance now reaches the UI (frontend step-presentation.tsx renders
-# ✓? for completed_unverified and ⚠ for partially_completed), so the backend no
-# longer collapses them into completed/failed.
+# ✓? for completed_unverified and ⚠ for partially_completed; backend ui/units.py
+# step_list mirrors the same glyphs for the persisted run-detail Steps tab), so the
+# backend no longer collapses them into completed/failed.
 _STEP_STATUS_TO_UI: dict[str, str] = {
     "pending": "pending",
     "ready": "pending",
     "running": "executing",
     "completed": "completed",
-    # Verification nuance now reaches the UI (frontend step-presentation.tsx
-    # renders ✓? for completed_unverified and ⚠ for partially_completed), so we
-    # pass these through instead of collapsing to completed/failed.
     "completed_unverified": "completed_unverified",
     "partially_completed": "partially_completed",
     "failed": "failed",

@@ -115,6 +115,29 @@ def test_step_list_renders_each_step_with_status() -> None:
     assert "pending" in s
 
 
+def test_step_list_renders_verification_nuance_not_pending() -> None:
+    # Regression: completed_unverified/partially_completed must render their own
+    # icon+variant, not fall back to the "○"/"default" pending look (which is
+    # what happened before these two statuses were added to the status maps).
+    steps = [
+        StepState(step_id="s1", description="Send email", status="completed_unverified"),
+        StepState(step_id="s2", description="Update record", status="partially_completed"),
+    ]
+    c = units.step_list(steps=steps, run_id="r1")
+
+    unverified_row = c.children[1]
+    marker = unverified_row.children[0]
+    badge = unverified_row.children[-1]
+    assert marker.properties["text"] == "  ✓?"
+    assert badge.properties["variant"] == "warning"
+
+    partial_row = c.children[2]
+    marker = partial_row.children[0]
+    badge = partial_row.children[-1]
+    assert marker.properties["text"] == "  ⚠"
+    assert badge.properties["variant"] == "danger"
+
+
 def test_step_list_coerces_dicts() -> None:
     steps = [
         {"step_id": "s1", "description": "Do thing", "status": "completed"},
