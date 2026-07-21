@@ -739,7 +739,13 @@ class WorldModel:
                 workspace_id=workspace_id,
             )
 
-    async def extract_from_text(self, text: str, user_id: str, workspace_id: str = "") -> list[str]:
+    async def extract_from_text(
+        self,
+        text: str,
+        user_id: str,
+        workspace_id: str = "",
+        source_ref: SourceRef | None = None,
+    ) -> list[str]:
         """Extract entities from free text (e.g. user messages). Returns entity_ids."""
         try:
             llm_text = await complete_text(
@@ -775,6 +781,7 @@ class WorldModel:
                 importance=importance,
                 workspace_id=workspace_id,
                 origin="user_message",
+                source_ref=source_ref,
             )
             if entity_id:
                 entity_ids.append(entity_id)

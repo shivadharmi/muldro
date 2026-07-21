@@ -190,10 +190,13 @@ class OutcomeLearner:
         """Shared core: extract entities from outcome text and sync them to the
         graph. Best-effort — entity/graph learning must never fail a run."""
         try:
+            from src.services.provenance import SourceRef
+
             entity_ids = await world_model.extract_from_text(
                 source_text,
                 user_id=user_id,
                 workspace_id=workspace_id,
+                source_ref=SourceRef(source="outcome", run_id=run_id),
             )
             if not entity_ids:
                 return

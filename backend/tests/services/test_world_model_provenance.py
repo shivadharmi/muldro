@@ -246,3 +246,35 @@ def test_extract_from_event_passes_event_sourceref():
     assert up.await_count == 1
     passed = up.call_args.kwargs["source_ref"]
     assert passed.source == "gmail" and passed.event_id == "evt_42"
+
+
+def test_extract_from_text_threads_caller_sourceref():
+    import json
+
+    from src.services.world_model import WorldModel
+    from tests.conftest import make_mock_settings
+
+    wm = WorldModel(settings=make_mock_settings(), db=AsyncMock())
+    llm_response = json.dumps(
+        {
+            "entities": [{"entity_type": "person", "canonical_name": "Jane", "attributes": {}}],
+            "relationships": [],
+        }
+    )
+    with (
+        patch(
+            "src.services.world_model.complete_text",
+            new=AsyncMock(return_value=llm_response),
+        ),
+        patch.object(wm, "upsert_entity", new=AsyncMock(return_value="ent_1")) as up,
+        patch.object(wm, "_create_relationship_by_name", new=AsyncMock()),
+    ):
+        asyncio.run(
+            wm.extract_from_text(
+                "some text",
+                user_id="user_1",
+                workspace_id="ws_1",
+                source_ref=SourceRef(source="interaction"),
+            )
+        )
+    assert up.call_args.kwargs["source_ref"].source == "interaction"

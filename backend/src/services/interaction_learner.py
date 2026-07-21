@@ -146,11 +146,15 @@ class InteractionLearner:
     async def _extract_entities(self, db, text: str, user_id: str, workspace_id: str) -> list[str]:
         """Extract entities from text via WorldModel (best-effort)."""
         try:
+            from src.services.provenance import SourceRef
             from src.services.world_model import WorldModel
 
             wm = WorldModel(self._settings, db, vector_store=self._vector_store)
             entity_ids = await wm.extract_from_text(
-                text, user_id=user_id, workspace_id=workspace_id
+                text,
+                user_id=user_id,
+                workspace_id=workspace_id,
+                source_ref=SourceRef(source="interaction"),
             )
             if entity_ids:
                 await db.commit()
