@@ -342,6 +342,81 @@ class SurfacePusher:
             logger.warning("Failed to push workspace surface", exc_info=True)
             return None
 
+    async def push_briefing_surface(
+        self,
+        briefing,
+        user_id: str,
+        workspace_id: str,
+    ) -> str | None:
+        """Push a structured briefing surface, deduped with the REST rebuild.
+
+        Uses surface_id = "briefing_<briefing_id>" (identical to
+        SurfaceService._build_briefing_surface) so the live WS card and the REST
+        card merge into one in the frontend store. Structured preview via
+        build_briefing_preview — never the markdown-blob plan path.
+        """
+        from datetime import datetime, timedelta, timezone
+
+        from src.contracts import WorkspaceSurfacePush
+        from src.models.ids import ensure_prefix
+        from src.services.surface_mapping import build_briefing_preview
+        from src.ui.renderer import build_detail_config
+
+        if not await self.check_surface_rate(user_id, "workspace"):
+            logger.debug("Briefing surface push rate-limited for user %s", user_id)
+            return None
+
+        try:
+            event_bus = await self._events.ensure_event_bus()
+            if not event_bus:
+                return None
+
+            surface_id = ensure_prefix("briefing", briefing.briefing_id)
+            preview = build_briefing_preview(briefing)
+            detail_config = build_detail_config("briefing", surface_id)
+
+            surface = WorkspaceSurfacePush(
+                id=surface_id,
+                kind="briefing",
+                preview=preview.model_dump(mode="json"),
+                detail_config=(detail_config.model_dump(mode="json") if detail_config else None),
+                created_at=(
+                    briefing.created_at.isoformat()
+                    if getattr(briefing, "created_at", None)
+                    else datetime.now(timezone.utc).isoformat()
+                ),
+            )
+
+            channel = f"jarvis:a2ui:{user_id}"
+            ws_msg = json.dumps({"type": "surface", "surface": surface.model_dump(mode="json")})
+            await event_bus.publish_to_channel(channel, ws_msg)
+
+            try:
+                from src.models.ui_state import UISurface
+
+                async with self._db_factory() as db:
+                    db.add(
+                        UISurface(
+                            surface_id=surface.id,
+                            user_id=user_id,
+                            workspace_id=workspace_id,
+                            surface_type="briefing",
+                            payload=surface.model_dump(mode="json"),
+                            preview=preview.model_dump(mode="json"),
+                            detail_config=(
+                                detail_config.model_dump(mode="json") if detail_config else None
+                            ),
+                            expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
+                        )
+                    )
+                    await db.commit()
+            except Exception:
+                logger.debug("Failed to persist briefing surface to DB", exc_info=True)
+            return surface_id
+        except Exception:
+            logger.warning("Failed to push briefing surface", exc_info=True)
+            return None
+
     async def push_insight_surface(
         self,
         signal: "PerceptionSignal",

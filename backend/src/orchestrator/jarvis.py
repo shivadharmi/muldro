@@ -605,21 +605,32 @@ class JarvisOrchestrator:
                             body=str(result)[:500],
                             workspace_id=workspace_id,
                         )
-                await self._push_workspace_surface(
-                    PlanOutput(
-                        goal="Daily Briefing",
-                        reasoning=str(result)[:200],
-                        steps=[
-                            PlanStep(
-                                description="Briefing update",
-                                capability="system.add_to_brief",
-                            )
-                        ],
-                    ),
-                    user_id=user_id,
-                    workspace_id=workspace_id,
-                    response_text=str(result)[:1000],
-                )
+                # The get_briefing tool wrote today's Briefing row mid-run (see the
+                # idempotency note above), so fetch it and push a STRUCTURED briefing
+                # surface deduped with the REST rebuild (same "briefing_<id>" id).
+                # Never fall back to the markdown-blob plan push — if the row is
+                # somehow absent, skip; the REST _build_briefing_surface still renders.
+                from datetime import date as _date
+
+                from sqlalchemy import select as _select
+
+                from src.models.briefings import Briefing
+
+                async with self._db_factory() as db:
+                    row = await db.execute(
+                        _select(Briefing)
+                        .where(
+                            Briefing.user_id == user_id,
+                            Briefing.briefing_date == _date.today(),
+                        )
+                        .order_by(Briefing.created_at.desc())
+                        .limit(1)
+                    )
+                    briefing_row = row.scalar_one_or_none()
+                if briefing_row is not None:
+                    await self._push_briefing_surface(
+                        briefing_row, user_id=user_id, workspace_id=workspace_id
+                    )
             except Exception:
                 logger.debug("Briefing delivery failed", exc_info=True)
 
@@ -731,6 +742,15 @@ class JarvisOrchestrator:
         return await self._surfaces.push_workspace_surface(
             plan, user_id, workspace_id, run_id=run_id, response_text=response_text
         )
+
+    async def _push_briefing_surface(
+        self,
+        briefing,
+        user_id: str,
+        workspace_id: str,
+    ) -> str | None:
+        """Delegate to SurfacePusher (facade kept for internal callers + test mockability)."""
+        return await self._surfaces.push_briefing_surface(briefing, user_id, workspace_id)
 
     async def _push_insight_surface(
         self,
