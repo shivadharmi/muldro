@@ -52,3 +52,29 @@ test("when phase is absent, detail tabs render and fetch", async () => {
   expect(await screen.findByText("TAB_STEPS_SECTION")).toBeTruthy();
   expect(fetchSurfaceDetail).toHaveBeenCalledWith("run_01", "steps");
 });
+
+test("a live phase transition on the SAME surface id clears the stale cached tab", async () => {
+  const s = runSurface();
+  const noPhase = { ...s, phase: null } as unknown as WorkspaceSurface;
+  const qc = new QueryClient();
+  const { rerender } = render(
+    <QueryClientProvider client={qc}>
+      <SurfaceDetailModal surface={noPhase} open={true} onClose={() => {}} />
+    </QueryClientProvider>,
+  );
+
+  // Tab fetch resolves and caches the "steps" tab content.
+  expect(await screen.findByText("TAB_STEPS_SECTION")).toBeTruthy();
+
+  // Same surface id, but a WS update now sets phase — modal stays open,
+  // no prop-identity change to trigger the render-phase reset.
+  const nowExecuting = { ...noPhase, phase: "executing" } as unknown as WorkspaceSurface;
+  rerender(
+    <QueryClientProvider client={qc}>
+      <SurfaceDetailModal surface={nowExecuting} open={true} onClose={() => {}} />
+    </QueryClientProvider>,
+  );
+
+  expect(screen.queryByText("TAB_STEPS_SECTION")).toBeNull();
+  expect(screen.getAllByText("Live run goal").length).toBeGreaterThan(0);
+});

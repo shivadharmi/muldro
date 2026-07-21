@@ -211,20 +211,20 @@ export function SurfaceDetailModal({ surface, open, onClose }: Props) {
             />
           )}
 
-          {!hasPresenterContent && loading && (
+          {!hasPresenterContent && !showLiveExec && loading && (
             <div className="flex items-center justify-center py-8">
               <div className="w-5 h-5 border-2 border-accent-primary/30 border-t-accent-primary rounded-full animate-spin" />
               <span className="ml-2 text-sm text-t-tertiary">Loading {activeTab?.label}...</span>
             </div>
           )}
 
-          {!hasPresenterContent && error && !loading && (
+          {!hasPresenterContent && !showLiveExec && error && !loading && (
             <div className="rounded-[var(--radius-md)] bg-j-error-soft border border-j-error/20 p-4">
               <p className="text-sm text-j-error">{error}</p>
             </div>
           )}
 
-          {!hasPresenterContent && activeData && !loading && (
+          {!hasPresenterContent && !showLiveExec && activeData && !loading && (
             <div className="space-y-3">
               {activeData.sections.map((section) => (
                 <CollapsibleSection
