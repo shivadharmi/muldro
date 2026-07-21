@@ -106,14 +106,8 @@ class SurfaceService:
             "variant": "success" if level in ("trusted", "autonomous") else "default",
         }
 
-    async def _approval_risk_and_flags(self, run_id: str) -> tuple[str | None, list[str]]:
-        """Resolve risk level + flags for a run awaiting approval.
-
-        Looks up the most recent pending Approval for the run. ``risk`` comes
-        from the approval's risk_level (clamped to the SurfacePreview literal);
-        ``flags`` carries "Irreversible" when the action is not reversible plus
-        the capability's trust level uppercased (e.g. "LEARNING") when known.
-        """
+    async def _latest_pending_approval(self, run_id: str):
+        """Most recent pending Approval for a run (or None)."""
         from src.models.approvals import Approval
 
         result = await self._db.execute(
@@ -126,7 +120,24 @@ class SurfaceService:
             .order_by(Approval.created_at.desc())
             .limit(1)
         )
-        approval = result.scalar_one_or_none()
+        return result.scalar_one_or_none()
+
+    async def _run_trust_context(self, run_id: str) -> dict[str, str] | None:
+        """Full trust-context dict for an awaiting-approval run (was discarded)."""
+        approval = await self._latest_pending_approval(run_id)
+        if not approval:
+            return None
+        return await self._get_trust_context(approval)
+
+    async def _approval_risk_and_flags(self, run_id: str) -> tuple[str | None, list[str]]:
+        """Resolve risk level + flags for a run awaiting approval.
+
+        Looks up the most recent pending Approval for the run. ``risk`` comes
+        from the approval's risk_level (clamped to the SurfacePreview literal);
+        ``flags`` carries "Irreversible" when the action is not reversible plus
+        the capability's trust level uppercased (e.g. "LEARNING") when known.
+        """
+        approval = await self._latest_pending_approval(run_id)
         if not approval:
             return None, []
 
@@ -272,8 +283,10 @@ class SurfaceService:
             # Approval context (risk + flags) when the run is gated on a decision.
             risk_value: str | None = None
             flags: list[str] = []
+            trust_context: dict[str, str] | None = None
             if awaiting:
                 risk_value, flags = await self._approval_risk_and_flags(run.run_id)
+                trust_context = await self._run_trust_context(run.run_id)
 
             preview = SurfacePreview(
                 title=title,
@@ -310,6 +323,7 @@ class SurfaceService:
                     created_at=(
                         run.started_at.isoformat() if run.started_at else run.created_at.isoformat()
                     ),
+                    trust_context=trust_context,
                 )
             )
 
