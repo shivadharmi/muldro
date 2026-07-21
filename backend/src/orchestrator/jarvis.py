@@ -610,23 +610,7 @@ class JarvisOrchestrator:
                 # surface deduped with the REST rebuild (same "briefing_<id>" id).
                 # Never fall back to the markdown-blob plan push — if the row is
                 # somehow absent, skip; the REST _build_briefing_surface still renders.
-                from datetime import date as _date
-
-                from sqlalchemy import select as _select
-
-                from src.models.briefings import Briefing
-
-                async with self._db_factory() as db:
-                    row = await db.execute(
-                        _select(Briefing)
-                        .where(
-                            Briefing.user_id == user_id,
-                            Briefing.briefing_date == _date.today(),
-                        )
-                        .order_by(Briefing.created_at.desc())
-                        .limit(1)
-                    )
-                    briefing_row = row.scalar_one_or_none()
+                briefing_row = await self._get_todays_briefing(user_id, workspace_id)
                 if briefing_row is not None:
                     await self._push_briefing_surface(
                         briefing_row, user_id=user_id, workspace_id=workspace_id
@@ -649,11 +633,17 @@ class JarvisOrchestrator:
                 trace.trace_id, user_id=user_id, workspace_id=workspace_id
             )
 
-    async def _briefing_already_exists(self, user_id: str, workspace_id: str) -> bool:
-        """Return True if a briefing row already exists for (user, today).
+    async def _get_todays_briefing(self, user_id: str, workspace_id: str):
+        """Return today's most-recent Briefing row for (user, workspace), or None.
 
-        Used as the per-day delivery idempotency key in generate_briefing so a
-        scheduler re-fire does not re-notify / re-push.
+        Single source for the per-day briefing lookup, shared by the delivery
+        idempotency check (_briefing_already_exists) and the structured-surface
+        delivery fetch in generate_briefing. Scoped by workspace_id because
+        Briefing is workspace-scoped: without it, a second workspace's briefing
+        for the same user+date could satisfy this workspace's idempotency check
+        (suppressing its briefing) or be pushed to the wrong surface — and the
+        (user_id, briefing_date) index is non-unique, so a multi-workspace user
+        legitimately has >1 row for today.
         """
         from datetime import date as _date
 
@@ -661,15 +651,27 @@ class JarvisOrchestrator:
 
         from src.models.briefings import Briefing
 
-        try:
-            async with self._db_factory() as db:
-                result = await db.execute(
-                    _select(Briefing.briefing_id).where(
-                        Briefing.user_id == user_id,
-                        Briefing.briefing_date == _date.today(),
-                    )
+        async with self._db_factory() as db:
+            result = await db.execute(
+                _select(Briefing)
+                .where(
+                    Briefing.user_id == user_id,
+                    Briefing.workspace_id == workspace_id,
+                    Briefing.briefing_date == _date.today(),
                 )
-                return result.scalar_one_or_none() is not None
+                .order_by(Briefing.created_at.desc())
+                .limit(1)
+            )
+            return result.scalar_one_or_none()
+
+    async def _briefing_already_exists(self, user_id: str, workspace_id: str) -> bool:
+        """Return True if a briefing row already exists for (user, workspace, today).
+
+        Used as the per-day delivery idempotency key in generate_briefing so a
+        scheduler re-fire does not re-notify / re-push.
+        """
+        try:
+            return await self._get_todays_briefing(user_id, workspace_id) is not None
         except Exception:
             # Fail open on the idempotency check: if we cannot tell, prefer
             # delivering (a missed briefing is worse than a rare duplicate).
