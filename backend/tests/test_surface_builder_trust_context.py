@@ -2,10 +2,12 @@
 surfaces on the REST path (previously computed then discarded).
 
 ``_approval_risk_and_flags`` already looks up the pending Approval and calls
-``_get_trust_context`` to derive the "LEARNING"/"TRUSTED"/... flag — it now
-also returns that dict as its third element so callers get risk + flags +
-trust_context from a single pending-approval + trust-state round trip
-instead of repeating both lookups.
+``_get_trust_context`` to derive the trust dict — it returns that dict as its
+third element so callers get risk + flags + trust_context from a single
+pending-approval + trust-state round trip instead of repeating both lookups.
+The trust level itself is NOT duplicated into ``flags``: the card renders a
+single trust pill from ``trust_context``, so a bare uppercased flag
+(e.g. "LEARNING") would be a redundant second rendering of the same signal.
 """
 
 import asyncio
@@ -29,7 +31,7 @@ def test_approval_risk_and_flags_returns_trust_context_as_third_element():
 
     assert risk_value == "high"
     assert "Irreversible" in flags
-    assert "LEARNING" in flags
+    assert "LEARNING" not in flags
     assert trust_context == {"trust_level": "learning", "label": "Similar to 4 approvals"}
 
 

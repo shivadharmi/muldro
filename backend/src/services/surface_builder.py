@@ -133,10 +133,11 @@ class SurfaceService:
 
         Looks up the most recent pending Approval for the run. ``risk`` comes
         from the approval's risk_level (clamped to the SurfacePreview literal);
-        ``flags`` carries "Irreversible" when the action is not reversible plus
-        the capability's trust level uppercased (e.g. "LEARNING") when known.
-        ``trust_context`` is the full dict computed for that flag, returned so
-        callers don't need a second pending-approval + trust-state round trip.
+        ``flags`` carries "Irreversible" when the action is not reversible.
+        ``trust_context`` is the full trust dict for the capability, returned so
+        callers don't need a second pending-approval + trust-state round trip —
+        it's the sole place trust level is surfaced on the card (rendered as a
+        pill), so it is not duplicated into ``flags``.
         """
         approval = await self._latest_pending_approval(run_id)
         if not approval:
@@ -151,10 +152,6 @@ class SurfaceService:
             flags.append("Irreversible")
 
         trust_context = await self._get_trust_context(approval)
-        if trust_context:
-            level = trust_context.get("trust_level")
-            if level and level != "first_use":
-                flags.append(level.upper())
 
         return risk_value, flags, trust_context
 
