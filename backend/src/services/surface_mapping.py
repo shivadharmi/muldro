@@ -16,6 +16,7 @@ from src.llm_utils import parse_llm_json
 
 if TYPE_CHECKING:
     from src.contracts import PlanOutput, SurfaceDataPayload, SurfaceSpec
+    from src.models.briefings import Briefing
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +84,38 @@ def build_surface_preview_from_plan(
         entities=[],
         progress=None,
         tags=tags,
+    )
+
+
+def build_briefing_preview(briefing: "Briefing"):
+    """Structured preview for a Briefing row — the single source of truth for a
+    briefing card. Both the REST rebuild (SurfaceService._build_briefing_surface)
+    and the live push (SurfacePusher.push_briefing_surface) call this so the two
+    paths produce an identical, structured (never markdown-blob) card.
+
+    items = priority titles (top 5); metrics = Priorities/Actions counts;
+    subtitle = first priority (plain text, capped).
+    """
+    from src.ui.contracts import SurfaceMetric, SurfacePreview
+
+    priorities = briefing.top_priorities or []
+    actions = briefing.recommended_actions or []
+
+    def _priority_title(p) -> str:
+        return (p.get("title", "") if isinstance(p, dict) else str(p)).strip()
+
+    priority_titles = [t for t in (_priority_title(p) for p in priorities) if t]
+    first_priority = priority_titles[0] if priority_titles else ""
+
+    return SurfacePreview(
+        title=briefing.headline or "Daily Briefing",
+        subtitle=first_priority[:100] if first_priority else None,
+        metrics=[
+            SurfaceMetric(label="Priorities", value=str(len(priorities))),
+            SurfaceMetric(label="Actions", value=str(len(actions))),
+        ],
+        items=priority_titles[:5],
+        tags=["briefing"],
     )
 
 

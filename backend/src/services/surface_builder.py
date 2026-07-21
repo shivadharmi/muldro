@@ -177,27 +177,10 @@ class SurfaceService:
         if not briefing:
             return None
 
+        from src.services.surface_mapping import build_briefing_preview
+
         surface_id = f"briefing_{briefing.briefing_id}"
-        priorities = briefing.top_priorities or []
-        actions = briefing.recommended_actions or []
-
-        # Priority titles → subtitle (first) + items[] (top 5) for the card.
-        def _priority_title(p) -> str:
-            return (p.get("title", "") if isinstance(p, dict) else str(p)).strip()
-
-        priority_titles = [t for t in (_priority_title(p) for p in priorities) if t]
-        first_priority = priority_titles[0] if priority_titles else ""
-
-        preview = SurfacePreview(
-            title=briefing.headline or "Daily Briefing",
-            subtitle=first_priority[:100] if first_priority else None,
-            metrics=[
-                SurfaceMetric(label="Priorities", value=str(len(priorities))),
-                SurfaceMetric(label="Actions", value=str(len(actions))),
-            ],
-            items=priority_titles[:5],
-            tags=["briefing"],
-        )
+        preview = build_briefing_preview(briefing)
         detail_config = build_detail_config("briefing", surface_id)
 
         return WorkspaceSurfacePush(
