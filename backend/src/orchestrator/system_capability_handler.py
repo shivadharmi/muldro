@@ -23,6 +23,23 @@ from src.orchestrator.services import ServiceContainer
 logger = logging.getLogger(__name__)
 
 
+def _coerce_instruction_spec(raw: object) -> dict:
+    """Normalize the LLM-produced ``input['instruction']`` value to a dict.
+
+    The planner (LLM) sometimes emits the instruction as a bare string (the
+    instruction text) rather than the structured ``{instruction_text,
+    instruction_type, ...}`` object the handler expects. Validate the shape at
+    this system boundary: a string becomes ``{'instruction_text': raw}``, a dict
+    passes through, and anything else (None/list/number) is treated as an empty
+    spec (handled downstream as 'no instruction spec provided').
+    """
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str):
+        return {"instruction_text": raw}
+    return {}
+
+
 class SystemCapabilityHandler:
     """Route and execute ``system.*`` capability steps against the data layer."""
 
@@ -267,7 +284,7 @@ class SystemCapabilityHandler:
                 goal_text, reasoning, plan.priority, user_id, workspace_id
             )
         elif cap == "system.set_instruction":
-            instruction = step.input.get("instruction", {})
+            instruction = _coerce_instruction_spec(step.input.get("instruction"))
             result = await self._handle_set_instruction(
                 goal_text, reasoning, instruction, user_id, workspace_id
             )

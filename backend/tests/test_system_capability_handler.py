@@ -26,6 +26,30 @@ def _make_orchestrator():
     return orch
 
 
+class TestCoerceInstructionSpec:
+    """The LLM's ``input['instruction']`` value is normalized to a dict."""
+
+    def test_string_becomes_instruction_text(self):
+        from src.orchestrator.system_capability_handler import _coerce_instruction_spec
+
+        assert _coerce_instruction_spec("Remind me daily") == {
+            "instruction_text": "Remind me daily"
+        }
+
+    def test_dict_passes_through(self):
+        from src.orchestrator.system_capability_handler import _coerce_instruction_spec
+
+        spec = {"instruction_text": "x", "instruction_type": "trigger"}
+        assert _coerce_instruction_spec(spec) == spec
+
+    def test_none_and_other_types_become_empty_dict(self):
+        from src.orchestrator.system_capability_handler import _coerce_instruction_spec
+
+        assert _coerce_instruction_spec(None) == {}
+        assert _coerce_instruction_spec(["a", "b"]) == {}
+        assert _coerce_instruction_spec(42) == {}
+
+
 class TestHandleSystemCapability:
     """system.* capability steps route to the correct direct handler."""
 
@@ -72,6 +96,24 @@ class TestHandleSystemCapability:
         result = await orch._handle_system_capability(step, plan, "usr_1", "ws_1")
         assert result["status"] == "created"
         assert result["memory_id"] == "mem_instr456"
+
+    @pytest.mark.asyncio
+    async def test_system_set_instruction_string_input(self):
+        # The LLM planner sometimes emits input["instruction"] as a bare string
+        # (the instruction text) instead of the structured dict. This must NOT
+        # crash — the string is normalized to the instruction_text.
+        orch = _make_orchestrator()
+        step = PlanStep(
+            step_id="s1",
+            description="Notify me when calendar events are created",
+            capability="system.set_instruction",
+            input={"instruction": "Notify me when calendar events are created"},
+        )
+        plan = PlanOutput(goal="Set instruction", steps=[step])
+        result = await orch._handle_system_capability(step, plan, "usr_1", "ws_1")
+        assert result["status"] == "created"
+        assert result["text"] == "Notify me when calendar events are created"
+        assert result["instruction_type"] == "preference"
 
     @pytest.mark.asyncio
     async def test_system_add_to_brief(self):
