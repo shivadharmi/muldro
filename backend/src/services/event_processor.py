@@ -159,14 +159,7 @@ class EventProcessor:
             # Perception-throughput latency: only for events actually stored
             # (skip duplicates, which return None without doing scoring work).
             if event_id is not None:
-                try:
-                    from src.services.metrics_service import MetricsService
-
-                    MetricsService.record_event_processing(
-                        raw.source, (time.monotonic() - start) * 1000
-                    )
-                except Exception:
-                    logger.debug("Failed to record event-processing latency", exc_info=True)
+                self._record_processing_latency(raw.source, (time.monotonic() - start) * 1000)
             return event_id
 
     async def _process_inner(
@@ -230,53 +223,12 @@ class EventProcessor:
         )
 
         # Record Prometheus metrics
-        try:
-            from src.services.metrics_service import MetricsService
-
-            MetricsService.record_event_ingested(raw.source, raw.event_type)
-        except Exception as exc:
-            logger.warning("Metrics recording failed: %s", exc)
-            if self._dead_letter:
-                try:
-                    await self._dead_letter.enqueue(
-                        user_id=user_id,
-                        operation_type="metrics_recording",
-                        error_type=type(exc).__name__,
-                        error_message=str(exc)[:500],
-                        payload={"event_id": event_id, "source": raw.source},
-                        workspace_id=workspace_id,
-                    )
-                except Exception:
-                    logger.debug("DLQ enqueue failed for metrics", exc_info=True)
+        await self._record_ingestion_metrics(
+            event_id, raw.source, raw.event_type, user_id, workspace_id
+        )
 
         # Embed into Qdrant for vector search (importance >= 0.3 only)
-        if (event.importance_score or 0) >= 0.3 and self._embedding_service and self._vector_store:
-            try:
-                parts = [event.event_type, event.source, event.title or "", event.summary or ""]
-                text = " ".join(p for p in parts if p)
-                embedding = await self._embedding_service.embed_text(text)
-                if embedding:
-                    await self._vector_store.upsert(
-                        collection="events",
-                        id=event.event_id,
-                        vector=embedding,
-                        payload={
-                            "event_id": event.event_id,
-                            "event_type": event.event_type,
-                            "source": event.source,
-                            "importance_score": event.importance_score,
-                            "workspace_id": workspace_id,
-                            "occurred_at": event.occurred_at.isoformat()
-                            if event.occurred_at
-                            else None,
-                            "actor": (event.actor_entities[0] or {}).get("name")
-                            if event.actor_entities
-                            else None,
-                        },
-                        user_id=event.user_id,
-                    )
-            except Exception:
-                logger.debug("Event embedding failed for %s", event_id, exc_info=True)
+        await self._embed_event(event, workspace_id)
 
         # Publish to event bus for decoupled downstream processing
         if self._event_bus:
@@ -304,6 +256,81 @@ class EventProcessor:
         await self._evaluate_initiative(event, user_id, workspace_id=workspace_id)
 
         return event_id
+
+    async def _record_ingestion_metrics(
+        self,
+        event_id: str,
+        source: str,
+        event_type: str,
+        user_id: str,
+        workspace_id: str,
+    ) -> None:
+        """Record the Prometheus event-ingested counter. On failure, DLQ-enqueue
+        so the miss isn't silently dropped. Shared by process() and the batch
+        path — same metric, same fallback semantics either way."""
+        try:
+            from src.services.metrics_service import MetricsService
+
+            MetricsService.record_event_ingested(source, event_type)
+        except Exception as exc:
+            logger.warning("Metrics recording failed: %s", exc)
+            if self._dead_letter:
+                try:
+                    await self._dead_letter.enqueue(
+                        user_id=user_id,
+                        operation_type="metrics_recording",
+                        error_type=type(exc).__name__,
+                        error_message=str(exc)[:500],
+                        payload={"event_id": event_id, "source": source},
+                        workspace_id=workspace_id,
+                    )
+                except Exception:
+                    logger.debug("DLQ enqueue failed for metrics", exc_info=True)
+
+    @staticmethod
+    def _record_processing_latency(source: str, duration_ms: float) -> None:
+        """Record the Prometheus event-processing latency histogram."""
+        try:
+            from src.services.metrics_service import MetricsService
+
+            MetricsService.record_event_processing(source, duration_ms)
+        except Exception:
+            logger.debug("Failed to record event-processing latency", exc_info=True)
+
+    async def _embed_event(self, event: NormalizedEvent, workspace_id: str) -> None:
+        """Embed an event into Qdrant for vector search (importance >= 0.3 only).
+
+        Shared by process() and the batch path so semantic search stays
+        populated regardless of which ingestion path stored the event.
+        """
+        if (event.importance_score or 0) < 0.3:
+            return
+        if not self._embedding_service or not self._vector_store:
+            return
+        try:
+            parts = [event.event_type, event.source, event.title or "", event.summary or ""]
+            text = " ".join(p for p in parts if p)
+            embedding = await self._embedding_service.embed_text(text)
+            if embedding:
+                await self._vector_store.upsert(
+                    collection="events",
+                    id=event.event_id,
+                    vector=embedding,
+                    payload={
+                        "event_id": event.event_id,
+                        "event_type": event.event_type,
+                        "source": event.source,
+                        "importance_score": event.importance_score,
+                        "workspace_id": workspace_id,
+                        "occurred_at": event.occurred_at.isoformat() if event.occurred_at else None,
+                        "actor": (event.actor_entities[0] or {}).get("name")
+                        if event.actor_entities
+                        else None,
+                    },
+                    user_id=event.user_id,
+                )
+        except Exception:
+            logger.debug("Event embedding failed for %s", event.event_id, exc_info=True)
 
     async def _evaluate_triggers(
         self, event: NormalizedEvent, user_id: str, workspace_id: str = ""
@@ -605,6 +632,7 @@ class EventProcessor:
         self, events: list[RawEvent], user_id: str, workspace_id: str
     ) -> list[str | None]:
         """Score and store a chunk of events via a single Claude call."""
+        chunk_start = time.monotonic()
 
         # 1. Batch dedup check
         keys = [make_idempotency_key(r) for r in events]
@@ -660,7 +688,26 @@ class EventProcessor:
             self._db.add(event)
             results.append(event_id)
 
-        await self._db.commit()
+        try:
+            await self._db.commit()
+        except IntegrityError:
+            # Concurrent ingestion lost the race on the idempotency_key unique
+            # constraint for one (or more) events in this chunk. Unlike the
+            # single-event path (process()/_process_inner), a chunk-wide
+            # commit can't identify which row conflicted without re-running
+            # the insert per-event, so we treat the whole chunk as a dedup
+            # skip: rollback and report every event as None rather than
+            # letting the IntegrityError crash the rest of the batch (and
+            # the caller's remaining chunks). The next ingestion cycle will
+            # naturally pick up any event that wasn't actually a duplicate,
+            # since it re-reads from source.
+            await self._db.rollback()
+            logger.warning(
+                "Batch commit hit IntegrityError (likely concurrent duplicate); "
+                "treating %d event(s) in this chunk as skipped",
+                len(non_dupe_events),
+            )
+            return [None] * len(events)
 
         # 4. Post-process (triggers + initiative) for stored events
         for raw, key in zip(events, keys):
@@ -674,6 +721,19 @@ class EventProcessor:
                     )
                     ev = result_.scalar_one_or_none()
                     if ev:
+                        # Record Prometheus metrics (mirrors process()/_process_inner).
+                        await self._record_ingestion_metrics(
+                            ev.event_id, raw.source, raw.event_type, user_id, workspace_id
+                        )
+                        self._record_processing_latency(
+                            raw.source, (time.monotonic() - chunk_start) * 1000
+                        )
+
+                        # Embed into Qdrant for vector search (importance >= 0.3 only,
+                        # mirrors process()/_process_inner — without this, semantic
+                        # search silently stops being populated for batch-triaged events).
+                        await self._embed_event(ev, workspace_id)
+
                         # Publish to event bus for decoupled downstream processing
                         # (mirrors process()/_process_inner — worker extraction
                         # consumers key off this exact event/stream shape).
