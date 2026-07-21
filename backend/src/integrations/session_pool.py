@@ -493,9 +493,24 @@ class UserMCPSessionPool:
                     # this, a revoked/expired token is resent repeatedly
                     # until the 5-min circuit cooldown elapses — at which
                     # point the same stale session is still cached.
-                    should_refresh = not scope_failure and (
-                        error_code == MCPErrorCode.AUTH_ERROR
-                        or self._is_oauth_server(server_name, workspace_id)
+                    # Only cycle the session when the failure could plausibly be
+                    # session/token staleness. A client-fault error — VALIDATION
+                    # (bad/missing args) or NOT_FOUND (missing resource) — has
+                    # nothing to do with session health; refreshing on it would
+                    # tear down the *shared* OAuth session (and release the managed
+                    # process) out from under concurrent calls, cascading
+                    # "Session task completed unexpectedly" to unrelated tools.
+                    client_fault = error_code in (
+                        MCPErrorCode.VALIDATION,
+                        MCPErrorCode.NOT_FOUND,
+                    )
+                    should_refresh = (
+                        not scope_failure
+                        and not client_fault
+                        and (
+                            error_code == MCPErrorCode.AUTH_ERROR
+                            or self._is_oauth_server(server_name, workspace_id)
+                        )
                     )
                     if should_refresh:
                         try:
