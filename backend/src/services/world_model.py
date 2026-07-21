@@ -31,7 +31,7 @@ from src.services.entity_facts.confidence import (
     days_since,
 )
 from src.services.entity_resolver import EntityResolver
-from src.services.provenance import SourceRef
+from src.services.provenance import SourceRef, merge_source_refs
 
 logger = logging.getLogger(__name__)
 
@@ -354,7 +354,7 @@ class WorldModel:
         canonical_name: str,
         attributes: dict | None = None,
         aliases: list[str] | None = None,
-        source_refs: list[dict] | None = None,
+        source_ref: SourceRef | None = None,
         importance: float | None = None,
         workspace_id: str = "",
         origin: str = "unknown",
@@ -374,12 +374,20 @@ class WorldModel:
         if existing:
             if attributes:
                 await self._record_attribute_facts(
-                    existing.entity_id, user_id, workspace_id, attributes, origin, now
+                    existing.entity_id,
+                    user_id,
+                    workspace_id,
+                    attributes,
+                    origin,
+                    now,
+                    source_ref=source_ref,
                 )
                 # entities.attributes stays the denormalized current snapshot (D2).
                 existing.attributes = {**(existing.attributes or {}), **attributes}
             if aliases:
                 await self._add_aliases(existing.entity_id, aliases, workspace_id=workspace_id)
+            if source_ref is not None:
+                existing.source_refs = merge_source_refs(existing.source_refs, source_ref)
             # Update temporal tracking
             existing.last_seen_at = now
             existing.interaction_count = (existing.interaction_count or 0) + 1
@@ -413,7 +421,7 @@ class WorldModel:
             entity_type=entity_type,
             canonical_name=canonical_name,
             attributes=attributes,
-            source_refs=source_refs,
+            source_refs=[source_ref.to_dict()] if source_ref else None,
             last_seen_at=now,
             interaction_count=1,
             importance_score=importance or 0.5,
@@ -453,7 +461,7 @@ class WorldModel:
         # Record each attribute as a bi-temporal fact now that the entity row exists.
         if attributes:
             await self._record_attribute_facts(
-                entity_id, user_id, workspace_id, attributes, origin, now
+                entity_id, user_id, workspace_id, attributes, origin, now, source_ref=source_ref
             )
             await self._db.commit()
 
