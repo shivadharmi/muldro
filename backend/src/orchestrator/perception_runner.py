@@ -19,6 +19,7 @@ from src.config.settings import Settings
 from src.contracts import PlanOutput
 from src.errors import classify, new_correlation_id
 from src.middleware.observability import get_correlation_id
+from src.orchestrator import perception_triage_gate as triage_gate
 from src.orchestrator.agent_invoker import AgentInvoker
 from src.orchestrator.budget import BudgetTracker
 from src.orchestrator.connector_poller import ConnectorPoller
@@ -140,14 +141,13 @@ class PerceptionRunner:
         """
         trace = self._trace_manager.start_trace("cross_source_synthesis")
         try:
-            run_synthesis = True
-            if self._settings.perception_triage_enabled:
-                run_synthesis = await self._has_actionable_for_sources(source_names, workspace_id)
-
+            run_synthesis = (
+                not self._settings.perception_triage_enabled
+                or await self._has_actionable_for_sources(source_names, workspace_id)
+            )
             if not run_synthesis:
                 logger.info(
-                    "Cross-source synthesis skipped for %s: no actionable events",
-                    ", ".join(source_names),
+                    "Cross-source synthesis skipped: no actionable events (%s)", source_names
                 )
                 return {"status": "skipped", "reason": "no_actionable_events"}
 
@@ -190,61 +190,12 @@ class PerceptionRunner:
             )
 
     async def _has_actionable(self, raw_events: list, workspace_id: str) -> bool:
-        """True if any just-ingested event was triaged actionable.
+        """Step-3 Planner gate — see ``perception_triage_gate.has_actionable_events``."""
+        return await triage_gate.has_actionable_events(self._db_factory, raw_events, workspace_id)
 
-        Looks up the stored ``NormalizedEvent`` rows for this poll's events
-        (by idempotency key) and checks ``importance_signals.actionable``,
-        the field the triage service persists. Used to gate the Opus
-        Planner call behind ``settings.perception_triage_enabled`` — a
-        poll where every event triaged as noise never needs a Planner call.
-        """
-        from sqlalchemy import select
-
-        from src.models.events import NormalizedEvent
-        from src.services.event_processor import make_idempotency_key
-
-        keys = [make_idempotency_key(r) for r in raw_events]
-        if not keys:
-            return False
-        async with self._db_factory() as db:
-            rows = (
-                await db.execute(
-                    select(NormalizedEvent.importance_signals).where(
-                        NormalizedEvent.workspace_id == workspace_id,
-                        NormalizedEvent.idempotency_key.in_(keys),
-                    )
-                )
-            ).all()
-        return any((r[0] or {}).get("actionable") for r in rows)
-
-    async def _has_actionable_for_sources(self, source_names: list[str], workspace_id: str) -> bool:
-        """True if any recently-ingested event from these sources was triaged
-        actionable — the cross-source synthesis gate.
-
-        Unlike ``_has_actionable``, synthesis has no ``raw_events`` in hand
-        (the scheduler only passes source names + counts), so this looks up
-        the most recently ingested rows for these sources/workspace instead
-        of matching specific idempotency keys.
-        """
-        from sqlalchemy import select
-
-        from src.models.events import NormalizedEvent
-
-        if not source_names:
-            return False
-        async with self._db_factory() as db:
-            rows = (
-                await db.execute(
-                    select(NormalizedEvent.importance_signals)
-                    .where(
-                        NormalizedEvent.workspace_id == workspace_id,
-                        NormalizedEvent.source.in_(source_names),
-                    )
-                    .order_by(NormalizedEvent.ingested_at.desc())
-                    .limit(50)
-                )
-            ).all()
-        return any((r[0] or {}).get("actionable") for r in rows)
+    async def _has_actionable_for_sources(self, sources: list[str], workspace_id: str) -> bool:
+        """Synthesis gate — see ``perception_triage_gate.has_actionable_for_sources``."""
+        return await triage_gate.has_actionable_for_sources(self._db_factory, sources, workspace_id)
 
     async def run_perception_cycle(self, source: str, user_id: str, workspace_id: str = "") -> dict:
         """Run a perception cycle for a specific data source.
@@ -514,10 +465,10 @@ class PerceptionRunner:
                 planner_message += f"\n\n--- Correlation Context ---{correlation_context}"
 
             planner_result = None
-            run_planner = True
-            if self._settings.perception_triage_enabled:
-                run_planner = await self._has_actionable(raw_events, workspace_id)
-
+            run_planner = (
+                not self._settings.perception_triage_enabled
+                or await self._has_actionable(raw_events, workspace_id)
+            )
             if run_planner:
                 planner_result = await self._invoker.call_agent(
                     "planner",
@@ -527,10 +478,7 @@ class PerceptionRunner:
                     workspace_id=workspace_id,
                 )
             else:
-                logger.info(
-                    "Perception poll for %s: no actionable events, skipping Planner",
-                    source,
-                )
+                logger.info("Perception poll %s: no actionable events, skip Planner", source)
 
             # Step 4: Extract and apply perception policy if present
             await self._apply_perception_policy_from_planner(
