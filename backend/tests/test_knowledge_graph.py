@@ -190,7 +190,7 @@ class TestTemporalTracking:
 
 
 class TestEntityExtractionExpanded:
-    @patch("src.services.world_model.complete_text")
+    @patch("src.services.world_model_extraction.complete_text")
     @pytest.mark.asyncio
     async def test_extracts_document_entity(self, mock_complete, settings, mock_db):
         """Should extract document entities from events."""
@@ -245,7 +245,7 @@ class TestEntityExtractionExpanded:
 
         assert len(entity_ids) == 2
 
-    @patch("src.services.world_model.complete_text")
+    @patch("src.services.world_model_extraction.complete_text")
     @pytest.mark.asyncio
     async def test_invalid_type_falls_back_to_person(self, mock_complete, settings, mock_db):
         """Unknown entity_type should fall back to 'person'."""
@@ -287,7 +287,7 @@ class TestEntityExtractionExpanded:
         added = mock_db.add.call_args_list[0][0][0]
         assert added.entity_type == "person"
 
-    @patch("src.services.world_model.complete_text")
+    @patch("src.services.world_model_extraction.complete_text")
     @pytest.mark.asyncio
     async def test_invalid_relation_falls_back_to_related_to(
         self, mock_complete, settings, mock_db

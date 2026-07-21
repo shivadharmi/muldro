@@ -83,7 +83,7 @@ async def test_upsert_updates_existing_entity(settings, mock_db):
     assert existing_entity.attributes == {"role": "investor", "company": "BigFund"}
 
 
-@patch("src.services.world_model.complete_text")
+@patch("src.services.world_model_extraction.complete_text")
 @pytest.mark.asyncio
 async def test_extract_from_event_calls_claude(mock_complete, settings, mock_db):
     """extract_from_event should call Claude and create entities."""
@@ -127,7 +127,7 @@ async def test_extract_from_event_calls_claude(mock_complete, settings, mock_db)
     mock_complete.assert_awaited_once()
 
 
-@patch("src.services.world_model.complete_text")
+@patch("src.services.world_model_extraction.complete_text")
 @pytest.mark.asyncio
 async def test_extract_from_event_tolerates_bare_list(mock_complete, settings, mock_db):
     """The LLM sometimes returns a bare entities array instead of

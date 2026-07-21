@@ -263,7 +263,7 @@ def test_extract_from_text_threads_caller_sourceref():
     )
     with (
         patch(
-            "src.services.world_model.complete_text",
+            "src.services.world_model_extraction.complete_text",
             new=AsyncMock(return_value=llm_response),
         ),
         patch.object(wm, "upsert_entity", new=AsyncMock(return_value="ent_1")) as up,
