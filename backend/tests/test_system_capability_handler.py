@@ -219,6 +219,30 @@ class TestHandleSystemCapability:
         assert "schedule_id" in result
 
     @pytest.mark.asyncio
+    async def test_system_schedule_reminder_malformed_tasks_does_not_crash(self):
+        # The LLM planner sometimes emits a legacy "tasks" wrapper with a
+        # malformed (non-list) value. This must not crash with AttributeError.
+        orch = _make_orchestrator()
+        mock_db = AsyncMock()
+        mock_db.commit = AsyncMock()
+        mock_db.add = MagicMock()
+        ctx = AsyncMock()
+        ctx.__aenter__ = AsyncMock(return_value=mock_db)
+        ctx.__aexit__ = AsyncMock(return_value=False)
+        orch._db_factory = MagicMock(return_value=ctx)
+
+        step = PlanStep(
+            step_id="s1",
+            description="Remind me to call John at 3pm",
+            capability="system.schedule_reminder",
+            input={"tasks": "not a list"},
+        )
+        plan = PlanOutput(goal="Schedule reminder", priority="medium", steps=[step])
+        result = await orch._handle_system_capability(step, plan, "usr_1", "ws_1")
+        assert result["status"] == "created"
+        assert "schedule_id" in result
+
+    @pytest.mark.asyncio
     async def test_system_respond_returns_empty(self):
         orch = _make_orchestrator()
         step = PlanStep(step_id="s1", description="Respond", capability="system.respond")

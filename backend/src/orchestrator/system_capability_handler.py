@@ -20,7 +20,7 @@ from src.contracts import PlanOutput, PlanStep
 from src.errors import classify, new_correlation_id
 from src.middleware.observability import get_correlation_id
 from src.orchestrator.services import ServiceContainer
-from src.tools.schemas import SetInstructionInput
+from src.tools.schemas import ScheduleReminderInput, SetInstructionInput
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +49,29 @@ def _coerce_instruction_input(raw: object) -> dict:
             "schedule_config": inner.get("schedule_config"),
         }
     return {}
+
+
+def _coerce_schedule_reminder_input(raw: object) -> dict:
+    """Normalize LLM shape variance for schedule_reminder into the flat model shape.
+
+    Accepts: the canonical flat ``{"title": ..., "cron_expr": ...}`` dict; the
+    legacy ``{"tasks": [{"input_data": {"cron_expr": ...}}]}`` wrapper (tolerant
+    of a malformed/non-list ``tasks``); or a bare string (treated as the title).
+    Returns a dict suitable for ``ScheduleReminderInput.model_validate``.
+    """
+    if isinstance(raw, str):
+        return {"title": raw}
+    if not isinstance(raw, dict):
+        return {}
+    if "tasks" in raw:
+        tasks = raw.get("tasks")
+        cron_expr = ""
+        if isinstance(tasks, list) and tasks and isinstance(tasks[0], dict):
+            input_data = tasks[0].get("input_data") or {}
+            if isinstance(input_data, dict):
+                cron_expr = input_data.get("cron_expr") or ""
+        return {"title": raw.get("title", ""), "cron_expr": cron_expr}
+    return {"title": raw.get("title", ""), "cron_expr": raw.get("cron_expr", "")}
 
 
 class SystemCapabilityHandler:
@@ -188,18 +211,15 @@ class SystemCapabilityHandler:
         self,
         reminder_text: str,
         reasoning: str,
-        tasks: list[dict],
+        spec: ScheduleReminderInput,
         user_id: str,
         workspace_id: str,
     ) -> dict:
         """Create a one-shot schedule for a reminder."""
         from src.models.schedules import Schedule
 
-        title = reminder_text or reasoning or "Reminder"
-        # Extract timing from tasks if available
-        schedule_config: dict = {}
-        if tasks:
-            schedule_config = tasks[0].get("input_data") or {}
+        title = spec.title or reminder_text or reasoning or "Reminder"
+        cron_expr = spec.cron_expr or None
 
         try:
             async with self._db_factory() as db:
@@ -210,11 +230,10 @@ class SystemCapabilityHandler:
                     workspace_id=workspace_id,
                     name=title[:100],
                     schedule_type="one_shot",
-                    cron_expr=schedule_config.get("cron_expr"),
+                    cron_expr=cron_expr,
                     action_type="custom_agent_task",
                     action_config={
                         "instructions": f"Remind the user: {title}",
-                        **schedule_config,
                     },
                     enabled=True,
                     source="user",
@@ -304,9 +323,14 @@ class SystemCapabilityHandler:
                 goal_text, reasoning, spec, user_id, workspace_id
             )
         elif cap == "system.schedule_reminder":
-            tasks = step.input.get("tasks", [])
+            coerced = _coerce_schedule_reminder_input(step.input)
+            try:
+                spec = ScheduleReminderInput.model_validate(coerced)
+            except ValidationError:
+                logger.warning("schedule_reminder input failed validation: %s", step.input)
+                return {"status": "error", "error": "invalid schedule_reminder input"}
             result = await self._handle_schedule_reminder(
-                goal_text, reasoning, tasks, user_id, workspace_id
+                goal_text, reasoning, spec, user_id, workspace_id
             )
         elif cap == "system.add_to_brief":
             result = await self._handle_add_to_brief(goal_text, user_id, workspace_id)
