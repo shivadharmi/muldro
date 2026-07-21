@@ -276,14 +276,23 @@ class SetInstructionInput(BaseModel):
     reminders use ``schedule_reminder`` instead — this tool stores a durable preference, it does
     not create schedules or triggers."""
 
-    model_config = ConfigDict(extra="ignore")
-
     instruction_text: str = Field(description="The instruction or preference, verbatim")
     instruction_type: str = Field(
         default="preference",
         description="Instruction category label (stored on the preference memory), e.g. "
         "'preference'",
     )
+
+
+class SetInstructionStepInput(BaseModel):
+    """Planner ``system.set_instruction`` STEP input (capability path only, NOT
+    the direct MCP tool schema). Supports the richer trigger/schedule creation
+    that ``_handle_set_instruction`` performs."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    instruction_text: str = Field(description="The instruction or preference, verbatim")
+    instruction_type: str = Field(default="preference", description="Instruction category label")
     trigger_conditions: dict | None = Field(
         default=None, description="Optional trigger match conditions"
     )

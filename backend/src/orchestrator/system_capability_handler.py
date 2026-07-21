@@ -20,7 +20,7 @@ from src.contracts import PlanOutput, PlanStep
 from src.errors import classify, new_correlation_id
 from src.middleware.observability import get_correlation_id
 from src.orchestrator.services import ServiceContainer
-from src.tools.schemas import ScheduleReminderInput, SetInstructionInput
+from src.tools.schemas import ScheduleReminderInput, SetInstructionStepInput
 
 logger = logging.getLogger(__name__)
 
@@ -29,14 +29,16 @@ def _coerce_instruction_input(raw: object) -> dict:
     """Normalize LLM shape variance for set_instruction into the flat model shape.
 
     Accepts: the canonical flat dict (``step.input`` itself already shaped like
-    ``SetInstructionInput``); a nested ``{"instruction": {...}}`` wrapper; a
+    ``SetInstructionStepInput``); a nested ``{"instruction": {...}}`` wrapper; a
     nested ``{"instruction": "text"}`` or bare top-level string; anything else
     normalizes to ``{}`` (handled downstream as "no instruction spec provided").
-    Returns a dict suitable for ``SetInstructionInput.model_validate``.
+    Returns a dict suitable for ``SetInstructionStepInput.model_validate``.
     """
     if not isinstance(raw, dict):
         return {}
-    inner = raw.get("instruction", raw)
+    inner = raw.get("instruction")
+    if inner is None:
+        inner = raw
     if isinstance(inner, str):
         return {"instruction_text": inner}
     if isinstance(inner, dict):
@@ -121,7 +123,7 @@ class SystemCapabilityHandler:
         self,
         instruction_text: str,
         reasoning: str,
-        instruction: SetInstructionInput,
+        instruction: SetInstructionStepInput,
         user_id: str,
         workspace_id: str,
     ) -> dict:
@@ -315,7 +317,7 @@ class SystemCapabilityHandler:
         elif cap == "system.set_instruction":
             coerced = _coerce_instruction_input(step.input)
             try:
-                spec = SetInstructionInput.model_validate(coerced)
+                spec = SetInstructionStepInput.model_validate(coerced)
             except ValidationError:
                 logger.warning("set_instruction input failed validation: %s", step.input)
                 return {"status": "error", "error": "invalid set_instruction input"}
