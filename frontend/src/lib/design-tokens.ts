@@ -291,10 +291,4 @@ export const KIND_LABELS: Record<string, string> = {
   summary: "Summary",
   recommendation: "Rec",
   proactive_insight: "Insight",
-  execution: "Execution",
-  checklist: "Checklist",
-  comparison: "Compare",
-  timeline: "Timeline",
-  table: "Table",
-  activity: "Activity",
 };
