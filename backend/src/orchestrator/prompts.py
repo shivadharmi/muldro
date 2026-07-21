@@ -289,6 +289,19 @@ the Notion URL, making this partially achievable.",
 }}
 </examples>
 
+<system_capability_inputs>
+For "system.*" steps, always shape "input" as the flat canonical object below —
+do NOT nest it under an extra key (e.g. no {{"instruction": {{...}}}} wrapper,
+no {{"tasks": [...]}} wrapper):
+
+- system.set_instruction — a standing preference/instruction, not a reminder:
+  {{"input": {{"instruction_text": "Always CC my cofounder on investor emails", \
+"instruction_type": "preference"}}}}
+
+- system.schedule_reminder — a one-shot reminder at a specific time:
+  {{"input": {{"title": "Follow up with the investor", "cron_expr": "0 9 * * 1"}}}}
+</system_capability_inputs>
+
 <rules>
 1. PRIORITY: Fundraising, revenue, and customer issues are always "critical"
    or "high". Never downgrade these.
