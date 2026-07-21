@@ -7,7 +7,7 @@ import { A2UIRenderer } from "@/components/a2ui/renderer";
 import type { InsightData } from "@/lib/a2ui-types";
 import { InlineMarkdown } from "@/components/jarvis/markdown-renderer";
 import { StatusBadge } from "@/components/ui/status-badge";
-import { riskLevelTextColor } from "@/lib/design-tokens";
+import { riskLevelTextColor, trustLevelColor } from "@/lib/design-tokens";
 
 interface Props {
   surface: WorkspaceSurface;
@@ -186,6 +186,22 @@ export function SurfaceCard({ surface, onClick }: Props) {
               {f}
             </span>
           ))}
+        </div>
+      )}
+
+      {/* Trust context (awaiting-approval runs) */}
+      {surface.trust_context?.label && (
+        <div className="flex flex-wrap items-center gap-1.5 mb-2.5">
+          <span
+            className={`text-[10px] px-1.5 py-0.5 rounded-[var(--radius-sm)] text-white font-medium ${trustLevelColor(surface.trust_context.trust_level ?? "first_use")}`}
+          >
+            {surface.trust_context.label}
+          </span>
+          {surface.trust_context.graduation_hint && (
+            <span className="text-[10px] text-t-muted">
+              {surface.trust_context.graduation_hint}
+            </span>
+          )}
         </div>
       )}
 
