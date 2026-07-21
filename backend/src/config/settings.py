@@ -102,6 +102,10 @@ class Settings(BaseSettings):
     max_perception_per_tick: int = 5  # Max perception cycles per scheduler tick
     webhook_lag_threshold: int = 5000  # Reject webhooks when stream lag exceeds this
 
+    # Perception triage redesign (cost/reliability phase-gates)
+    perception_triage_enabled: bool = False  # JARVIS_PERCEPTION_TRIAGE_ENABLED
+    perception_triage_shadow: bool = False  # JARVIS_PERCEPTION_TRIAGE_SHADOW
+
     # Auth
     magic_link_ttl_minutes: int = 15
     session_ttl_hours: int = 720  # 30 days
