@@ -52,6 +52,9 @@ class LocalMCPProcessManager:
     ready_timeout: float = READY_TIMEOUT_SECONDS
     _running: dict[str, _Running] = field(default_factory=dict)
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    # Strong refs to stderr-drain tasks so they aren't garbage-collected before
+    # the subprocess exits (asyncio only holds weak refs to bare tasks).
+    _stderr_tasks: set[Any] = field(default_factory=set)
 
     def refcount(self, server_name: str) -> int:
         r = self._running.get(server_name)
@@ -104,10 +107,37 @@ class LocalMCPProcessManager:
             *spec.argv,
             env=full_env,
             stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
         )
         logger.info("[mcp:local] spawned %s pid=%s port=%d", spec.server_name, proc.pid, port)
+        # Forward the child's stderr to the log so a crash reason (uvx resolve
+        # failure, auth error, traceback) is visible instead of silently dropped.
+        task = asyncio.create_task(self._drain_stderr(spec.server_name, proc))
+        self._stderr_tasks.add(task)
+        task.add_done_callback(self._stderr_tasks.discard)
         return proc, port
+
+    async def _drain_stderr(self, server_name: str, proc: Any) -> None:
+        """Forward the subprocess's stderr to the logger, line by line.
+
+        Ends naturally when the process exits (readline returns EOF). Draining is
+        also required so a chatty child never blocks on a full stderr pipe.
+        """
+        stream = proc.stderr
+        if stream is None:
+            return
+        try:
+            while True:
+                line = await stream.readline()
+                if not line:
+                    break
+                logger.warning(
+                    "[mcp:local:%s] %s",
+                    server_name,
+                    line.decode(errors="replace").rstrip(),
+                )
+        except Exception:
+            logger.debug("stderr drain for %s ended", server_name, exc_info=True)
 
     async def _wait_ready(self, proc: Any, port: int, path: str) -> None:
         deadline = asyncio.get_event_loop().time() + self.ready_timeout

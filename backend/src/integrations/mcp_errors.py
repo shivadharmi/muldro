@@ -31,6 +31,10 @@ class MCPErrorCode:
     VALIDATION = "validation_error"
     CIRCUIT_OPEN = "circuit_open"
     NOT_FOUND = "not_found"
+    # The MCP session's transport died (background task exited / resource closed
+    # — e.g. the on-demand subprocess crashed, or a concurrent refresh tore the
+    # shared session down). Recoverable: rebuild the session and retry.
+    SESSION_LOST = "session_lost"
     UNKNOWN = "unknown_error"
 
 
@@ -117,6 +121,21 @@ def classify_error(error: Exception) -> str:
     if "404" in error_str or "not found" in error_str:
         return MCPErrorCode.NOT_FOUND
 
+    # Session-transport death: the session's background task exited or the
+    # underlying resource was closed. Recoverable by rebuilding the session and
+    # retrying (handled as transient by the session_pool retry loop).
+    if any(
+        k in error_str
+        for k in (
+            "session task completed",
+            "closed resource",
+            "broken resource",
+            "connection closed",
+            "session closed",
+        )
+    ):
+        return MCPErrorCode.SESSION_LOST
+
     # Server errors (5xx)
     if any(k in error_str for k in ("500", "502", "503", "504", "server error")):
         return MCPErrorCode.SERVER_ERROR
@@ -149,6 +168,7 @@ def is_transient(error_code: str) -> bool:
         MCPErrorCode.TIMEOUT,
         MCPErrorCode.RATE_LIMIT,
         MCPErrorCode.SERVER_ERROR,
+        MCPErrorCode.SESSION_LOST,
     )
 
 

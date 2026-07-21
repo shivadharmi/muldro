@@ -527,6 +527,22 @@ class UserMCPSessionPool:
                             )
                     break
 
+                # A lost session will never recover by retrying the SAME dead
+                # session — rebuild it (refresh drops the dead entry; re-acquire
+                # spawns a fresh one) before the backoff retry.
+                if error_code == MCPErrorCode.SESSION_LOST:
+                    try:
+                        await self.refresh_session(server_name, user_id, workspace_id=workspace_id)
+                        session = await self.get_or_create_session(
+                            server_name, user_id, workspace_id
+                        )
+                    except Exception:
+                        logger.debug(
+                            "Rebuild of %s session after session-loss failed",
+                            server_name,
+                            exc_info=True,
+                        )
+
                 # Exponential backoff with jitter: 1s, 2s, 4s
                 delay = (2**attempt) + random.uniform(0, 0.5)
                 logger.info(

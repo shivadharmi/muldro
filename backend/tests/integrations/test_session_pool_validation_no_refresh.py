@@ -81,6 +81,40 @@ async def test_not_found_error_does_not_refresh_oauth_session():
     refresh_mock.assert_not_awaited()
 
 
+async def test_session_lost_rebuilds_session_and_retries():
+    """A dead session ('Session task completed unexpectedly') is transient: the
+    retry loop refreshes + re-acquires a fresh session, then the retry succeeds."""
+    pool = _oauth_pool()
+
+    dead = _session_raising(RuntimeError("Session task completed unexpectedly"))
+
+    ok_result = MagicMock()
+    ok_result.content = [MagicMock(text="events-json")]
+    good_client = AsyncMock()
+    good_client.call_tool = AsyncMock(return_value=ok_result)
+    good = MagicMock()
+    good.client = good_client
+
+    get_session = AsyncMock(side_effect=[dead, good])
+    with (
+        patch.object(pool, "get_or_create_session", get_session),
+        patch.object(pool, "refresh_session", AsyncMock()) as refresh_mock,
+        patch("asyncio.sleep", AsyncMock()),
+    ):
+        result = await pool.call_tool(
+            "get_events",
+            {},
+            user_id="u1",
+            server_name="google-workspace",
+            workspace_id="ws_1",
+        )
+
+    assert result["status"] == "ok"
+    assert result["result"] == "events-json"
+    refresh_mock.assert_awaited()  # dead session was rebuilt
+    assert get_session.await_count == 2  # pre-loop acquire + re-acquire after refresh
+
+
 async def test_auth_error_still_refreshes_oauth_session():
     """Guard: a genuine AUTH error MUST still refresh (stale-bearer recovery)."""
     pool = _oauth_pool()
