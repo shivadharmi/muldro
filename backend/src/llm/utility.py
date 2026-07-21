@@ -8,7 +8,7 @@ OWN ``llm_utils.parse_llm_json`` + domain fallback — this seam only fetches te
 
 from __future__ import annotations
 
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 
 from src.llm.model_factory import build_utility_model
 
@@ -20,22 +20,23 @@ async def complete_text(
     tier: str,
     max_tokens: int,
     temperature: float | None = None,
-    prefill: str | None = None,
 ) -> str:
     """Run one plain completion and return the assistant's text.
 
     - ``system``: plain string, a list of content blocks, or ``None`` (omitted).
-    - ``prefill``: optional assistant partial (e.g. ``"{"``); the returned text is the
-      CONTINUATION (does not include the prefill) — callers re-prepend if needed,
-      matching the raw-SDK prefill behavior.
+
+    The conversation always ends with the user message. Assistant-message *prefill*
+    (seeding the reply with ``"{"`` to force JSON) is intentionally NOT supported:
+    every model Jarvis runs is an adaptive-thinking model, and those reject a
+    conversation that ends with an assistant turn (400 "does not support assistant
+    message prefill"). Callers that need JSON instruct it in the system prompt and
+    lean on ``llm_utils.parse_llm_json``, which tolerates fences and surrounding prose.
     """
     model = build_utility_model(tier, max_tokens=max_tokens, temperature=temperature)
     messages: list[BaseMessage] = []
     if system is not None:
         messages.append(SystemMessage(content=system))
     messages.append(HumanMessage(content=user))
-    if prefill is not None:
-        messages.append(AIMessage(content=prefill))
     response = await model.ainvoke(messages)
     content = response.content
     if isinstance(content, str):

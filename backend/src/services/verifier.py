@@ -232,10 +232,10 @@ class Verifier:
         )
 
         try:
-            # Prefill the assistant turn with "{" so the model is forced to continue a JSON
-            # object instead of prose — the canonical fix for the judge returning "No JSON
-            # value found". complete_text returns the CONTINUATION only; we re-attach the "{".
-            continuation = await complete_text(
+            # No assistant-message prefill: Jarvis's adaptive-thinking models reject a
+            # conversation ending in an assistant turn (400). Instead we instruct JSON-only
+            # in the system prompt and rely on parse_llm_json to tolerate any stray prose.
+            text = await complete_text(
                 system=(
                     "You are a quality verification engine. "
                     "Evaluate whether the run met the criteria. "
@@ -244,12 +244,9 @@ class Verifier:
                 user=prompt,
                 tier="resolved",
                 max_tokens=256,
-                prefill="{",
             )
             from src.llm_utils import parse_llm_json
 
-            # Re-attach the prefilled "{" the model continued from.
-            text = "{" + (continuation or "")
             # Advisory verification: a malformed/empty judge response must NOT
             # raise (it is informational, not failing). Degrade to not-passed.
             result = parse_llm_json(text, default={"passed": False, "reason": "unparseable"})

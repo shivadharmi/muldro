@@ -49,16 +49,17 @@ async def test_complete_text_accepts_block_list_system():
     assert msgs[0].content == [{"type": "text", "text": "sys prompt"}]
 
 
-async def test_complete_text_appends_prefill_and_returns_continuation():
-    model = _mock_model('"passed": true}')  # continuation after the "{" prefill
+async def test_complete_text_conversation_ends_with_user_message():
+    # Adaptive-thinking models (every model Jarvis runs) reject a conversation that
+    # ends with an assistant turn. complete_text must never append an assistant
+    # (prefill) message — the last message is always the HumanMessage.
+    model = _mock_model('{"passed": true}')
     with patch("src.llm.utility.build_utility_model", return_value=model):
-        out = await complete_text(
-            system="s", user="u", tier="resolved", max_tokens=256, prefill="{"
-        )
+        out = await complete_text(system="s", user="u", tier="resolved", max_tokens=256)
     msgs = model.ainvoke.call_args.args[0]
-    assert isinstance(msgs[-1], AIMessage) and msgs[-1].content == "{"
-    # Returns the CONTINUATION only (not the prefill) — verifier re-prepends the "{".
-    assert out == '"passed": true}'
+    assert isinstance(msgs[-1], HumanMessage)
+    assert not any(isinstance(m, AIMessage) for m in msgs)
+    assert out == '{"passed": true}'
 
 
 async def test_complete_text_joins_block_list_content():
