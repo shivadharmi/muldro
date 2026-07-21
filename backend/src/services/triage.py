@@ -21,6 +21,7 @@ CATEGORY_TIER: dict[str, Tier] = {
     "newsletter": "skip",
     "social_notification": "skip",
     "delivery_ping": "skip",
+    "otp": "skip",  # transient one-time codes — no durable value, PII-sensitive to store
     "financial": "light",
     "transactional": "light",
     "personal": "full",
@@ -99,7 +100,10 @@ Categories (choose exactly one per event):
 - transactional: account/service notices carrying a durable fact
 - personal: mail from a real individual to the user
 - work_thread: work/project discussion, colleagues, collaborators
-- security_alert: logins, passkeys, password/2FA, suspicious activity
+- otp: a transient one-time password / login code / transaction OTP that expires \
+(e.g. "OTP for your transaction", "your login code is 123456") — noise, never a durable fact
+- security_alert: a durable security EVENT the user should notice — a NEW passkey/device \
+added, a password change, or suspicious/unrecognized login activity (NOT routine OTP codes)
 - calendar_invite: meeting invites/updates needing awareness or response
 - direct_request: an explicit ask/question requiring the user to act
 

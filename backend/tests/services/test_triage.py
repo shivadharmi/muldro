@@ -45,6 +45,7 @@ def test_derive_tier_maps_category():
     assert derive_tier("marketing") == "skip"
     assert derive_tier("financial") == "light"
     assert derive_tier("security_alert") == "full"
+    assert derive_tier("otp") == "skip"  # transient one-time codes are noise, not alerts
     assert derive_tier("totally_unknown") == "full"  # fail-safe: unknown → full (recall)
     # derive_tier must agree with the CATEGORY_TIER table for every known category.
     for category, tier in CATEGORY_TIER.items():
