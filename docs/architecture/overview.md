@@ -134,7 +134,7 @@ User query
     └── Local cross-encoder reranker (ms-marco-MiniLM-L-12-v2) merges + reranks results
 ```
 
-The `TriSearchService` (`src/services/tri_search.py`) runs all three backends in parallel, deduplicates results, and reranks via the local cross-encoder. Full-text search uses Postgres native `tsvector` columns with GIN indexes on the FTS tables (memories, entities, events, conversations, briefings, approvals, artifacts). Elasticsearch has been fully removed.
+The `TriSearchService` (`src/services/tri_search.py`) runs all three backends in parallel, deduplicates results, and reranks via the local cross-encoder. Full-text search currently uses a GIN-indexed Postgres `tsvector` on **`entities` only** (activated by migration `b3e8c1f5a9d2`); the other models define a nullable `search_vector` column that is provisioned but not yet trigger-populated or indexed — see [Data Model → Postgres FTS](data-model.md#postgres-fts-indexes-tsvector--gin). Elasticsearch has been fully removed.
 
 ### Knowledge Graph (Neo4j)
 
