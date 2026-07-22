@@ -148,4 +148,14 @@ class EntityFact(Base, TimestampMixin):
     __table_args__ = (
         Index("ix_entity_facts_lookup", "entity_id", "attr_key", "valid_to"),
         Index("ix_entity_facts_ws", "workspace_id"),
+        # At most ONE current (valid_to IS NULL) fact per (entity, attr_key). Prevents a
+        # concurrent race from inserting two current rows (which makes current_fact()'s
+        # scalar_one_or_none() raise MultipleResultsFound). See migration 8129484eed6f.
+        Index(
+            "uq_entity_facts_current",
+            "entity_id",
+            "attr_key",
+            unique=True,
+            postgresql_where=text("valid_to IS NULL"),
+        ),
     )

@@ -12,6 +12,7 @@ import logging
 from datetime import datetime, timezone
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from ulid import ULID
 
 from src.models.entities import EntityFact
@@ -42,12 +43,17 @@ class EntityFactStore:
         origin: str,
         source_ref: dict | None = None,
         now: datetime | None = None,
+        _allow_retry: bool = True,
     ) -> tuple[str, bool]:
         """Record an attribute observation. Returns (current_fact_id, superseded).
 
         - No current fact for (entity, attr_key)      -> insert (superseded=False)
         - Current fact with the SAME value            -> corroborate in place (False)
         - Current fact with a DIFFERENT value         -> close old + insert new (True)
+
+        ``_allow_retry`` is internal: on the one-shot recovery after a concurrent-insert race
+        (uq_entity_facts_current), the retry sets it False so a re-conflict raises instead of
+        looping.
         """
         now = now or datetime.now(timezone.utc)
         current = await self.current_fact(entity_id, attr_key, workspace_id)
@@ -68,29 +74,54 @@ class EntityFactStore:
             return current.fact_id, False
 
         fact_id = f"fact_{ULID()}"
-        if current is not None:
-            current.valid_to = now
-            current.superseded_by = fact_id
-
-        new_fact = EntityFact(
-            fact_id=fact_id,
-            entity_id=entity_id,
-            workspace_id=workspace_id,
-            user_id=user_id,
-            attr_key=attr_key,
-            attr_value=attr_value,
-            corroboration_count=1,
-            confidence=compute_confidence(origin=origin, corroboration_count=1, age_days=0.0),
-            provenance={
-                "origin": origin,
-                "source_ref": source_ref,
-                "observed_at": now.isoformat(),
-                "reliability": reliability_for(origin),
-            },
-            valid_from=now,
-        )
-        self._db.add(new_fact)
-        await self._db.flush()
+        try:
+            # SAVEPOINT: a concurrent writer may create the current (entity, attr_key) row between
+            # the current_fact() read above and this insert, tripping the uq_entity_facts_current
+            # partial-unique guard. Isolating close+insert in a nested transaction means such a
+            # conflict rolls back ONLY this write — the caller's batch/session stays usable — and
+            # expires the stale ``current`` we mutated (same idiom as entity_facts/reconciliation).
+            async with self._db.begin_nested():
+                if current is not None:
+                    current.valid_to = now
+                    current.superseded_by = fact_id
+                new_fact = EntityFact(
+                    fact_id=fact_id,
+                    entity_id=entity_id,
+                    workspace_id=workspace_id,
+                    user_id=user_id,
+                    attr_key=attr_key,
+                    attr_value=attr_value,
+                    corroboration_count=1,
+                    confidence=compute_confidence(
+                        origin=origin, corroboration_count=1, age_days=0.0
+                    ),
+                    provenance={
+                        "origin": origin,
+                        "source_ref": source_ref,
+                        "observed_at": now.isoformat(),
+                        "reliability": reliability_for(origin),
+                    },
+                    valid_from=now,
+                )
+                self._db.add(new_fact)
+                await self._db.flush()
+        except IntegrityError:
+            # Lost the race: a concurrent writer already holds the current row. The savepoint
+            # rolled back our close+insert; re-read and re-decide ONCE against the winner
+            # (corroborate if same value, supersede if different).
+            if not _allow_retry:
+                raise
+            return await self.record_fact(
+                entity_id=entity_id,
+                workspace_id=workspace_id,
+                user_id=user_id,
+                attr_key=attr_key,
+                attr_value=attr_value,
+                origin=origin,
+                source_ref=source_ref,
+                now=now,
+                _allow_retry=False,
+            )
         if current is not None:
             logger.info(
                 "entity_fact superseded: entity=%s key=%s %s -> %s",

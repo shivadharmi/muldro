@@ -231,3 +231,82 @@ async def test_record_fact_corroboration_is_monotonic_across_origins():
         assert superseded2 is False
         # Monotonic: corroboration never drops confidence below its pre-corroboration value.
         assert after >= high
+
+
+async def test_two_current_rows_per_attribute_are_rejected():
+    """F3 (Codex PR #9, P2): a partial unique index enforces AT MOST ONE current
+    (valid_to IS NULL) fact per (entity_id, attr_key). Without it, a concurrent race can insert
+    two current rows and current_fact()'s scalar_one_or_none() then raises MultipleResultsFound,
+    permanently breaking corroboration/supersede for that attribute."""
+    from sqlalchemy.exc import IntegrityError
+
+    from src.models.entities import EntityFact
+
+    async with _entity_env("ent_facts_6") as (factory, ws, uid):
+        now = datetime.now(timezone.utc)
+        with pytest.raises(IntegrityError):
+            async with factory() as db:
+                for i in (1, 2):
+                    db.add(
+                        EntityFact(
+                            fact_id=f"fact_dup_{i}",
+                            entity_id="ent_facts_6",
+                            workspace_id=ws,
+                            user_id=uid,
+                            attr_key="role",
+                            attr_value="CEO",
+                            corroboration_count=1,
+                            confidence=0.9,
+                            valid_from=now,
+                            valid_to=None,
+                        )
+                    )
+                await db.commit()
+
+
+async def test_record_fact_recovers_from_concurrent_current_insert():
+    """F3 (Codex PR #9, P2): if a concurrent writer inserts the current (entity, attr_key) row
+    between this call's current_fact() read and its own insert, the partial-unique guard fires;
+    record_fact must catch it, re-read the winner, and corroborate once — not propagate
+    IntegrityError (which would poison the batch). Simulated by forcing the initial current_fact()
+    read to MISS an already-existing current row (a stale read = the race window)."""
+    async with _entity_env("ent_facts_7") as (factory, ws, uid):
+        async with factory() as db:
+            store = EntityFactStore(db)
+            # The 'winner' current row already exists.
+            fid_winner, _ = await store.record_fact(
+                entity_id="ent_facts_7",
+                workspace_id=ws,
+                user_id=uid,
+                attr_key="role",
+                attr_value="CEO",
+                origin="user_message",
+            )
+            await db.commit()
+
+            # Force ONLY the next call's initial read to miss the winner, so record_fact takes the
+            # insert path and collides with the unique guard; the recovery re-reads for real.
+            real_current_fact = store.current_fact
+            state = {"n": 0}
+
+            async def _stale_then_real(entity_id, attr_key, workspace_id):
+                state["n"] += 1
+                if state["n"] == 1:
+                    return None
+                return await real_current_fact(entity_id, attr_key, workspace_id)
+
+            store.current_fact = _stale_then_real
+
+            fid2, superseded = await store.record_fact(
+                entity_id="ent_facts_7",
+                workspace_id=ws,
+                user_id=uid,
+                attr_key="role",
+                attr_value="CEO",
+                origin="perception",
+            )
+            await db.commit()
+
+        # Recovered: corroborated the existing winner in place (same value), no crash, no dup row.
+        assert fid2 == fid_winner
+        assert superseded is False
