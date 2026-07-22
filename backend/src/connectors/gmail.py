@@ -1,5 +1,6 @@
 """Gmail connector — polls Gmail API for new messages."""
 
+import asyncio
 import logging
 from datetime import datetime, timezone
 
@@ -22,6 +23,13 @@ MAX_BACKFILL_PAGES = 4
 # iteration). On hitting the cap we warn and advance the cursor to the last
 # fetched historyId, so the next poll resumes from there.
 MAX_HISTORY_PAGES = 50
+
+# Per-message detail GETs within a single page are fetched concurrently, bounded
+# by this semaphore. The whole poll runs under a 30s budget (connector_poller);
+# serial per-message fetches make wall-clock scale with message count and blow
+# that budget on a busy mailbox. Kept modest so a page fan-out cannot hammer the
+# Gmail API rate limit.
+MAX_CONCURRENT_MESSAGE_FETCHES = 8
 
 
 @register_connector("gmail")
@@ -94,17 +102,19 @@ class GmailConnector(BaseConnector):
 
                         data = resp.json()
                         final_history_id = data.get("historyId", final_history_id)
+                        page_msg_ids: list[str] = []
                         for history in data.get("history", []):
                             for msg_added in history.get("messagesAdded", []):
                                 msg_id = msg_added["message"]["id"]
                                 if msg_id in seen_msg_ids:
                                     continue
                                 seen_msg_ids.add(msg_id)
-                                event = await self._fetch_message_as_event(
-                                    client, access_token, user_id, msg_id
-                                )
-                                if event:
-                                    events.append(event)
+                                page_msg_ids.append(msg_id)
+                        events.extend(
+                            await self._fetch_messages_as_events(
+                                client, access_token, user_id, page_msg_ids
+                            )
+                        )
 
                         pages_fetched += 1
                         page_token = data.get("nextPageToken")
@@ -156,16 +166,18 @@ class GmailConnector(BaseConnector):
                             return PollResult(events=[], cursor=cursor, error_class=error_class)
 
                         data = resp.json()
+                        page_msg_ids = []
                         for msg_meta in data.get("messages", []):
                             msg_id = msg_meta["id"]
                             if msg_id in seen_msg_ids:
                                 continue
                             seen_msg_ids.add(msg_id)
-                            event = await self._fetch_message_as_event(
-                                client, access_token, user_id, msg_id
+                            page_msg_ids.append(msg_id)
+                        events.extend(
+                            await self._fetch_messages_as_events(
+                                client, access_token, user_id, page_msg_ids
                             )
-                            if event:
-                                events.append(event)
+                        )
 
                         pages_fetched += 1
                         page_token = data.get("nextPageToken")
@@ -238,6 +250,26 @@ class GmailConnector(BaseConnector):
     async def get_auth_url(self, scopes: list[str] | None = None) -> str:
         """Get Google OAuth URL."""
         return "/v1/auth/oauth/google/authorize"
+
+    async def _fetch_messages_as_events(
+        self, client, access_token: str, user_id: str, msg_ids: list[str]
+    ) -> list[RawEvent]:
+        """Fetch multiple message details concurrently, bounded by a semaphore.
+
+        Preserves ``msg_ids`` order (gather is order-preserving) so event ordering
+        matches the previous serial behaviour, and drops any message that failed
+        to fetch (``None``).
+        """
+        if not msg_ids:
+            return []
+        sem = asyncio.Semaphore(MAX_CONCURRENT_MESSAGE_FETCHES)
+
+        async def _one(msg_id: str) -> RawEvent | None:
+            async with sem:
+                return await self._fetch_message_as_event(client, access_token, user_id, msg_id)
+
+        results = await asyncio.gather(*(_one(m) for m in msg_ids))
+        return [event for event in results if event]
 
     async def _fetch_message_as_event(
         self, client, access_token: str, user_id: str, msg_id: str

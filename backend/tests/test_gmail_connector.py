@@ -1,5 +1,6 @@
 """Tests for Gmail connector — header capture."""
 
+import asyncio
 import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -524,3 +525,62 @@ async def test_history_pagination_capped(caplog):
     assert any(
         "truncated" in rec.message and rec.levelno == logging.WARNING for rec in caplog.records
     )
+
+
+@pytest.mark.asyncio
+async def test_initial_sync_fetches_message_details_concurrently():
+    """Per-message detail GETs run concurrently, not serially.
+
+    The whole poll is wrapped in a 30s budget by the poller; fetching each new
+    message's detail serially makes wall-clock scale with message count and blows
+    that budget on a busy mailbox. This test proves the details for a page are
+    fetched concurrently by tracking the peak number of in-flight detail GETs:
+    serial execution never exceeds 1; concurrent execution reaches N.
+    """
+    connector = GmailConnector(make_mock_settings())
+    n_messages = 5
+    msg_ids = [f"msg_{i}" for i in range(n_messages)]
+
+    in_flight = 0
+    max_in_flight = 0
+
+    async def fake_get(url: str, **kwargs) -> MagicMock:
+        nonlocal in_flight, max_in_flight
+        if url.endswith("/messages"):
+            resp = MagicMock()
+            resp.status_code = 200
+            resp.json.return_value = {"messages": [{"id": m} for m in msg_ids]}
+            return resp
+        if url.endswith("/profile"):
+            resp = MagicMock()
+            resp.status_code = 200
+            resp.json.return_value = {"historyId": "history_after_sync"}
+            return resp
+        # Per-message detail GET — record concurrency across the yield point.
+        in_flight += 1
+        max_in_flight = max(max_in_flight, in_flight)
+        await asyncio.sleep(0)
+        in_flight -= 1
+        msg_id = url.rstrip("/").rsplit("/", 1)[-1]
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.json.return_value = _make_gmail_message(msg_id=msg_id)
+        return resp
+
+    with patch("httpx.AsyncClient") as mock_cls:
+        mock_client = AsyncMock()
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        # Plain async function (not AsyncMock side_effect) so concurrent calls
+        # are routed by URL rather than consumed from an order-sensitive list.
+        mock_client.get = fake_get
+        mock_cls.return_value = mock_client
+
+        result = await connector.poll(TEST_USER_ID, None, {"access_token": "tok"})
+
+    assert result.ok is True
+    # Every message became an event, regardless of fetch ordering.
+    assert len(result.events) == n_messages
+    assert {e.raw_payload["message_id"] for e in result.events} == set(msg_ids)
+    # The load-bearing assertion: details overlapped in flight.
+    assert max_in_flight > 1
