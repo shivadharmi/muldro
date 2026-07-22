@@ -1,8 +1,6 @@
 """Task 10 Change A: the routine Librarian extraction pass in the perception
-cycle is redundant with the tier-gated worker consumers (which now own entity/
-memory extraction). When ``perception_triage_enabled`` is on, run_perception_cycle
-must NOT call the librarian agent; when it's off (legacy behavior), it still
-does — the worker isn't the extraction owner yet in that mode.
+cycle is redundant with the tier-gated worker consumers (which own entity/
+memory extraction), so run_perception_cycle must NOT call the librarian agent.
 """
 
 from unittest.mock import AsyncMock, MagicMock
@@ -22,8 +20,7 @@ def _wire_common_mocks(pr):
     pr._apply_perception_policy_from_planner = AsyncMock()
     pr._queue_perception_plan = AsyncMock(return_value=None)
     # Task 11 fast-path: gate is orthogonal to what this file tests (the
-    # librarian call), so force it "actionable" so the planner still runs
-    # under perception_triage_enabled=True as it did before Task 11.
+    # librarian call), so force it "actionable" so the planner still runs.
     pr._has_actionable = AsyncMock(return_value=True)
     pr._events.publish_event = AsyncMock()
     pr._trace_manager = MagicMock()
@@ -54,10 +51,10 @@ def _make_orchestrator(settings):
 
 class TestLibrarianGateOnTriage:
     @pytest.mark.asyncio
-    async def test_triage_enabled_skips_librarian_call(self):
-        """With perception_triage_enabled=True, the worker owns extraction —
-        run_perception_cycle must not call the librarian agent at all."""
-        settings = make_mock_settings(perception_triage_enabled=True)
+    async def test_skips_librarian_call(self):
+        """The worker owns extraction — run_perception_cycle must not call the
+        librarian agent at all."""
+        settings = make_mock_settings()
         orch = _make_orchestrator(settings)
         pr = orch._perception
         _wire_common_mocks(pr)
@@ -74,25 +71,3 @@ class TestLibrarianGateOnTriage:
         assert "librarian" not in called_agents
         assert "planner" in called_agents
         assert result["librarian"] is None
-
-    @pytest.mark.asyncio
-    async def test_triage_disabled_still_calls_librarian(self):
-        """With perception_triage_enabled=False (legacy), the routine Librarian
-        pass must still run — the worker isn't the sole extraction owner yet."""
-        settings = make_mock_settings(perception_triage_enabled=False)
-        orch = _make_orchestrator(settings)
-        pr = orch._perception
-        _wire_common_mocks(pr)
-        pr._invoker.call_agent = AsyncMock(return_value="agent output")
-
-        result = await orch.run_perception_cycle(
-            source="github",
-            user_id=TEST_USER_ID,
-            workspace_id=TEST_WORKSPACE_ID,
-        )
-
-        assert result["status"] == "completed"
-        called_agents = [c.args[0] for c in pr._invoker.call_agent.call_args_list]
-        assert "librarian" in called_agents
-        assert "planner" in called_agents
-        assert result["librarian"] == "agent output"

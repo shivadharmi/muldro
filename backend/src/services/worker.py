@@ -226,11 +226,10 @@ class StreamConsumerManager:
         runs redundantly per event and can also hit the "Event not found"
         warning when a stale message arrives after retention eviction.
 
-        When ``settings.perception_triage_enabled``, extraction is gated on the
-        triage tier persisted on the event: skip/light tiers do no entity
-        extraction (see ``_handle_memory_extraction`` for the memory-only
-        light-tier path). A full-tier ``calendar_invite`` whose meeting entity
-        already exists (a recurring series occurrence) also skips re-extraction.
+        Extraction is gated on the triage tier persisted on the event: skip/light
+        tiers do no entity extraction (see ``_handle_memory_extraction`` for the
+        memory-only light-tier path). A full-tier ``calendar_invite`` whose meeting
+        entity already exists (a recurring series occurrence) also skips re-extraction.
         """
         if getattr(event, "event_type", "") != "event_processed":
             return
@@ -267,32 +266,31 @@ class StreamConsumerManager:
                 vector_store=self._vector_store,
             )
 
-            if self._settings.perception_triage_enabled:
-                tier = _event_tier(ev)
-                if tier in {"skip", "light"}:
-                    logger.info("Tier=%s event %s: no entity extraction", tier, event_id)
+            tier = _event_tier(ev)
+            if tier in {"skip", "light"}:
+                logger.info("Tier=%s event %s: no entity extraction", tier, event_id)
+                return
+            if _event_category(ev) == "calendar_invite":
+                try:
+                    existing = await world_model.find_entity(
+                        user_id, ev.title or "", workspace_id=workspace_id
+                    )
+                except Exception:
+                    # Dedup is a cost optimization, not correctness — a lookup
+                    # failure must fall back to extracting rather than skip it.
+                    existing = []
+                    logger.warning(
+                        "Calendar-recurrence dedup lookup failed for event %s; "
+                        "proceeding with extraction",
+                        event_id,
+                        exc_info=True,
+                    )
+                if any((e.get("entity_type") == "meeting") for e in (existing or [])):
+                    logger.info(
+                        "Recurring meeting for event %s already extracted; skipping",
+                        event_id,
+                    )
                     return
-                if _event_category(ev) == "calendar_invite":
-                    try:
-                        existing = await world_model.find_entity(
-                            user_id, ev.title or "", workspace_id=workspace_id
-                        )
-                    except Exception:
-                        # Dedup is a cost optimization, not correctness — a lookup
-                        # failure must fall back to extracting rather than skip it.
-                        existing = []
-                        logger.warning(
-                            "Calendar-recurrence dedup lookup failed for event %s; "
-                            "proceeding with extraction",
-                            event_id,
-                            exc_info=True,
-                        )
-                    if any((e.get("entity_type") == "meeting") for e in (existing or [])):
-                        logger.info(
-                            "Recurring meeting for event %s already extracted; skipping",
-                            event_id,
-                        )
-                        return
 
             entity_ids = await world_model.extract_from_event(
                 event_id, user_id, workspace_id=workspace_id
@@ -330,9 +328,9 @@ class StreamConsumerManager:
         Filters to ``event_processed`` only. See ``_handle_entity_extraction``
         for the rationale.
 
-        When ``settings.perception_triage_enabled``, skip-tier events do no
-        memory extraction. Light and full tiers both extract memories — the
-        founder spend/receipt ledger is a light-tier's entire value.
+        Skip-tier events do no memory extraction. Light and full tiers both
+        extract memories — the founder spend/receipt ledger is a light-tier's
+        entire value.
         """
         if getattr(event, "event_type", "") != "event_processed":
             return
@@ -364,7 +362,7 @@ class StreamConsumerManager:
             if not ev:
                 return
 
-            if self._settings.perception_triage_enabled and _event_tier(ev) == "skip":
+            if _event_tier(ev) == "skip":
                 logger.info("Skip-tier event %s: no memory extraction", event_id)
                 return
 

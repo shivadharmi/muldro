@@ -6,8 +6,7 @@ Extraction cost must be proportional to the triage tier persisted on each
   - light -> memory extraction ONLY (founder spend/receipt ledger)
   - full  -> both entity + memory extraction (current behavior)
 
-All gating is behind ``settings.perception_triage_enabled`` (default False = unchanged
-behavior). Additionally, a full-tier ``calendar_invite`` whose meeting entity already
+Additionally, a full-tier ``calendar_invite`` whose meeting entity already
 exists (recurring series) skips re-extraction.
 """
 
@@ -114,7 +113,7 @@ class TestEventTierHelper:
 class TestSkipTier:
     @pytest.mark.asyncio
     async def test_skip_tier_no_entity_extraction(self):
-        mgr = _make_manager(perception_triage_enabled=True)
+        mgr = _make_manager()
         event = _make_bus_event({"event_id": "evt_skip_1"})
         ev = _make_normalized_event(tier="skip")
         mock_db = _mock_db_with_event(ev)
@@ -133,7 +132,7 @@ class TestSkipTier:
 
     @pytest.mark.asyncio
     async def test_skip_tier_no_memory_extraction(self):
-        mgr = _make_manager(perception_triage_enabled=True)
+        mgr = _make_manager()
         event = _make_bus_event({"event_id": "evt_skip_2"})
         ev = _make_normalized_event(tier="skip")
         mock_db = _mock_db_with_event(ev)
@@ -153,7 +152,7 @@ class TestSkipTier:
 class TestLightTier:
     @pytest.mark.asyncio
     async def test_light_tier_memory_but_no_entities(self):
-        mgr = _make_manager(perception_triage_enabled=True)
+        mgr = _make_manager()
         ev = _make_normalized_event(tier="light")
 
         # Entity handler: no extraction.
@@ -184,7 +183,7 @@ class TestLightTier:
 class TestFullTier:
     @pytest.mark.asyncio
     async def test_full_tier_extracts_both(self):
-        mgr = _make_manager(perception_triage_enabled=True)
+        mgr = _make_manager()
         ev = _make_normalized_event(tier="full", category="email_received", title="Note")
 
         entity_event = _make_bus_event({"event_id": "evt_full_1"})
@@ -211,40 +210,10 @@ class TestFullTier:
         mock_memory_service.extract_and_store.assert_awaited_once()
 
 
-class TestFlagDisabled:
-    @pytest.mark.asyncio
-    async def test_disabled_flag_extracts_everything(self):
-        """Flag off = old behavior, even for a skip-tier event."""
-        mgr = _make_manager(perception_triage_enabled=False)
-        ev = _make_normalized_event(tier="skip")
-
-        entity_event = _make_bus_event({"event_id": "evt_disabled_1"})
-        mock_db_entity = _mock_db_with_event(ev)
-        mock_world_model = MagicMock()
-        mock_world_model.extract_from_event = AsyncMock(return_value=[])
-        with (
-            _patch_factory(mock_db_entity),
-            patch("src.services.world_model.WorldModel", return_value=mock_world_model),
-        ):
-            await mgr._handle_entity_extraction(entity_event)
-        mock_world_model.extract_from_event.assert_awaited_once()
-
-        memory_event = _make_bus_event({"event_id": "evt_disabled_2"})
-        mock_db_memory = _mock_db_with_event(ev)
-        mock_memory_service = MagicMock()
-        mock_memory_service.extract_and_store = AsyncMock(return_value=["mem_1"])
-        with (
-            _patch_factory(mock_db_memory),
-            patch("src.services.memory_service.MemoryService", return_value=mock_memory_service),
-        ):
-            await mgr._handle_memory_extraction(memory_event)
-        mock_memory_service.extract_and_store.assert_awaited_once()
-
-
 class TestCalendarRecurrenceDedup:
     @pytest.mark.asyncio
     async def test_recurring_calendar_invite_skips_when_meeting_exists(self):
-        mgr = _make_manager(perception_triage_enabled=True)
+        mgr = _make_manager()
         event = _make_bus_event({"event_id": "evt_cal_1"})
         ev = _make_normalized_event(tier="full", category="calendar_invite", title="HMI Jour Fixe")
         mock_db = _mock_db_with_event(ev)
@@ -272,7 +241,7 @@ class TestCalendarRecurrenceDedup:
 
     @pytest.mark.asyncio
     async def test_first_calendar_invite_extracts_when_no_existing_meeting(self):
-        mgr = _make_manager(perception_triage_enabled=True)
+        mgr = _make_manager()
         event = _make_bus_event({"event_id": "evt_cal_2"})
         ev = _make_normalized_event(
             tier="full", category="calendar_invite", title="New Onboarding Call"
@@ -294,7 +263,7 @@ class TestCalendarRecurrenceDedup:
     @pytest.mark.asyncio
     async def test_dedup_lookup_failure_falls_back_to_extraction(self):
         """A lookup error must not block extraction — fail defensively open."""
-        mgr = _make_manager(perception_triage_enabled=True)
+        mgr = _make_manager()
         event = _make_bus_event({"event_id": "evt_cal_3"})
         ev = _make_normalized_event(tier="full", category="calendar_invite", title="Weekly Sync")
         mock_db = _mock_db_with_event(ev)
@@ -314,7 +283,7 @@ class TestCalendarRecurrenceDedup:
     @pytest.mark.asyncio
     async def test_non_calendar_full_tier_does_not_call_find_entity(self):
         """Dedup lookup only fires for calendar_invite — no needless calls elsewhere."""
-        mgr = _make_manager(perception_triage_enabled=True)
+        mgr = _make_manager()
         event = _make_bus_event({"event_id": "evt_email_1"})
         ev = _make_normalized_event(tier="full", category="email_received", title="Investor note")
         mock_db = _mock_db_with_event(ev)
@@ -336,7 +305,7 @@ class TestCalendarRecurrenceDedup:
 class TestEntityHandlerMissingNormalizedEvent:
     @pytest.mark.asyncio
     async def test_returns_early_when_event_not_found(self):
-        mgr = _make_manager(perception_triage_enabled=True)
+        mgr = _make_manager()
         event = _make_bus_event({"event_id": "evt_missing"})
         mock_db = _mock_db_with_event(None)
 

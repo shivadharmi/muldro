@@ -92,10 +92,6 @@ def make_mock_settings(**overrides) -> MagicMock:
         # ON for every test that builds the lock wrapper from a mock Settings. Mirror the real
         # default (False = fail-open).
         write_lock_require_redis=False,
-        # Perception triage redesign phase-gates: MagicMock unset bool is truthy — would flip
-        # the triage gates ON for every test. Mirror the real Settings defaults (False).
-        perception_triage_enabled=False,
-        perception_triage_shadow=False,
     )
     defaults.update(overrides)
     for k, v in defaults.items():

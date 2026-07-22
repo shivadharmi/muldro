@@ -141,10 +141,7 @@ class PerceptionRunner:
         """
         trace = self._trace_manager.start_trace("cross_source_synthesis")
         try:
-            run_synthesis = (
-                not self._settings.perception_triage_enabled
-                or await self._has_actionable_for_sources(source_names, workspace_id)
-            )
+            run_synthesis = await self._has_actionable_for_sources(source_names, workspace_id)
             if not run_synthesis:
                 logger.info(
                     "Cross-source synthesis skipped: no actionable events (%s)", source_names
@@ -293,17 +290,10 @@ class PerceptionRunner:
                             observer_summary += f"\n  [{sender}]: {snippet}"
 
             # Step 2: entity/memory extraction is owned by the tier-gated worker
-            # consumers when triage is enabled; skip the redundant Librarian pass.
+            # consumers (event_processed stream); the routine Librarian pass here
+            # would be a redundant second extraction, so it is not run. The result
+            # field is kept (always None) to preserve the return-dict shape.
             librarian_result = None
-            if not self._settings.perception_triage_enabled:
-                librarian_result = await self._invoker.call_agent(
-                    "librarian",
-                    message=f"Process these observations from {source} and extract "
-                    f"entities and memories:\n{observer_summary}",
-                    user_id=user_id,
-                    trace=trace,
-                    workspace_id=workspace_id,
-                )
 
             # Enrich with correlation context for thread-aware planning
             correlation_context = ""
@@ -465,10 +455,7 @@ class PerceptionRunner:
                 planner_message += f"\n\n--- Correlation Context ---{correlation_context}"
 
             planner_result = None
-            run_planner = (
-                not self._settings.perception_triage_enabled
-                or await self._has_actionable(raw_events, workspace_id)
-            )
+            run_planner = await self._has_actionable(raw_events, workspace_id)
             if run_planner:
                 planner_result = await self._invoker.call_agent(
                     "planner",

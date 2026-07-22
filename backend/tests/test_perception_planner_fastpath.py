@@ -1,11 +1,9 @@
 """Task 11: the Opus Planner fast-path.
 
 Triage flags each ingested event ``actionable`` (persisted on the stored
-``NormalizedEvent.importance_signals``). When ``perception_triage_enabled``
-is on, ``run_perception_cycle`` must skip the Planner call entirely (Step 3)
-if no event from this poll was triaged actionable — saving an unconditional
-Opus call on pure-noise polls. When the flag is off (legacy behavior), the
-Planner always runs regardless of triage.
+``NormalizedEvent.importance_signals``). ``run_perception_cycle`` must skip the
+Planner call entirely (Step 3) if no event from this poll was triaged actionable
+— saving an unconditional Opus call on pure-noise polls.
 """
 
 from unittest.mock import AsyncMock, MagicMock
@@ -58,8 +56,8 @@ def _make_orchestrator(settings, execute_result=None):
 class TestPlannerFastPathOnTriage:
     @pytest.mark.asyncio
     async def test_planner_skipped_when_no_actionable(self):
-        """perception_triage_enabled=True + no actionable event → Planner not called."""
-        settings = make_mock_settings(perception_triage_enabled=True)
+        """No actionable event → Planner not called."""
+        settings = make_mock_settings()
         orch = _make_orchestrator(settings)
         pr = orch._perception
         _wire_common_mocks(pr)
@@ -80,13 +78,13 @@ class TestPlannerFastPathOnTriage:
 
     @pytest.mark.asyncio
     async def test_planner_runs_when_actionable(self):
-        """perception_triage_enabled=True + an actionable stored event → Planner called.
+        """An actionable stored event → Planner called.
 
         Exercises the real ``_has_actionable`` query logic (not mocked): the
         DB execute() is wired to return a row whose importance_signals carries
         actionable=True, matching what triage persists on NormalizedEvent.
         """
-        settings = make_mock_settings(perception_triage_enabled=True)
+        settings = make_mock_settings()
         mock_exec_result = MagicMock()
         mock_exec_result.all.return_value = [({"actionable": True, "tier": "act"},)]
         orch = _make_orchestrator(settings, execute_result=mock_exec_result)
@@ -106,36 +104,12 @@ class TestPlannerFastPathOnTriage:
         assert "planner" in called_agents
         assert result["planner"] == "planner output"
 
-    @pytest.mark.asyncio
-    async def test_planner_always_runs_when_flag_disabled(self):
-        """perception_triage_enabled=False (legacy) → Planner always runs regardless
-        of triage, even though no actionable event was found."""
-        settings = make_mock_settings(perception_triage_enabled=False)
-        orch = _make_orchestrator(settings)
-        pr = orch._perception
-        _wire_common_mocks(pr)
-        pr._invoker.call_agent = AsyncMock(return_value="agent output")
-        pr._has_actionable = AsyncMock(return_value=False)
-
-        result = await orch.run_perception_cycle(
-            source="github",
-            user_id=TEST_USER_ID,
-            workspace_id=TEST_WORKSPACE_ID,
-        )
-
-        assert result["status"] == "completed"
-        called_agents = [c.args[0] for c in pr._invoker.call_agent.call_args_list]
-        assert "planner" in called_agents
-        assert result["planner"] == "agent output"
-        # Fast-path gate is entirely bypassed when the flag is off.
-        pr._has_actionable.assert_not_called()
-
 
 class TestHasActionableHelper:
     @pytest.mark.asyncio
     async def test_has_actionable_empty_raw_events_returns_false(self):
         """No raw events (nothing ingested) → trivially not actionable, no query."""
-        settings = make_mock_settings(perception_triage_enabled=True)
+        settings = make_mock_settings()
         orch = _make_orchestrator(settings)
         pr = orch._perception
 
@@ -143,7 +117,7 @@ class TestHasActionableHelper:
 
     @pytest.mark.asyncio
     async def test_has_actionable_true_when_any_row_actionable(self):
-        settings = make_mock_settings(perception_triage_enabled=True)
+        settings = make_mock_settings()
         mock_exec_result = MagicMock()
         mock_exec_result.all.return_value = [
             ({"actionable": False},),
@@ -157,7 +131,7 @@ class TestHasActionableHelper:
 
     @pytest.mark.asyncio
     async def test_has_actionable_false_when_all_rows_non_actionable(self):
-        settings = make_mock_settings(perception_triage_enabled=True)
+        settings = make_mock_settings()
         mock_exec_result = MagicMock()
         mock_exec_result.all.return_value = [
             ({"actionable": False},),
