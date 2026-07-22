@@ -650,7 +650,9 @@ class EventProcessor:
 
         # 2. Batch score via single Claude call
         async with self._semaphore:
-            scores_list = await self._score_events_batch([r for r, _ in non_dupe_events], user_id)
+            scores_list = await self._score_events_batch(
+                [r for r, _ in non_dupe_events], user_id, workspace_id
+            )
 
         # 3. Store events + post-process
         results: list[str | None] = []
@@ -762,14 +764,16 @@ class EventProcessor:
 
         return results
 
-    async def _score_events_batch(self, events: list[RawEvent], user_id: str) -> list[dict]:
+    async def _score_events_batch(
+        self, events: list[RawEvent], user_id: str, workspace_id: str = ""
+    ) -> list[dict]:
         """Triage + score events in one batched call. Returns a per-event dict
         carrying scores AND triage fields (category/tier/actionable) in
         importance_signals. Triage is rules-first; only the ambiguous remainder
-        hits Haiku."""
+        hits Haiku. ``workspace_id`` attributes the triage token span."""
         from src.services.triage import TriageService
 
-        triage_results = await TriageService().triage_batch(events, user_id)
+        triage_results = await TriageService().triage_batch(events, user_id, workspace_id)
         out: list[dict] = []
         for raw, tr in zip(events, triage_results):
             out.append(

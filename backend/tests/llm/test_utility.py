@@ -83,3 +83,45 @@ async def test_complete_text_empty_content_returns_empty():
     with patch("src.llm.utility.build_utility_model", return_value=model):
         out = await complete_text(system="s", user="u", tier="haiku", max_tokens=16)
     assert out == ""
+
+
+async def test_complete_text_with_usage_surfaces_token_counts():
+    from src.llm.utility import complete_text_with_usage
+
+    model = AsyncMock()
+    model.model = "claude-haiku-4-5-20251001"
+    model.ainvoke = AsyncMock(
+        return_value=AIMessage(
+            content="hi",
+            usage_metadata={
+                "input_tokens": 321,
+                "output_tokens": 12,
+                "total_tokens": 333,
+                "input_token_details": {"cache_read": 100, "cache_creation": 5},
+            },
+        )
+    )
+    with patch("src.llm.utility.build_utility_model", return_value=model):
+        text, usage = await complete_text_with_usage(
+            system="s", user="u", tier="haiku", max_tokens=64
+        )
+    assert text == "hi"
+    assert usage.model == "claude-haiku-4-5-20251001"
+    assert usage.input_tokens == 321
+    assert usage.output_tokens == 12
+    assert usage.cache_read_input_tokens == 100
+    assert usage.cache_creation_input_tokens == 5
+
+
+async def test_complete_text_with_usage_zeros_when_no_metadata():
+    from src.llm.utility import complete_text_with_usage
+
+    model = AsyncMock()
+    model.model = "claude-haiku-4-5-20251001"
+    model.ainvoke = AsyncMock(return_value=AIMessage(content="x"))  # no usage_metadata
+    with patch("src.llm.utility.build_utility_model", return_value=model):
+        text, usage = await complete_text_with_usage(
+            system=None, user="u", tier="haiku", max_tokens=8
+        )
+    assert text == "x"
+    assert usage.input_tokens == 0 and usage.output_tokens == 0

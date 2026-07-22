@@ -206,3 +206,23 @@ class TestBudgetStatus:
         degraded = BudgetStatus(8.5, 10.0, "degraded", 1.5, 85.0)
         assert tracker.get_perception_interval_multiplier(normal) == 1
         assert tracker.get_perception_interval_multiplier(degraded) == 3
+
+
+async def test_record_token_span_noop_on_empty_workspace():
+    """record_token_span must not touch the DB when workspace_id is empty
+    (token_usage.workspace_id is NOT NULL; a blank span would fail)."""
+    from unittest.mock import MagicMock, patch
+
+    from src.orchestrator.budget import record_token_span
+
+    factory = MagicMock(side_effect=AssertionError("session factory must not be used"))
+    with patch("src.models.database.get_session_factory", factory):
+        await record_token_span(
+            agent_name="triage",
+            model="claude-haiku-4-5-20251001",
+            input_tokens=100,
+            output_tokens=10,
+            trigger="perception",
+            workspace_id="",
+        )
+    factory.assert_not_called()

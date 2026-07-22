@@ -8,8 +8,9 @@ import logging
 from dataclasses import dataclass
 from typing import Literal
 
-from src.llm.utility import complete_text
+from src.llm.utility import complete_text_with_usage
 from src.llm_utils import parse_llm_json
+from src.orchestrator.budget import record_token_span
 
 logger = logging.getLogger(__name__)
 
@@ -141,10 +142,15 @@ class TriageService:
             origin="llm",
         )
 
-    async def triage_batch(self, events: list, user_id: str) -> list[TriageResult]:
+    async def triage_batch(
+        self, events: list, user_id: str, workspace_id: str = ""
+    ) -> list[TriageResult]:
         """Classify a batch of raw events. Deterministic rules run first; the
         ambiguous remainder is classified by a single batched Haiku call so
-        cost stays proportional to the ambiguous fraction of the batch."""
+        cost stays proportional to the ambiguous fraction of the batch.
+
+        ``workspace_id`` attributes the batched-Haiku token span (trigger='perception');
+        empty → the span is skipped (see ``_classify_llm``)."""
         results: list[TriageResult | None] = [None] * len(events)
         remainder: list[tuple[int, object]] = []
 
@@ -166,15 +172,20 @@ class TriageService:
 
         # 2. One batched Haiku call for whatever the rules couldn't classify.
         if remainder:
-            llm_results = await self._classify_llm([r for _, r in remainder])
+            llm_results = await self._classify_llm(
+                [r for _, r in remainder], workspace_id=workspace_id
+            )
             for (idx, _), res in zip(remainder, llm_results, strict=True):
                 results[idx] = res
 
         return [r if r is not None else self._default() for r in results]
 
-    async def _classify_llm(self, events: list) -> list[TriageResult]:
+    async def _classify_llm(self, events: list, workspace_id: str = "") -> list[TriageResult]:
         """Classify *events* in a single Haiku call. Falls back to the
-        recall-preserving default (full tier) on any parse/count failure."""
+        recall-preserving default (full tier) on any parse/count failure.
+
+        Records a ``trigger='perception'`` token span for the call (best-effort) so
+        the previously-invisible triage cost shows up in ``token_usage``."""
         parts = []
         for i, raw in enumerate(events, 1):
             sender = (getattr(raw, "actor", None) or {}).get("email", "unknown")
@@ -184,11 +195,21 @@ class TriageService:
             )
         user_msg = "Classify these events:\n\n" + "\n\n".join(parts)
         try:
-            text = await complete_text(
+            text, usage = await complete_text_with_usage(
                 system=TRIAGE_SYSTEM_PROMPT,
                 user=user_msg,
                 tier="haiku",
                 max_tokens=128 * len(events),
+            )
+            await record_token_span(
+                agent_name="triage",
+                model=usage.model,
+                input_tokens=usage.input_tokens,
+                output_tokens=usage.output_tokens,
+                cache_creation_input_tokens=usage.cache_creation_input_tokens,
+                cache_read_input_tokens=usage.cache_read_input_tokens,
+                trigger="perception",
+                workspace_id=workspace_id,
             )
             parsed = parse_llm_json(text, default=[])
             if isinstance(parsed, dict):

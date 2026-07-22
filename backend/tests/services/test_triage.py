@@ -1,6 +1,7 @@
 import asyncio
 from unittest.mock import AsyncMock, patch
 
+from src.llm.utility import LLMUsage
 from src.services.event_processor import RawEvent
 from src.services.triage import (
     CATEGORY_TIER,
@@ -64,7 +65,7 @@ def test_triage_batch_rules_skip_llm_when_all_rule_classified():
         _raw(headers={"List-Unsubscribe": "<x>"}, title="Sale"),
         _raw(headers={"Precedence": "bulk"}, title="Promo"),
     ]
-    with patch("src.services.triage.complete_text", new=AsyncMock()) as mock_llm:
+    with patch("src.services.triage.complete_text_with_usage", new=AsyncMock()) as mock_llm:
         results = _run(svc.triage_batch(events, user_id="u"))
     mock_llm.assert_not_called()  # zero LLM calls for an all-marketing batch
     assert [r.tier for r in results] == ["skip", "skip"]
@@ -81,8 +82,10 @@ def test_triage_batch_llm_classifies_remainder():
         '[{"category":"work_thread","importance_score":0.8,'
         '"urgency_score":0.6,"confidence_score":0.9}]'
     )
+    usage = LLMUsage(model="claude-haiku-4-5-20251001", input_tokens=100, output_tokens=10)
     with patch(
-        "src.services.triage.complete_text", new=AsyncMock(return_value=llm_json)
+        "src.services.triage.complete_text_with_usage",
+        new=AsyncMock(return_value=(llm_json, usage)),
     ) as mock_llm:
         results = _run(svc.triage_batch(events, user_id="u"))
     mock_llm.assert_called_once()  # only the 1 ambiguous event went to the LLM
