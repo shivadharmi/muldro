@@ -1,5 +1,7 @@
 """Tests for tool schema registry — verifies orphan tools are removed."""
 
+from datetime import timezone
+
 import pytest
 from pydantic import ValidationError
 
@@ -52,6 +54,33 @@ class TestScheduleReminderCronValidation:
         cron = by_name["schedule_reminder"]["input_schema"]["properties"]["cron_expr"]
         assert "0 9 * * 1-5" in cron["examples"]
         assert "from step 1 date" in cron["description"]
+
+
+class TestScheduleReminderRunAt:
+    """run_at gives a one-time reminder a concrete fire instant (ISO 8601),
+    parsed and validated structurally by Pydantic — no natural language."""
+
+    def test_parses_iso_run_at_to_aware_datetime(self):
+        spec = ScheduleReminderInput.model_validate(
+            {"title": "call John", "run_at": "2026-07-23T15:00:00Z"}
+        )
+        assert spec.run_at is not None
+        assert spec.run_at.tzinfo is not None
+        assert spec.run_at.year == 2026 and spec.run_at.hour == 15
+
+    def test_naive_run_at_is_assumed_utc(self):
+        spec = ScheduleReminderInput.model_validate(
+            {"title": "call John", "run_at": "2026-07-23T15:00:00"}
+        )
+        assert spec.run_at.tzinfo == timezone.utc
+
+    def test_rejects_natural_language_run_at(self):
+        with pytest.raises(ValidationError):
+            ScheduleReminderInput.model_validate({"title": "x", "run_at": "tomorrow at 3pm"})
+
+    def test_absent_run_at_is_none(self):
+        spec = ScheduleReminderInput.model_validate({"title": "x", "cron_expr": "0 9 * * *"})
+        assert spec.run_at is None
 
 
 class TestSetInstructionScheduleConfigValidation:

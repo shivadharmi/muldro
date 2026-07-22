@@ -270,6 +270,69 @@ class TestHandleSystemCapability:
         assert "schedule_id" in result
 
     @pytest.mark.asyncio
+    async def test_system_schedule_reminder_run_at_sets_next_run_at(self):
+        from datetime import datetime, timezone
+
+        from src.models.schedules import Schedule
+
+        orch = _make_orchestrator()
+        mock_db = AsyncMock()
+        mock_db.commit = AsyncMock()
+        mock_db.add = MagicMock()
+        ctx = AsyncMock()
+        ctx.__aenter__ = AsyncMock(return_value=mock_db)
+        ctx.__aexit__ = AsyncMock(return_value=False)
+        orch._db_factory = MagicMock(return_value=ctx)
+
+        step = PlanStep(
+            step_id="s1",
+            description="Remind me to call John",
+            capability="system.schedule_reminder",
+            input={"title": "Call John", "run_at": "2026-07-23T15:00:00Z"},
+        )
+        plan = PlanOutput(goal="Schedule reminder", steps=[step])
+        orch._system_capability_handler._db_factory = orch._db_factory
+        result = await orch._handle_system_capability(step, plan, "usr_1", "ws_1")
+        assert result["status"] == "created"
+
+        scheds = [c.args[0] for c in mock_db.add.call_args_list if isinstance(c.args[0], Schedule)]
+        assert len(scheds) == 1
+        want = datetime(2026, 7, 23, 15, 0, tzinfo=timezone.utc)
+        # A concrete one-time reminder fires at run_at (both columns set).
+        assert scheds[0].run_at == want
+        assert scheds[0].next_run_at == want
+
+    @pytest.mark.asyncio
+    async def test_system_schedule_reminder_without_time_still_fires(self):
+        # The closed gap: a reminder with neither run_at nor cron previously left
+        # next_run_at=None forever (never fired). Now it fires on the next tick.
+        from src.models.schedules import Schedule
+
+        orch = _make_orchestrator()
+        mock_db = AsyncMock()
+        mock_db.commit = AsyncMock()
+        mock_db.add = MagicMock()
+        ctx = AsyncMock()
+        ctx.__aenter__ = AsyncMock(return_value=mock_db)
+        ctx.__aexit__ = AsyncMock(return_value=False)
+        orch._db_factory = MagicMock(return_value=ctx)
+
+        step = PlanStep(
+            step_id="s1",
+            description="Remind me about the thing",
+            capability="system.schedule_reminder",
+            input={"title": "the thing"},
+        )
+        plan = PlanOutput(goal="Schedule reminder", steps=[step])
+        orch._system_capability_handler._db_factory = orch._db_factory
+        result = await orch._handle_system_capability(step, plan, "usr_1", "ws_1")
+        assert result["status"] == "created"
+
+        scheds = [c.args[0] for c in mock_db.add.call_args_list if isinstance(c.args[0], Schedule)]
+        assert len(scheds) == 1
+        assert scheds[0].next_run_at is not None
+
+    @pytest.mark.asyncio
     async def test_system_schedule_reminder_malformed_tasks_does_not_crash(self):
         # The LLM planner sometimes emits a legacy "tasks" wrapper with a
         # malformed (non-list) value. This must not crash with AttributeError.

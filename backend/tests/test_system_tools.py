@@ -140,6 +140,40 @@ async def test_schedule_reminder_adds_one_shot_schedule(configured):
     assert result["schedule_id"].startswith("sched_")
 
 
+async def test_schedule_reminder_run_at_sets_next_run_at(configured):
+    from datetime import datetime, timezone
+
+    from src.models.schedules import Schedule
+
+    result = await intelligence_server.schedule_reminder(
+        title="Call John",
+        ctx=_mock_ctx(),
+        run_at="2026-07-23T15:00:00Z",
+        user_id="usr_1",
+        workspace_id="ws_1",
+    )
+
+    (added,), _ = configured["session"].add.call_args
+    assert isinstance(added, Schedule)
+    want = datetime(2026, 7, 23, 15, 0, tzinfo=timezone.utc)
+    assert added.run_at == want
+    assert added.next_run_at == want
+    assert result["status"] == "created"
+
+
+async def test_schedule_reminder_rejects_natural_language_run_at(configured):
+    result = await intelligence_server.schedule_reminder(
+        title="Call John",
+        ctx=_mock_ctx(),
+        run_at="tomorrow at 3pm",
+        user_id="usr_1",
+        workspace_id="ws_1",
+    )
+    # Rejected at model validation — nothing persisted.
+    assert result["status"] == "error"
+    configured["session"].add.assert_not_called()
+
+
 async def test_memory_service_unavailable_returns_error(configured):
     """When the container has no memory_service, the tool returns a clean error dict rather
     than raising (fail-soft, mirrors the handler's guard)."""

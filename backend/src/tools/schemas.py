@@ -4,6 +4,7 @@ Each tool input is a Pydantic BaseModel with Field descriptions.
 Schemas are generated via .model_json_schema() — single source of truth.
 """
 
+from datetime import datetime, timezone
 from typing import Literal
 
 from croniter import croniter
@@ -371,11 +372,31 @@ class ScheduleReminderInput(BaseModel):
     me to …", "ping me about …")."""
 
     title: str = Field(description="What to remind the user about")
+    run_at: datetime | None = Field(
+        default=None,
+        description=(
+            "Preferred for a ONE-TIME reminder: the exact instant it should fire, "
+            "as an ISO 8601 datetime (e.g. '2026-07-23T15:00:00Z'). A naive value "
+            "is treated as UTC. Use this instead of cron_expr whenever the reminder "
+            "is a single specific moment. Must be a real datetime — never natural "
+            "language ('tomorrow', 'next week')."
+        ),
+        examples=["2026-07-23T15:00:00Z", "2026-08-01T09:30:00+00:00"],
+    )
     cron_expr: str = Field(
         default="",
-        description=f"Optional. {CRON_FIELD_DESCRIPTION}",
+        description=f"Optional, for a RECURRING/next-match reminder. {CRON_FIELD_DESCRIPTION}",
         examples=CRON_EXAMPLES,
     )
+
+    @field_validator("run_at")
+    @classmethod
+    def _ensure_run_at_aware(cls, v: datetime | None) -> datetime | None:
+        # The scheduler compares next_run_at against a UTC-aware now(); a naive
+        # datetime would raise on comparison, so normalize naive -> UTC here.
+        if v is not None and v.tzinfo is None:
+            return v.replace(tzinfo=timezone.utc)
+        return v
 
     @field_validator("cron_expr")
     @classmethod
@@ -383,6 +404,21 @@ class ScheduleReminderInput(BaseModel):
         # Every model_validate (tool path + capability path) rejects a malformed
         # cron structurally, so it can never be persisted as a raw agent value.
         return _ensure_valid_cron(v) or ""
+
+    def resolve_next_run_at(self, now: datetime) -> datetime | None:
+        """The Schedule.next_run_at this reminder should be created with.
+
+        Precedence: a concrete ``run_at`` (one-time instant) wins; else a
+        ``cron_expr`` is left as ``None`` for the scheduler's repair path to
+        compute from the cron; else the reminder carries no timing at all, so
+        fire it on the next tick (``now``) rather than leaving it dormant
+        forever. Shared by the tool and capability paths so both agree.
+        """
+        if self.run_at is not None:
+            return self.run_at
+        if self.cron_expr:
+            return None
+        return now
 
 
 class AddToBriefInput(BaseModel):

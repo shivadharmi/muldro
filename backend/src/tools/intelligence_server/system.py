@@ -100,23 +100,33 @@ async def schedule_reminder(
     title: str,
     ctx: Context,
     cron_expr: str = "",
+    run_at: str = "",
     user_id: str = "",
     workspace_id: str = "",
 ) -> dict:
-    """Create a one-shot reminder for the user."""
+    """Create a one-shot reminder for the user.
+
+    Provide ``run_at`` (ISO 8601 datetime) for a reminder at a specific instant,
+    or ``cron_expr`` for a recurring/next-match time.
+    """
+    from datetime import datetime, timezone
+
     from pydantic import ValidationError
 
     from src.models.schedules import Schedule
     from src.tools.schemas import ScheduleReminderInput
 
-    # Validate agent-supplied args through the tool's Pydantic input model (its
-    # cron_expr field_validator rejects a malformed cron) rather than persisting
-    # a raw agent response that later crashes the scheduler.
+    # Validate agent-supplied args through the tool's Pydantic input model (which
+    # parses/validates run_at and rejects a malformed cron) rather than
+    # persisting a raw agent response that later crashes the scheduler.
     try:
-        spec = ScheduleReminderInput.model_validate({"title": title, "cron_expr": cron_expr})
+        spec = ScheduleReminderInput.model_validate(
+            {"title": title, "cron_expr": cron_expr, "run_at": run_at or None}
+        )
     except ValidationError as e:
         return make_error_response(e)
 
+    now = datetime.now(timezone.utc)
     async with _get_db() as db:
         try:
             schedule_id = f"sched_{ULID()}"
@@ -127,6 +137,8 @@ async def schedule_reminder(
                 name=spec.title[:100],
                 schedule_type="one_shot",
                 cron_expr=spec.cron_expr or None,
+                run_at=spec.run_at,
+                next_run_at=spec.resolve_next_run_at(now),
                 action_type="custom_agent_task",
                 action_config={"instructions": f"Remind the user: {spec.title}"},
                 enabled=True,

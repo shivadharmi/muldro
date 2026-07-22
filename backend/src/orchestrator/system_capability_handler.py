@@ -56,10 +56,12 @@ def _coerce_instruction_input(raw: object) -> dict:
 def _coerce_schedule_reminder_input(raw: object) -> dict:
     """Normalize LLM shape variance for schedule_reminder into the flat model shape.
 
-    Accepts: the canonical flat ``{"title": ..., "cron_expr": ...}`` dict; the
-    legacy ``{"tasks": [{"input_data": {"cron_expr": ...}}]}`` wrapper (tolerant
-    of a malformed/non-list ``tasks``); or a bare string (treated as the title).
-    Returns a dict suitable for ``ScheduleReminderInput.model_validate``.
+    Accepts: the canonical flat ``{"title": ..., "cron_expr": ..., "run_at": ...}``
+    dict; the legacy ``{"tasks": [{"input_data": {...}}]}`` wrapper (tolerant of a
+    malformed/non-list ``tasks``); or a bare string (treated as the title).
+    ``run_at`` is passed through as ``None`` when absent (empty string is not a
+    valid datetime for the model). Returns a dict suitable for
+    ``ScheduleReminderInput.model_validate``.
     """
     if isinstance(raw, str):
         return {"title": raw}
@@ -68,12 +70,18 @@ def _coerce_schedule_reminder_input(raw: object) -> dict:
     if "tasks" in raw:
         tasks = raw.get("tasks")
         cron_expr = ""
+        run_at = None
         if isinstance(tasks, list) and tasks and isinstance(tasks[0], dict):
             input_data = tasks[0].get("input_data") or {}
             if isinstance(input_data, dict):
                 cron_expr = input_data.get("cron_expr") or ""
-        return {"title": raw.get("title", ""), "cron_expr": cron_expr}
-    return {"title": raw.get("title", ""), "cron_expr": raw.get("cron_expr", "")}
+                run_at = input_data.get("run_at") or None
+        return {"title": raw.get("title", ""), "cron_expr": cron_expr, "run_at": run_at}
+    return {
+        "title": raw.get("title", ""),
+        "cron_expr": raw.get("cron_expr", ""),
+        "run_at": raw.get("run_at") or None,
+    }
 
 
 class SystemCapabilityHandler:
@@ -220,10 +228,13 @@ class SystemCapabilityHandler:
         workspace_id: str,
     ) -> dict:
         """Create a one-shot schedule for a reminder."""
+        from datetime import datetime, timezone
+
         from src.models.schedules import Schedule
 
         title = spec.title or reminder_text or reasoning or "Reminder"
         cron_expr = spec.cron_expr or None
+        now = datetime.now(timezone.utc)
 
         try:
             async with self._db_factory() as db:
@@ -235,6 +246,8 @@ class SystemCapabilityHandler:
                     name=title[:100],
                     schedule_type="one_shot",
                     cron_expr=cron_expr,
+                    run_at=spec.run_at,
+                    next_run_at=spec.resolve_next_run_at(now),
                     action_type="custom_agent_task",
                     action_config={
                         "instructions": f"Remind the user: {title}",
