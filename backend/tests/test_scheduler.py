@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.services.scheduler import SchedulerLoop, compute_next_run
+from src.services.scheduler import SchedulerLoop, compute_next_run, is_valid_cron
 from tests.conftest import TEST_USER_ID, TEST_WORKSPACE_ID, make_mock_settings
 
 
@@ -64,6 +64,22 @@ class TestComputeNextRun:
         base = datetime(2026, 3, 15, 10, 0, tzinfo=timezone.utc)
         result = compute_next_run("*/30 * * * *", base)
         assert result == datetime(2026, 3, 15, 10, 30, tzinfo=timezone.utc)
+
+
+class TestIsValidCron:
+    """Cron validation used at write boundaries to reject garbage before persist."""
+
+    def test_accepts_standard_five_column(self):
+        assert is_valid_cron("*/15 * * * *") is True
+        assert is_valid_cron("0 7 * * 1-5") is True
+
+    def test_rejects_wrong_column_count(self):
+        # The exact failure mode from the scheduler crash: not 5/6/7 columns.
+        assert is_valid_cron("not a valid cron") is False
+        assert is_valid_cron("0 7 *") is False
+
+    def test_rejects_empty(self):
+        assert is_valid_cron("") is False
 
 
 class TestSchedulerTick:
@@ -261,6 +277,52 @@ class TestSchedulerTick:
         # The first schedule fired successfully — its advance must be durable.
         assert sched1.next_run_at > now, "sched1 next_run_at was not advanced"
         assert mock_db.commit.await_count >= 1, "sched1's advance was never committed"
+
+    @pytest.mark.asyncio
+    async def test_bad_cron_does_not_abort_dispatch(self, settings):
+        """One malformed cron_expr must not abort the whole dispatch sweep.
+
+        A schedule with next_run_at=None and an invalid cron hits the repair
+        path (compute_next_run), which sits OUTSIDE the per-schedule try/except.
+        Unisolated, one poison row raises CroniterBadCronError and starves every
+        other schedule from firing — every tick, forever. The bad row must be
+        isolated (disabled) so valid schedules still dispatch.
+        """
+        now = datetime.now(timezone.utc)
+        # nullsfirst ordering visits the poison row first, before the good one.
+        bad = _make_schedule(
+            schedule_id="sched_bad",
+            cron_expr="not a valid cron",
+            next_run_at=None,
+        )
+        good = _make_schedule(
+            schedule_id="sched_good",
+            cron_expr="*/15 * * * *",
+            next_run_at=now - timedelta(minutes=1),
+        )
+
+        mock_result = MagicMock()
+        mock_result.scalars.return_value.all.return_value = [bad, good]
+
+        mock_db = MagicMock()
+        mock_db.execute = AsyncMock(return_value=mock_result)
+        mock_db.commit = AsyncMock()
+        mock_db.__aenter__ = AsyncMock(return_value=mock_db)
+        mock_db.__aexit__ = AsyncMock(return_value=False)
+
+        mock_factory = MagicMock(return_value=mock_db)
+
+        scheduler = SchedulerLoop(settings)
+
+        with patch.object(scheduler, "_fire", new_callable=AsyncMock) as mock_fire:
+            # Must not raise despite the malformed cron.
+            await scheduler._process_due_schedules(mock_factory)
+
+        # The valid schedule still fired ...
+        mock_fire.assert_awaited_once_with(good)
+        # ... and the poison row was disabled so it stops crashing the sweep.
+        assert bad.enabled is False
+        assert bad.last_error is not None
 
     """Tests for SchedulerLoop._fire() action dispatch.
 
