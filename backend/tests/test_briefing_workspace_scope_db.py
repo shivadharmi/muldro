@@ -25,6 +25,7 @@ from src.models.briefings import Briefing
 from src.models.users import User, Workspace
 from src.orchestrator.jarvis import JarvisOrchestrator
 from src.orchestrator.services import ServiceContainer
+from src.services.presenter import Presenter
 from tests.conftest import make_mock_settings
 
 
@@ -141,3 +142,20 @@ async def test_briefing_already_exists_is_workspace_scoped():
         # A third workspace with no briefing today → False (not shadowed by ws_a/ws_b).
         empty_ws = f"ws_empty_{ULID()}"
         assert await orch._briefing_already_exists(uid, empty_ws) is False
+
+
+async def test_presenter_generate_briefing_cache_is_workspace_scoped():
+    """Presenter.generate_briefing's cache-check must scope workspace_id.
+
+    A user with a briefing in TWO workspaces today matches both rows on the
+    unscoped (user_id, briefing_date) filter, so scalar_one_or_none() raises
+    MultipleResultsFound — and even with a single match it could hand back a
+    different workspace's cached briefing. The scoped check must return the
+    queried workspace's row (here ws_a's briefing, not ws_b's).
+    """
+    async with _env() as (factory, uid, ws_a, ws_b, brief_a, brief_b):
+        async with factory() as db:
+            presenter = Presenter(settings=make_mock_settings(), db=db)
+            cached = await presenter.generate_briefing(uid, date.today(), workspace_id=ws_a)
+        assert cached.briefing_id == brief_a
+        assert cached.workspace_id == ws_a

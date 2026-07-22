@@ -183,6 +183,7 @@ class Presenter:
         existing = await self._db.execute(
             select(Briefing).where(
                 Briefing.user_id == user_id,
+                Briefing.workspace_id == workspace_id,
                 Briefing.briefing_date == briefing_date,
             )
         )
