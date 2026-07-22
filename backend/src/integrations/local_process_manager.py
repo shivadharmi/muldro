@@ -25,6 +25,28 @@ READY_TIMEOUT_SECONDS = 30.0
 READY_POLL_INTERVAL = 0.5
 TERMINATE_GRACE_SECONDS = 5.0
 
+# Content substrings (case-insensitive) that elevate a forwarded stderr line
+# above INFO. Local MCP children write all their operational logging to stderr,
+# so a fixed WARNING level would bury real problems under routine chatter.
+_STDERR_ERROR_TOKENS = ("traceback", "critical", "fatal", "panic", "exception", "error")
+_STDERR_WARN_TOKENS = ("warning", "warn", "fail")
+
+
+def _classify_stderr_level(text: str) -> int:
+    """Infer a log level for one forwarded subprocess stderr line from its content.
+
+    Defaults to INFO (routine chatter) and elevates only on danger signals, so an
+    untagged crash reason (e.g. ``uvx: failed to resolve package ...``) stays
+    visible while the child's normal ``[INFO]``/``[TOOL]`` output does not
+    masquerade as a backend warning.
+    """
+    low = text.lower()
+    if any(token in low for token in _STDERR_ERROR_TOKENS):
+        return logging.ERROR
+    if any(token in low for token in _STDERR_WARN_TOKENS):
+        return logging.WARNING
+    return logging.INFO
+
 
 @dataclass
 class LocalServerSpec:
@@ -127,15 +149,18 @@ class LocalMCPProcessManager:
         if stream is None:
             return
         try:
+            level_to_log = {
+                logging.ERROR: logger.error,
+                logging.WARNING: logger.warning,
+                logging.INFO: logger.info,
+            }
             while True:
                 line = await stream.readline()
                 if not line:
                     break
-                logger.warning(
-                    "[mcp:local:%s] %s",
-                    server_name,
-                    line.decode(errors="replace").rstrip(),
-                )
+                text = line.decode(errors="replace").rstrip()
+                log = level_to_log[_classify_stderr_level(text)]
+                log("[mcp:local:%s] %s", server_name, text)
         except Exception:
             logger.debug("stderr drain for %s ended", server_name, exc_info=True)
 
