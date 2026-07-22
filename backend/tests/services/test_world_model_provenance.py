@@ -5,7 +5,10 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from src.llm.utility import LLMUsage
 from src.services.provenance import SourceRef
+
+_USAGE = LLMUsage(model="claude-sonnet-5", input_tokens=1, output_tokens=1)
 
 
 def test_record_attribute_facts_passes_source_ref():
@@ -263,9 +266,10 @@ def test_extract_from_text_threads_caller_sourceref():
     )
     with (
         patch(
-            "src.services.world_model_extraction.complete_text",
-            new=AsyncMock(return_value=llm_response),
+            "src.services.world_model_extraction.complete_text_with_usage",
+            new=AsyncMock(return_value=(llm_response, _USAGE)),
         ),
+        patch("src.services.world_model_extraction.record_token_span", new=AsyncMock()),
         patch.object(wm, "upsert_entity", new=AsyncMock(return_value="ent_1")) as up,
         patch.object(wm, "_create_relationship_by_name", new=AsyncMock()),
     ):

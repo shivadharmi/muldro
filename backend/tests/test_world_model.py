@@ -5,8 +5,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from src.llm.utility import LLMUsage
 from src.services.world_model import WorldModel
 from tests.conftest import TEST_USER_ID, make_mock_settings
+
+# extraction now returns (text, usage); tests only assert on the text, so a fixed usage is fine.
+_USAGE = LLMUsage(model="claude-sonnet-5", input_tokens=1, output_tokens=1)
 
 
 @pytest.fixture
@@ -83,7 +87,8 @@ async def test_upsert_updates_existing_entity(settings, mock_db):
     assert existing_entity.attributes == {"role": "investor", "company": "BigFund"}
 
 
-@patch("src.services.world_model_extraction.complete_text")
+@patch("src.services.world_model_extraction.record_token_span", new=AsyncMock())
+@patch("src.services.world_model_extraction.complete_text_with_usage")
 @pytest.mark.asyncio
 async def test_extract_from_event_calls_claude(mock_complete, settings, mock_db):
     """extract_from_event should call Claude and create entities."""
@@ -107,7 +112,7 @@ async def test_extract_from_event_calls_claude(mock_complete, settings, mock_db)
         "relationships": [],
     }
 
-    mock_complete.return_value = json.dumps(extraction_result)
+    mock_complete.return_value = (json.dumps(extraction_result), _USAGE)
 
     # First execute returns the event, subsequent return no-entity-found for upsert
     event_result = MagicMock()
@@ -127,7 +132,8 @@ async def test_extract_from_event_calls_claude(mock_complete, settings, mock_db)
     mock_complete.assert_awaited_once()
 
 
-@patch("src.services.world_model_extraction.complete_text")
+@patch("src.services.world_model_extraction.record_token_span", new=AsyncMock())
+@patch("src.services.world_model_extraction.complete_text_with_usage")
 @pytest.mark.asyncio
 async def test_extract_from_event_tolerates_bare_list(mock_complete, settings, mock_db):
     """The LLM sometimes returns a bare entities array instead of
@@ -141,7 +147,7 @@ async def test_extract_from_event_tolerates_bare_list(mock_complete, settings, m
 
     # Bare array — the exact shape that raised AttributeError: 'list' has no 'get'.
     bare_list = [{"entity_type": "person", "canonical_name": "John Doe"}]
-    mock_complete.return_value = json.dumps(bare_list)
+    mock_complete.return_value = (json.dumps(bare_list), _USAGE)
 
     event_result = MagicMock()
     event_result.scalar_one_or_none.return_value = mock_event

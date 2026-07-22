@@ -5,8 +5,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from src.llm.utility import LLMUsage
 from src.services.memory_service import MemoryService
 from tests.conftest import TEST_USER_ID, TEST_WORKSPACE_ID, make_mock_settings
+
+# extraction now returns (text, usage); these tests assert on the text only.
+_USAGE = LLMUsage(model="claude-sonnet-5", input_tokens=1, output_tokens=1)
 
 
 @pytest.fixture
@@ -27,7 +31,8 @@ def mock_db():
     return db
 
 
-@patch("src.services.memory_service.extraction.complete_text")
+@patch("src.services.memory_service.extraction.record_token_span", new=AsyncMock())
+@patch("src.services.memory_service.extraction.complete_text_with_usage")
 @patch("src.services.memory_service._base.EmbeddingService")
 @pytest.mark.asyncio
 async def test_extract_stores_memories(mock_embed_cls, mock_complete, settings, mock_db):
@@ -51,7 +56,7 @@ async def test_extract_stores_memories(mock_embed_cls, mock_complete, settings, 
         ]
     }
 
-    mock_complete.return_value = json.dumps(extraction)
+    mock_complete.return_value = (json.dumps(extraction), _USAGE)
 
     mock_embedder = MagicMock()
     mock_embedder.embed_text = AsyncMock(return_value=[0.1] * 768)
@@ -67,7 +72,8 @@ async def test_extract_stores_memories(mock_embed_cls, mock_complete, settings, 
     assert mock_db.add.call_count == 2
 
 
-@patch("src.services.memory_service.extraction.complete_text")
+@patch("src.services.memory_service.extraction.record_token_span", new=AsyncMock())
+@patch("src.services.memory_service.extraction.complete_text_with_usage")
 @patch("src.services.memory_service._base.EmbeddingService")
 @pytest.mark.asyncio
 async def test_extract_skips_duplicates(mock_embed_cls, mock_complete, settings, mock_db):
@@ -82,7 +88,7 @@ async def test_extract_skips_duplicates(mock_embed_cls, mock_complete, settings,
         ]
     }
 
-    mock_complete.return_value = json.dumps(extraction)
+    mock_complete.return_value = (json.dumps(extraction), _USAGE)
 
     mock_embedder = MagicMock()
     mock_embedder.embed_text = AsyncMock(return_value=[0.1] * 768)
@@ -99,7 +105,8 @@ async def test_extract_skips_duplicates(mock_embed_cls, mock_complete, settings,
     assert len(memory_ids) == 0
 
 
-@patch("src.services.memory_service.extraction.complete_text")
+@patch("src.services.memory_service.extraction.record_token_span", new=AsyncMock())
+@patch("src.services.memory_service.extraction.complete_text_with_usage")
 @patch("src.services.memory_service._base.EmbeddingService")
 @pytest.mark.asyncio
 async def test_extract_and_store_uses_prompt_addendum(
@@ -108,7 +115,7 @@ async def test_extract_and_store_uses_prompt_addendum(
     """Should append prompt_addendum to system prompt when provided."""
     extraction = {"memories": []}
 
-    mock_complete.return_value = json.dumps(extraction)
+    mock_complete.return_value = (json.dumps(extraction), _USAGE)
 
     mock_embedder = MagicMock()
     mock_embedder.embed_text = AsyncMock(return_value=[0.1] * 768)
@@ -156,7 +163,8 @@ async def test_retrieve_returns_matching(mock_embed_cls, settings, mock_db):
     assert results[0]["fact_text"] == "Alice is CFO"
 
 
-@patch("src.services.memory_service.extraction.complete_text")
+@patch("src.services.memory_service.extraction.record_token_span", new=AsyncMock())
+@patch("src.services.memory_service.extraction.complete_text_with_usage")
 @patch("src.services.memory_service._base.EmbeddingService")
 @pytest.mark.asyncio
 async def test_extract_auto_checks_contradictions(mock_embed_cls, mock_complete, settings, mock_db):
@@ -173,7 +181,7 @@ async def test_extract_auto_checks_contradictions(mock_embed_cls, mock_complete,
         ]
     }
 
-    mock_complete.return_value = json.dumps(extraction)
+    mock_complete.return_value = (json.dumps(extraction), _USAGE)
 
     mock_embedder = MagicMock()
     mock_embedder.embed_text = AsyncMock(return_value=[0.1] * 768)
@@ -251,7 +259,8 @@ async def test_memory_upsert_includes_enriched_payload():
     assert "created_at" in payload
 
 
-@patch("src.services.memory_service.extraction.complete_text")
+@patch("src.services.memory_service.extraction.record_token_span", new=AsyncMock())
+@patch("src.services.memory_service.extraction.complete_text_with_usage")
 @patch("src.services.memory_service._base.EmbeddingService")
 @pytest.mark.asyncio
 async def test_contradiction_failure_does_not_block_storage(
@@ -270,7 +279,7 @@ async def test_contradiction_failure_does_not_block_storage(
         ]
     }
 
-    mock_complete.return_value = json.dumps(extraction)
+    mock_complete.return_value = (json.dumps(extraction), _USAGE)
 
     mock_embedder = MagicMock()
     mock_embedder.embed_text = AsyncMock(return_value=[0.1] * 768)

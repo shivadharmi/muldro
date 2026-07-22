@@ -14,8 +14,9 @@ import logging
 
 from sqlalchemy import select
 
-from src.llm.utility import complete_text
+from src.llm.utility import complete_text_with_usage
 from src.models.events import NormalizedEvent
+from src.orchestrator.budget import record_token_span
 from src.services.provenance import SourceRef
 
 logger = logging.getLogger(__name__)
@@ -159,7 +160,7 @@ class WorldModelExtractionMixin:
             logger.warning("Event not found for extraction: %s", event_id)
             return []
 
-        extracted = await self._call_extraction(event)
+        extracted = await self._call_extraction(event, workspace_id=workspace_id)
         entity_ids = []
         ref = SourceRef(source=event.source, event_id=event_id)
 
@@ -204,11 +205,21 @@ class WorldModelExtractionMixin:
     ) -> list[str]:
         """Extract entities from free text (e.g. user messages). Returns entity_ids."""
         try:
-            llm_text = await complete_text(
+            llm_text, usage = await complete_text_with_usage(
                 system=ENTITY_EXTRACTION_PROMPT,
                 user=f"Source: user_message\nSummary: {text}",
                 tier="resolved",
                 max_tokens=1024,
+            )
+            await record_token_span(
+                agent_name="world_model",
+                model=usage.model,
+                input_tokens=usage.input_tokens,
+                output_tokens=usage.output_tokens,
+                cache_creation_input_tokens=usage.cache_creation_input_tokens,
+                cache_read_input_tokens=usage.cache_read_input_tokens,
+                trigger="perception",
+                workspace_id=workspace_id,
             )
             from src.llm_utils import coerce_to_object, parse_llm_json
 
@@ -255,8 +266,8 @@ class WorldModelExtractionMixin:
 
         return entity_ids
 
-    async def _call_extraction(self, event: NormalizedEvent) -> dict:
-        """Call Claude to extract entities from an event."""
+    async def _call_extraction(self, event: NormalizedEvent, workspace_id: str = "") -> dict:
+        """Call Claude to extract entities from an event. Records a perception token span."""
         parts = [f"Event type: {event.event_type}", f"Source: {event.source}"]
         if event.title:
             parts.append(f"Title: {event.title}")
@@ -267,11 +278,21 @@ class WorldModelExtractionMixin:
         user_message = "\n".join(parts)
 
         try:
-            llm_text = await complete_text(
+            llm_text, usage = await complete_text_with_usage(
                 system=ENTITY_EXTRACTION_PROMPT,
                 user=user_message,
                 tier="resolved",
                 max_tokens=1024,
+            )
+            await record_token_span(
+                agent_name="world_model",
+                model=usage.model,
+                input_tokens=usage.input_tokens,
+                output_tokens=usage.output_tokens,
+                cache_creation_input_tokens=usage.cache_creation_input_tokens,
+                cache_read_input_tokens=usage.cache_read_input_tokens,
+                trigger="perception",
+                workspace_id=workspace_id,
             )
             from src.llm_utils import coerce_to_object, parse_llm_json
 

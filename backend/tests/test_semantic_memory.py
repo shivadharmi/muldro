@@ -5,8 +5,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from src.llm.utility import LLMUsage
 from src.services.memory_service import MemoryService
 from tests.conftest import TEST_USER_ID, make_mock_settings
+
+_USAGE = LLMUsage(model="claude-sonnet-5", input_tokens=1, output_tokens=1)
 
 
 @pytest.fixture
@@ -25,7 +28,8 @@ def mock_db():
     return db
 
 
-@patch("src.services.memory_service.extraction.complete_text")
+@patch("src.services.memory_service.extraction.record_token_span", new=AsyncMock())
+@patch("src.services.memory_service.extraction.complete_text_with_usage")
 @patch("src.services.memory_service._base.EmbeddingService")
 @pytest.mark.asyncio
 async def test_extract_stores_with_embedding(mock_embed_cls, mock_complete, settings, mock_db):
@@ -41,7 +45,7 @@ async def test_extract_stores_with_embedding(mock_embed_cls, mock_complete, sett
             }
         ]
     }
-    mock_complete.return_value = json.dumps(extraction)
+    mock_complete.return_value = (json.dumps(extraction), _USAGE)
 
     fake_embedding = [0.1] * 768
     mock_embedder = MagicMock()
@@ -140,7 +144,8 @@ async def test_text_fallback_when_embedding_fails(mock_embed_cls, settings, mock
     assert "similarity" not in results[0]
 
 
-@patch("src.services.memory_service.extraction.complete_text")
+@patch("src.services.memory_service.extraction.record_token_span", new=AsyncMock())
+@patch("src.services.memory_service.extraction.complete_text_with_usage")
 @patch("src.services.memory_service._base.EmbeddingService")
 @pytest.mark.asyncio
 async def test_extract_preferences(mock_embed_cls, mock_complete, settings, mock_db):
@@ -155,7 +160,7 @@ async def test_extract_preferences(mock_embed_cls, mock_complete, settings, mock
             }
         ]
     }
-    mock_complete.return_value = json.dumps(extraction)
+    mock_complete.return_value = (json.dumps(extraction), _USAGE)
 
     mock_embedder = MagicMock()
     mock_embedder.embed_text = AsyncMock(return_value=[0.1] * 768)

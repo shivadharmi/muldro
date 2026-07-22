@@ -9,8 +9,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from src.llm.utility import LLMUsage
 from src.services.world_model import ENTITY_TYPES, RELATION_TYPES, WorldModel
 from tests.conftest import TEST_USER_ID, make_mock_settings
+
+_USAGE = LLMUsage(model="claude-sonnet-5", input_tokens=1, output_tokens=1)
 
 
 @pytest.fixture
@@ -190,7 +193,8 @@ class TestTemporalTracking:
 
 
 class TestEntityExtractionExpanded:
-    @patch("src.services.world_model_extraction.complete_text")
+    @patch("src.services.world_model_extraction.record_token_span", new=AsyncMock())
+    @patch("src.services.world_model_extraction.complete_text_with_usage")
     @pytest.mark.asyncio
     async def test_extracts_document_entity(self, mock_complete, settings, mock_db):
         """Should extract document entities from events."""
@@ -227,7 +231,7 @@ class TestEntityExtractionExpanded:
             ],
         }
 
-        mock_complete.return_value = json.dumps(extraction_result)
+        mock_complete.return_value = (json.dumps(extraction_result), _USAGE)
 
         event_result = MagicMock()
         event_result.scalar_one_or_none.return_value = mock_event
@@ -245,7 +249,8 @@ class TestEntityExtractionExpanded:
 
         assert len(entity_ids) == 2
 
-    @patch("src.services.world_model_extraction.complete_text")
+    @patch("src.services.world_model_extraction.record_token_span", new=AsyncMock())
+    @patch("src.services.world_model_extraction.complete_text_with_usage")
     @pytest.mark.asyncio
     async def test_invalid_type_falls_back_to_person(self, mock_complete, settings, mock_db):
         """Unknown entity_type should fall back to 'person'."""
@@ -269,7 +274,7 @@ class TestEntityExtractionExpanded:
             "relationships": [],
         }
 
-        mock_complete.return_value = json.dumps(extraction_result)
+        mock_complete.return_value = (json.dumps(extraction_result), _USAGE)
 
         event_result = MagicMock()
         event_result.scalar_one_or_none.return_value = mock_event
@@ -287,7 +292,8 @@ class TestEntityExtractionExpanded:
         added = mock_db.add.call_args_list[0][0][0]
         assert added.entity_type == "person"
 
-    @patch("src.services.world_model_extraction.complete_text")
+    @patch("src.services.world_model_extraction.record_token_span", new=AsyncMock())
+    @patch("src.services.world_model_extraction.complete_text_with_usage")
     @pytest.mark.asyncio
     async def test_invalid_relation_falls_back_to_related_to(
         self, mock_complete, settings, mock_db
@@ -326,7 +332,7 @@ class TestEntityExtractionExpanded:
             ],
         }
 
-        mock_complete.return_value = json.dumps(extraction_result)
+        mock_complete.return_value = (json.dumps(extraction_result), _USAGE)
 
         event_result = MagicMock()
         event_result.scalar_one_or_none.return_value = mock_event
@@ -392,7 +398,8 @@ class TestEntityExtractionExpanded:
 
 class TestEntityMemoryLinking:
     @patch("src.services.memory_service._base.EmbeddingService")
-    @patch("src.services.memory_service.extraction.complete_text")
+    @patch("src.services.memory_service.extraction.record_token_span", new=AsyncMock())
+    @patch("src.services.memory_service.extraction.complete_text_with_usage")
     @pytest.mark.asyncio
     async def test_extract_and_store_with_entity_ids(
         self, mock_complete, mock_embedder_cls, settings, mock_db
@@ -414,7 +421,7 @@ class TestEntityMemoryLinking:
             ]
         }
 
-        mock_complete.return_value = json.dumps(extraction_result)
+        mock_complete.return_value = (json.dumps(extraction_result), _USAGE)
 
         # No duplicate found
         no_result = MagicMock()
