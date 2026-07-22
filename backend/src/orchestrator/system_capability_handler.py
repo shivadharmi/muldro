@@ -192,10 +192,12 @@ class SystemCapabilityHandler:
                         user_id=user_id,
                         workspace_id=workspace_id,
                         name=inst_text[:100],
-                        schedule_type=schedule_config.get("type", "recurring"),
-                        cron_expr=schedule_config.get("cron_expr"),
-                        action_type=schedule_config.get("action_type", "custom_agent_task"),
-                        action_config=schedule_config.get("action_config", {}),
+                        # schedule_config is a validated ScheduleConfig (its
+                        # cron_expr was checked at model-validation time).
+                        schedule_type=schedule_config.type,
+                        cron_expr=schedule_config.cron_expr,
+                        action_type=schedule_config.action_type,
+                        action_config=schedule_config.action_config,
                         enabled=True,
                         source="user",
                         priority="medium",

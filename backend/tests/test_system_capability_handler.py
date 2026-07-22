@@ -167,6 +167,57 @@ class TestHandleSystemCapability:
         assert "trigger_id" in result
 
     @pytest.mark.asyncio
+    async def test_system_set_instruction_schedule_creates_schedule(self):
+        # A valid typed schedule_config drives Schedule creation via attribute
+        # access (schedule_config.type/.cron_expr/...), not raw dict .get().
+        orch = _make_orchestrator()
+        mock_db = AsyncMock()
+        mock_db.commit = AsyncMock()
+        mock_db.add = MagicMock()
+        ctx = AsyncMock()
+        ctx.__aenter__ = AsyncMock(return_value=mock_db)
+        ctx.__aexit__ = AsyncMock(return_value=False)
+        orch._db_factory = MagicMock(return_value=ctx)
+
+        step = PlanStep(
+            step_id="s1",
+            description="Send me a daily digest at 8am",
+            capability="system.set_instruction",
+            input={
+                "instruction": {
+                    "instruction_text": "Send me a daily digest at 8am",
+                    "instruction_type": "schedule",
+                    "schedule_config": {"type": "recurring", "cron_expr": "0 8 * * *"},
+                }
+            },
+        )
+        plan = PlanOutput(goal="Set schedule instruction", steps=[step])
+        result = await orch._handle_system_capability(step, plan, "usr_1", "ws_1")
+        assert result["status"] == "created"
+        assert "schedule_id" in result
+
+    @pytest.mark.asyncio
+    async def test_system_set_instruction_bad_cron_returns_error(self):
+        # A malformed cron in schedule_config is rejected at model validation,
+        # so no poison Schedule row is ever persisted.
+        orch = _make_orchestrator()
+        step = PlanStep(
+            step_id="s1",
+            description="Digest on a bad schedule",
+            capability="system.set_instruction",
+            input={
+                "instruction": {
+                    "instruction_text": "Digest on a bad schedule",
+                    "instruction_type": "schedule",
+                    "schedule_config": {"cron_expr": "whenever"},
+                }
+            },
+        )
+        plan = PlanOutput(goal="?", steps=[step])
+        result = await orch._handle_system_capability(step, plan, "usr_1", "ws_1")
+        assert result["status"] == "error"
+
+    @pytest.mark.asyncio
     async def test_system_set_instruction_garbage_input_returns_error(self):
         # A malformed instruction value (neither string nor dict) must not crash
         # the handler — it fails validation and returns a structured error.

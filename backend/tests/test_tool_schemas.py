@@ -3,7 +3,12 @@
 import pytest
 from pydantic import ValidationError
 
-from src.tools.schemas import TOOL_INPUT_MODELS, ScheduleReminderInput, build_tool_definitions
+from src.tools.schemas import (
+    TOOL_INPUT_MODELS,
+    ScheduleReminderInput,
+    SetInstructionStepInput,
+    build_tool_definitions,
+)
 
 
 class TestScheduleReminderCronValidation:
@@ -26,6 +31,41 @@ class TestScheduleReminderCronValidation:
         # The exact production failure mode: not 5/6/7 columns.
         with pytest.raises(ValidationError):
             ScheduleReminderInput.model_validate({"title": "bad", "cron_expr": "not a valid cron"})
+
+
+class TestSetInstructionScheduleConfigValidation:
+    """set_instruction's schedule_config is a typed ScheduleConfig, so its cron
+    is validated structurally too — no raw agent dict reaches the scheduler."""
+
+    def test_accepts_valid_schedule_config(self):
+        spec = SetInstructionStepInput.model_validate(
+            {
+                "instruction_text": "daily digest",
+                "instruction_type": "schedule",
+                "schedule_config": {"type": "recurring", "cron_expr": "0 8 * * *"},
+            }
+        )
+        assert spec.schedule_config is not None
+        assert spec.schedule_config.cron_expr == "0 8 * * *"
+        # Defaults fill in for omitted keys.
+        assert spec.schedule_config.action_type == "custom_agent_task"
+
+    def test_accepts_absent_schedule_config(self):
+        spec = SetInstructionStepInput.model_validate(
+            {"instruction_text": "x", "instruction_type": "preference"}
+        )
+        assert spec.schedule_config is None
+
+    def test_rejects_malformed_cron_in_schedule_config(self):
+        # Previously a raw dict passed through untouched; now it's rejected.
+        with pytest.raises(ValidationError):
+            SetInstructionStepInput.model_validate(
+                {
+                    "instruction_text": "x",
+                    "instruction_type": "schedule",
+                    "schedule_config": {"cron_expr": "every so often"},
+                }
+            )
 
 
 class TestToolInputModels:

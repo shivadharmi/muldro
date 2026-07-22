@@ -9,6 +9,21 @@ from typing import Literal
 from croniter import croniter
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+
+def _ensure_valid_cron(v: str | None) -> str | None:
+    """Reject a malformed cron at model-validation time.
+
+    Empty/None means "no recurrence". A non-empty value MUST be a well-formed
+    croniter expression — an LLM-supplied garbage cron would otherwise be
+    persisted and later crash the scheduler's dispatch sweep
+    (CroniterBadCronError). Shared by every schedule-bearing tool input so the
+    rule lives in exactly one place.
+    """
+    if v and not croniter.is_valid(v):
+        raise ValueError(f"invalid cron expression: {v!r}")
+    return v
+
+
 # ── Tool Input Models ──────────────────────────────────────────────
 
 
@@ -285,6 +300,27 @@ class SetInstructionInput(BaseModel):
     )
 
 
+class ScheduleConfig(BaseModel):
+    """Typed schedule spec inside a ``system.set_instruction`` step (when
+    ``instruction_type == "schedule"``). Replaces a raw LLM dict so its
+    ``cron_expr`` is validated structurally, like ``ScheduleReminderInput`` —
+    an invalid cron here would otherwise crash the scheduler after persist."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    type: str = Field(default="recurring", description="Schedule type: recurring | one_shot")
+    cron_expr: str | None = Field(default=None, description="Cron expression for recurring runs")
+    action_type: str = Field(
+        default="custom_agent_task", description="Action to run when the schedule fires"
+    )
+    action_config: dict = Field(default_factory=dict, description="Action-specific config")
+
+    @field_validator("cron_expr")
+    @classmethod
+    def _validate_cron(cls, v: str | None) -> str | None:
+        return _ensure_valid_cron(v)
+
+
 class SetInstructionStepInput(BaseModel):
     """Planner ``system.set_instruction`` STEP input (capability path only, NOT
     the direct MCP tool schema). Supports the richer trigger/schedule creation
@@ -297,7 +333,9 @@ class SetInstructionStepInput(BaseModel):
     trigger_conditions: dict | None = Field(
         default=None, description="Optional trigger match conditions"
     )
-    schedule_config: dict | None = Field(default=None, description="Optional schedule config")
+    schedule_config: ScheduleConfig | None = Field(
+        default=None, description="Optional schedule config"
+    )
 
 
 class ScheduleReminderInput(BaseModel):
@@ -312,17 +350,9 @@ class ScheduleReminderInput(BaseModel):
     @field_validator("cron_expr")
     @classmethod
     def _validate_cron(cls, v: str) -> str:
-        """Reject a malformed cron at model-validation time.
-
-        Empty means "no recurrence". A non-empty value MUST be a well-formed
-        croniter expression — an LLM-supplied garbage cron would otherwise be
-        persisted and later crash the scheduler's dispatch sweep
-        (CroniterBadCronError). Enforcing it here means every ``model_validate``
-        call (tool path and capability path) rejects it structurally.
-        """
-        if v and not croniter.is_valid(v):
-            raise ValueError(f"invalid cron expression: {v!r}")
-        return v
+        # Every model_validate (tool path + capability path) rejects a malformed
+        # cron structurally, so it can never be persisted as a raw agent value.
+        return _ensure_valid_cron(v) or ""
 
 
 class AddToBriefInput(BaseModel):
