@@ -44,10 +44,10 @@ sequenceDiagram
     end
 
     Note over O,PG: Step 4: Action-time write gating (chat path)
-    Note over O,PG: TrustEngine is DORMANT on the chat path (user message = authorization).
-    Note over O,PG: Writes are gated at action time by permission_gate per permission_mode.
-    Note over O,PG: No GraphExecutor run is created (run_id = None).
-    O->>PG: on write tool call, evaluate permission_mode (bypass/ask/auto)
+    Note over O,PG: trust_gate (TrustEngine) stays DORMANT here — the user's message is the authorization.
+    Note over O,PG: Always-on: capability_scope + write_lock gate every write. No GraphExecutor run (run_id = None); a DB Plan may still be persisted for multi-step / write-risky turns.
+    Note over O,PG: permission_gate (per permission_mode: bypass/ask/auto) is added ONLY on the feature-gated single-lead path (deep_single_lead=True + durable checkpointer); the default per-step path has none.
+    O->>PG: on write tool call → capability_scope + write_lock (+ permission_gate when enabled)
     PG-->>O: allow / confirm / block
 
     Note over O,PR: Step 5: Format Response
@@ -62,7 +62,12 @@ sequenceDiagram
     API-->>U: SSE event stream
 ```
 
-> **Chat vs autonomous path.** The diagram above is the **chat path**: execution runs on the deep single-lead runtime (`chat_single_lead.py` `stream_deep_lead`), TrustEngine stays dormant, writes are gated at action time by `permission_gate` per the turn's `permission_mode`, and no `Plan`/`GraphExecutor` run is created (`run_id = None`). The **autonomous path** (scheduler/perception-triggered runs) is the one that persists a DB `Plan`, drives it per-step via `GraphExecutor` (`create_run()` / `execute_run()`), and gates every step with TrustEngine's 4×4 trust_level × risk_level matrix (`PolicyDecision`: `auto_execute_silent` / `auto_execute_notify` / `approval_required` / `blocked`).
+> **Chat vs autonomous path.** The diagram above is the **chat path**. Both chat variants run on the deep runtime with TrustEngine/`trust_gate` **dormant** (the user's message is the authorization) and create **no** `GraphExecutor` run (`run_id = None`) — though a DB `Plan` record *is* persisted for multi-step or write-risky turns (`chat_processor.py` `persist_plan_record`). They differ only in write gating:
+>
+> - **Default** (`deep_single_lead = False`, the current shipping config): the legacy per-step path (`chat_processor.py` → `call_agent_stream` → `build_deep_agent` per step). Writes are held by the always-on `capability_scope` + `write_lock` middlewares — there is **no `permission_gate`**.
+> - **Feature-gated single-lead** (`deep_single_lead = True` **and** `can_pause` **and** a durable checkpointer): the `chat_single_lead.py` `stream_deep_lead` path, which additionally installs **`permission_gate`** to confirm writes per the turn's `permission_mode` (`bypass` / `ask` / `auto`). `_resolve_effective_mode()` fail-safe downgrades to the default path when `ask`/`auto` has no durable checkpointer.
+>
+> The **autonomous path** (scheduler/perception-triggered runs) persists a DB `Plan`, drives it per-step via `GraphExecutor` (`create_run()` / `execute_run()`), and gates every step with TrustEngine's 4×4 trust_level × risk_level matrix (`PolicyDecision`: `auto_execute_silent` / `auto_execute_notify` / `approval_required` / `blocked`).
 
 ## SSE Event Stream
 

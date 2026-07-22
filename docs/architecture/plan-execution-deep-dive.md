@@ -842,10 +842,10 @@ flowchart TD
     FAILURE[Failure Occurs]
 
     FAILURE --> LEVEL1{"Level 1: Step Timeout<br/>(step.timeout_seconds or 120s)"}
-    LEVEL1 -->|"timeout"| TOOL_ERROR["transition_step(→ timed_out)<br/>(retry re-enters ready queue)"]
-    TOOL_ERROR --> AGENT_SEES["Failed tool returns<br/>ToolMessage(status=error);<br/>agent may retry autonomously"]
+    LEVEL1 -->|"timeout"| TIMED_OUT["transition_step(→ timed_out) and return<br/>TERMINAL: does NOT call handle_step_failure<br/>(no retry_count / backoff / re-queue)"]
+    TIMED_OUT --> DAG_DONE["DAG loop treats the step as finished<br/>(run → completed / partially_completed,<br/>or blocked if a dependent needs it)"]
 
-    FAILURE --> LEVEL2{"Level 2: Step Retry<br/>(max_retries, default 3)"}
+    FAILURE -->|"tool / MCP-auth / other exception"| LEVEL2{"Level 2: Step Retry via handle_step_failure()<br/>(max_retries, default 3)"}
     LEVEL2 -->|"retry_count < max"| BACKOFF["Exponential backoff<br/>2^retry × 1s, cap 30s"]
     BACKOFF --> RETRY_STEP["transition_step(failed → pending)<br/>Re-enters ready queue"]
     LEVEL2 -->|"retries exhausted"| STEP_FAIL["transition_step(→ failed)"]

@@ -59,7 +59,7 @@ All data tables include `workspace_id` (`String(64)`, NOT NULL FK to `workspaces
 
 | Table | PK Prefix | Key Columns | Notes |
 |-------|-----------|-------------|-------|
-| `entities` | `ent_` | entity_type, canonical_name, attributes (JSONB), importance_score, search_tsv (tsvector), last_seen_at, interaction_count | entity_type is free-form `String(32)` |
+| `entities` | `ent_` | entity_type, canonical_name, attributes (JSONB), importance_score, search_vector (tsvector), last_seen_at, interaction_count | entity_type is free-form `String(32)` |
 | `entity_aliases` | - | entity_id (FK), alias_type, alias_value | Cascade delete |
 | `entity_relationships` | `rel_` | from_entity_id, relation_type, to_entity_id, strength, active | relation_type is free-form `String(32)` |
 | `entity_facts` | `fact_` | entity_id (FK), attr_key, attr_value (JSONB), confidence, corroboration_count, provenance (JSONB), valid_from, valid_to, superseded_by | Bitemporal world-model facts; single current fact per (entity_id, attr_key) via partial unique where valid_to IS NULL |
@@ -68,7 +68,7 @@ All data tables include `workspace_id` (`String(64)`, NOT NULL FK to `workspaces
 
 | Table | PK Prefix | Key Columns | Notes |
 |-------|-----------|-------------|-------|
-| `memories` | `mem_` | memory_type, fact_text, search_tsv (tsvector), confidence, stability_score, refresh_count, last_accessed_at, superseded_by, entity_ids (ARRAY), status | GIN index on entity_ids + search_tsv |
+| `memories` | `mem_` | memory_type, fact_text, search_vector (tsvector), confidence, stability_score, refresh_count, last_accessed_at, superseded_by, entity_ids (ARRAY), status | `search_vector` provisioned; FTS not yet activated (no trigger/GIN) |
 
 ### Plans & Execution
 
@@ -323,19 +323,19 @@ graph LR
 
 ### Postgres FTS Indexes (tsvector + GIN)
 
-FTS tsvector columns and GIN indexes are activated by the hash-named migration `b3e8c1f5a9d2_entity_fts_activation` (run `alembic history` for the current chain — migrations are hash-named, not numerically prefixed).
+Each table below defines a nullable `search_vector` (`tsvector`) column in the initial schema, but FTS is **activated for `entities` only** so far. Migration `b3e8c1f5a9d2_entity_fts_activation` backfills `entities.search_vector`, installs the `entities_search_vector_trigger` to keep it current, and creates the `ix_entities_search_vector` GIN index. The other tables have the column **provisioned but not yet activated** — no population trigger and no GIN index. (Migrations are hash-named; run `alembic history` for the current chain.)
 
-| Table | tsvector Column | Indexed Fields |
-|-------|----------------|---------------|
-| `memories` | `search_tsv` | fact_text |
-| `entities` | `search_tsv` | canonical_name, attributes |
-| `normalized_events` | `search_tsv` | title, summary |
-| `conversations` | `search_tsv` | title |
-| `briefings` | `search_tsv` | content |
-| `approvals` | `search_tsv` | title, justification |
-| `artifacts` | `search_tsv` | title |
+| Table | Column | Source Fields | FTS status |
+|-------|--------|---------------|-----------|
+| `entities` | `search_vector` | canonical_name, attributes | **Active** — trigger + GIN via `b3e8c1f5a9d2` |
+| `memories` | `search_vector` | fact_text | Provisioned (column only) |
+| `normalized_events` | `search_vector` | title, summary | Provisioned (column only) |
+| `conversations` | `search_vector` | title | Provisioned (column only) |
+| `briefings` | `search_vector` | content | Provisioned (column only) |
+| `approvals` | `search_vector` | title, justification | Provisioned (column only) |
+| `messages` | `search_vector` | content | Provisioned (column only) |
 
-> **Note:** Elasticsearch was fully removed. All full-text search now uses Postgres native tsvector with GIN indexes, which provides comparable BM25-style keyword matching without the operational overhead of a separate search cluster.
+> **Note:** Elasticsearch was fully removed. Full-text search uses Postgres native `tsvector` + GIN, which provides BM25-style keyword matching without the operational overhead of a separate search cluster. (`artifacts` has no `search_vector` column.)
 
 ### Neo4j Graph Schema
 
