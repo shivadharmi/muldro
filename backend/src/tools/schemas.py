@@ -6,7 +6,8 @@ Schemas are generated via .model_json_schema() — single source of truth.
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from croniter import croniter
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 # ── Tool Input Models ──────────────────────────────────────────────
 
@@ -307,6 +308,21 @@ class ScheduleReminderInput(BaseModel):
     cron_expr: str = Field(
         default="", description="Optional cron/timing expression for the reminder"
     )
+
+    @field_validator("cron_expr")
+    @classmethod
+    def _validate_cron(cls, v: str) -> str:
+        """Reject a malformed cron at model-validation time.
+
+        Empty means "no recurrence". A non-empty value MUST be a well-formed
+        croniter expression — an LLM-supplied garbage cron would otherwise be
+        persisted and later crash the scheduler's dispatch sweep
+        (CroniterBadCronError). Enforcing it here means every ``model_validate``
+        call (tool path and capability path) rejects it structurally.
+        """
+        if v and not croniter.is_valid(v):
+            raise ValueError(f"invalid cron expression: {v!r}")
+        return v
 
 
 class AddToBriefInput(BaseModel):

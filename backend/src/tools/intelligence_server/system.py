@@ -104,14 +104,18 @@ async def schedule_reminder(
     workspace_id: str = "",
 ) -> dict:
     """Create a one-shot reminder for the user."""
-    from src.models.schedules import Schedule
-    from src.services.scheduler import is_valid_cron
+    from pydantic import ValidationError
 
-    # Validate cron at the boundary: an unparseable expression persisted here
-    # would later crash the scheduler's dispatch sweep (CroniterBadCronError).
-    normalized_cron = cron_expr or None
-    if normalized_cron is not None and not is_valid_cron(normalized_cron):
-        return make_error_response(ValueError(f"invalid cron_expr: {cron_expr!r}"))
+    from src.models.schedules import Schedule
+    from src.tools.schemas import ScheduleReminderInput
+
+    # Validate agent-supplied args through the tool's Pydantic input model (its
+    # cron_expr field_validator rejects a malformed cron) rather than persisting
+    # a raw agent response that later crashes the scheduler.
+    try:
+        spec = ScheduleReminderInput.model_validate({"title": title, "cron_expr": cron_expr})
+    except ValidationError as e:
+        return make_error_response(e)
 
     async with _get_db() as db:
         try:
@@ -120,18 +124,18 @@ async def schedule_reminder(
                 schedule_id=schedule_id,
                 user_id=user_id,
                 workspace_id=workspace_id,
-                name=title[:100],
+                name=spec.title[:100],
                 schedule_type="one_shot",
-                cron_expr=normalized_cron,
+                cron_expr=spec.cron_expr or None,
                 action_type="custom_agent_task",
-                action_config={"instructions": f"Remind the user: {title}"},
+                action_config={"instructions": f"Remind the user: {spec.title}"},
                 enabled=True,
                 source="user",
                 priority="medium",
             )
             db.add(schedule)
             await db.commit()
-            return {"status": "created", "schedule_id": schedule_id, "title": title}
+            return {"status": "created", "schedule_id": schedule_id, "title": spec.title}
         except Exception as e:  # noqa: BLE001
             logger.error("schedule_reminder failed: %s", e, exc_info=True)
             await db.rollback()

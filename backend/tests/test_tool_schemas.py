@@ -1,6 +1,31 @@
 """Tests for tool schema registry — verifies orphan tools are removed."""
 
-from src.tools.schemas import TOOL_INPUT_MODELS, build_tool_definitions
+import pytest
+from pydantic import ValidationError
+
+from src.tools.schemas import TOOL_INPUT_MODELS, ScheduleReminderInput, build_tool_definitions
+
+
+class TestScheduleReminderCronValidation:
+    """cron_expr is validated in the Pydantic model, so every model_validate
+    (tool path + capability path) rejects an LLM-supplied garbage cron before it
+    can be persisted and crash the scheduler."""
+
+    def test_accepts_valid_cron(self):
+        spec = ScheduleReminderInput.model_validate(
+            {"title": "standup", "cron_expr": "0 9 * * 1-5"}
+        )
+        assert spec.cron_expr == "0 9 * * 1-5"
+
+    def test_accepts_empty_cron(self):
+        # Empty = no recurrence; a reminder need not carry a cron.
+        spec = ScheduleReminderInput.model_validate({"title": "ping me"})
+        assert spec.cron_expr == ""
+
+    def test_rejects_malformed_cron(self):
+        # The exact production failure mode: not 5/6/7 columns.
+        with pytest.raises(ValidationError):
+            ScheduleReminderInput.model_validate({"title": "bad", "cron_expr": "not a valid cron"})
 
 
 class TestToolInputModels:

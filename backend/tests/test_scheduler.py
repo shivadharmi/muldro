@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.services.scheduler import SchedulerLoop, compute_next_run, is_valid_cron
+from src.services.scheduler import SchedulerLoop, compute_next_run
 from tests.conftest import TEST_USER_ID, TEST_WORKSPACE_ID, make_mock_settings
 
 
@@ -64,22 +64,6 @@ class TestComputeNextRun:
         base = datetime(2026, 3, 15, 10, 0, tzinfo=timezone.utc)
         result = compute_next_run("*/30 * * * *", base)
         assert result == datetime(2026, 3, 15, 10, 30, tzinfo=timezone.utc)
-
-
-class TestIsValidCron:
-    """Cron validation used at write boundaries to reject garbage before persist."""
-
-    def test_accepts_standard_five_column(self):
-        assert is_valid_cron("*/15 * * * *") is True
-        assert is_valid_cron("0 7 * * 1-5") is True
-
-    def test_rejects_wrong_column_count(self):
-        # The exact failure mode from the scheduler crash: not 5/6/7 columns.
-        assert is_valid_cron("not a valid cron") is False
-        assert is_valid_cron("0 7 *") is False
-
-    def test_rejects_empty(self):
-        assert is_valid_cron("") is False
 
 
 class TestSchedulerTick:

@@ -25,16 +25,6 @@ def compute_next_run(cron_expr: str, after: datetime) -> datetime:
     return croniter(cron_expr, after).get_next(datetime)
 
 
-def is_valid_cron(cron_expr: str) -> bool:
-    """True if ``cron_expr`` is a well-formed croniter expression.
-
-    Used to validate cron input at write boundaries (e.g. the schedule_reminder
-    tool) so a malformed expression is rejected before it is persisted rather
-    than crashing the dispatch sweep on a later tick.
-    """
-    return bool(cron_expr) and croniter.is_valid(cron_expr)
-
-
 class SchedulerBase:
     """Lifecycle, cadence dispatch, and shared helpers for the scheduler."""
 
