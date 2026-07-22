@@ -14,7 +14,7 @@ Services are organized in dependency layers. Higher layers depend on lower layer
 | **L3 Knowledge** | WorldModel, MemoryService | Entity graph, long-term memory |
 | **L4 Planning** | Planner, InitiativeScorer, ContextBuilder, CapabilityResolver, ProcedureLibrary, RelevanceAssessor | Structured task graphs, proactive scoring, context assembly, capability routing |
 | **L5 Governance** | Governor (edge-case audit only), TrustEngine (4x4 matrix), RiskAssessor, AuditService | Trust-based approval gates, risk assessment, audit logging |
-| **L6 Execution** | Operator, GraphExecutor, ExecutionState, EvictionService | DAG execution, state machine, data retention |
+| **L6 Execution** | GraphExecutor, DagRunner, StepRunner, ExecutionState, EvictionService | DAG execution, state machine, data retention |
 | **L7 Output** | Presenter, Notifier, BriefingReadModel, SurfaceDetailBuilders, EngagementService | Briefings, multi-surface notifications, engagement tracking |
 | **L8 Observability** | TraceStore, MetricsService, BudgetTracker | Traces, Prometheus metrics, per-agent cost tracking |
 | **L9 Coordination** | Scheduler, Worker, AgentRegistry, WatcherService, ScheduleSeeder | Background jobs, agent config |
@@ -62,7 +62,7 @@ Services are organized in dependency layers. Higher layers depend on lower layer
 
 ### MemoryService (L3)
 
-**File:** `src/services/memory_service.py`
+**File:** `src/services/memory_service/` (package)
 
 **Purpose:** Long-term memory with 7 types (episodic, semantic, preference, relationship, task_context, goal, briefing_item). Stability decays at 0.02/day with +0.1 boost on access.
 
@@ -169,13 +169,13 @@ score = 0.40 * cosine_similarity   (relevance)
 
 **Purpose:** Single approval gate for all execution. Implements a 4x4 matrix of (trust_level x risk_level) to produce PolicyDecision. Trust graduates over time based on successful executions.
 
-**4x4 Matrix:** trust_level (new, developing, established, trusted) x risk_level (low, medium, high, critical)
+**4x4 Matrix:** trust_level (first_use, learning, trusted, autonomous) x risk_level (none, low, medium, high)
 
 **PolicyDecision outcomes:** `auto_execute_silent`, `auto_execute_notify`, `approval_required`, `blocked`
 
-**Models:** TrustState (per-user trust level + history), TrustCeiling (per-capability max trust)
+**Models:** TrustState (per-workspace, per-capability trust, keyed workspace_id + capability + risk_level), TrustCeiling (per-capability max trust)
 
-**Called by:** GraphExecutor (per-step, before tool execution)
+**Invoked via:** the DAG-step `TrustGate` (`trust_gate.py`) and the deep `trust_gate` middleware; GraphExecutor delegates to DagRunner/StepRunner rather than calling TrustEngine directly.
 
 ---
 
@@ -185,25 +185,37 @@ score = 0.40 * cosine_similarity   (relevance)
 
 **Purpose:** Evaluates risk level for tool calls and plan steps. Provides the risk_level input to the TrustEngine 4x4 matrix.
 
-**Called by:** GraphExecutor (feeds into TrustEngine evaluation)
+**Invoked via:** the DAG-step `TrustGate` / deep `trust_gate` middleware (feeds into TrustEngine evaluation)
 
 ---
 
-### Operator (L6)
+### DagRunner (L6)
 
-**File:** `src/services/operator.py`
+**File:** `src/services/dag_runner.py`
 
-**Purpose:** Thin wrapper delegating execution to GraphExecutor.
+**Purpose:** Drives the per-run DAG loop that GraphExecutor delegates to — ready-step detection, sequential batch execution, checkpointing, and the DAG-step `TrustGate` approval gate. Runs each step through the deep runtime via StepRunner.
 
-**Constructor:**
-- `settings`, `db`, `notifier?`, `graph_executor?`
+**Calls:** StepRunner, TrustGate, ExecutionState, ContextBuilder, ExecutionSurfaceEmitter
 
-**Key Methods:**
-| Method | Description |
-|--------|-------------|
-| `execute_plan(plan_id, user_id)` | Fetch plan, delegate to GraphExecutor for TaskRun creation and execution |
+---
 
-**Calls:** GraphExecutor, Notifier
+### StepRunner (L6)
+
+**File:** `src/services/step_runner.py`
+
+**Purpose:** Executes a single step through the deep runtime. `run_step_via_deep_agent()` builds and invokes the deep agent (via `AgentInvoker`) scoped to the step's capability.
+
+**Calls:** deep runtime (`build_deep_agent` / `AgentInvoker`), ToolRegistry
+
+---
+
+### TrustGate (L6)
+
+**File:** `src/services/trust_gate.py`
+
+**Purpose:** DAG-step approval gate. Invokes TrustEngine + RiskAssessor per step and pauses the run when `approval_required`. Emits approval SurfaceUpdates via `execution_surface_emitter.py`.
+
+**Calls:** TrustEngine, RiskAssessor, ExecutionSurfaceEmitter
 
 ---
 
@@ -211,7 +223,7 @@ score = 0.40 * cosine_similarity   (relevance)
 
 **File:** `src/services/graph_executor.py`
 
-**Purpose:** DAG-based execution engine with parallel steps, checkpoints, approval gates, verification.
+**Purpose:** DAG-based execution engine with checkpoints, approval gates, and verification. Owns TaskRun creation and lifecycle; delegates the per-step DAG loop to DagRunner (which runs each step via StepRunner on the deep runtime).
 
 **Constructor:**
 - `settings`, `db`, `event_bus?`, `notifier?`, `tool_registry?`, `verifier?`, `context_builder?`, `connector_credentials_fn?`, `memory_service?`
@@ -225,7 +237,7 @@ score = 0.40 * cosine_similarity   (relevance)
 | `pause_run(run_id, reason)` | Pause mid-execution |
 | `cancel_run(run_id)` | Cancel with step cleanup |
 
-**Calls:** ContextBuilder, ToolRegistry, MCP Bridge, Verifier, MemoryService, Notifier, EventBus, Redis pubsub
+**Calls:** DagRunner, StepRunner, ContextBuilder, ToolRegistry, Verifier, MemoryService, Notifier, EventBus, Redis pubsub
 
 ---
 
@@ -311,7 +323,7 @@ score = 0.40 * cosine_similarity   (relevance)
 
 ### Scheduler (L9)
 
-**File:** `src/services/scheduler.py`
+**File:** `src/services/scheduler/` (package)
 
 **Purpose:** Backend-owned scheduler polling every 30 seconds for due schedules.
 
@@ -330,9 +342,9 @@ score = 0.40 * cosine_similarity   (relevance)
 | Tick | Frequency | Purpose |
 |------|-----------|---------|
 | `_tick_background_tasks()` | Every 30s | Execute pending background TaskRuns |
-| `_tick_dlq_retry()` | Every 30s | Retry dead-letter queue entries |
-| `_tick_memory_expiration()` | Every 30s | Expire memories past TTL |
-| `_tick_eviction()` | Every 30s | Evict data older than 90-day retention |
+| `_tick_dlq_retry()` | Every 5th tick (~150s) | Retry dead-letter queue entries |
+| `_tick_memory_expiration()` | Every 5th tick (~150s) | Expire memories past TTL |
+| `_tick_eviction()` | Every 5th tick (~150s) | Evict data older than 90-day retention |
 | `_tick_persona_batch()` | Every 10th tick (~5 min) | Batch persona preference extraction |
 | Cross-source synthesis | 30-min cooldown | Planner synthesis when 2+ perception sources have events |
 
@@ -344,7 +356,7 @@ score = 0.40 * cosine_similarity   (relevance)
 
 **Purpose:** Redis stream consumers for async event processing.
 
-**Consumer Groups:** entity_extractor, memory_extractor, planner, trigger_evaluator
+**Consumer Groups:** entity_extractor, memory_extractor, trigger_evaluator
 
 > Note: The `event_indexer` consumer group was removed when Elasticsearch was dropped. Entity extraction now syncs directly to Qdrant.
 
@@ -354,14 +366,14 @@ score = 0.40 * cosine_similarity   (relevance)
 
 **File:** `src/services/agent_registry.py`
 
-**Purpose:** DB-backed agent configuration. Seeds 7 agents: perceiver, librarian, planner, governor, operator, presenter, persona. No agent_routes table — routing is handled by CapabilityResolver.
+**Purpose:** DB-backed agent configuration. Seeds 6 agents: perceiver, librarian, planner, executor, presenter, persona. No agent_routes table — routing is handled by CapabilityResolver.
 
 **Constructor:** `db`
 
 **Key Methods:**
 | Method | Description |
 |--------|-------------|
-| `seed_defaults()` | Seed 7 default agents (syncs capability_scope + system_prompt on restart) |
+| `seed_defaults()` | Seed 6 default agents (syncs capability_scope + system_prompt on restart) |
 | `load_as_sub_agents()` | Convert DB agents to SubAgent instances |
 | CRUD | `list_agents`, `get_agent`, `create_agent`, `update_agent`, `toggle_agent` |
 
@@ -412,7 +424,7 @@ score = 0.40 * cosine_similarity   (relevance)
 | `transition_run(run, new_status)` | Validate and apply TaskRun status transition (12 statuses, including awaiting_input) |
 | `transition_step(step, new_status)` | Validate and apply TaskStep status transition (10 statuses, including ready and awaiting_input) |
 
-Invalid transitions raise `InvalidTransitionError`. All status changes in GraphExecutor and Operator go through these functions — no direct status mutation is permitted.
+Invalid transitions raise `InvalidTransitionError`. All status changes in GraphExecutor, DagRunner, and StepRunner go through these functions — no direct status mutation is permitted.
 
 ---
 
@@ -435,7 +447,7 @@ Invalid transitions raise `InvalidTransitionError`. All status changes in GraphE
 
 **File:** `src/services/trust_engine.py`
 
-**Purpose:** Graduated autonomy scoring. Tracks user trust level to determine approval thresholds.
+**Purpose:** Graduated autonomy scoring. Tracks per-workspace, per-capability trust level to determine approval thresholds.
 
 ---
 
@@ -489,7 +501,7 @@ Invalid transitions raise `InvalidTransitionError`. All status changes in GraphE
 
 ### SurfaceDetailBuilders (L7)
 
-**File:** `src/services/surface_detail_builders.py`
+**File:** `src/services/surface_detail_builders/` (package)
 
 **Purpose:** Builds detailed A2UI component trees for specific surface types. Extracted from inline surface construction logic for reuse across surface kinds.
 
@@ -737,12 +749,13 @@ graph TD
 
     GOV[Governor] --> AUD[AuditService]
 
-    OP[Operator] --> GE[GraphExecutor]
-    OP --> NT
+    GE[GraphExecutor] --> DR[DagRunner]
+    DR --> SR_STEP[StepRunner]
+    DR --> TG[TrustGate]
+    TG --> TE[TrustEngine]
 
     GE --> CB
     GE --> TR[ToolRegistry]
-    GE --> TE[TrustEngine]
     GE --> VER[Verifier]
     GE --> MS
     GE --> NT
@@ -752,7 +765,6 @@ graph TD
     SCH[Scheduler] --> ORCH[Orchestrator]
     WK[Worker] --> WM
     WK --> MS
-    WK --> PL
 
     TS_SEARCH --> VS[VectorStore/Qdrant]
     TS_SEARCH --> FTS[FTSService/Postgres]

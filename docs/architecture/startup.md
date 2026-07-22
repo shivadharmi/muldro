@@ -31,7 +31,7 @@ sequenceDiagram
 
     Note over APP,DB: Seed Configuration
     APP->>DB: ToolRegistry.seed_defaults() (tools from catalog.py)
-    APP->>DB: AgentRegistry.seed_defaults() (7 agents)
+    APP->>DB: AgentRegistry.seed_defaults() (6 agents)
 
     Note over APP,DB: Validate Registry
     APP->>APP: validate_registry() (6 cross-checks)
@@ -87,7 +87,7 @@ graph TD
     A -->|check_slos| SLO[AlertingService.check_slos]
 ```
 
-### Default Schedules (7)
+### Default Schedules
 
 | Name | Cron | Action | Purpose |
 |------|------|--------|---------|
@@ -98,6 +98,7 @@ graph TD
 | `observe_github` | `*/10 * * * *` | observe_source | Poll GitHub every 10 min |
 | `memory_consolidation` | `0 2 * * *` | consolidate_memories | Merge duplicates at 2 AM |
 | `slo_health_check` | `0 */6 * * *` | check_slos | SLO evaluation every 6 hours |
+| `system_heartbeat` | `0 * * * *` | heartbeat | Hourly maintenance sweep (stale-plan reaper, approval expiry, observation health) |
 
 ### Background Task Execution
 

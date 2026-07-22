@@ -23,10 +23,10 @@ sequenceDiagram
     EP->>EP: Generate idempotency_key (source:entity_id:event_type)
     EP->>EP: Check for duplicate (skip if exists)
 
-    Note over EP,C: Score Event
-    EP->>C: "Rate importance, urgency, confidence"
-    C-->>EP: {importance: 0-1, urgency: 0-1, confidence: 0-1}
-    EP->>EP: Store NormalizedEvent
+    Note over EP,C: Score Event (rules-first triage, Haiku on ambiguous remainder)
+    EP->>C: Triage batch (rules); ambiguous events scored via Haiku
+    C-->>EP: {importance: 0-1, urgency: 0-1, confidence: 0-1} + triage fields
+    EP->>EP: Store NormalizedEvent (triage fields in importance_signals)
 
     Note over EP,QD: Selective Embedding (importance >= 0.3)
     alt importance >= 0.3
@@ -49,11 +49,11 @@ sequenceDiagram
 
     Note over EP,IS: Proactive Intelligence
     EP->>IS: Score initiative (composite formula)
-    IS-->>EP: {score, should_plan, should_notify}
+    IS-->>EP: {score, is_high_priority, should_notify, signals}
 
-    alt score >= 0.70
-        EP->>PL: Auto-create plan
-    else score >= 0.50
+    alt is_high_priority (score >= 0.70)
+        EP->>EB: Log + publish initiative.high_priority (handled by perception cycle)
+    else should_notify (score >= 0.50)
         EP->>NT: Proactive notification
     end
 
@@ -61,7 +61,6 @@ sequenceDiagram
     EP->>EB: Publish to event stream
     EB->>WM: entity_extractor consumer
     EB->>MS: memory_extractor consumer
-    EB->>PL: planner consumer (importance >= 0.7)
     EB->>TE: trigger_evaluator consumer
 ```
 
@@ -77,7 +76,7 @@ The scheduler retries DLQ items every 5th tick (~150s).
 
 ## Event Scoring
 
-Events are scored via Claude with three dimensions:
+Batch event scoring is **rules-first triage** (`TriageService.triage_batch`): deterministic rules classify each event, and only the ambiguous remainder is sent to Haiku (tiered triage-before-extract). Triage fields (`category`, `tier`, `actionable`) are carried in `importance_signals`. Scoring produces three dimensions:
 
 | Dimension | Range | Signals |
 |-----------|-------|---------|
@@ -85,9 +84,9 @@ Events are scored via Claude with three dimensions:
 | **Urgency** | 0.0 - 1.0 | Time-sensitive, requires immediate response, blocking others |
 | **Confidence** | 0.0 - 1.0 | How certain the scoring is (data quality, context available) |
 
-Default scores (on Claude error): `{importance: 0.3, urgency: 0.2, confidence: 0.5}`
+Default scores (on Claude error): `{importance: 0.5, urgency: 0.3, confidence: 0.3}`
 
-Events with importance < 0.4 are skipped for planning.
+The only importance floor in ingestion is the `>= 0.3` embedding gate below. Proactive auto-planning is driven by the `InitiativeScorer` composite score (`>= 0.70`), and the perception-cycle Planner is gated by a triage "actionable" check — not by an importance threshold.
 
 ### Selective Embedding
 
@@ -118,7 +117,7 @@ new_stability = min(1.0, max(0.0, current_stability - 0.02 * days_since_access) 
 - **Access boost**: +0.1 on each access (via `refresh_stability()`)
 - **Range**: Clamped to [0.0, 1.0]
 
-7 memory types: `episodic`, `semantic`, `procedural`, `preference`, `goal`, `task_context`, `briefing_item`.
+Memory types: `episodic`, `semantic`, `preference`, `relationship`, `task_context`, `goal`, `briefing_item`.
 
 ## Engagement History
 
@@ -158,7 +157,7 @@ Final score is capped at 1.0.
 | `urgency` | From event scoring (Claude) |
 | `goal_relevance` | Keyword overlap between event title/summary and active user goals |
 | `entity_significance` | Importance score of actors in event (via WorldModel.find_entity) |
-| `novelty` | 1.0 minus top similarity if no related memories found; inverted relevance otherwise |
+| `novelty` | Constant `0.9` when no related memories are found; `1.0 - top_score` when related memories exist |
 
 ### Thresholds
 
@@ -244,5 +243,6 @@ Background workers consume events from Redis streams:
 |---------------|---------|--------|
 | `entity_extractor` | WorldModel.extract_from_event() | Extract entities + relationships |
 | `memory_extractor` | MemoryService.extract_and_store() | Extract memories with entity linking |
-| `planner` | Planner.plan_for_event() | Auto-plan for high-importance events |
 | `trigger_evaluator` | TriggerEngine.evaluate() | Match triggers against events |
+
+The `graph_syncer` consumer group runs on the **agent stream** (not the main event stream) to sync graph relationships.

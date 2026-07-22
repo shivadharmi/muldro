@@ -6,8 +6,8 @@ Comprehensive architecture reference for the Jarvis Personal AI Operating System
 
 | Document | Description |
 |----------|-------------|
-| [System Overview](overview.md) | Core loop, hub-and-spoke topology, the 7 sub-agents |
-| [Message Flow](message-flow.md) | User chat processing pipeline, streaming SSE events, planner decisions |
+| [System Overview](overview.md) | Core loop, hub-and-spoke topology, the 6 sub-agents |
+| [Message Flow](message-flow.md) | User chat processing pipeline, streaming SSE events, capability-based plans |
 | [Event System](event-system.md) | Event ingestion, scoring, initiative scoring, triggers, proactive intelligence |
 | [Execution Engine](execution.md) | DAG executor, state machine, checkpoints, approval gates, verification |
 | [Perception](perception.md) | Ambient observation cycles, cursor-based fetch, budget-aware scheduling |

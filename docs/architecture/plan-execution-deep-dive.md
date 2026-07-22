@@ -12,7 +12,7 @@ This document traces the complete lifecycle of goals, plans, and execution in Ja
 4. [Plan Persistence & Data Model](#4-plan-persistence--data-model)
 5. [Capability Resolution & Agent Routing](#5-capability-resolution--agent-routing)
 6. [Plan Execution: GraphExecutor](#6-plan-execution-graphexecutor)
-7. [Agent Loop: Step-Level Execution](#7-agent-loop-step-level-execution)
+7. [Step-Level Execution: The Deep Runtime](#7-step-level-execution-the-deep-runtime)
 8. [Execution State Machine](#8-execution-state-machine)
 9. [Trust & Approval Gates](#9-trust--approval-gates)
 10. [Frontend Status Updates](#10-frontend-status-updates)
@@ -43,7 +43,7 @@ flowchart LR
 
     subgraph Execution
         G[GraphExecutor<br/>DAG orchestration]
-        H[Agent Loop<br/>per-step reasoning]
+        H[Deep Runtime<br/>per-step reasoning]
         I[TrustEngine<br/>approval gates]
     end
 
@@ -332,7 +332,7 @@ flowchart TD
     CHECK -->|"reason / respond / none"| PRES[Presenter Agent]
     CHECK -->|"knowledge.*"| LIB[Librarian Agent]
     CHECK -->|"Read capability<br/>(no tool needs approval)"| PERC[Perceiver Agent<br/>+ ALL read tools]
-    CHECK -->|"Write capability<br/>(any tool needs approval)"| OP[Operator Agent<br/>+ matched tools]
+    CHECK -->|"Write capability<br/>(any tool needs approval)"| OP[Executor Agent<br/>+ matched tools]
     CHECK -->|"No tools found"| UNREACHABLE["Unroutable ''<br/>(logged as error)"]
 
     subgraph "CapabilityResolver.resolve_for_step()"
@@ -346,7 +346,7 @@ flowchart TD
     OP --> R1
 ```
 
-**Key insight:** The routing is purely data-driven. No hardcoded agent-to-capability mappings exist. If you add a new tool with `capability="notion.create"` and `requires_approval=True`, it automatically routes to the Operator agent.
+**Key insight:** The routing is purely data-driven. No hardcoded agent-to-capability mappings exist. If you add a new tool with `capability="notion.create"` and `requires_approval=True`, it automatically routes to the Executor agent (per-step scope via `resolve_for_step`).
 
 **Key files:**
 - `src/services/capability_resolver.py` — `CapabilityResolver`, `route_step()`
@@ -364,7 +364,7 @@ sequenceDiagram
     participant GE as GraphExecutor
     participant DB as Postgres
     participant TE as TrustEngine
-    participant AL as Agent Loop
+    participant AL as Deep Runtime (StepRunner)
     participant Redis as Redis PubSub
     participant NT as Notifier
 
@@ -375,7 +375,7 @@ sequenceDiagram
     GE->>DB: Create TaskStep per PlanTask (status=pending)
     GE->>DB: Build graph_definition {nodes, edges}
 
-    Note over GE,AL: Phase 2 — DAG Execution
+    Note over GE,AL: Phase 2 — DAG Execution (via DagRunner)
     Caller->>GE: execute_run(run_id)
     GE->>DB: transition_run(pending → running)
     GE->>Redis: _emit_surface_update(phase=plan_ready)
@@ -396,7 +396,7 @@ sequenceDiagram
                 Note over GE: Execution pauses here
             else auto_execute
                 GE->>DB: transition_step(ready → running)
-                GE->>AL: _run_step_via_agent_loop(step)
+                GE->>AL: StepRunner.run_step_via_deep_agent(step)
                 AL-->>GE: Step output
                 GE->>DB: step.output_data = result
                 GE->>DB: transition_step(running → completed)
@@ -457,66 +457,38 @@ This enables declarative data wiring between DAG steps without hardcoding.
 
 ---
 
-## 7. Agent Loop: Step-Level Execution
+## 7. Step-Level Execution: The Deep Runtime
 
-Each step within the DAG is executed by the `agent_loop()` function (`src/orchestrator/agent_loop.py`). This is the core reasoning engine:
+Each step within the DAG is executed through the **single deep runtime** — there is no separate step-level reasoning engine. `GraphExecutor` (via `DagRunner`) calls `StepRunner.run_step_via_deep_agent()` (`src/services/step_runner.py`), which invokes `AgentInvoker.run_autonomous_deep_step`. The agent for the step is a LangGraph/Deep-Agents graph built by `build_deep_agent` (`src/deep_runtime/`); it discovers the step's scoped tools and autonomously decides which to call. The legacy `agent_loop()` engine (`src/orchestrator/agent_loop.py`) is **deleted**.
 
 ```mermaid
 flowchart TD
-    START[agent_loop starts] --> CHECK_CB{Circuit breaker<br/>OPEN?}
-    CHECK_CB -->|Yes| ERROR[Yield LoopError<br/>skip API call]
-    CHECK_CB -->|No| LOOP_START
+    START["DagRunner picks ready step"] --> RUNNER["StepRunner.run_step_via_deep_agent(step)"]
+    RUNNER --> INVOKE["AgentInvoker.run_autonomous_deep_step<br/>authorization_source = AUTONOMOUS"]
+    INVOKE --> BUILD["build_deep_agent()<br/>(LangGraph graph, per-step capability scope)"]
 
-    subgraph "Multi-Turn Loop (max 10 rounds)"
-        LOOP_START[Build API request] --> CANCEL{Cancellation<br/>requested?}
-        CANCEL -->|Yes| CANCELLED[Raise CancellationRequested]
-        CANCEL -->|No| API_CALL
-
-        API_CALL["Claude API call<br/>(with retry on RateLimitError)"] --> THINKING["Process thinking blocks<br/>Yield LoopThinking"]
-        THINKING --> TOOLS{Tool calls<br/>in response?}
-
-        TOOLS -->|No| DONE[Extract text<br/>Yield LoopDone]
-        TOOLS -->|Yes| TOOL_LOOP
-
-        subgraph "Tool Processing"
-            TOOL_LOOP[For each tool_use block] --> PRE_HOOK["governor_pre_tool_hook()<br/>Check: blocked tool?"]
-            PRE_HOOK -->|Blocked| BLOCKED_RESULT["Return error result<br/>blocked=True"]
-            PRE_HOOK -->|Allowed| EXECUTE["execute_tool_fn()<br/>timeout: 60s"]
-            EXECUTE --> POST_HOOK["audit_post_tool_hook()<br/>Log to AgentDecisionLog"]
-            POST_HOOK --> TOKEN_ATTR["Attribute tokens<br/>per-tool cost tracking"]
-            TOKEN_ATTR --> NEXT_TOOL{More tools?}
-            NEXT_TOOL -->|Yes| TOOL_LOOP
-            NEXT_TOOL -->|No| APPEND["Append tool_results<br/>to messages"]
-        end
-
-        BLOCKED_RESULT --> NEXT_TOOL
-        APPEND --> LOOP_START
+    subgraph "Deep Runtime (LangGraph agent loop)"
+        BUILD --> GRAPH["Agent discovers scoped tools,<br/>reasons multi-turn, calls tools"]
+        GRAPH --> DISPATCH["jarvis_tool_dispatcher (wrap_tool_call)<br/>→ ToolExecutor.execute_tool"]
+        DISPATCH --> MW["Middleware chain (outer→inner):<br/>capability_scope → governor_audit →<br/>unavailable_server → trust_gate →<br/>write_lock → [read_back] → dispatcher"]
+        MW --> GRAPH
     end
 
-    DONE --> FINALIZE["Record token usage<br/>End trace span<br/>Yield LoopDone"]
+    GRAPH --> RESULT["Step output (StepResult)"]
+    RESULT --> BUDGET["budget middleware records<br/>TokenUsage span per model call"]
 ```
 
-### Event Types Yielded
-
-The agent loop is an async generator yielding typed events:
-
-| Event | When | Contains |
-|-------|------|----------|
-| `LoopAgentStart` | Loop begins | agent name, model |
-| `LoopThinking` | Opus thinking block | thinking text |
-| `LoopTextDelta` | Streaming text chunk | delta text |
-| `LoopToolCall` | Before tool execution | tool name, input |
-| `LoopToolResult` | After tool execution | result, blocked flag, latency |
-| `LoopDone` | Loop completes | full text, token counts, tools used |
-| `LoopError` | Unrecoverable error | error message |
+The deep runtime is streamed via `stream_adapter.py`, which maps tool/`status="error"` results to the frozen SSE frames the client consumes. Policy is enforced by the fixed middleware chain wrapping the central dispatcher, not by hand-rolled loop logic.
 
 ### Resilience Features
 
-- **API Retry:** 3 attempts with exponential backoff (2s→4s→8s) on `RateLimitError`
-- **Thinking Fallback:** If API rejects thinking blocks, auto-disables and retries
-- **Tool Timeout:** 60s per tool via `asyncio.wait_for`
-- **Circuit Breaker:** `AnthropicCircuitBreaker` tracks per-model failures (5 failures → OPEN for 120s)
-- **Cancellation Token:** `asyncio.Event` checked between tool rounds for graceful exit
+The deep runtime is a LangGraph graph over `langchain-anthropic`, so the behaviors the retired `agent_loop` hand-rolled are now provided by that stack or deliberately dropped:
+
+- **API Retry:** delegated to `langchain-anthropic`'s client — there is **no** Jarvis-owned exponential-backoff loop on `RateLimitError`.
+- **Thinking params:** built once per agent tier at model construction (`deep_runtime/model_factory.py` + `_thinking.py`). There is **no** mid-loop "disable thinking and retry" fallback.
+- **Step Timeout:** there is **no** per-tool 60s timeout. Background runs are capped per-step by `step.timeout_seconds or 120s`; user-initiated chat runs are uncapped.
+- **Circuit Breaker:** there is **no** Jarvis `AnthropicCircuitBreaker` in the deep path (the perception-side `PerceptionPolicyService` circuit breaker is separate).
+- **Tool error signaling:** a failed tool returns a `ToolMessage(status="error")`, mapped by `stream_adapter.py` to the frozen `blocked` SSE frame so the client knows the call failed.
 
 ---
 
@@ -584,7 +556,7 @@ stateDiagram-v2
     running --> waiting_approval : TrustEngine gate
     running --> awaiting_input : user action needed
     running --> skipped : cancelled mid-run
-    running --> timed_out : 60s tool / 120s step timeout
+    running --> timed_out : step.timeout_seconds or 120s
     running --> cancelled : run cancelled
 
     waiting_approval --> running : approved
@@ -642,31 +614,33 @@ flowchart TD
 
     TE --> MATRIX{"4×4 Decision Matrix"}
 
-    MATRIX --> |"trusted × low"| SILENT[auto_execute_silent<br/>Execute without notification]
-    MATRIX --> |"established × medium"| NOTIFY[auto_execute_notify<br/>Execute + notify user]
-    MATRIX --> |"new × medium"| APPROVE[approval_required<br/>Pause + create Approval]
-    MATRIX --> |"any × critical"| BLOCK[blocked<br/>Mark step failed]
+    MATRIX --> |"autonomous × low"| SILENT[auto_execute_silent<br/>Execute without notification]
+    MATRIX --> |"trusted × low"| NOTIFY[auto_execute_notify<br/>Execute + notify user]
+    MATRIX --> |"first_use / learning × any"| APPROVE[approval_required<br/>Pause + create Approval]
+    MATRIX --> |"autonomous × high"| APPROVE2[approval_required<br/>Never auto at high risk]
 
     subgraph "Trust Graduation"
-        G1["new → learning: 3 approved"]
+        G1["first_use → learning: 3 approved"]
         G2["learning → trusted: 10 approved (<10% reject)"]
         G3["trusted → autonomous: 25 approved (<5% reject)"]
     end
 
     subgraph "Trust Demotion"
         D1["Rejection applies cooldown<br/>72h / 48h / 24h"]
-        D2["Multiple rejections → demotion<br/>trusted → learning → new"]
+        D2["Multiple rejections → demotion<br/>trusted → learning → first_use"]
     end
 ```
 
 ### The 4×4 Matrix
 
-| | **low risk** | **medium risk** | **high risk** | **critical risk** |
+Trust levels are `first_use`, `learning`, `trusted`, `autonomous`. Risk levels are `none`, `low`, `medium`, `high` (there is no `critical`).
+
+| | **none risk** | **low risk** | **medium risk** | **high risk** |
 |---|---|---|---|---|
-| **new** | auto_execute_notify | approval_required | approval_required | blocked |
-| **learning** | auto_execute_silent | auto_execute_notify | approval_required | blocked |
-| **established** | auto_execute_silent | auto_execute_silent | approval_required | approval_required |
-| **trusted** | auto_execute_silent | auto_execute_silent | auto_execute_notify | approval_required |
+| **first_use** | approval_required | approval_required | approval_required | approval_required |
+| **learning** | approval_required | approval_required | approval_required | approval_required |
+| **trusted** | auto_execute_notify | auto_execute_notify | approval_required | approval_required |
+| **autonomous** | auto_execute_silent | auto_execute_silent | auto_execute_notify | approval_required |
 
 ### Approval Lifecycle
 
@@ -867,11 +841,11 @@ Failures are handled at four levels with increasing escalation:
 flowchart TD
     FAILURE[Failure Occurs]
 
-    FAILURE --> LEVEL1{"Level 1: Tool Timeout<br/>(60s per tool)"}
-    LEVEL1 -->|"timeout"| TOOL_ERROR["Return error dict<br/>{error: '...', timed_out: true}"]
-    TOOL_ERROR --> AGENT_SEES["Agent sees error in<br/>tool_result, may retry<br/>autonomously"]
+    FAILURE --> LEVEL1{"Level 1: Step Timeout<br/>(step.timeout_seconds or 120s)"}
+    LEVEL1 -->|"timeout"| TIMED_OUT["transition_step(→ timed_out) and return<br/>TERMINAL: does NOT call handle_step_failure<br/>(no retry_count / backoff / re-queue)"]
+    TIMED_OUT --> DAG_DONE["DAG loop treats the step as finished<br/>(run → completed / partially_completed,<br/>or blocked if a dependent needs it)"]
 
-    FAILURE --> LEVEL2{"Level 2: Step Retry<br/>(max_retries, default 3)"}
+    FAILURE -->|"tool / MCP-auth / other exception"| LEVEL2{"Level 2: Step Retry via handle_step_failure()<br/>(max_retries, default 3)"}
     LEVEL2 -->|"retry_count < max"| BACKOFF["Exponential backoff<br/>2^retry × 1s, cap 30s"]
     BACKOFF --> RETRY_STEP["transition_step(failed → pending)<br/>Re-enters ready queue"]
     LEVEL2 -->|"retries exhausted"| STEP_FAIL["transition_step(→ failed)"]
@@ -1037,10 +1011,12 @@ SchedulerLoop (every 30s)
 | **Orchestrator** | `src/orchestrator/jarvis.py` | Entry points, plan creation, surface push |
 | **Intent Classifier** | `src/orchestrator/intent_classifier.py` | Fast intents, `classify_intent()`, `extract_plan()` |
 | **Planner Prompt** | `src/orchestrator/prompts.py` | `PLANNER_PROMPT_V2`, all agent prompts |
-| **Agent Loop** | `src/orchestrator/agent_loop.py` | Multi-turn reasoning, tool execution |
+| **Deep Runtime** | `src/deep_runtime/` (`build_deep_agent`) | Single execution engine (LangGraph agent loop, middleware chain) |
+| **Step Runner** | `src/services/step_runner.py` | `run_step_via_deep_agent()` → `AgentInvoker.run_autonomous_deep_step` |
+| **DAG Runner** | `src/services/dag_runner.py` | Per-step DAG execution GraphExecutor delegates to |
 | **Hooks** | `src/orchestrator/hooks.py` | Pre/post tool hooks, Governor audit |
 | **Recovery** | `src/orchestrator/recovery.py` | Startup reconciliation |
-| **Contracts** | `src/orchestrator/contracts.py` | PlanOutput, PlanStep, SurfaceUpdate |
+| **Contracts** | `src/contracts/` | PlanOutput, PlanStep, SurfaceUpdate |
 | **GraphExecutor** | `src/services/graph_executor.py` | DAG execution, checkpoints, approval gates |
 | **Execution State** | `src/services/execution_state.py` | State machine, transition validation |
 | **Capability Resolver** | `src/services/capability_resolver.py` | Capability → agent + tools routing |
@@ -1079,7 +1055,7 @@ SchedulerLoop (every 30s)
 │                       ↓                                                      │
 │ 5. ROUTING           CapabilityResolver → agent + tools per step           │
 │                       ↓                                                      │
-│ 6. EXECUTION         GraphExecutor → DAG loop → agent_loop per step        │
+│ 6. EXECUTION         GraphExecutor → DagRunner → deep runtime per step      │
 │                       ↓                                                      │
 │ 7. TRUST GATES       TrustEngine 4×4 matrix → approve/auto/block          │
 │                       ↓                                                      │

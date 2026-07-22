@@ -1,21 +1,22 @@
 # Cost & Model Tiers
 
-Jarvis routes each of its 7 agents to a model *tier* (`opus` / `sonnet` / `haiku`)
-chosen for that agent's job. Tier → concrete model is resolved in
-`orchestrator/jarvis.py` (`MODEL_TIERS` for the direct API, `BEDROCK_MODEL_TIERS`
-for Bedrock). This page documents what that costs and how to lower it.
+Jarvis routes each of its 6 agents to a model *tier* (`opus` / `sonnet` / `haiku`)
+chosen for that agent's job. Tier → concrete model is resolved via `MODEL_TIERS`
+in `src/config/models.py` (imported by `orchestrator/jarvis.py`). There is a single
+direct Anthropic API backend — Bedrock is fully removed (no `BEDROCK_MODEL_TIERS`).
+This page documents what that costs and how to lower it.
 
 ## Per-tier list prices
 
 List prices for the Claude 4.x family (USD per million tokens). Tiers map to the
 current default models (`claude-opus-4-8`, `claude-sonnet-4-6`,
-`claude-haiku-4-5`):
+`claude-haiku-4-5-20251001`):
 
-| Tier   | Default model        | Input $/M | Output $/M | Used by (default) |
-|--------|----------------------|-----------|------------|-------------------|
-| opus   | claude-opus-4-8      | 15.00     | 75.00      | Planner |
-| sonnet | claude-sonnet-4-6    | 3.00      | 15.00      | Perceiver, Librarian, Governor, Operator, Presenter |
-| haiku  | claude-haiku-4-5     | 1.00      | 5.00       | Persona |
+| Tier   | Default model              | Input $/M | Output $/M | Used by (default) |
+|--------|----------------------------|-----------|------------|-------------------|
+| opus   | claude-opus-4-8            | 15.00     | 75.00      | Planner |
+| sonnet | claude-sonnet-4-6          | 3.00      | 15.00      | Perceiver, Librarian, Executor, Presenter |
+| haiku  | claude-haiku-4-5-20251001  | 0.80      | 4.00       | Persona |
 
 Thinking tokens are billed as **output**. With per-agent thinking budgets of
 2K–8K tokens, the Opus Planner is by far the most expensive single call —

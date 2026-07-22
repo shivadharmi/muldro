@@ -5,7 +5,6 @@
 ```mermaid
 sequenceDiagram
     participant PL as Planner
-    participant OP as Operator
     participant GE as GraphExecutor
     participant TE as TrustEngine
     participant CB as ContextBuilder
@@ -15,12 +14,12 @@ sequenceDiagram
     participant MS as MemoryService
     participant NT as Notifier
 
-    Note over PL,OP: Phase 1: Planning
+    Note over PL,GE: Phase 1: Planning
     PL->>PL: Create PlanOutput (steps with capabilities)
-    PL-->>OP: PlanOutput (plan_id, steps, capability_gaps)
+    PL-->>GE: PlanOutput (plan_id, steps, capability_gaps)
 
-    Note over OP,GE: Phase 2: DAG Construction
-    OP->>GE: create_run(plan_id)
+    Note over GE,GE: Phase 2: DAG Construction
+    GE->>GE: create_run(plan_id)
     GE->>GE: Build DAG from PlanTasks
     GE->>GE: Resolve dependencies (topological sort)
     GE->>CB: Build context pack
@@ -152,19 +151,18 @@ Execution order: [A] -> [B, C] (sequential within batch) -> [D]
 
 ## Execution Contracts
 
-All execution boundaries use typed contracts from `src/orchestrator/contracts.py`:
+All execution boundaries use typed contracts from `src/contracts/`:
 
 - **StepResult** — Wraps the outcome of each TaskStep execution (status, output_data, error, duration)
 - **ToolCallRequest** — Typed request for tool invocation (tool_name, arguments, requires_approval)
-- **ToolCallResult** — Typed result from tool invocation (success, output, error, duration)
-- **SurfaceUpdate** — Live execution surface event (run_id, status, step_summary, progress). Emitted in GraphExecutor at: plan_ready, executing, step_started, step_completed, step_failed, approval_needed, approval_resolved, completed, failed.
+- **SurfaceUpdate** — Live execution surface event (run_id, status, step_summary, progress). Emitted via `execution_surface_emitter.py` (called from `graph_executor.py`, `dag_runner.py`, and `trust_gate.py`) — autonomous-path only — at: plan_ready, executing, step_started, step_completed, step_failed, approval_needed, approval_resolved, completed, failed.
 - **InsightSurfaceData** — Structured data for insight-type surfaces pushed during execution.
 
 These contracts ensure structured data flows between GraphExecutor, tool dispatch, memory writeback, and live UI surfaces.
 
 ## Live Execution Surfaces (SurfaceUpdate)
 
-The GraphExecutor emits `SurfaceUpdate` events via Redis pubsub at key execution milestones. The frontend receives these via WebSocket and renders live progress in the workspace.
+`SurfaceUpdate` events are emitted via `execution_surface_emitter.py` (called from `graph_executor.py`, `dag_runner.py`, and `trust_gate.py`) over Redis pubsub at key execution milestones — the autonomous path only. The frontend receives these via WebSocket and renders live progress in the workspace.
 
 Surface update lifecycle: `plan_ready` → `executing` → `approval_needed` (if gated) → `completed` / `failed`
 
@@ -185,8 +183,8 @@ Step action request
         │   Tools: search, ingest_event, push_ui_update, etc.
         │
         ├── external_mcp → MCP Bridge (external servers)
-        │   Google Workspace, GitHub, Slack, Notion, Linear,
-        │   Playwright, Filesystem — real MCP names, no normalization
+        │   Google Workspace, GitHub, Slack, Notion,
+        │   Atlassian, Playwright — real MCP names, no normalization
         │
         └── composite → Multi-MCP orchestration (e.g., web_search)
 ```
@@ -216,7 +214,7 @@ A single TrustEngine gate in GraphExecutor handles all approval decisions. There
 
 ### TrustEngine 4x4 Matrix
 
-The TrustEngine evaluates each step using a 4x4 matrix of `trust_level` (new, developing, established, trusted) x `risk_level` (low, medium, high, critical):
+The TrustEngine evaluates each step using a 4x4 matrix of `trust_level` (first_use, learning, trusted, autonomous) x `risk_level` (none, low, medium, high):
 
 | PolicyDecision | Meaning |
 |----------------|---------|

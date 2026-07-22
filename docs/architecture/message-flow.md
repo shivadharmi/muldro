@@ -9,11 +9,11 @@ sequenceDiagram
     participant U as User
     participant API as FastAPI /v1/jarvis/chat
     participant O as Orchestrator
+    participant IC as IntentClassifier (Haiku)
     participant P as Planner (Opus)
     participant CR as CapabilityResolver
-    participant A as Agent Pipeline
-    participant TE as TrustEngine
-    participant GE as GraphExecutor
+    participant DR as Deep Runtime (build_deep_agent)
+    participant PG as permission_gate
     participant PR as Presenter
     participant PA as Persona (Haiku)
 
@@ -22,29 +22,33 @@ sequenceDiagram
     API->>O: process_message_stream(user_id, workspace_id)
     O->>O: start_trace(trigger=user_message)
 
-    Note over O,P: Step 1: Intent Classification
-    O->>P: "Classify this message"
-    P->>P: Structured output (PlanOutput)
-    P-->>O: {goal, reasoning, achievable, priority, steps[], capability_gaps[]}
+    Note over O,IC: Step 1: Intent Classification (fast Haiku, before any Planner call)
+    O->>IC: classify_intent(message)
+    IC-->>O: (intent, confidence, sources)
+    alt fast intent (skip Planner)
+        O->>O: intent_to_plan() -> lightweight PlanOutput
+    else use_planner is true
+        O->>P: run PLANNER_PROMPT_V2 (Opus)
+        P-->>O: PlanOutput {goal, reasoning, achievable, priority, steps[], capability_gaps[]}
+    end
 
     Note over O,CR: Step 2: Capability Resolution
     O->>CR: resolve(step.capability)
     CR-->>O: agent assignment per step
 
-    Note over O,A: Step 3: Pipeline Execution
+    Note over O,DR: Step 3: Step Execution (single deep runtime)
     loop For each step in plan
-        O->>A: _call_agent(agent, message)
-        A->>A: Tool loop (max 10 rounds)
-        A-->>O: agent_result
+        O->>DR: run step through build_deep_agent (LangGraph agent loop)
+        DR->>DR: discover tools + loop autonomously (recursion limit)
+        DR-->>O: step result
     end
 
-    alt plan has executable steps
-        Note over O,GE: Step 4: Plan Execution
-        O->>TE: evaluate trust_level x risk_level (4x4 matrix)
-        TE-->>O: PolicyDecision (auto_execute_silent/auto_execute_notify/approval_required/blocked)
-        O->>GE: create_run() + execute_run()
-        GE-->>O: run result
-    end
+    Note over O,PG: Step 4: Action-time write gating (chat path)
+    Note over O,PG: trust_gate (TrustEngine) stays DORMANT here — the user's message is the authorization.
+    Note over O,PG: Always-on: capability_scope + write_lock gate every write. No GraphExecutor run (run_id = None); a DB Plan may still be persisted for multi-step / write-risky turns.
+    Note over O,PG: permission_gate (per permission_mode: bypass/ask/auto) is added ONLY on the feature-gated single-lead path (deep_single_lead=True + durable checkpointer); the default per-step path has none.
+    O->>PG: on write tool call → capability_scope + write_lock (+ permission_gate when enabled)
+    PG-->>O: allow / confirm / block
 
     Note over O,PR: Step 5: Format Response
     O->>PR: "Present this result to the user"
@@ -57,6 +61,13 @@ sequenceDiagram
     O-->>API: final response
     API-->>U: SSE event stream
 ```
+
+> **Chat vs autonomous path.** The diagram above is the **chat path**. Both chat variants run on the deep runtime with TrustEngine/`trust_gate` **dormant** (the user's message is the authorization) and create **no** `GraphExecutor` run (`run_id = None`) — though a DB `Plan` record *is* persisted for multi-step or write-risky turns (`chat_processor.py` `persist_plan_record`). They differ only in write gating:
+>
+> - **Default** (`deep_single_lead = False`, the current shipping config): the legacy per-step path (`chat_processor.py` → `call_agent_stream` → `build_deep_agent` per step). Writes are held by the always-on `capability_scope` + `write_lock` middlewares — there is **no `permission_gate`**.
+> - **Feature-gated single-lead** (`deep_single_lead = True` **and** `can_pause` **and** a durable checkpointer): the `chat_single_lead.py` `stream_deep_lead` path, which additionally installs **`permission_gate`** to confirm writes per the turn's `permission_mode` (`bypass` / `ask` / `auto`). `_resolve_effective_mode()` fail-safe downgrades to the default path when `ask`/`auto` has no durable checkpointer.
+>
+> The **autonomous path** (scheduler/perception-triggered runs) persists a DB `Plan`, drives it per-step via `GraphExecutor` (`create_run()` / `execute_run()`), and gates every step with TrustEngine's 4×4 trust_level × risk_level matrix (`PolicyDecision`: `auto_execute_silent` / `auto_execute_notify` / `approval_required` / `blocked`).
 
 ## SSE Event Stream
 
@@ -79,19 +90,23 @@ sequenceDiagram
             S->>C: event: tool_call {agent, tool, input}
             S->>C: event: tool_result {agent, tool, result}
         end
+        opt If a write needs confirmation
+            S->>C: event: approval_needed {...}
+        end
         S->>C: event: agent_done {agent, text, cost_usd, cache_creation_input_tokens, cache_read_input_tokens, thinking_tokens, latency_ms}
     end
 
     S->>C: event: plan {goal, reasoning, steps[], capability_gaps[]}
 
-    opt If plan execution triggered
-        S->>C: event: execution_start {run_id}
-        S->>C: event: execution_result {status, steps_completed}
+    opt On error
+        S->>C: event: error {message}
     end
 
     S->>C: event: response {text}
     S->>C: event: done {trace_id}
 ```
+
+> **Chat SSE frames** (emitted by `stream_adapter.py`): `agent_start`, `thinking`, `text_delta`, `tool_call`, `tool_result`, `agent_done`, `error`, `approval_needed`. The `execution_start` / `execution_result` frames are **autonomous-path only** — they are not part of the chat stream.
 
 ### Event Types Reference
 
@@ -100,14 +115,15 @@ sequenceDiagram
 | `conversation` | `{conversation_id}` | Start of stream |
 | `trace` | `{trace_id}` | Trace created |
 | `agent_start` | `{agent, model}` | Agent begins work |
-| `thinking` | `{agent, text, is_thinking: true}` | Agent reasoning (thinking blocks, Opus only) |
+| `thinking` | `{agent, text, is_thinking: true}` | Agent reasoning (thinking blocks; enabled for all 6 agents, not Opus-only) |
 | `text_delta` | `{agent, text}` | Incremental text output |
 | `tool_call` | `{agent, tool, input}` | Tool invocation |
 | `tool_result` | `{agent, tool, result, blocked?, latency_ms?}` | Tool output |
+| `approval_needed` | `{...}` | Chat write awaiting confirmation (`permission_gate`) |
 | `agent_done` | `{agent, text, cost_usd, cache_creation_input_tokens, cache_read_input_tokens, thinking_tokens, latency_ms}` | Agent complete |
 | `plan` | `{goal, reasoning, steps[], capability_gaps[]}` | Planner plan extracted |
-| `execution_start` | `{run_id}` | GraphExecutor begins |
-| `execution_result` | `{status, steps}` | Execution outcome |
+| `execution_start` | `{run_id}` | GraphExecutor begins (autonomous path only) |
+| `execution_result` | `{status, steps}` | Execution outcome (autonomous path only) |
 | `response` | `{text}` | Final user-facing response |
 | `error` | `{message}` | Error occurred |
 | `done` | `{trace_id}` | Stream end |
@@ -122,7 +138,7 @@ The Planner returns a structured `PlanOutput` (Pydantic model) with capability-b
 class PlanOutput(BaseModel):
     goal: str
     reasoning: str
-    achievable: bool
+    achievable: Literal["full", "partial", "not_achievable"] = "full"
     priority: Literal["low", "medium", "high", "critical"] = "medium"
     steps: list[PlanStep] = []
     success_criteria: str = ""
@@ -133,13 +149,15 @@ class PlanOutput(BaseModel):
 class PlanStep(BaseModel):
     step_id: str
     description: str
-    actor: str                    # agent name
+    actor: Literal["jarvis", "user"] = "jarvis"   # who performs the step, NOT the agent
     capability: str               # e.g., "email.read", "search.web"
     input: dict = {}
     depends_on: list[str] = []    # step_id references
-    risk: str = "low"
-    user_context: str = ""
+    risk: Literal["none", "low", "medium", "high"] = "none"
+    user_context: str | None = None
 ```
+
+Both `PlanOutput` and `PlanStep` are frozen (`frozen=True`, `extra="ignore"`). The `actor` field distinguishes a step performed by Jarvis from one that must be performed by the user; the **agent** that executes a Jarvis step is assigned by the `CapabilityResolver` from the step's `capability`, not from `actor`.
 
 The Planner uses Claude's `tool_use` structured output with a text fallback parser (`extract_plan`) for resilience. A circular dependency validator ensures step DAGs are acyclic.
 
@@ -153,7 +171,7 @@ There are no hardcoded decision-to-agent mappings. Routing is purely capability-
 
 ## Context Assembly
 
-Four agents receive pre-loaded context (Planner, Presenter, Perceiver, Librarian):
+Context-enriched agents (`CONTEXT_ENRICHED_AGENTS`) receive pre-loaded context: Planner, Presenter, Perceiver, Librarian, Executor, and Lead.
 
 ```mermaid
 graph TD
@@ -186,13 +204,13 @@ The `ContextPack` is converted to a markdown block appended to the agent's syste
 
 The `ContextBuilder` also accepts `graph_engine` (Neo4j) and `vector_store` (Qdrant) for enrichment. Explicit preferences are always injected via `get_user_preferences()` to ensure they influence decisions even when they do not match the current query semantically.
 
-**Prompt architecture:** System prompts are split into `JARVIS_SOUL_CORE` (shared by all 7 agents) and `PLANNER_PROMPT_V2` (Planner-only 7-step decomposition). Perceiver has `PERCEIVER_PROMPT` (7-step read-only). This prevents non-Planner agents from making routing decisions.
+**Prompt architecture:** System prompts are split into `JARVIS_SOUL_CORE` (shared by all 6 agents) and `PLANNER_PROMPT_V2` (Planner-only 7-step decomposition). Perceiver has `PERCEIVER_PROMPT` (7-step read-only). This prevents non-Planner agents from making routing decisions.
 
 ## Streaming Implementation
 
-The `_call_agent_stream()` method uses `client.messages.stream()` with thinking support for Opus. The stream emits:
+The `_call_agent_stream()` method uses `client.messages.stream()` with thinking enabled for all 6 agents (budgets: Planner 8192, Perceiver 6144, Librarian 4096, Presenter 4096, Executor 2048, Persona 2048). The stream emits:
 
-- **thinking** events with `is_thinking: true` for Opus reasoning blocks
+- **thinking** events with `is_thinking: true` for reasoning blocks (all agents, Sonnet and Haiku included)
 - **text_delta** events for incremental text output
 - **tool_call** / **tool_result** events for tool invocations
 - **agent_done** with full cost breakdown: `cost_usd`, `cache_creation_input_tokens`, `cache_read_input_tokens`, `thinking_tokens`

@@ -6,7 +6,6 @@
 erDiagram
     User ||--o{ Conversation : has
     User ||--o{ Session : has
-    User ||--o{ OAuthConnection : has
     User ||--o{ NormalizedEvent : receives
     User ||--o{ Entity : owns
     User ||--o{ Memory : stores
@@ -48,7 +47,6 @@ All data tables include `workspace_id` (`String(64)`, NOT NULL FK to `workspaces
 |-------|-----------|-------------|-------|
 | `users` | `usr_` | email, display_name, status, timezone, settings (JSONB) | Unique on email |
 | `sessions` | - | user_id, token_hash, expires_at, surface, device_info (JSONB) | Unique on token_hash |
-| `oauth_connections` | - | user_id, provider, access_token_encrypted, refresh_token_encrypted, scopes (JSONB) | Unique on user+provider |
 | `workspaces` / `workspace_members` | - | Multi-tenant support with role (owner, admin, member) | |
 
 ### Events
@@ -61,15 +59,16 @@ All data tables include `workspace_id` (`String(64)`, NOT NULL FK to `workspaces
 
 | Table | PK Prefix | Key Columns | Notes |
 |-------|-----------|-------------|-------|
-| `entities` | `ent_` | entity_type, canonical_name, attributes (JSONB), importance_score, search_tsv (tsvector), last_seen_at, interaction_count | 15 entity types |
+| `entities` | `ent_` | entity_type, canonical_name, attributes (JSONB), importance_score, search_vector (tsvector), last_seen_at, interaction_count | entity_type is free-form `String(32)` |
 | `entity_aliases` | - | entity_id (FK), alias_type, alias_value | Cascade delete |
-| `entity_relationships` | `rel_` | from_entity_id, relation_type, to_entity_id, strength, active | 17 relation types |
+| `entity_relationships` | `rel_` | from_entity_id, relation_type, to_entity_id, strength, active | relation_type is free-form `String(32)` |
+| `entity_facts` | `fact_` | entity_id (FK), attr_key, attr_value (JSONB), confidence, corroboration_count, provenance (JSONB), valid_from, valid_to, superseded_by | Bitemporal world-model facts; single current fact per (entity_id, attr_key) via partial unique where valid_to IS NULL |
 
 ### Memory
 
 | Table | PK Prefix | Key Columns | Notes |
 |-------|-----------|-------------|-------|
-| `memories` | `mem_` | memory_type, fact_text, search_tsv (tsvector), confidence, stability_score, refresh_count, last_accessed_at, superseded_by, entity_ids (ARRAY), status | GIN index on entity_ids + search_tsv |
+| `memories` | `mem_` | memory_type, fact_text, search_vector (tsvector), confidence, stability_score, refresh_count, last_accessed_at, superseded_by, entity_ids (ARRAY), status | `search_vector` provisioned; FTS not yet activated (no trigger/GIN) |
 
 ### Plans & Execution
 
@@ -77,8 +76,8 @@ All data tables include `workspace_id` (`String(64)`, NOT NULL FK to `workspaces
 |-------|-----------|-------------|-------|
 | `plans` | `plan_` | trigger_type, goal, priority, decision, risk_level, execution_mode, status | |
 | `plan_tasks` | - | plan_id (FK), task_id, task_type, input_data (JSONB), depends_on (JSONB), status | Cascade on plan |
-| `task_runs` | `run_` | plan_id (FK), status (11 states: pending, running, paused, awaiting_approval, completed, failed, cancelled, blocked, partially_completed, archived, timed_out), graph_definition (JSONB), current_step_ids (ARRAY), checkpoint (JSONB), trace_id, context_pack_json (JSONB) | |
-| `task_steps` | `step_` | run_id (FK), task_id, step_type, depends_on (ARRAY), status (9 states: pending, running, completed, failed, skipped, cancelled, awaiting_approval, blocked, timed_out), input_data (JSONB), output_data (JSONB) | Cascade on run |
+| `task_runs` | `run_` | plan_id (FK), status (pending, running, paused, awaiting_approval, awaiting_input, awaiting_reauth, blocked, partially_completed, completed, failed, cancelled, archived, timed_out), graph_definition (JSONB), current_step_ids (ARRAY), checkpoint (JSONB), trace_id, context_pack_json (JSONB) | |
+| `task_steps` | `step_` | run_id (FK), task_id, step_type, depends_on (ARRAY), status (pending, ready, running, completed, completed_unverified, partially_completed, failed, waiting_approval, awaiting_input, skipped, timed_out, cancelled, blocked), input_data (JSONB), output_data (JSONB) | Cascade on run |
 | `task_checkpoints` | - | run_id (FK), step_id, state_snapshot (JSONB), reason | |
 
 ### Governance
@@ -114,8 +113,7 @@ All data tables include `workspace_id` (`String(64)`, NOT NULL FK to `workspaces
 |-------|-----------|-------------|-------|
 | `schedules` | `sched_` | name, cron_expr, action_type, action_config (JSONB), enabled, next_run_at, run_count, priority | |
 | `observation_cursors` | - | source, cursor_value, poll_interval_seconds | |
-
-> **Note:** `observation_statuses` was consolidated into `perception_state` (see Perception & Runtime section below).
+| `observation_status` | - | user_id, source, last_observed_at, items_found, items_ingested, status, error_message | Per-source observation health, alongside `perception_state`; unique on (user_id, source) |
 
 ### Conversations
 
@@ -153,19 +151,12 @@ All data tables include `workspace_id` (`String(64)`, NOT NULL FK to `workspaces
 | `briefings` | - | user_id, briefing_type, content (JSONB), generated_at | Generated briefing snapshots |
 | `briefing_feedback` | - | briefing_id (FK), rating, feedback_text | User feedback on briefings |
 
-### Procedures & Working Memory
-
-| Table | PK Prefix | Key Columns | Notes |
-|-------|-----------|-------------|-------|
-| `procedures` | - | name, description, steps (JSONB), trigger_conditions (JSONB), enabled | Reusable workflow procedures |
-| `working_memory` | - | user_id, conversation_id, context (JSONB), expires_at | Short-term conversation context |
-
 ### UI & OAuth
 
 | Table | PK Prefix | Key Columns | Notes |
 |-------|-----------|-------------|-------|
 | `ui_surfaces` | - | user_id, surface_type, state (JSONB), last_active_at | Active UI surface tracking |
-| `oauth_tokens` | - | connection_id (FK), token_type, token_encrypted, expires_at | Individual OAuth token storage |
+| `oauth_tokens` | - | token_id (PK), user_id, provider, access_token_encrypted, refresh_token_encrypted, expires_at, scopes (ARRAY) | Single OAuth token store (consolidated; the dead `oauth_connections` parent was dropped) |
 | `magic_links` | - | user_id, token_hash, expires_at, used_at | Passwordless auth links |
 
 ### MCP & Integration Trust
@@ -174,7 +165,6 @@ All data tables include `workspace_id` (`String(64)`, NOT NULL FK to `workspaces
 |-------|-----------|-------------|-------|
 | `mcp_server_catalog` | - | name, uri, transport, status, capabilities (JSONB) | Discovered MCP servers |
 | `server_trust_records` | - | server_name, trust_level, verified_at | MCP server trust scores |
-| `capability_bindings` | - | server_name, capability, agent_name, enabled | Agent-to-MCP capability mapping |
 | `org_allowlists` | - | domain, approved_by, reason | Approved external domains |
 
 ### Integration & Webhooks
@@ -239,13 +229,14 @@ All IDs use ULID (Universally Unique Lexicographically Sortable Identifier) with
 
 | Configuration | Value |
 |--------------|-------|
-| Provider | AWS Bedrock Titan V2 |
-| Dimensions | 1024 |
+| Provider | Local fastembed (ONNX, no external API) |
+| Model | `BAAI/bge-base-en-v1.5` |
+| Dimensions | 768 |
 | Storage | Qdrant |
 | Full-text | Postgres tsvector + GIN indexes |
-| Reranking | Bedrock amazon.rerank-v1:0 |
+| Reranking | Local fastembed cross-encoder `Xenova/ms-marco-MiniLM-L-12-v2` |
 
-> **Note:** pgvector embedding columns were removed from Postgres (migration 046). All vector storage is now in Qdrant only. Full-text search uses native Postgres tsvector columns with GIN indexes.
+> **Note:** pgvector embedding columns were removed from Postgres; all vector storage is now in Qdrant only. Full-text search uses native Postgres tsvector columns with GIN indexes.
 
 Embeddings enable:
 - Semantic memory search (cosine similarity via Qdrant)
@@ -321,28 +312,30 @@ graph LR
 
 | Collection | Dimensions | Payload Fields | Payload Indexes | Purpose |
 |-----------|------------|---------------|-----------------|---------|
-| `memories` | 1024 | user_id, memory_type, fact_text, confidence, scope, preference_strength | memory_type (keyword), confidence (float) | Semantic memory retrieval |
-| `entities` | 1024 | user_id, entity_type, canonical_name, attributes | entity_type (keyword) | Entity search |
-| `events` | 1024 | user_id, source, event_type, title, summary, importance_score | source (keyword), event_type (keyword), importance_score (float) | Event discovery |
-| `artifacts` | 1024 | user_id, artifact_type, title, mime_type | - | Artifact search |
-| `conversations` | 1024 | user_id, title, surface | - | Conversation semantic search |
-| `approvals` | 1024 | user_id, approval_type, title, risk_level | - | Approval semantic search |
+| `memories` | 768 | user_id, memory_type, fact_text, confidence, scope, preference_strength | memory_type (keyword), confidence (float) | Semantic memory retrieval |
+| `entities` | 768 | user_id, entity_type, canonical_name, attributes | entity_type (keyword) | Entity search |
+| `events` | 768 | user_id, source, event_type, title, summary, importance_score | source (keyword), event_type (keyword), importance_score (float) | Event discovery |
+| `artifacts` | 768 | user_id, artifact_type, title, mime_type | - | Artifact search |
+| `conversations` | 768 | user_id, title, surface | - | Conversation semantic search |
+| `approvals` | 768 | user_id, approval_type, title, risk_level | - | Approval semantic search |
 
 `ensure_indexes()` creates Qdrant payload indexes at startup for filtered search on the fields listed above.
 
 ### Postgres FTS Indexes (tsvector + GIN)
 
-| Table | tsvector Column | Indexed Fields | Migration |
-|-------|----------------|---------------|-----------|
-| `memories` | `search_tsv` | fact_text | 045 |
-| `entities` | `search_tsv` | canonical_name, attributes | 045 |
-| `normalized_events` | `search_tsv` | title, summary | 045 |
-| `conversations` | `search_tsv` | title | 045 |
-| `briefings` | `search_tsv` | content | 045 |
-| `approvals` | `search_tsv` | title, justification | 045 |
-| `artifacts` | `search_tsv` | title | 045 |
+Each table below defines a nullable `search_vector` (`tsvector`) column in the initial schema, but FTS is **activated for `entities` only** so far. Migration `b3e8c1f5a9d2_entity_fts_activation` backfills `entities.search_vector`, installs the `entities_search_vector_trigger` to keep it current, and creates the `ix_entities_search_vector` GIN index. The other tables have the column **provisioned but not yet activated** — no population trigger and no GIN index. (Migrations are hash-named; run `alembic history` for the current chain.)
 
-> **Note:** Elasticsearch was fully removed. All full-text search now uses Postgres native tsvector with GIN indexes, which provides comparable BM25-style keyword matching without the operational overhead of a separate search cluster.
+| Table | Column | Source Fields | FTS status |
+|-------|--------|---------------|-----------|
+| `entities` | `search_vector` | canonical_name, attributes | **Active** — trigger + GIN via `b3e8c1f5a9d2` |
+| `memories` | `search_vector` | fact_text | Provisioned (column only) |
+| `normalized_events` | `search_vector` | title, summary | Provisioned (column only) |
+| `conversations` | `search_vector` | title | Provisioned (column only) |
+| `briefings` | `search_vector` | content | Provisioned (column only) |
+| `approvals` | `search_vector` | title, justification | Provisioned (column only) |
+| `messages` | `search_vector` | content | Provisioned (column only) |
+
+> **Note:** Elasticsearch was fully removed. Full-text search uses Postgres native `tsvector` + GIN, which provides BM25-style keyword matching without the operational overhead of a separate search cluster. (`artifacts` has no `search_vector` column.)
 
 ### Neo4j Graph Schema
 

@@ -32,8 +32,7 @@ graph TB
         PCV[Perceiver]
         LIB[Librarian]
         PLN[Planner]
-        GOV[Governor]
-        OPR[Operator]
+        EXE[Executor]
         PRS[Presenter]
         PER[Persona]
     end
@@ -66,10 +65,10 @@ graph TB
 
     WEB --> API
     API --> ORCH
-    ORCH --> PCV & LIB & PLN & GOV & OPR & PRS & PER
+    ORCH --> PCV & LIB & PLN & EXE & PRS & PER
     ORCH --> TRACE & BUDGET
-    PCV & LIB & PLN & GOV & OPR & PRS & PER --> INT
-    PCV & LIB & PLN & GOV & OPR & PRS & PER --> MCP
+    PCV & LIB & PLN & EXE & PRS & PER --> INT
+    PCV & EXE --> MCP
     INT --> EP & WM & MS & PL & GV & GE & NT
     ORCH --> CAT
     EP & WM & MS & PL & GV & GE & NT & CR & TE --> PG
@@ -79,36 +78,37 @@ graph TB
     EP --> QD
 ```
 
-## The 7 Sub-Agents
+## The 6 Sub-Agents
 
-The orchestrator routes to 7 specialized sub-agents via Claude API. Each agent has a defined role, model tier, write scope, and tool scope. Agents never call each other directly — all coordination flows through the orchestrator. The former Observer and Researcher agents were merged into the Perceiver.
+The orchestrator routes to 6 specialized sub-agents via Claude API. Each agent has a defined role, model tier, write scope, and tool scope. Agents never call each other directly — all coordination flows through the orchestrator. The former Observer and Researcher agents were merged into the Perceiver.
 
 | Agent | Model Tier | Role | Write Scope | Tool Scope |
 |-------|-----------|------|-------------|------------|
 | **Perceiver** | Sonnet | Read external sources, detect changes, ingest events, deep context gathering | `normalized_events` | Gmail/Calendar/Drive/Slack/GitHub read + cursors, web_search, Playwright browser |
 | **Librarian** | Sonnet | Extract entities, update world model | `entities`, `relationships`, `memories` | update_entity, search |
 | **Planner** | Opus | Determine intent, produce capability-based plans (PlanOutput) | `plans`, `plan_tasks` | plan_command, get_active_plans, search, discover_capabilities |
-| **Governor** | Sonnet | Audit-only edge-case evaluation (edge_case_only=True) | `policy decisions`, `approvals` | evaluate_policy |
-| **Operator** | Sonnet | Execute approved plans via MCP tools | `executions`, `task_runs` | Gmail/Calendar/Slack/GitHub sends + execution tracking |
+| **Executor** | Sonnet | Execute approved plans via tools, scoped to each step's capability | `task_runs`, `task_steps` | Per-step capability tools (Gmail/Calendar/Slack/GitHub sends, etc.) |
 | **Presenter** | Sonnet | Generate user-facing output | `briefings`, `UI payloads` | get_briefing, search, push_ui_update |
 | **Persona** | Haiku | Learn user preferences from interactions | `memories` (preference type) | search, extract_preferences |
+
+> The **Governor** is not a routed sub-agent. It is a deterministic policy service (`services/governor.py`) invoked as an audit-only pre-tool hook — see [Design Decisions](decisions.md#19-single-trustengine-gate).
 
 ### Agent Boundaries
 
 These boundaries are strict and must not be violated:
 
 - **Only Planner** decides intent (what to do)
-- **Only Operator** executes external actions (sends emails, posts messages)
+- **Only the Executor** executes external actions (sends emails, posts messages), scoped to each step's capability
 - **Only Presenter** talks to the user (formats output)
-- **TrustEngine** in GraphExecutor is the single approval gate (Governor is audit-only for edge cases)
+- **TrustEngine** in GraphExecutor is the single approval gate for the autonomous path. The Governor is not a routed agent — it is a deterministic policy service invoked as an audit-only pre-tool hook
 
 ### Model Tier Rationale
 
 | Tier | Model | Used By | Rationale |
 |------|-------|---------|-----------|
-| Opus | claude-opus-4 | Planner | Deepest reasoning for intent classification and task graph generation |
-| Sonnet | claude-sonnet-4 | Perceiver, Librarian, Governor, Operator, Presenter | Best balance of capability and cost for most agent work |
-| Haiku | claude-haiku-4 | Persona | Lightweight preference extraction, called frequently |
+| Opus | claude-opus-4-8 | Planner | Deepest reasoning for intent classification and task graph generation |
+| Sonnet | claude-sonnet-4-6 | Perceiver, Librarian, Executor, Presenter | Best balance of capability and cost for most agent work |
+| Haiku | claude-haiku-4-5 | Persona | Lightweight preference extraction, called frequently |
 
 ## Infrastructure Services
 
@@ -118,7 +118,7 @@ Jarvis uses 5 infrastructure services. Postgres and Redis are required; the rest
 |---------|---------|------|-----------|----------|
 | **PostgreSQL** | 17 | System of record: all models, tsvector FTS with GIN indexes | Yes | None |
 | **Redis** | 7 | Event streams, task queue, caching, distributed locks, surface tracking, pubsub | Yes | In-memory (limited) |
-| **Qdrant** | 1.12 | Semantic vector search (collections: memories, entities, events, artifacts, conversations, approvals) | No | Postgres FTS only |
+| **Qdrant** | 1.17 | Semantic vector search (collections: memories, entities, events, artifacts, conversations, approvals) | No | Postgres FTS only |
 | **Neo4j** | 5 Community | Knowledge graph projection: multi-hop traversal, shortest-path, community detection | No | Postgres entity tables only |
 | **MinIO / S3** | - | Artifact document/media storage (Postgres holds metadata + S3 key ref) | No | No artifact storage |
 
@@ -128,13 +128,13 @@ Jarvis uses **TriSearch** — a three-engine parallel search with reranking:
 
 ```
 User query
-    ├── Qdrant: semantic vector search (Titan V2 1024-dim embeddings)
+    ├── Qdrant: semantic vector search (local fastembed bge-base-en-v1.5, 768-dim)
     ├── Postgres FTS: tsvector + GIN keyword search
     ├── Neo4j: graph entity search (CONTAINS matching)
-    └── Bedrock Reranker (amazon.rerank-v1:0) merges + reranks results
+    └── Local cross-encoder reranker (ms-marco-MiniLM-L-12-v2) merges + reranks results
 ```
 
-The `TriSearchService` (`src/services/tri_search.py`) runs all three backends in parallel, deduplicates results, and reranks via Bedrock. Full-text search uses Postgres native `tsvector` columns with GIN indexes on the FTS tables (memories, entities, events, conversations, briefings, approvals, artifacts). Elasticsearch has been fully removed.
+The `TriSearchService` (`src/services/tri_search.py`) runs all three backends in parallel, deduplicates results, and reranks via the local cross-encoder. Full-text search uses Postgres native `tsvector` columns with GIN indexes on the FTS tables (memories, entities, events, conversations, briefings, approvals, artifacts). Elasticsearch has been fully removed.
 
 ### Knowledge Graph (Neo4j)
 
@@ -164,7 +164,7 @@ graph LR
     B --> C[Librarian<br/>entities, memories]
     C --> D[Planner<br/>task graphs]
     D --> E[TrustEngine<br/>approval gate]
-    E --> F[Operator<br/>execute]
+    E --> F[Executor<br/>execute]
     F --> G[Presenter<br/>deliver via web/A2UI]
 ```
 
