@@ -105,6 +105,13 @@ async def schedule_reminder(
 ) -> dict:
     """Create a one-shot reminder for the user."""
     from src.models.schedules import Schedule
+    from src.services.scheduler import is_valid_cron
+
+    # Validate cron at the boundary: an unparseable expression persisted here
+    # would later crash the scheduler's dispatch sweep (CroniterBadCronError).
+    normalized_cron = cron_expr or None
+    if normalized_cron is not None and not is_valid_cron(normalized_cron):
+        return make_error_response(ValueError(f"invalid cron_expr: {cron_expr!r}"))
 
     async with _get_db() as db:
         try:
@@ -115,7 +122,7 @@ async def schedule_reminder(
                 workspace_id=workspace_id,
                 name=title[:100],
                 schedule_type="one_shot",
-                cron_expr=cron_expr or None,
+                cron_expr=normalized_cron,
                 action_type="custom_agent_task",
                 action_config={"instructions": f"Remind the user: {title}"},
                 enabled=True,
