@@ -6,7 +6,9 @@ wins until changed here first.
 
 ## 1. Architecture
 
-- **One-way dependencies.** `api → services → models`; `orchestrator → services`; `tools → services`.
+- **One-way dependencies.** `api → services → {models, contracts}`; `orchestrator → services`;
+  `tools → services`. `contracts/` is the neutral boundary-contract layer (PlanOutput, PlanStep,
+  SurfaceUpdate, StepResult, PolicyDecision, ...) that both api and services import downward from.
   Nothing imports back up the chain. If you need an upward call, you need an event or a callback
   injected from above — not an import.
 - **No new code on god objects.** `JarvisOrchestrator` (`orchestrator/jarvis.py`) and
@@ -21,8 +23,8 @@ wins until changed here first.
   **400** (React components), **200** (Zustand stores). Hitting a cap is a design signal —
   split by responsibility, not by line count. Enforced by pre-commit (`scripts/check_file_size.py`);
   pre-existing oversized files are grandfathered in the script's exemption list and must not grow —
-  each one carries a standing debt to be split (`jarvis.py`, `graph_executor.py`,
-  `surface_detail_builders.py`, etc.). Function cap: ~50 lines.
+  each one carries a standing debt to be split (`jarvis.py`, `graph_executor.py`, etc.).
+  Function cap: ~50 lines.
 - **State changes only through transition functions.** Never mutate a status field directly;
   use `transition_run()` / `transition_step()` and extend the same pattern to any new state machine.
 
@@ -59,7 +61,8 @@ wins until changed here first.
 
 - Hooks called unconditionally at the top; no side effects during render; lazy `useState`
   initializers for storage-derived state; `useRouter().replace()` in effects for redirects.
-- Components under ~300 lines; feature-folder organization; one Zustand store per concern.
+- Components target ~300 lines, below the enforced 400-line hard cap (§1); feature-folder
+  organization; one Zustand store per concern.
 - API client split per domain (`api/auth.ts`, `api/chat.ts`, ...) with typed responses
   mirroring backend Pydantic models.
 

@@ -77,6 +77,14 @@ Defined as `InternalToolDef` entries in `catalog.py`. Served via in-process Fast
 | `store_preference` | intelligence | Store a user preference |
 | `get_plan_details` | intelligence | Get detailed plan info |
 | `discover_capabilities` | intelligence | List available capabilities for Planner |
+| `get_entity` | intelligence | Read a world-model entity |
+| `query_facts` | intelligence | Query entity facts |
+| `traverse` | intelligence | Traverse world-model relationships |
+| `get_provenance` | intelligence | Read provenance for a fact/entity |
+| `set_goal` | intelligence | Set a user goal |
+| `set_instruction` | intelligence | Store a standing instruction |
+| `schedule_reminder` | intelligence | Schedule a reminder |
+| `add_to_brief` | intelligence | Add an item to the daily brief |
 | `report_governor_verdict` | _special | Return input as-is (inline dispatch) |
 | `push_ui_update` | communication | Push A2UI surface update |
 
@@ -88,17 +96,15 @@ The Planner does not receive raw tool schemas. Instead, `generate_capability_sum
 
 Defined as `ExternalToolSeed` entries in `catalog.py`. Served via external MCP servers.
 
-| Server | Tools | Verified | Naming |
-|--------|-------|----------|--------|
-| Google Workspace | 17 | Yes | snake_case (`search_gmail_messages`, `get_events`, etc.) |
-| GitHub | 22 | No | snake_case (`create_pull_request`, `list_issues`, etc.) |
-| Slack | 8 | No | snake_case (`slack_post_message`, `slack_get_channel_history`) |
-| Notion | 22 | Yes | `API-` kebab-case (`API-post-page`, `API-patch-page`) |
-| Linear | 18 | Yes | `linear_` snake_case (`linear_create_issue`, `linear_get_issue`) |
-| Playwright | 22 | Yes | `browser_` snake_case (`browser_navigate`, `browser_snapshot`) |
-| Filesystem | 14 | Yes | snake_case (`read_text_file`, `write_file`, `search_files`) |
-| Atlassian | 13 | No | camelCase (`getJiraIssue`, `createJiraIssue`) |
-| Composite | 1 | N/A | `web_search` (multi-MCP orchestration) |
+| Server | Verified | Naming |
+|--------|----------|--------|
+| Google Workspace | Yes | snake_case (`search_gmail_messages`, `get_events`, etc.) |
+| GitHub | No | snake_case (`create_pull_request`, `list_issues`, etc.) |
+| Slack | No | snake_case (`slack_post_message`, `slack_get_channel_history`) |
+| Notion | Yes | `API-` kebab-case (`API-post-page`, `API-patch-page`) |
+| Playwright | Yes | `browser_` snake_case (`browser_navigate`, `browser_snapshot`) |
+| Atlassian | No | camelCase (`getJiraIssue`, `createJiraIssue`) |
+| Composite | N/A | `web_search` (multi-MCP orchestration) |
 
 ### Unknown Discovered Tools
 
@@ -117,15 +123,14 @@ tool_name → ToolRegistry.get_tool() → tool.capability → check agent scope
 
 | Agent | Capability Scope Summary |
 |-------|-------------------------|
-| Perceiver | email.*, calendar.*, doc.*, messaging.*, issue.*, repo.*, workflow.*, filesystem.read/list/search + internal cursor/observation/ingest tools + search.web, browser.* |
+| Perceiver | email.*, calendar.*, doc.*, messaging.*, issue.*, repo.*, workflow.* (reads) + world-model reads + internal cursor/observation/ingest tools + search.web, browser.* |
 | Librarian | internal.update_entity, internal.search, internal.store_memory |
 | Planner | internal.get_plans, internal.get_goals, internal.search, internal.store_memory, system.discovery |
-| Governor | internal.evaluate_policy, internal.approve_action, internal.get_plan_details |
-| Operator | email.send/draft/reply + email.list/read/search, calendar.*, messaging.*, issue.*, repo.*, workflow.*, doc.create/update/comment/append + internal.update_execution |
+| Executor | email.send/draft/reply + email.list/read/search, calendar.*, messaging.*, issue.*, repo.*, workflow.*, doc.create/update/comment/append + internal.update_execution |
 | Presenter | internal.get_briefing, internal.search, internal.push_ui, messaging.send |
 | Persona | internal.search, internal.extract_preferences, internal.store_preference |
 
-**Note:** 7 agents total. Perceiver replaces the former Observer + Researcher agents. Governor is edge-case-only (fires only when policy evaluation is needed).
+**Note:** 6 agents total. Perceiver replaces the former Observer + Researcher agents. The Governor is not a routed cognitive agent — it is a deterministic policy service + audit-only pre-tool hook, so it has no capability scope entry.
 
 ## Authorization: TrustEngine in GraphExecutor
 
@@ -148,7 +153,7 @@ External MCP servers run on demand with no Docker dependency:
 | GitHub | Remote HTTP (Bearer token) | `https://api.githubcopilot.com/mcp/` |
 | Atlassian | Remote HTTP (Bearer token) | Remote hosted |
 | Google Workspace | On-demand local process | `uvx workspace-mcp` via `LocalMCPProcessManager` |
-| Slack, Notion, Playwright, Filesystem | stdio | `npx` (version-pinned) |
+| Slack, Notion, Playwright | stdio | `npx` (version-pinned) |
 
 `LocalMCPProcessManager` (`src/integrations/local_process_manager.py`) manages the Google Workspace process with reference counting; the process starts on first use within a turn and is torn down when all references are released. An idle reaper in the scheduler's `run_health_tick` is the safety net for leaked sessions. A startup preflight (`src/integrations/runtime_preflight.py`) warns if `uvx` or `npx` are absent from the host.
 

@@ -36,7 +36,7 @@
 
 ## 3. TrustEngine as Single Approval Gate
 
-**Decision:** The `TrustEngine` in GraphExecutor is the single approval gate for all external writes, using a 4x4 matrix of trust_level (new, familiar, trusted, autonomous) x risk_level (none, low, medium, high). Governor is now audit-only (`edge_case_only=True`).
+**Decision:** The `TrustEngine` in GraphExecutor is the single approval gate for all external writes, using a 4x4 matrix of trust_level (first_use, learning, trusted, autonomous) x risk_level (none, low, medium, high). Governor is not a routed agent — it is a deterministic policy service (`services/governor.py`) invoked as an audit-only pre-tool hook.
 
 **Rationale:**
 - **Safety-first** for a system that acts on behalf of a founder
@@ -268,7 +268,7 @@ wrappers over the shared singletons — negligible next to a Claude API call.
 
 **Rationale:**
 - **Single gate** - One evaluation point instead of three, eliminating conflicting decisions
-- **Graduated autonomy** - Four trust levels (new, familiar, trusted, autonomous) evolve based on real interaction history
+- **Graduated autonomy** - Four trust levels (first_use, learning, trusted, autonomous) evolve based on real interaction history
 - **Four outcomes** - `auto_execute_silent`, `auto_execute_notify`, `approval_required`, `blocked` (not just approve/reject)
 - **Risk assessment** - `RiskAssessor` (`src/services/risk_assessor.py`) evaluates step risk independently from trust
 

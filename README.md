@@ -28,15 +28,14 @@ graph TB
     subgraph AGENTS["Sub-Agents — Claude API"]
         direction LR
         PCV[Perceiver<br/>Sonnet] ~~~ LIB[Librarian<br/>Sonnet]
-        PLN[Planner<br/>Opus] ~~~ GOV[Governor<br/>Sonnet]
-        OPR[Operator<br/>Sonnet] ~~~ PRS[Presenter<br/>Sonnet]
-        PER[Persona<br/>Haiku]
+        PLN[Planner<br/>Opus] ~~~ EXE[Executor<br/>Sonnet]
+        PRS[Presenter<br/>Sonnet] ~~~ PER[Persona<br/>Haiku]
     end
 
     subgraph TOOLS["Tool Layer"]
         CAT[Tool Catalog<br/>catalog.py]
         INT[Internal FastMCP<br/>2 servers]
-        MCP[MCP Bridge<br/>Google · GitHub · Slack<br/>Notion · Linear · Playwright · Filesystem]
+        MCP[MCP Bridge<br/>Google · GitHub · Slack<br/>Notion · Atlassian · Playwright]
     end
 
     subgraph SVC["Services"]
@@ -57,9 +56,9 @@ graph TB
     WEB --> FA
     FA --> JO
     JO --> TR & BU
-    JO --> PCV & LIB & PLN & GOV & OPR & PRS & PER
-    PCV & LIB & PLN & GOV & OPR & PRS --> INT
-    OPR & PCV --> MCP
+    JO --> PCV & LIB & PLN & EXE & PRS & PER
+    PCV & LIB & PLN & EXE & PRS --> INT
+    EXE & PCV --> MCP
     INT --> SVC
     MCP --> SVC
     SVC --> PG & RD
@@ -68,19 +67,18 @@ graph TB
     GE -.->|artifact files| S3
 ```
 
-### The 7 Sub-Agents
+### The 6 Sub-Agents
 
 | Agent | Model | Role |
 |-------|-------|------|
 | **Perceiver** | Sonnet | Observe external sources, gather context, detect changes (merges former Observer + Researcher) |
 | **Librarian** | Sonnet | Extract entities, update world model |
 | **Planner** | Opus | Determine intent, produce capability-based plans |
-| **Governor** | Sonnet | Evaluate policies, gate approvals via TrustEngine |
-| **Operator** | Sonnet | Execute approved plans via MCP tools |
+| **Executor** | Sonnet | Execute approved plans via tools, scoped to each step's capability |
 | **Presenter** | Sonnet | Generate user-facing output and live execution surfaces |
 | **Persona** | Haiku | Learn user preferences from interactions |
 
-Only Planner decides intent. Only Operator executes external actions. Only Presenter talks to the user. TrustEngine gates approvals with graduated autonomy (first_use, learning, trusted, autonomous).
+Only Planner decides intent. Only the Executor executes external actions. Only Presenter talks to the user. TrustEngine gates approvals with graduated autonomy (first_use, learning, trusted, autonomous). The Governor is **not** a routed agent — it is a deterministic policy service invoked as an audit-only pre-tool hook.
 
 > **Detailed architecture docs:** [`docs/architecture/`](docs/architecture/README.md) — sequence diagrams, data model, service reference, design decisions
 
@@ -139,14 +137,17 @@ jarvis/
 │   ├── src/
 │   │   ├── api/            # REST/SSE routers (/v1/ prefix)
 │   │   ├── config/         # Settings (pydantic-settings, JARVIS_ env prefix)
-│   │   ├── connectors/     # MCP bridge, perception connectors
+│   │   ├── connectors/     # Perception source pollers
+│   │   ├── contracts/      # Neutral boundary contracts (PlanOutput, PolicyDecision, SurfaceUpdate, ...)
+│   │   ├── deep_runtime/   # The single execution engine (LangGraph deep agent + middleware chain)
+│   │   ├── integrations/   # MCP bridge + external server management (remote HTTP / uvx / npx)
+│   │   ├── llm/            # Model factory + Claude API client helpers
 │   │   ├── models/         # SQLAlchemy models (all workspace-scoped)
-│   │   ├── orchestrator/   # JarvisOrchestrator, agents, hooks, tracing, budget, contracts
-│   │   ├── services/       # Business logic (planner, governor, operator, tri_search, etc.)
+│   │   ├── orchestrator/   # JarvisOrchestrator, agents, hooks, tracing, budget, intent classifier
+│   │   ├── services/       # Business logic (planner, executor, trust_engine, tri_search, etc.)
 │   │   ├── tools/          # Tool catalog, schemas, validation, FastMCP servers
-│   │   ├── ui/             # A2UI renderer + contracts
-│   │   └── workflows/      # inbox_triage, meeting_prep, research
-│   ├── tests/              # pytest + pytest-asyncio
+│   │   └── ui/             # A2UI renderer + contracts
+│   ├── tests/              # pytest (custom asyncio hook in conftest.py)
 │   └── alembic/            # database migrations
 ├── frontend/               # Next.js + A2UI renderer + chat panel
 ├── infra/                  # Terraform (AWS: EC2, VPC, Route53, IAM, SSM)
@@ -158,16 +159,16 @@ jarvis/
 
 | Layer | Technology |
 |-------|-----------|
-| Backend | Python 3.13+ / FastAPI |
+| Backend | Python 3.12+ / FastAPI |
 | Frontend | Next.js / React / A2UI |
 | Database | PostgreSQL 17 (tsvector FTS) — source of truth |
-| Vector Search | Qdrant 1.12 — semantic similarity (enriched payloads) |
-| Reranking | AWS Bedrock amazon.rerank-v1:0 |
+| Vector Search | Qdrant 1.17 — semantic similarity (enriched payloads) |
+| Reranking | Local fastembed cross-encoder — ms-marco-MiniLM-L-12-v2 (ONNX, no external API) |
 | Knowledge Graph | Neo4j 5 — multi-hop traversal, community detection |
 | Object Storage | MinIO / S3 — artifact documents and media |
 | Cache/Queue | Redis 7 — streams, cache, locks, pubsub, surface tracking |
-| AI Models | Claude Opus/Sonnet/Haiku via Anthropic API or AWS Bedrock |
-| Embeddings | AWS Bedrock Titan V2 (1024 dim) |
+| AI Models | Claude Opus/Sonnet/Haiku via the Anthropic API |
+| Embeddings | Local fastembed — BAAI/bge-base-en-v1.5 (768 dim, ONNX, no external API) |
 | Tool Protocol | MCP (Model Context Protocol) via FastMCP |
 | Delivery | Web SSE + A2UI surfaces |
 | Infrastructure | AWS (Terraform), Caddy reverse proxy |
@@ -180,7 +181,7 @@ jarvis/
 - **Graduated autonomy**: TrustEngine with 4 trust tiers (first_use, learning, trusted, autonomous)
 - **Capability-based routing**: CapabilityResolver maps plans to agents by capability scope (not decision type)
 - **Live execution surfaces**: Real-time step progress via A2UI during plan execution
-- **TriSearch**: Parallel Qdrant + Postgres FTS + Neo4j search with Bedrock reranking
+- **TriSearch**: Parallel Qdrant + Postgres FTS + Neo4j search with local cross-encoder reranking
 - **Knowledge graph**: Neo4j with typed relationship edges, weighted traversal, temporal scoping
 - **Signal-driven perception**: Relevance assessment with tiered notification (not fixed-interval polling)
 - **Runtime contracts**: Pydantic-validated boundaries (PlanOutput, PolicyDecision, StepResult, ToolCallRequest)

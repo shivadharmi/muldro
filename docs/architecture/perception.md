@@ -10,9 +10,8 @@ sequenceDiagram
     participant PPS as PerceptionPolicyService
     participant PC as PerceptionCoordinator
     participant BT as BudgetTracker
-    participant PER as Perceiver Agent
+    participant POL as Connector Poller
     participant RA as RelevanceAssessor
-    participant LIB as Librarian Agent
     participant PL as Planner Agent
     participant NT as Notifier
     participant DB as Postgres
@@ -26,30 +25,27 @@ sequenceDiagram
         alt mode = paused
             SCH->>SCH: Skip (budget exhausted)
         else mode = normal or degraded
-            SCH->>PER: "Poll {source} from cursor {last_position}"
-            Note over PER: Uses get_observation_cursor tool
-            Note over PER: Calls source-specific read tools
-            PER-->>SCH: observations (new emails, events, messages)
+            SCH->>POL: poll(source) from cursor
+            Note over POL: Direct connector poll — no Claude/agent call
+            POL-->>SCH: observations (new emails, events, messages)
 
             SCH->>RA: assess_relevance(observations, user_context)
             RA-->>SCH: {relevance_score, urgency, notification_tier}
 
-            alt tier = act (relevance >= 0.7 + urgent)
-                SCH->>NT: Push notification immediately
-                SCH->>PL: Evaluate for planning
-            else tier = alert (relevance >= 0.4)
-                SCH->>NT: Hold for briefing delivery
-            else tier = brief
-                SCH->>LIB: Extract entities + memories (background)
+            alt tier = push (relevance >= 0.7 AND urgent)
+                SCH->>NT: push_insight_surface (immediate)
+            else tier = briefing (relevance >= 0.4)
+                SCH->>DB: store_briefing_memory (hold for briefing)
             else tier = silent (relevance < 0.4)
-                SCH->>SCH: Log only, no action
+                SCH->>SCH: record_engagement("ignored")
             end
 
-            SCH->>LIB: "Extract entities and memories from observations"
-            Note over LIB: Uses update_entity, store_memory tools
-            LIB-->>SCH: entities[] + memories[]
+            alt observations actionable
+                SCH->>PL: run_planner (evaluate for planning)
+            end
 
-            SCH->>DB: Update cursor position
+            Note over SCH: Entity/memory extraction is owned by the<br/>tier-gated worker consumers, not the cycle
+            SCH->>POL: update_cursor(source)
         end
     end
 
@@ -68,14 +64,15 @@ sequenceDiagram
 | `relates_to_goals` | list[str] | Which goals this relates to |
 | `suggested_actions` | list[SuggestedAction] | Capability-based actions |
 
-### 4-Tier Routing
+### 3-Tier Routing
+
+`notification_tier` is a `Literal["push", "briefing", "silent"]` — exactly three tiers:
 
 | Tier | Condition | Action |
 |------|-----------|--------|
-| **act** (push) | relevance >= 0.7 AND urgency in (immediate, today, this_week) | Push notification + evaluate for planning |
-| **alert** (briefing) | relevance >= 0.4 | Hold for next briefing delivery |
-| **brief** | relevance >= 0.4 (lower urgency) | Extract knowledge, background enrichment |
-| **silent** | relevance < 0.4 | Log only, no notification |
+| **push** | relevance >= 0.7 AND urgency in (immediate, today, this_week) | Push an insight surface immediately |
+| **briefing** | relevance >= 0.4 | Store a briefing memory (`store_briefing_memory`) for next briefing delivery |
+| **silent** | relevance < 0.4 | Record an `"ignored"` engagement, no notification |
 
 ## Notification Rate Limiting
 
@@ -122,14 +119,15 @@ Failed sources use exponential backoff capped at 8x (`BACKOFF_CAP = 8`). Jitter 
 
 ## Cursor-Based Incremental Fetch
 
-Each source maintains a cursor in the `perception_state` table:
+Each source keeps circuit-breaker and interval state in the `perception_state` table (cursors themselves are managed by the poller path, not stored here):
 
 | Field | Purpose |
 |-------|---------|
 | `source` | Source name (gmail, calendar, slack, github) |
-| `cursor_value` | Last-seen position (timestamp, message ID, etc.) |
-| `poll_interval_seconds` | Configured interval for this source |
 | `user_id` | Owner |
+| `base_interval_s` | Configured base poll interval for this source |
+| `effective_interval_s` | Current interval after backoff/degraded multipliers |
+| `agent_interval_s` | Interval for the agent-driven perception path |
 | `consecutive_failures` | Failure counter for circuit breaker |
 | `last_error` | Most recent error message (512 chars) |
 | `circuit_state` | closed, open, half_open |
@@ -138,7 +136,7 @@ Each source maintains a cursor in the `perception_state` table:
 | `last_event_count` | Items discovered in last cycle |
 | `total_runs` | Lifetime run count |
 
-The Perceiver agent uses `get_observation_cursor` to retrieve the cursor, then fetches only new items since that position. After processing, it updates the cursor via `update_observation_cursor`.
+The routine perception cycle does **not** invoke the Perceiver agent. Cursor retrieval and advancement happen directly in the connector poller (`self._poller.poll` / `self._poller.update_cursor`), which fetches only new items since the last position. (The `get_observation_cursor` / `update_observation_cursor` MCP tools exist for the agent-driven path but are not used by the routine cycle.)
 
 ## Budget-Aware Scheduling
 
@@ -174,9 +172,9 @@ Each perception cycle is capped at **50,000 input tokens**. The `BudgetTracker.c
 
 | Model | Input ($/1M tokens) | Output ($/1M tokens) |
 |-------|---------------------|----------------------|
-| Claude Opus 4 | $15.00 | $75.00 |
-| Claude Sonnet 4 | $3.00 | $15.00 |
-| Claude Haiku 4 | $0.80 | $4.00 |
+| `claude-opus-4-8` | $15.00 | $75.00 |
+| `claude-sonnet-4-6` | $3.00 | $15.00 |
+| `claude-haiku-4-5-20251001` | $0.80 | $4.00 |
 
 ### Cache & Thinking Token Pricing
 
@@ -227,15 +225,15 @@ Every 10th scheduler tick (~5 minutes), the Persona agent runs a batch preferenc
 - 24-hour lookback window
 - Extracts patterns into preference memories
 
-## Multi-Agent Perception
+## Perception Cycle Reality
 
-The perception cycle uses three agents in sequence:
+The routine perception cycle is **not** a three-agent chain:
 
-1. **Perceiver** reads raw data from external sources (replaces former Observer + Researcher)
-2. **Librarian** extracts structured knowledge (entities, relationships, memories)
-3. **Planner** evaluates whether the observations warrant action
+1. **Polling** is a direct connector poll (`self._poller.poll`) — no Perceiver agent or Claude/LLM call. Cursors advance via `self._poller.update_cursor`.
+2. **Entity/memory extraction is not run in-cycle** (`librarian_result = None`). It is owned by the tier-gated worker consumers (`entity_extractor`, `memory_extractor`) on the event stream.
+3. **The Planner agent is the only agent invoked**, and only conditionally (`run_planner`) when the polled events are actionable.
 
-This three-agent chain ensures separation of concerns: reading, understanding, and deciding are handled by different specialized agents.
+Relevance routing (push / briefing / silent) and initiative scoring happen deterministically in the cycle; only the conditional planning step reaches an agent.
 
 ## DLQ Integration
 
