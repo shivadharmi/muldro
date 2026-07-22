@@ -843,7 +843,7 @@ flowchart TD
 
     FAILURE --> LEVEL1{"Level 1: Step Timeout<br/>(step.timeout_seconds or 120s)"}
     LEVEL1 -->|"timeout"| TIMED_OUT["transition_step(→ timed_out) and return<br/>TERMINAL: does NOT call handle_step_failure<br/>(no retry_count / backoff / re-queue)"]
-    TIMED_OUT --> DAG_DONE["DAG loop finds no ready steps:<br/>completed / partially_completed if none pending;<br/>failed only if a step is 'failed';<br/>else breaks with the run left 'running'<br/>(no 'blocked' transition — cleared later by recovery)"]
+    TIMED_OUT --> DAG_DONE["DAG loop finds no ready steps:<br/>completed / partially_completed if none pending,<br/>failed only if a step is 'failed',<br/>else breaks with the run left 'running'<br/>(no 'blocked' transition, cleared later by recovery)"]
 
     FAILURE -->|"tool / MCP-auth / other exception"| LEVEL2{"Level 2: Step Retry via handle_step_failure()<br/>(max_retries, default 3)"}
     LEVEL2 -->|"retry_count < max"| BACKOFF["Exponential backoff<br/>2^retry × 1s, cap 30s"]
