@@ -133,13 +133,28 @@ def iter_app_routes(routes, _prefix=""):
     included routers / mounts.
 
     Newer Starlette/FastAPI no longer flatten ``include_router`` into
-    ``app.routes`` — they leave Mount-style wrapper objects (e.g.
-    ``_IncludedRouter``) that carry the prefix and hold the real routes under
-    ``.routes`` with prefix-relative paths. Accumulating the wrapper prefix
-    reconstructs the full path in BOTH the flattened (older) and wrapped (newer)
-    representations, so route-introspection tests survive the version change.
+    ``app.routes`` — they leave ``_IncludedRouter`` wrapper objects. Two shapes
+    exist across versions and BOTH must be traversed:
+
+    * FastAPI >= ~0.136 (Starlette >= 1.3): the wrapper's ``path`` is ``None`` and
+      it has no ``.routes``; the real ``APIRouter`` and its prefix live under
+      ``.include_context.included_router`` / ``.include_context.prefix``.
+    * Older: the wrapper (Mount-style) exposes the real routes under ``.routes``
+      with a ``path``/``prefix`` prefix.
+
+    Accumulating the prefix reconstructs the full path in either representation,
+    so route-introspection tests survive the framework version change.
     """
     for r in routes:
+        # Newer FastAPI: the included APIRouter is reachable via include_context.
+        ctx = getattr(r, "include_context", None)
+        if ctx is not None:
+            inner = getattr(ctx, "included_router", None)
+            sub = getattr(inner, "routes", None)
+            if sub:
+                yield from iter_app_routes(sub, _prefix + (getattr(ctx, "prefix", "") or ""))
+                continue
+        # Older: Mount-style wrapper exposes the routes directly.
         sub = getattr(r, "routes", None)
         if sub:
             wrapper_prefix = getattr(r, "path", "") or getattr(r, "prefix", "") or ""
