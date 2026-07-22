@@ -164,6 +164,7 @@ async def _stream_and_persist_chat(
     workspace_id: str,
     surface: str,
     assistant_message_id: str,
+    count_user_message: bool = True,
 ):
     """Fold a typed ``CoreEvent`` stream into the persisted-message metadata, serialize each
     to its SSE frame, and persist the assistant reply + conversation aggregates in the
@@ -297,8 +298,11 @@ async def _stream_and_persist_chat(
                 total_output = sum(s.output_tokens or 0 for s in agent_steps)
                 total_cost = sum(s.cost_usd or 0.0 for s in agent_steps)
 
-                # Count: always 1 for user message; +1 if assistant responded
-                msg_increment = 1
+                # Count: the initial turn's user message (inserted by chat_stream, not counted
+                # there) + the assistant reply below. On approval-resume no new user message is
+                # inserted (count_user_message=False), so only the assistant reply is counted —
+                # otherwise message_count gains a phantom message per resume.
+                msg_increment = 1 if count_user_message else 0
                 from sqlalchemy import select, update
 
                 async with get_session_factory()() as db:
@@ -342,7 +346,7 @@ async def _stream_and_persist_chat(
                                     cost_usd=total_cost if total_cost else None,
                                 )
                             )
-                            msg_increment = 2
+                            msg_increment += 1
 
                         # Always update conversation aggregates (timestamps, cost) so the
                         # sidebar stays accurate even when the Presenter doesn't produce a
@@ -543,6 +547,9 @@ async def chat_resume(
             workspace_id=workspace_id,
             surface=req.surface,
             assistant_message_id=assistant_message_id,
+            # Resume inserts no new user message (the original turn already did), so count
+            # only the assistant continuation — avoids a phantom message per resume.
+            count_user_message=False,
         ),
         media_type="text/event-stream",
         headers={

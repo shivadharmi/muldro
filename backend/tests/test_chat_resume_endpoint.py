@@ -284,6 +284,106 @@ async def test_helper_persists_assistant_reply_to_conversation():
 
 
 @_db_skip
+async def test_helper_counts_user_and_assistant_on_initial_turn():
+    """The initial turn's user Message is inserted by ``chat_stream`` (not the helper) and NOT
+    counted there, so the helper counts BOTH the user message and the assistant reply → +2.
+    Pins the default so a regression can't silently drop the user-message count."""
+    from src.models.conversations import Conversation
+
+    async with _conversation_env() as (factory, user_id, workspace_id, conversation_id):
+        async with factory() as db:
+            before = (
+                await db.execute(
+                    select(Conversation.message_count).where(
+                        Conversation.conversation_id == conversation_id
+                    )
+                )
+            ).scalar_one()
+
+        events = [
+            TraceStarted(trace_id="trace_i"),
+            Presentation(text="Done."),
+            RunCompleted(trace_id="trace_i", run_id=None, surface_id=None),
+        ]
+        # The helper persists via the app-global get_session_factory() (thread-local,
+        # loop-bound); under the per-test asyncio.run loop that engine cross-loop-fails after
+        # the first real-DB test binds it. Point it at THIS test's current-loop factory (same
+        # Postgres) so the persist is loop-safe and deterministic.
+        with patch("src.models.database.get_session_factory", return_value=factory):
+            _ = [
+                f
+                async for f in _stream_and_persist_chat(
+                    _agen(events),
+                    request=_mock_request(),
+                    user_id=user_id,
+                    conversation_id=conversation_id,
+                    workspace_id=workspace_id,
+                    surface="web",
+                    assistant_message_id="msg_initial_1",
+                )
+            ]
+
+        async with factory() as db:
+            after = (
+                await db.execute(
+                    select(Conversation.message_count).where(
+                        Conversation.conversation_id == conversation_id
+                    )
+                )
+            ).scalar_one()
+        assert after - before == 2
+
+
+@_db_skip
+async def test_helper_resume_counts_only_assistant_message():
+    """F2 (Codex P2): on approval-resume, no new USER message is inserted (``chat_stream`` inserts
+    it only on the initial turn), so the shared persist helper must bump ``message_count`` by
+    exactly 1 (the assistant reply), not 2. Counting 2 reports a phantom user message per resume,
+    compounding across chained approvals."""
+    from src.models.conversations import Conversation
+
+    async with _conversation_env() as (factory, user_id, workspace_id, conversation_id):
+        async with factory() as db:
+            before = (
+                await db.execute(
+                    select(Conversation.message_count).where(
+                        Conversation.conversation_id == conversation_id
+                    )
+                )
+            ).scalar_one()
+
+        events = [
+            TraceStarted(trace_id="trace_r"),
+            Presentation(text="Booked."),
+            RunCompleted(trace_id="trace_r", run_id=None, surface_id=None),
+        ]
+        with patch("src.models.database.get_session_factory", return_value=factory):
+            _ = [
+                f
+                async for f in _stream_and_persist_chat(
+                    _agen(events),
+                    request=_mock_request(),
+                    user_id=user_id,
+                    conversation_id=conversation_id,
+                    workspace_id=workspace_id,
+                    surface="web",
+                    assistant_message_id="msg_resume_1",
+                    count_user_message=False,  # resume: no new user message was inserted
+                )
+            ]
+
+        async with factory() as db:
+            after = (
+                await db.execute(
+                    select(Conversation.message_count).where(
+                        Conversation.conversation_id == conversation_id
+                    )
+                )
+            ).scalar_one()
+        assert after - before == 1
+
+
+@_db_skip
 async def test_helper_refuses_cross_tenant_conversation_persist():
     """SECURITY (P2.4 review, property F): a caller in a DIFFERENT workspace/user supplying a
     victim's ``conversation_id`` persists NOTHING — no injected Message, no aggregate bump."""
