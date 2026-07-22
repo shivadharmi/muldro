@@ -44,3 +44,6 @@ prompts/
 pytest-of-sivasankarreddybogala/
 .playwright-mcp/
 .superpowers/.claude/worktrees/
+
+# Local Claude Code planning/scratch docs — not tracked
+docs/superpowers/
