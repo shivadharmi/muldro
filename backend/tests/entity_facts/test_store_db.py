@@ -194,3 +194,40 @@ async def test_corroborate_and_weaken_adjust_the_stored_base():
             await store.weaken(fid)
             lowered = (await store.get_fact(fid)).confidence
             assert lowered < raised
+
+
+async def test_record_fact_corroboration_is_monotonic_across_origins():
+    """F4 (Codex PR #9, P2): corroborating an existing fact (same value) with a LOWER-reliability
+    origin must never REDUCE its confidence. A user_message fact (r=0.95 → 0.95) corroborated by a
+    perception observation would otherwise recompute as 1-(1-0.70)^2 = 0.91 — corroboration
+    paradoxically lowering belief while provenance still reads user_message. Confidence is
+    monotonic under corroboration."""
+    async with _entity_env("ent_facts_5") as (factory, ws, uid):
+        async with factory() as db:
+            store = EntityFactStore(db)
+            fid1, superseded1 = await store.record_fact(
+                entity_id="ent_facts_5",
+                workspace_id=ws,
+                user_id=uid,
+                attr_key="role",
+                attr_value="CEO",
+                origin="user_message",
+            )
+            high = (await store.current_fact("ent_facts_5", "role", ws)).confidence
+
+            # Corroborate the SAME value from a lower-reliability origin.
+            fid2, superseded2 = await store.record_fact(
+                entity_id="ent_facts_5",
+                workspace_id=ws,
+                user_id=uid,
+                attr_key="role",
+                attr_value="CEO",
+                origin="perception",
+            )
+            after = (await store.current_fact("ent_facts_5", "role", ws)).confidence
+
+        # Corroborated in place (same fact row), not superseded.
+        assert fid2 == fid1
+        assert superseded2 is False
+        # Monotonic: corroboration never drops confidence below its pre-corroboration value.
+        assert after >= high

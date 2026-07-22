@@ -54,8 +54,15 @@ class EntityFactStore:
 
         if current is not None and _values_equal(current.attr_value, attr_value):
             current.corroboration_count += 1
-            current.confidence = compute_confidence(
-                origin=origin, corroboration_count=current.corroboration_count, age_days=0.0
+            # Monotonic under corroboration: more evidence must never REDUCE confidence, even when
+            # the corroborating observation comes from a lower-reliability origin (e.g. a
+            # user_message fact later re-observed via perception, whose recompute would drop
+            # 0.95 -> 0.91). Keep the stronger of the existing and recomputed values.
+            current.confidence = max(
+                current.confidence,
+                compute_confidence(
+                    origin=origin, corroboration_count=current.corroboration_count, age_days=0.0
+                ),
             )
             await self._db.flush()
             return current.fact_id, False
