@@ -43,11 +43,12 @@ sequenceDiagram
         DR-->>O: step result
     end
 
-    Note over O,PG: Step 4: Action-time write gating (chat path)
-    Note over O,PG: trust_gate (TrustEngine) stays DORMANT here — the user's message is the authorization.
-    Note over O,PG: Always-on: capability_scope + write_lock gate every write. No GraphExecutor run (run_id = None); a DB Plan may still be persisted for multi-step / write-risky turns.
-    Note over O,PG: permission_gate (per permission_mode: bypass/ask/auto) is added ONLY on the feature-gated single-lead path (deep_single_lead=True + durable checkpointer); the default per-step path has none.
-    O->>PG: on write tool call → capability_scope + write_lock (+ permission_gate when enabled)
+    Note over O,PG: Step 4 - Action-time write gating (chat path)
+    Note over O,PG: trust_gate (TrustEngine) is dormant here. The user message is the authorization
+    Note over O,PG: Always-on capability_scope and write_lock gate every write
+    Note over O,PG: No GraphExecutor run, so run_id stays None. A DB Plan may be persisted for multi-step or write-risky turns
+    Note over O,PG: permission_gate (per permission_mode bypass/ask/auto) is added ONLY on the feature-gated single-lead path (enabled by deep_single_lead, off by default). The default per-step path has none
+    O->>PG: on write tool call - capability_scope and write_lock, plus permission_gate when enabled
     PG-->>O: allow / confirm / block
 
     Note over O,PR: Step 5: Format Response

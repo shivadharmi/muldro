@@ -7,7 +7,8 @@
 > **⚠️ Strategy superseded (2026-06-22):** the team chose a **hard replacement** over the
 > strangler-fig. The gradual strategy below (Part E Option 1, Part F phasing, the
 > `JARVIS_RUNTIME` flag, the `LoopEvent` adapter) is **superseded** by
-> [`docs/superpowers/specs/2026-06-22-deep-agents-hard-replacement-design.md`](superpowers/specs/2026-06-22-deep-agents-hard-replacement-design.md).
+> `docs/superpowers/specs/2026-06-22-deep-agents-hard-replacement-design.md` (a local
+> planning doc — `docs/superpowers/` is untracked/gitignored and not part of the repo).
 > Everything else here remains the source of truth — the audit (Part B), the invariants
 > register (§B.7), the constraints (§B.8) — and the **already-built** Phase 0 spike + Phase 1
 > `deep_runtime` foundation/middleware (commit `da8c459`) **carry forward** as the foundation

@@ -24,7 +24,7 @@ sequenceDiagram
     EP->>EP: Check for duplicate (skip if exists)
 
     Note over EP,C: Score Event (rules-first triage, Haiku on ambiguous remainder)
-    EP->>C: Triage batch (rules); ambiguous events scored via Haiku
+    EP->>C: Triage batch (rules-first), ambiguous events scored via Haiku
     C-->>EP: {importance: 0-1, urgency: 0-1, confidence: 0-1} + triage fields
     EP->>EP: Store NormalizedEvent (triage fields in importance_signals)
 
