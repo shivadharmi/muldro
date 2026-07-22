@@ -298,8 +298,14 @@ no {{"tasks": [...]}} wrapper):
   {{"input": {{"instruction_text": "Always CC my cofounder on investor emails", \
 "instruction_type": "preference"}}}}
 
-- system.schedule_reminder — a one-shot reminder at a specific time:
+- system.schedule_reminder — a reminder that fires at the next time its
+  "cron_expr" matches. "cron_expr" MUST be a standard 5-field cron
+  "MIN HOUR DAY-OF-MONTH MONTH DAY-OF-WEEK" — NEVER natural language, a relative
+  date, or a placeholder (NOT "tomorrow", "in 2 hours", "from step 1 date"). If
+  you cannot express the timing as a cron, omit "cron_expr".
   {{"input": {{"title": "Follow up with the investor", "cron_expr": "0 9 * * 1"}}}}
+  cron examples: "0 9 * * 1-5" = weekdays 9am, "0 8 * * *" = daily 8am,
+  "30 17 * * 5" = Fridays 5:30pm, "0 9 1 * *" = 1st of month 9am.
 </system_capability_inputs>
 
 <rules>

@@ -9,6 +9,24 @@ from typing import Literal
 from croniter import croniter
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+# Concrete cron values shown to the model as JSON-schema ``examples`` — steer it
+# toward the standard 5-field format instead of natural language.
+CRON_EXAMPLES = ["0 9 * * 1-5", "0 8 * * *", "*/15 * * * *", "0 9 1 * *"]
+
+# Shared field description (surfaced to the model in the tool input schema). Kept
+# explicit about the format and — crucially — about what NOT to emit, since the
+# observed failures were natural-language placeholders like 'from s1 event date'.
+CRON_FIELD_DESCRIPTION = (
+    "Standard 5-field cron expression 'MIN HOUR DAY-OF-MONTH MONTH DAY-OF-WEEK' "
+    "setting when this fires (it fires at the next matching time). "
+    "Examples: '0 9 * * 1-5' = weekdays 9am, '0 8 * * *' = every day 8am, "
+    "'*/15 * * * *' = every 15 minutes, '0 9 1 * *' = 1st of each month 9am, "
+    "'30 17 * * 5' = Fridays 5:30pm. "
+    "MUST be a literal cron — NEVER natural language, relative dates, or "
+    "placeholders (NOT 'tomorrow', 'next week', 'in 2 hours', 'from step 1 date'). "
+    "Leave empty if the timing cannot be written as a cron."
+)
+
 
 def _ensure_valid_cron(v: str | None) -> str | None:
     """Reject a malformed cron at model-validation time.
@@ -17,10 +35,16 @@ def _ensure_valid_cron(v: str | None) -> str | None:
     croniter expression — an LLM-supplied garbage cron would otherwise be
     persisted and later crash the scheduler's dispatch sweep
     (CroniterBadCronError). Shared by every schedule-bearing tool input so the
-    rule lives in exactly one place.
+    rule lives in exactly one place. The error message is written to guide a
+    retry, since it is surfaced back to the calling agent.
     """
     if v and not croniter.is_valid(v):
-        raise ValueError(f"invalid cron expression: {v!r}")
+        raise ValueError(
+            f"{v!r} is not a valid cron expression. Use a standard 5-field cron "
+            "such as '0 9 * * 1-5' (weekdays 9am) or '0 8 * * *' (daily 8am), "
+            "not natural language or relative dates. Leave it empty if the timing "
+            "cannot be expressed as a cron."
+        )
     return v
 
 
@@ -309,7 +333,11 @@ class ScheduleConfig(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     type: str = Field(default="recurring", description="Schedule type: recurring | one_shot")
-    cron_expr: str | None = Field(default=None, description="Cron expression for recurring runs")
+    cron_expr: str | None = Field(
+        default=None,
+        description=CRON_FIELD_DESCRIPTION,
+        examples=CRON_EXAMPLES,
+    )
     action_type: str = Field(
         default="custom_agent_task", description="Action to run when the schedule fires"
     )
@@ -344,7 +372,9 @@ class ScheduleReminderInput(BaseModel):
 
     title: str = Field(description="What to remind the user about")
     cron_expr: str = Field(
-        default="", description="Optional cron/timing expression for the reminder"
+        default="",
+        description=f"Optional. {CRON_FIELD_DESCRIPTION}",
+        examples=CRON_EXAMPLES,
     )
 
     @field_validator("cron_expr")

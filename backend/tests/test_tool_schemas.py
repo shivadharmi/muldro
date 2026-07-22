@@ -32,6 +32,27 @@ class TestScheduleReminderCronValidation:
         with pytest.raises(ValidationError):
             ScheduleReminderInput.model_validate({"title": "bad", "cron_expr": "not a valid cron"})
 
+    def test_error_message_guides_a_retry(self):
+        # The message is surfaced back to the agent, so it must show the format.
+        try:
+            ScheduleReminderInput.model_validate({"title": "x", "cron_expr": "from s1 event date"})
+        except ValidationError as e:
+            msg = str(e)
+            assert "cron" in msg.lower()
+            assert "0 9 * * 1-5" in msg  # a concrete valid example
+        else:
+            raise AssertionError("expected ValidationError")
+
+    def test_schema_exposes_cron_examples_and_prohibition(self):
+        # The model schema (surfaced to the agent as the tool input schema) must
+        # carry concrete examples and the "no natural language" guidance so the
+        # model emits a valid cron instead of a placeholder like the observed
+        # 'from s1 event date'.
+        by_name = {d["name"]: d for d in build_tool_definitions()}
+        cron = by_name["schedule_reminder"]["input_schema"]["properties"]["cron_expr"]
+        assert "0 9 * * 1-5" in cron["examples"]
+        assert "from step 1 date" in cron["description"]
+
 
 class TestSetInstructionScheduleConfigValidation:
     """set_instruction's schedule_config is a typed ScheduleConfig, so its cron
