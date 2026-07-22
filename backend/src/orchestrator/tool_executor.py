@@ -64,6 +64,24 @@ def _enrich_internal_input(tool_name: str, tool_input: dict, user_id: str, works
     return enriched
 
 
+def _missing_required_args(input_schema, tool_input: dict) -> list[str]:
+    """Return the JSON-Schema ``required`` fields absent from ``tool_input``.
+
+    Fail-open by design: a non-dict schema, a missing/malformed ``required`` list, or
+    a ``required`` entry the schema doesn't actually describe in ``properties`` yields
+    no violations — we only enforce fields the authoritative schema both requires and
+    defines, so a degraded schema never blocks an otherwise-valid call.
+    """
+    if not isinstance(input_schema, dict):
+        return []
+    required = input_schema.get("required")
+    if not isinstance(required, list):
+        return []
+    props = input_schema.get("properties")
+    props = props if isinstance(props, dict) else {}
+    return [f for f in required if isinstance(f, str) and f in props and f not in tool_input]
+
+
 class ToolExecutor:
     """Tool definition building and registry-driven tool dispatch."""
 
@@ -338,6 +356,29 @@ class ToolExecutor:
         # events — it carries the governor's structured verdict, not a side-effecting call.
         if backend is ToolBackend.SPECIAL:
             return tool_input
+
+        # Dispatch-time required-arg validation for external MCP tools. An agent
+        # offered a tool with a degraded/propertyless schema (e.g. query_freebusy
+        # during flaky google-workspace discovery) can call it with no args, which
+        # then hard-fails at the server. Validate against the AUTHORITATIVE persisted
+        # schema and reject BEFORE the round-trip with a message the agent can act on
+        # (agents self-correct on tool errors). External-only: internal tools' context
+        # args (user_id/workspace_id) are injected below, not supplied by the agent.
+        if backend is ToolBackend.EXTERNAL_MCP:
+            missing = _missing_required_args(tool.input_schema, tool_input)
+            if missing:
+                logger.warning(
+                    "[mcp] %s rejected — missing required arg(s): %s",
+                    tool_name,
+                    ", ".join(missing),
+                )
+                return {
+                    "error": (
+                        f"Missing required argument(s) for '{tool_name}': "
+                        f"{', '.join(missing)}. Supply them and call the tool again."
+                    ),
+                    "error_code": "missing_required_args",
+                }
 
         logger.info(
             "[mcp] dispatch %s via %s/%s",
