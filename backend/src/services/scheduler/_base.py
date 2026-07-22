@@ -9,7 +9,7 @@ import asyncio
 import logging
 from datetime import datetime, timezone
 
-from croniter import croniter
+from croniter import CroniterBadCronError, croniter
 from sqlalchemy import select
 
 from src.config.settings import Settings
@@ -109,6 +109,9 @@ class SchedulerBase:
         if self._tick_count % 5 == 0:
             await self._run_subtick("eviction", self._tick_eviction(factory))
             await self._run_subtick("dlq_retry", self._tick_dlq_retry(factory))
+            await self._run_subtick(
+                "deferred_verification", self._tick_deferred_verification(factory)
+            )
 
             # Memory expiration — cascade to Qdrant
             vector_store = None
@@ -155,8 +158,32 @@ class SchedulerBase:
         if self._tick_count % 120 == 0:
             await self._run_subtick("webhook_renewal", self._tick_webhook_renewal(factory))
 
+        # 4f. Durable-checkpoint retention sweep — every 120th tick (~1h).
+        # No-op unless runtime="deep" AND a durable saver is reachable (Step 6C CF-4).
+        if self._tick_count % 120 == 0:
+            await self._run_subtick("checkpoint_reaper", self._tick_checkpoint_reaper(factory))
+
         # 5. Process due schedules (bounded so a stuck schedule fire can't hang the loop)
         await self._run_subtick("schedule_dispatch", self._process_due_schedules(factory))
+
+    def _disable_invalid_cron(self, sched, err: Exception) -> None:
+        """Isolate a schedule whose cron_expr can't be parsed.
+
+        Disables the row and records the error so a single malformed cron
+        expression (e.g. an unvalidated agent- or API-supplied value) can't abort
+        the whole dispatch sweep on every tick. Mutations are persisted by the
+        caller's per-schedule / end-of-sweep commit.
+        """
+        sched.enabled = False
+        sched.next_run_at = None
+        sched.consecutive_failures = (sched.consecutive_failures or 0) + 1
+        sched.last_error = f"invalid cron_expr {sched.cron_expr!r}: {err}"[:512]
+        logger.warning(
+            "Disabled schedule %s with invalid cron_expr %r: %s",
+            sched.schedule_id,
+            sched.cron_expr,
+            err,
+        )
 
     async def _process_due_schedules(self, factory) -> None:
         """Fire any schedules that are due; repair null next_run_at."""
@@ -184,7 +211,14 @@ class SchedulerBase:
             due = []
             for sched in candidates:
                 if sched.next_run_at is None and sched.cron_expr:
-                    sched.next_run_at = compute_next_run(sched.cron_expr, now)
+                    try:
+                        sched.next_run_at = compute_next_run(sched.cron_expr, now)
+                    except (CroniterBadCronError, ValueError) as e:
+                        # A malformed cron_expr for ONE schedule must not abort the
+                        # whole sweep (compute_next_run is outside the per-schedule
+                        # fire try/except). Isolate and disable the poison row.
+                        self._disable_invalid_cron(sched, e)
+                        continue
                     logger.info(
                         "Repaired next_run_at for %s → %s",
                         sched.schedule_id,
@@ -217,7 +251,12 @@ class SchedulerBase:
 
                 # Advance next_run_at
                 if sched.schedule_type == "recurring" and sched.cron_expr:
-                    sched.next_run_at = compute_next_run(sched.cron_expr, now)
+                    try:
+                        sched.next_run_at = compute_next_run(sched.cron_expr, now)
+                    except (CroniterBadCronError, ValueError) as e:
+                        # Same isolation as the repair path: a bad cron here would
+                        # otherwise blow the sub-tick after the schedule already fired.
+                        self._disable_invalid_cron(sched, e)
                 elif sched.schedule_type == "one_shot":
                     sched.enabled = False
                     sched.next_run_at = None

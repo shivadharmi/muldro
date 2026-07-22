@@ -15,8 +15,8 @@ if TYPE_CHECKING:
     from src.services.relevance_assessor import PerceptionSignal, RelevanceAssessment
 
 
-from src.config.models import BEDROCK_MODEL_TIERS, MODEL_TIERS
-from src.config.settings import Settings, get_anthropic_client
+from src.config.models import MODEL_TIERS
+from src.config.settings import Settings
 from src.contracts import PlanOutput, PlanStep
 from src.errors import (
     classify,
@@ -55,9 +55,8 @@ AGENT_EVENT_TYPES = {
     "perception_completed",
 }
 
-# MODEL_TIERS / BEDROCK_MODEL_TIERS now live in src.config.models (imported above)
-# so assessor services can depend on them downward instead of importing upward
-# from this orchestrator module.
+# MODEL_TIERS now lives in src.config.models (imported above) so assessor services
+# can depend on it downward instead of importing upward from this orchestrator module.
 
 
 # CONTEXT_ENRICHED_AGENTS now lives in context_assembler.py (its only consumer).
@@ -71,10 +70,8 @@ AGENT_EVENT_TYPES = {
 class JarvisOrchestrator:
     """The Jarvis brain — orchestrates sub-agents via Claude API.
 
-    This is NOT a ClaudeSDKClient wrapper (SDK not yet stable enough).
-    Instead, we use the Anthropic API directly with structured prompts
-    to simulate sub-agent routing. Each sub-agent call is a separate
-    Claude API call with the agent's specific prompt and tool scope.
+    Sub-agents run on the LangChain / Deep-Agents runtime (``src/llm`` +
+    ``src/deep_runtime``); each routed agent gets its own prompt + tool scope.
     """
 
     def __init__(
@@ -82,12 +79,12 @@ class JarvisOrchestrator:
         settings: Settings,
         db_factory,
         services: ServiceContainer,
+        checkpointer_provider=None,
     ):
         self._settings = settings
         self._db_factory = db_factory
         self._services = services
         self._system_capability_handler = SystemCapabilityHandler(db_factory, services, settings)
-        self._client = get_anthropic_client(settings)
         self._trace_store = TraceStore(db_factory=db_factory)
         self._trace_manager = TraceManager(trace_store=self._trace_store)
         self._budget = BudgetTracker(
@@ -107,7 +104,7 @@ class JarvisOrchestrator:
         # EventPublisher owns the lazy event bus + runtime-event emission (C5).
         self._events = EventPublisher(settings, services, _db_factory_provider)
         # ContextAssembler builds conversation-history + ambient context blocks.
-        self._context = ContextAssembler(settings, services, _db_factory_provider, self._client)
+        self._context = ContextAssembler(settings, services, _db_factory_provider, None)
         # PlanStore persists plans + interaction logs to the DB.
         self._plans = PlanStore(_db_factory_provider)
         # ToolExecutor builds tool definitions and dispatches tool calls.
@@ -122,9 +119,11 @@ class JarvisOrchestrator:
         # AgentInvoker runs a single sub-agent through the agent loop — shared by
         # the chat (streaming) and perception (batch) paths. Depends on the tool
         # executor + context assembler; agent set is kept in sync via set_agents().
+        # checkpointer_provider: zero-arg callable → durable LangGraph checkpointer
+        # (Step 6A.5); None/default falls back to MemorySaver inside the invoker.
         self._invoker = AgentInvoker(
             settings,
-            self._client,
+            None,
             services,
             self._budget,
             self._circuit_breaker,
@@ -132,6 +131,7 @@ class JarvisOrchestrator:
             self._tool_executor,
             self._context,
             self._agents,
+            checkpointer_provider=checkpointer_provider,
         )
         # ConnectorPoller owns connector polling, raw-event ingest, and cursor
         # I/O — the connector-facing half of each perception cycle.
@@ -147,7 +147,7 @@ class JarvisOrchestrator:
         # chat<->perception relationship acyclic.
         self._perception = PerceptionRunner(
             settings,
-            self._client,
+            None,
             self._budget,
             self._trace_manager,
             _db_factory_provider,
@@ -172,10 +172,7 @@ class JarvisOrchestrator:
                 redis=None,  # Populated lazily when event bus Redis is available
             )
         # Precompute haiku model ID for intent classification
-        if settings.use_bedrock:
-            self._haiku_model = BEDROCK_MODEL_TIERS["haiku"]
-        else:
-            self._haiku_model = MODEL_TIERS["haiku"]
+        self._haiku_model = MODEL_TIERS["haiku"]
 
         # ChatProcessor owns the user-facing chat pipeline (intent → plan → route
         # → execute → present → surface → learn). Constructed last so all of its
@@ -185,7 +182,7 @@ class JarvisOrchestrator:
         # orchestrator keeps thin facades delegating to it.
         self._chat = ChatProcessor(
             settings,
-            self._client,
+            None,
             self._haiku_model,
             self._trace_manager,
             _db_factory_provider,
@@ -360,6 +357,7 @@ class JarvisOrchestrator:
         surface: str = "api",
         context: dict | None = None,
         mode: str = "plan",
+        permission_mode: str = "auto",
     ) -> dict:
         """Facade -> ChatProcessor.process_message (batch chat entry point)."""
         return await self._chat.process_message(
@@ -370,6 +368,7 @@ class JarvisOrchestrator:
             surface=surface,
             context=context,
             mode=mode,
+            permission_mode=permission_mode,
         )
 
     def process_message_events(
@@ -381,6 +380,7 @@ class JarvisOrchestrator:
         mode: str = "ask",
         context: dict | None = None,
         conversation_id: str | None = None,
+        permission_mode: str = "auto",
     ) -> AsyncGenerator[CoreEvent, None]:
         """Facade -> ChatProcessor.process_message_events (typed-event chat path)."""
         return self._chat.process_message_events(
@@ -391,6 +391,7 @@ class JarvisOrchestrator:
             mode=mode,
             context=context,
             conversation_id=conversation_id,
+            permission_mode=permission_mode,
         )
 
     def process_message_stream(
@@ -402,6 +403,7 @@ class JarvisOrchestrator:
         mode: str = "ask",
         context: dict | None = None,
         conversation_id: str | None = None,
+        permission_mode: str = "auto",
     ) -> AsyncGenerator[dict[str, Any], None]:
         """Facade -> ChatProcessor.process_message_stream (SSE chat path)."""
         return self._chat.process_message_stream(
@@ -411,6 +413,27 @@ class JarvisOrchestrator:
             surface=surface,
             mode=mode,
             context=context,
+            conversation_id=conversation_id,
+            permission_mode=permission_mode,
+        )
+
+    def resume_message_events(
+        self,
+        *,
+        approval_id: str,
+        decision: str,
+        reason: str | None = None,
+        user_id: str,
+        workspace_id: str,
+        conversation_id: str | None = None,
+    ) -> AsyncGenerator[CoreEvent, None]:
+        """Facade -> ChatProcessor.resume_message_events (paused-turn RESUME, P2.4)."""
+        return self._chat.resume_message_events(
+            approval_id=approval_id,
+            decision=decision,
+            reason=reason,
+            user_id=user_id,
+            workspace_id=workspace_id,
             conversation_id=conversation_id,
         )
 
@@ -582,21 +605,16 @@ class JarvisOrchestrator:
                             body=str(result)[:500],
                             workspace_id=workspace_id,
                         )
-                await self._push_workspace_surface(
-                    PlanOutput(
-                        goal="Daily Briefing",
-                        reasoning=str(result)[:200],
-                        steps=[
-                            PlanStep(
-                                description="Briefing update",
-                                capability="system.add_to_brief",
-                            )
-                        ],
-                    ),
-                    user_id=user_id,
-                    workspace_id=workspace_id,
-                    response_text=str(result)[:1000],
-                )
+                # The get_briefing tool wrote today's Briefing row mid-run (see the
+                # idempotency note above), so fetch it and push a STRUCTURED briefing
+                # surface deduped with the REST rebuild (same "briefing_<id>" id).
+                # Never fall back to the markdown-blob plan push — if the row is
+                # somehow absent, skip; the REST _build_briefing_surface still renders.
+                briefing_row = await self._get_todays_briefing(user_id, workspace_id)
+                if briefing_row is not None:
+                    await self._push_briefing_surface(
+                        briefing_row, user_id=user_id, workspace_id=workspace_id
+                    )
             except Exception:
                 logger.debug("Briefing delivery failed", exc_info=True)
 
@@ -615,11 +633,17 @@ class JarvisOrchestrator:
                 trace.trace_id, user_id=user_id, workspace_id=workspace_id
             )
 
-    async def _briefing_already_exists(self, user_id: str, workspace_id: str) -> bool:
-        """Return True if a briefing row already exists for (user, today).
+    async def _get_todays_briefing(self, user_id: str, workspace_id: str):
+        """Return today's most-recent Briefing row for (user, workspace), or None.
 
-        Used as the per-day delivery idempotency key in generate_briefing so a
-        scheduler re-fire does not re-notify / re-push.
+        Single source for the per-day briefing lookup, shared by the delivery
+        idempotency check (_briefing_already_exists) and the structured-surface
+        delivery fetch in generate_briefing. Scoped by workspace_id because
+        Briefing is workspace-scoped: without it, a second workspace's briefing
+        for the same user+date could satisfy this workspace's idempotency check
+        (suppressing its briefing) or be pushed to the wrong surface — and the
+        (user_id, briefing_date) index is non-unique, so a multi-workspace user
+        legitimately has >1 row for today.
         """
         from datetime import date as _date
 
@@ -627,15 +651,27 @@ class JarvisOrchestrator:
 
         from src.models.briefings import Briefing
 
-        try:
-            async with self._db_factory() as db:
-                result = await db.execute(
-                    _select(Briefing.briefing_id).where(
-                        Briefing.user_id == user_id,
-                        Briefing.briefing_date == _date.today(),
-                    )
+        async with self._db_factory() as db:
+            result = await db.execute(
+                _select(Briefing)
+                .where(
+                    Briefing.user_id == user_id,
+                    Briefing.workspace_id == workspace_id,
+                    Briefing.briefing_date == _date.today(),
                 )
-                return result.scalar_one_or_none() is not None
+                .order_by(Briefing.created_at.desc())
+                .limit(1)
+            )
+            return result.scalar_one_or_none()
+
+    async def _briefing_already_exists(self, user_id: str, workspace_id: str) -> bool:
+        """Return True if a briefing row already exists for (user, workspace, today).
+
+        Used as the per-day delivery idempotency key in generate_briefing so a
+        scheduler re-fire does not re-notify / re-push.
+        """
+        try:
+            return await self._get_todays_briefing(user_id, workspace_id) is not None
         except Exception:
             # Fail open on the idempotency check: if we cannot tell, prefer
             # delivering (a missed briefing is worse than a rare duplicate).
@@ -708,6 +744,15 @@ class JarvisOrchestrator:
         return await self._surfaces.push_workspace_surface(
             plan, user_id, workspace_id, run_id=run_id, response_text=response_text
         )
+
+    async def _push_briefing_surface(
+        self,
+        briefing,
+        user_id: str,
+        workspace_id: str,
+    ) -> str | None:
+        """Delegate to SurfacePusher (facade kept for internal callers + test mockability)."""
+        return await self._surfaces.push_briefing_surface(briefing, user_id, workspace_id)
 
     async def _push_insight_surface(
         self,
@@ -840,7 +885,7 @@ class JarvisOrchestrator:
     async def _execute_tool(
         self, tool_name: str, tool_input: dict, user_id: str, workspace_id: str = ""
     ) -> dict:
-        """Delegate to ToolExecutor (facade kept for internal callers + agent_loop)."""
+        """Delegate to ToolExecutor (facade kept for internal callers)."""
         return await self._tool_executor.execute_tool(
             tool_name, tool_input, user_id, workspace_id=workspace_id
         )

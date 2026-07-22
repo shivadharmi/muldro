@@ -129,7 +129,9 @@ class TestBuildActiveExecutionSurfaces:
 
     @pytest.mark.asyncio
     async def test_awaiting_approval_carries_risk_and_flags(self):
-        """Approval context populates risk + flags (Irreversible, trust level)."""
+        """Approval context populates risk + flags (Irreversible); trust level
+        surfaces only via trust_context (the card's trust pill), not as a
+        duplicate bare flag."""
         db = AsyncMock()
         service = SurfaceService(db=db, workspace_id="ws_01")
 
@@ -165,10 +167,13 @@ class TestBuildActiveExecutionSurfaces:
         db.execute = mock_execute
 
         surfaces = await service._build_run_surfaces()
-        preview = surfaces[0].preview
+        surface = surfaces[0]
+        preview = surface.preview
         assert preview["risk"] == "high"
         assert "Irreversible" in preview["flags"]
-        assert "LEARNING" in preview["flags"]
+        assert "LEARNING" not in preview["flags"]
+        assert surface.trust_context is not None
+        assert surface.trust_context["trust_level"] == "learning"
 
     @pytest.mark.asyncio
     async def test_failed_run_produces_alert_surface(self):

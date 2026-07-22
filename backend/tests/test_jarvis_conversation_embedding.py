@@ -16,15 +16,11 @@ from tests.conftest import make_mock_settings
 async def test_summarize_history_returns_summary():
     """_summarize_history returns the Claude summary text."""
     settings = make_mock_settings()
-    settings.use_bedrock = False
 
-    with patch("src.orchestrator.jarvis.get_anthropic_client") as mock_get_client:
-        mock_client = MagicMock()
-        summary_response = MagicMock()
-        summary_response.content = [MagicMock(type="text", text="Summary of conversation.")]
-        mock_client.messages.create = AsyncMock(return_value=summary_response)
-        mock_get_client.return_value = mock_client
-
+    with patch(
+        "src.orchestrator.context_assembler.complete_text",
+        AsyncMock(return_value="Summary of conversation."),
+    ):
         from src.orchestrator.jarvis import JarvisOrchestrator
 
         orch = JarvisOrchestrator(
@@ -41,15 +37,11 @@ async def test_summarize_history_returns_summary():
 async def test_summarize_history_without_conversation_id():
     """Without conversation_id, summarization still works."""
     settings = make_mock_settings()
-    settings.use_bedrock = False
 
-    with patch("src.orchestrator.jarvis.get_anthropic_client") as mock_get_client:
-        mock_client = MagicMock()
-        summary_response = MagicMock()
-        summary_response.content = [MagicMock(type="text", text="Summary.")]
-        mock_client.messages.create = AsyncMock(return_value=summary_response)
-        mock_get_client.return_value = mock_client
-
+    with patch(
+        "src.orchestrator.context_assembler.complete_text",
+        AsyncMock(return_value="Summary."),
+    ):
         from src.orchestrator.jarvis import JarvisOrchestrator
 
         orch = JarvisOrchestrator(

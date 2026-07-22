@@ -1,6 +1,6 @@
 """Tests for ContextBuilder — assembles rich context for agent prompts."""
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -10,7 +10,7 @@ from src.services.context_builder import ContextBuilder, ContextPack
 @pytest.fixture
 def mock_world_model():
     wm = AsyncMock()
-    wm.find_entity = AsyncMock(return_value=[])
+    wm.resolve_entities = AsyncMock(return_value=[])
     return wm
 
 
@@ -46,18 +46,6 @@ def empty_builder():
     return ContextBuilder()
 
 
-def _make_artifact(
-    artifact_id="art_001",
-    artifact_type="document",
-    title="Investor Deck",
-):
-    a = MagicMock()
-    a.artifact_id = artifact_id
-    a.artifact_type = artifact_type
-    a.title = title
-    return a
-
-
 class TestBuildEmptyContext:
     @pytest.mark.asyncio
     async def test_build_empty_context(self, empty_builder):
@@ -83,7 +71,7 @@ class TestBuildWithEntities:
             {"canonical_name": "Acme Corp", "entity_type": "org"},
             {"canonical_name": "John Doe", "entity_type": "person"},
         ]
-        mock_world_model.find_entity.return_value = entities
+        mock_world_model.resolve_entities.return_value = entities
 
         pack = await builder.build("usr_1", "Acme Corp deal")
         assert len(pack.entities) == 2
@@ -92,7 +80,7 @@ class TestBuildWithEntities:
     @pytest.mark.asyncio
     async def test_build_truncates_entities_to_10(self, builder, mock_world_model):
         entities = [{"canonical_name": f"Entity {i}", "entity_type": "org"} for i in range(15)]
-        mock_world_model.find_entity.return_value = entities
+        mock_world_model.resolve_entities.return_value = entities
 
         pack = await builder.build("usr_1", "many entities")
         assert len(pack.entities) == 10
@@ -137,15 +125,6 @@ class TestBuildWithGoals:
         assert len(pack.recent_events) == 1
         assert len(pack.preferences) == 1
         assert pack.preferences[0]["fact_text"] == "Prefers concise emails"
-
-    @pytest.mark.asyncio
-    async def test_build_with_artifacts(self, builder, mock_artifact_store):
-        artifacts = [_make_artifact()]
-        mock_artifact_store.search.return_value = artifacts
-
-        pack = await builder.build("usr_1", "investor deck")
-        assert len(pack.artifacts) == 1
-        assert pack.artifacts[0]["title"] == "Investor Deck"
 
 
 class TestToPromptFormatting:
@@ -218,7 +197,7 @@ class TestToPromptFormatting:
 class TestBuildHandlesServiceFailures:
     @pytest.mark.asyncio
     async def test_build_handles_entity_failure(self, builder, mock_world_model):
-        mock_world_model.find_entity.side_effect = Exception("DB down")
+        mock_world_model.resolve_entities.side_effect = Exception("DB down")
         pack = await builder.build("usr_1", "test query")
         assert pack.entities == []
 
@@ -237,9 +216,8 @@ class TestBuildHandlesServiceFailures:
         mock_memory_service,
         mock_artifact_store,
     ):
-        mock_world_model.find_entity.side_effect = Exception("fail")
+        mock_world_model.resolve_entities.side_effect = Exception("fail")
         mock_memory_service.retrieve.side_effect = Exception("fail")
-        mock_artifact_store.search.side_effect = Exception("fail")
 
         pack = await builder.build("usr_1", "query", task_type="send_email")
         assert pack.task_summary == "query"
@@ -256,7 +234,7 @@ class TestEntityDoubleWrite:
     async def test_world_model_skipped_when_trisearch_returns_entities(self):
         """When TriSearch populates entities, world-model fallback should be skipped."""
         mock_world = AsyncMock()
-        mock_world.find_entity = AsyncMock(
+        mock_world.resolve_entities = AsyncMock(
             return_value=[
                 {"entity_id": "ent_wm", "entity_type": "org", "canonical_name": "WorldModel Co"},
             ]
@@ -285,13 +263,13 @@ class TestEntityDoubleWrite:
         assert len(pack.entities) == 1
         assert pack.entities[0]["canonical_name"] == "TriSearch Co"
         # World model should NOT have been called
-        mock_world.find_entity.assert_not_called()
+        mock_world.resolve_entities.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_world_model_runs_when_trisearch_returns_no_entities(self):
         """When TriSearch returns no entities, world-model fallback should run."""
         mock_world = AsyncMock()
-        mock_world.find_entity = AsyncMock(
+        mock_world.resolve_entities = AsyncMock(
             return_value=[
                 {"entity_id": "ent_wm", "entity_type": "org", "canonical_name": "WorldModel Co"},
             ]
@@ -314,7 +292,7 @@ class TestEntityDoubleWrite:
 
         pack = await builder.build("usr_1", "test", workspace_id="ws_1")
 
-        mock_world.find_entity.assert_called_once()
+        mock_world.resolve_entities.assert_called_once()
         assert len(pack.entities) == 1
         assert pack.entities[0]["canonical_name"] == "WorldModel Co"
 
@@ -411,7 +389,7 @@ class TestEnrichedGraphContext:
         )
 
         mock_world = AsyncMock()
-        mock_world.find_entity = AsyncMock(
+        mock_world.resolve_entities = AsyncMock(
             return_value=[
                 {"entity_id": "ent_a", "entity_type": "person", "canonical_name": "Bob"},
             ]

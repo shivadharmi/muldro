@@ -22,6 +22,23 @@ def _get_consumer_name() -> str:
 
 NOTIFICATIONS_STREAM = "jarvis:notifications"
 
+_EXTRACTION_TIERS = {"skip", "light", "full"}
+
+
+def _event_tier(ev) -> str:
+    """Extraction tier persisted on the event (``importance_signals.tier``,
+    set by ``TriageResult.to_signals()``). Missing/garbled -> 'full' (recall-preserving:
+    an unrecognized tier must never silently suppress extraction)."""
+    signals = getattr(ev, "importance_signals", None) or {}
+    tier = signals.get("tier")
+    return tier if tier in _EXTRACTION_TIERS else "full"
+
+
+def _event_category(ev) -> str:
+    """Triage category persisted on the event (``importance_signals.category``)."""
+    signals = getattr(ev, "importance_signals", None) or {}
+    return signals.get("category") or ""
+
 
 class StreamConsumerManager:
     """Manages event bus consumer groups for downstream processing.
@@ -208,6 +225,11 @@ class StreamConsumerManager:
         include ``event_id`` in their payload. Without this filter, extraction
         runs redundantly per event and can also hit the "Event not found"
         warning when a stale message arrives after retention eviction.
+
+        Extraction is gated on the triage tier persisted on the event: skip/light
+        tiers do no entity extraction (see ``_handle_memory_extraction`` for the
+        memory-only light-tier path). A full-tier ``calendar_invite`` whose meeting
+        entity already exists (a recurring series occurrence) also skips re-extraction.
         """
         if getattr(event, "event_type", "") != "event_processed":
             return
@@ -224,15 +246,52 @@ class StreamConsumerManager:
             )
             return
 
+        from sqlalchemy import select
+
+        from src.models.events import NormalizedEvent
         from src.services.world_model import WorldModel
 
         factory = get_session_factory()
         async with factory() as db:
+            event_result = await db.execute(
+                select(NormalizedEvent).where(NormalizedEvent.event_id == event_id)
+            )
+            ev = event_result.scalar_one_or_none()
+            if ev is None:
+                return
+
             world_model = WorldModel(
                 settings=self._settings,
                 db=db,
                 vector_store=self._vector_store,
             )
+
+            tier = _event_tier(ev)
+            if tier in {"skip", "light"}:
+                logger.info("Tier=%s event %s: no entity extraction", tier, event_id)
+                return
+            if _event_category(ev) == "calendar_invite":
+                try:
+                    existing = await world_model.find_entity(
+                        user_id, ev.title or "", workspace_id=workspace_id
+                    )
+                except Exception:
+                    # Dedup is a cost optimization, not correctness — a lookup
+                    # failure must fall back to extracting rather than skip it.
+                    existing = []
+                    logger.warning(
+                        "Calendar-recurrence dedup lookup failed for event %s; "
+                        "proceeding with extraction",
+                        event_id,
+                        exc_info=True,
+                    )
+                if any((e.get("entity_type") == "meeting") for e in (existing or [])):
+                    logger.info(
+                        "Recurring meeting for event %s already extracted; skipping",
+                        event_id,
+                    )
+                    return
+
             entity_ids = await world_model.extract_from_event(
                 event_id, user_id, workspace_id=workspace_id
             )
@@ -268,6 +327,10 @@ class StreamConsumerManager:
 
         Filters to ``event_processed`` only. See ``_handle_entity_extraction``
         for the rationale.
+
+        Skip-tier events do no memory extraction. Light and full tiers both
+        extract memories — the founder spend/receipt ledger is a light-tier's
+        entire value.
         """
         if getattr(event, "event_type", "") != "event_processed":
             return
@@ -299,12 +362,18 @@ class StreamConsumerManager:
             if not ev:
                 return
 
+            if _event_tier(ev) == "skip":
+                logger.info("Skip-tier event %s: no memory extraction", event_id)
+                return
+
             # Find entities related to this event for entity-memory linking
             entity_ids = None
             if ev.title or ev.summary:
                 wm = WorldModel(settings=self._settings, db=db)
                 query = ev.title or ev.summary or ""
-                entities = await wm.find_entity(user_id, query[:100], workspace_id=workspace_id)
+                entities = await wm.resolve_entities(
+                    user_id, query[:100], workspace_id=workspace_id
+                )
                 if entities:
                     entity_ids = [e["entity_id"] for e in entities[:5]]
 

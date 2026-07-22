@@ -15,14 +15,14 @@ _A = {"expected_allowed": True}  # All non-blocked tools pass through
 
 POLICY_CASES = [
     # Write tools -> allowed (approval gating is now in GraphExecutor)
-    {"tool": "send_gmail_message", "agent": "operator", **_A},
-    {"tool": "draft_gmail_message", "agent": "operator", **_A},
-    {"tool": "manage_event", "agent": "operator", **_A},
-    {"tool": "slack_post_message", "agent": "operator", **_A},
-    {"tool": "add_issue_comment", "agent": "operator", **_A},
+    {"tool": "send_gmail_message", "agent": "executor", **_A},
+    {"tool": "draft_gmail_message", "agent": "executor", **_A},
+    {"tool": "manage_event", "agent": "executor", **_A},
+    {"tool": "slack_post_message", "agent": "executor", **_A},
+    {"tool": "add_issue_comment", "agent": "executor", **_A},
     {"tool": "push_ui_update", "agent": "presenter", **_A},
-    {"tool": "issue_write", "agent": "operator", **_A},
-    {"tool": "create_pull_request", "agent": "operator", **_A},
+    {"tool": "issue_write", "agent": "executor", **_A},
+    {"tool": "create_pull_request", "agent": "executor", **_A},
     # Read-only tools -> allowed
     {"tool": "search", "agent": "planner", **_A},
     {"tool": "search_gmail_messages", "agent": "perceiver", **_A},
@@ -32,10 +32,10 @@ POLICY_CASES = [
     {"tool": "slack_get_channel_history", "agent": "perceiver", **_A},
     # Internal tools -> allowed
     {"tool": "ingest_event", "agent": "perceiver", **_A},
-    {"tool": "update_execution", "agent": "operator", **_A},
+    {"tool": "update_execution", "agent": "executor", **_A},
     {"tool": "build_context", "agent": "planner", **_A},
     # Unknown tools -> allowed (not blocked)
-    {"tool": "totally_unknown_tool_xyz", "agent": "operator", **_A},
+    {"tool": "totally_unknown_tool_xyz", "agent": "executor", **_A},
 ]
 
 

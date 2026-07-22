@@ -17,12 +17,11 @@ from tests.conftest import make_mock_settings
 def _make_orchestrator(services):
     from src.orchestrator.jarvis import JarvisOrchestrator
 
-    with patch("src.orchestrator.jarvis.get_anthropic_client", return_value=MagicMock()):
-        return JarvisOrchestrator(
-            settings=make_mock_settings(),
-            db_factory=MagicMock(),
-            services=services,
-        )
+    return JarvisOrchestrator(
+        settings=make_mock_settings(),
+        db_factory=MagicMock(),
+        services=services,
+    )
 
 
 @pytest.mark.asyncio

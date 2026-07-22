@@ -30,13 +30,12 @@ def _make_executor(memory_service=None, world_model=None):
     db.flush = AsyncMock()
     db.execute = AsyncMock()
 
-    with patch("src.services.graph_executor.get_anthropic_client"):
-        executor = GraphExecutor(
-            settings=settings,
-            db=db,
-            memory_service=memory_service,
-            world_model=world_model,
-        )
+    executor = GraphExecutor(
+        settings=settings,
+        db=db,
+        memory_service=memory_service,
+        world_model=world_model,
+    )
     return executor
 
 

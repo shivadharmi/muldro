@@ -81,7 +81,7 @@ def provider_for_server(server_name: str) -> str:
     """Infer the OAuth provider from an MCP server name.
 
     Falls back to the (unmodified) server name when no fragment matches, so
-    no-auth servers (filesystem, playwright) map to themselves.
+    no-auth servers (e.g. playwright) map to themselves.
     """
     name_lower = server_name.lower().replace("-", "_")
     for fragments, provider in _SERVER_NAME_FRAGMENTS:

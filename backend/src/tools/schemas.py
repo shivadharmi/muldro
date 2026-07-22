@@ -4,9 +4,50 @@ Each tool input is a Pydantic BaseModel with Field descriptions.
 Schemas are generated via .model_json_schema() — single source of truth.
 """
 
+from datetime import datetime, timezone
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from croniter import croniter
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+# Concrete cron values shown to the model as JSON-schema ``examples`` — steer it
+# toward the standard 5-field format instead of natural language.
+CRON_EXAMPLES = ["0 9 * * 1-5", "0 8 * * *", "*/15 * * * *", "0 9 1 * *"]
+
+# Shared field description (surfaced to the model in the tool input schema). Kept
+# explicit about the format and — crucially — about what NOT to emit, since the
+# observed failures were natural-language placeholders like 'from s1 event date'.
+CRON_FIELD_DESCRIPTION = (
+    "Standard 5-field cron expression 'MIN HOUR DAY-OF-MONTH MONTH DAY-OF-WEEK' "
+    "setting when this fires (it fires at the next matching time). "
+    "Examples: '0 9 * * 1-5' = weekdays 9am, '0 8 * * *' = every day 8am, "
+    "'*/15 * * * *' = every 15 minutes, '0 9 1 * *' = 1st of each month 9am, "
+    "'30 17 * * 5' = Fridays 5:30pm. "
+    "MUST be a literal cron — NEVER natural language, relative dates, or "
+    "placeholders (NOT 'tomorrow', 'next week', 'in 2 hours', 'from step 1 date'). "
+    "Leave empty if the timing cannot be written as a cron."
+)
+
+
+def _ensure_valid_cron(v: str | None) -> str | None:
+    """Reject a malformed cron at model-validation time.
+
+    Empty/None means "no recurrence". A non-empty value MUST be a well-formed
+    croniter expression — an LLM-supplied garbage cron would otherwise be
+    persisted and later crash the scheduler's dispatch sweep
+    (CroniterBadCronError). Shared by every schedule-bearing tool input so the
+    rule lives in exactly one place. The error message is written to guide a
+    retry, since it is surfaced back to the calling agent.
+    """
+    if v and not croniter.is_valid(v):
+        raise ValueError(
+            f"{v!r} is not a valid cron expression. Use a standard 5-field cron "
+            "such as '0 9 * * 1-5' (weekdays 9am) or '0 8 * * *' (daily 8am), "
+            "not natural language or relative dates. Leave it empty if the timing "
+            "cannot be expressed as a cron."
+        )
+    return v
+
 
 # ── Tool Input Models ──────────────────────────────────────────────
 
@@ -236,6 +277,157 @@ class DiscoverCapabilitiesInput(BaseModel):
     query: str = Field(description="Search query, e.g. 'email', 'calendar management'")
 
 
+class GetEntityInput(BaseModel):
+    """Fetch a world-model entity + its current attribute beliefs."""
+
+    entity_id: str = Field(description="Entity id (ent_...) to fetch")
+
+
+class QueryFactsInput(BaseModel):
+    """Query an entity's attribute beliefs as-of a timestamp (bi-temporal)."""
+
+    entity_id: str = Field(description="Entity id (ent_...) to query")
+    as_of: str = Field(default="", description="ISO-8601 timestamp; empty = now")
+
+
+class TraverseInput(BaseModel):
+    """List the relationships incident to an entity (one hop)."""
+
+    entity_id: str = Field(description="Entity id (ent_...) to traverse from")
+
+
+class GetProvenanceInput(BaseModel):
+    """Provenance for an entity's current beliefs."""
+
+    entity_id: str = Field(description="Entity id (ent_...)")
+    attr_key: str = Field(default="", description="Optional single attribute key")
+
+
+class SetGoalInput(BaseModel):
+    """Record a user goal so Jarvis can track and act toward it. Use when the user states an
+    objective ("my goal is …", "I want to …", "remember I'm trying to …")."""
+
+    title: str = Field(description="The goal statement, e.g. 'Close the seed round by Q3'")
+    priority: str = Field(default="medium", description="Goal priority: low, medium, or high")
+
+
+class SetInstructionInput(BaseModel):
+    """Record a standing user instruction or preference so future turns honor it. Use when the
+    user says "always …", "from now on …", "remember to …", "I prefer …". For time-based
+    reminders use ``schedule_reminder`` instead — this tool stores a durable preference, it does
+    not create schedules or triggers."""
+
+    instruction_text: str = Field(description="The instruction or preference, verbatim")
+    instruction_type: str = Field(
+        default="preference",
+        description="Instruction category label (stored on the preference memory), e.g. "
+        "'preference'",
+    )
+
+
+class ScheduleConfig(BaseModel):
+    """Typed schedule spec inside a ``system.set_instruction`` step (when
+    ``instruction_type == "schedule"``). Replaces a raw LLM dict so its
+    ``cron_expr`` is validated structurally, like ``ScheduleReminderInput`` —
+    an invalid cron here would otherwise crash the scheduler after persist."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    type: str = Field(default="recurring", description="Schedule type: recurring | one_shot")
+    cron_expr: str | None = Field(
+        default=None,
+        description=CRON_FIELD_DESCRIPTION,
+        examples=CRON_EXAMPLES,
+    )
+    action_type: str = Field(
+        default="custom_agent_task", description="Action to run when the schedule fires"
+    )
+    action_config: dict = Field(default_factory=dict, description="Action-specific config")
+
+    @field_validator("cron_expr")
+    @classmethod
+    def _validate_cron(cls, v: str | None) -> str | None:
+        return _ensure_valid_cron(v)
+
+
+class SetInstructionStepInput(BaseModel):
+    """Planner ``system.set_instruction`` STEP input (capability path only, NOT
+    the direct MCP tool schema). Supports the richer trigger/schedule creation
+    that ``_handle_set_instruction`` performs."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    instruction_text: str = Field(description="The instruction or preference, verbatim")
+    instruction_type: str = Field(default="preference", description="Instruction category label")
+    trigger_conditions: dict | None = Field(
+        default=None, description="Optional trigger match conditions"
+    )
+    schedule_config: ScheduleConfig | None = Field(
+        default=None, description="Optional schedule config"
+    )
+
+
+class ScheduleReminderInput(BaseModel):
+    """Create a one-shot reminder. Use when the user asks to be reminded of something ("remind
+    me to …", "ping me about …")."""
+
+    title: str = Field(description="What to remind the user about")
+    run_at: datetime | None = Field(
+        default=None,
+        description=(
+            "Preferred for a ONE-TIME reminder: the exact instant it should fire, "
+            "as an ISO 8601 datetime (e.g. '2026-07-23T15:00:00Z'). A naive value "
+            "is treated as UTC. Use this instead of cron_expr whenever the reminder "
+            "is a single specific moment. Must be a real datetime — never natural "
+            "language ('tomorrow', 'next week')."
+        ),
+        examples=["2026-07-23T15:00:00Z", "2026-08-01T09:30:00+00:00"],
+    )
+    cron_expr: str = Field(
+        default="",
+        description=f"Optional, for a RECURRING/next-match reminder. {CRON_FIELD_DESCRIPTION}",
+        examples=CRON_EXAMPLES,
+    )
+
+    @field_validator("run_at")
+    @classmethod
+    def _ensure_run_at_aware(cls, v: datetime | None) -> datetime | None:
+        # The scheduler compares next_run_at against a UTC-aware now(); a naive
+        # datetime would raise on comparison, so normalize naive -> UTC here.
+        if v is not None and v.tzinfo is None:
+            return v.replace(tzinfo=timezone.utc)
+        return v
+
+    @field_validator("cron_expr")
+    @classmethod
+    def _validate_cron(cls, v: str) -> str:
+        # Every model_validate (tool path + capability path) rejects a malformed
+        # cron structurally, so it can never be persisted as a raw agent value.
+        return _ensure_valid_cron(v) or ""
+
+    def resolve_next_run_at(self, now: datetime) -> datetime | None:
+        """The Schedule.next_run_at this reminder should be created with.
+
+        Precedence: a concrete ``run_at`` (one-time instant) wins; else a
+        ``cron_expr`` is left as ``None`` for the scheduler's repair path to
+        compute from the cron; else the reminder carries no timing at all, so
+        fire it on the next tick (``now``) rather than leaving it dormant
+        forever. Shared by the tool and capability paths so both agree.
+        """
+        if self.run_at is not None:
+            return self.run_at
+        if self.cron_expr:
+            return None
+        return now
+
+
+class AddToBriefInput(BaseModel):
+    """Add an item to the user's next daily briefing. Use when the user says "add this to my
+    briefing / brief", "surface this tomorrow", "flag this for my next update"."""
+
+    text: str = Field(description="The briefing item text")
+
+
 # ── Registry ───────────────────────────────────────────────────────
 
 TOOL_INPUT_MODELS: dict[str, type[BaseModel]] = {
@@ -260,6 +452,14 @@ TOOL_INPUT_MODELS: dict[str, type[BaseModel]] = {
     "store_preference": StorePreferenceInput,
     "get_plan_details": GetPlanDetailsInput,
     "discover_capabilities": DiscoverCapabilitiesInput,
+    "get_entity": GetEntityInput,
+    "query_facts": QueryFactsInput,
+    "traverse": TraverseInput,
+    "get_provenance": GetProvenanceInput,
+    "set_goal": SetGoalInput,
+    "set_instruction": SetInstructionInput,
+    "schedule_reminder": ScheduleReminderInput,
+    "add_to_brief": AddToBriefInput,
 }
 
 

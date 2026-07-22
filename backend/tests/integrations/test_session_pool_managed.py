@@ -45,7 +45,7 @@ async def test_release_managed_noop_when_not_managed():
     entry = SessionEntry(
         client=AsyncMock(),
         client_ctx=AsyncMock(),
-        server_name="filesystem",
+        server_name="example_stdio",
         user_id="u",
         tools={},
         managed_server=None,

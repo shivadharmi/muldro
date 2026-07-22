@@ -23,15 +23,48 @@ from src.api.schemas_history import (
     RunActionResponse,
 )
 from src.config.settings import Settings, get_settings
+from src.contracts import ApprovalContext
 from src.middleware.security import RATE_LIMIT_RUN_ACTION, per_endpoint_rate_limit
 from src.models.approvals import Approval
 from src.models.plans import Plan
 from src.models.runtime_event import RuntimeEvent
 from src.models.task_graph import TaskRun, TaskStep
-from src.services.execution_state import transition_run
+from src.models.ui_state import UISurface
+from src.services.execution_state import TERMINAL_SUCCESS, transition_run
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+def resolve_history_approval(
+    thin: HistoryApprovalContext | None,
+    surface_payload: dict | None,
+) -> ApprovalContext | HistoryApprovalContext | None:
+    """Prefer the rich ``ApprovalContext`` persisted on the run's surface (B12 / P3.2).
+
+    The autonomous surface machine persists the full ``ApprovalContext`` under
+    ``UISurface.payload["last_surface_update"]["approval"]`` (execution_surface_emitter).
+    This lets the persisted/REST approval path carry the SAME rich context the live-WS
+    path emits, so the frontend renders ONE ``InlineApprovalCard`` from either source.
+
+    Applies the shared ``extract_persisted_rich_approval`` classification:
+      * ABSENT → return *thin* (fallback; byte-neutral for existing data that predates
+        / lacks a persisted rich context);
+      * RICH → return the rich ``ApprovalContext``;
+      * MALFORMED → FAIL CLOSED (return ``None``) rather than emit a half-rendered card.
+    """
+    from src.services.approval_resolution import (
+        PersistedApprovalStatus,
+        extract_persisted_rich_approval,
+    )
+
+    status, ctx = extract_persisted_rich_approval(surface_payload)
+    if status is PersistedApprovalStatus.RICH:
+        return ctx
+    if status is PersistedApprovalStatus.MALFORMED:
+        return None  # fail closed
+    return thin  # ABSENT → byte-neutral fallback
+
 
 # Map UI filter values to DB status sets
 _STATUS_MAP: dict[str, list[str]] = {
@@ -139,7 +172,7 @@ async def list_history(
             for step in steps
         ]
 
-        completed_step_count = sum(1 for s in steps if s.status == "completed")
+        completed_step_count = sum(1 for s in steps if s.status in TERMINAL_SUCCESS)
 
         # Plan context
         goal: str | None = None
@@ -154,7 +187,7 @@ async def list_history(
                 risk_level = plan.risk_level
 
         # Approval context (only for awaiting_approval runs)
-        approval_ctx: HistoryApprovalContext | None = None
+        approval_ctx: ApprovalContext | HistoryApprovalContext | None = None
         if run.status == "awaiting_approval":
             appr_result = await db.execute(
                 select(Approval)
@@ -177,12 +210,31 @@ async def list_history(
                     risk_level=appr.risk_level or "low",
                 )
 
+            # B12 / P3.2: prefer the rich ApprovalContext persisted on the run's
+            # surface (execution_surface_emitter writes it under
+            # ``last_surface_update.approval``). Absent → thin fallback; malformed →
+            # fail closed (see helper). Enrichment relies on ``surface_id == run_id``
+            # (the default run-surface keying); a chat-linked autonomous run whose
+            # surface_id is overridden (graph_executor.py) simply falls through to the
+            # thin card — graceful degradation, intended. Scope by workspace_id + user_id
+            # (matching the sibling live-surface query below) so tenant isolation is
+            # LOCAL, not a transitive argument a future refactor could break.
+            run_surf = await db.execute(
+                select(UISurface).where(
+                    UISurface.surface_id == run.run_id,
+                    UISurface.workspace_id == workspace_id,
+                    UISurface.user_id == user_id,
+                )
+            )
+            run_surface = run_surf.scalar_one_or_none()
+            approval_ctx = resolve_history_approval(
+                approval_ctx, run_surface.payload if run_surface else None
+            )
+
         # Live surface state
         live_phase: str | None = None
         surface_id: str | None = None
         try:
-            from src.models.ui_state import UISurface
-
             surf_result = await db.execute(
                 select(UISurface).where(
                     UISurface.workspace_id == workspace_id,

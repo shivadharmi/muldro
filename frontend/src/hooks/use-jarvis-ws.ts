@@ -72,6 +72,10 @@ export function useJarvisWs({
     }
 
     let intentionallyClosed = false;
+    // Auth-level rejection (bad/expired token, user mismatch) is terminal for
+    // this identity — reconnecting would just replay the same failure every 3s
+    // (a reconnect storm). Only transient closes should reconnect.
+    let authRejected = false;
 
     const connect = () => {
       if (intentionallyClosed) return;
@@ -110,6 +114,14 @@ export function useJarvisWs({
         if (msg.type === "auth_ok") {
           setConnected(true);
         } else if (msg.type === "auth_error") {
+          // Terminal for this identity: stop reconnecting and surface it so the
+          // UI can prompt a re-auth rather than silently looping.
+          authRejected = true;
+          onErrorRef.current?.({
+            code: "auth_error",
+            message: typeof msg.message === "string" ? msg.message : "Authentication failed",
+            correlationId: null,
+          });
           ws.close();
         } else if (msg.type === "surface" && onSurfacePushRef.current) {
           if (msg.surface?.id) {
@@ -145,7 +157,7 @@ export function useJarvisWs({
 
       ws.onclose = () => {
         setConnected(false);
-        if (!intentionallyClosed) {
+        if (!intentionallyClosed && !authRejected) {
           reconnectTimer.current = setTimeout(connect, 3000);
         }
       };

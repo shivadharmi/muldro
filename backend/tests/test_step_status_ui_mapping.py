@@ -38,6 +38,16 @@ def test_none_and_unknown_fall_back_to_pending():
     assert step_status_to_ui("some_future_status") == "pending"
 
 
+def test_step3_verification_statuses_pass_through():
+    # The verification nuance now reaches the UI (frontend renders ✓? and ⚠),
+    # so the backend no longer collapses these two — they pass through as-is.
+    assert step_status_to_ui("completed_unverified") == "completed_unverified"
+    assert step_status_to_ui("partially_completed") == "partially_completed"
+    # And StepState must accept them (widened Literal).
+    for s in ("completed_unverified", "partially_completed"):
+        assert StepState(step_id="s", description="d", status=s).status == s
+
+
 def test_run_machine_unchanged_sanity():
     # Guard: awaiting_approval is still not self-allowed (documents Bug 1 invariant).
     assert "awaiting_approval" not in RUN_TRANSITIONS["awaiting_approval"]

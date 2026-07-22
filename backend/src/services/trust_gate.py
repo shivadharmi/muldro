@@ -9,8 +9,6 @@ the side-effecting pieces of the single TrustEngine approval gate:
   push the ``approval_needed`` surface.
 - ``notify_auto_executed`` / ``record_auto_execution_outcome`` — post-execution
   notification + trust reinforcement for the auto-execute path.
-- ``remember_auto_executed`` — stamp the run checkpoint audit trail that a later
-  verification failure reads to reverse premature reinforcement.
 
 The gate *decision* itself (``TrustEngine.evaluate`` + the fail-closed contract
 guard) stays in the executor's step pipeline; this collaborator holds the helpers
@@ -71,7 +69,6 @@ class TrustGate:
                 step_input=step.input_data or {},
                 user_context={"user_id": run.user_id},
                 workspace_id=run.workspace_id or "",
-                client=self._client,
                 redis=self._redis,
             )
         except Exception:
@@ -238,18 +235,30 @@ class TrustGate:
         try:
             from src.services.risk_assessor import record_approval_decision
 
-            await record_approval_decision(
-                self._db, workspace_id, capability, risk_level, "approved"
-            )
+            async with self._db.begin_nested():
+                await record_approval_decision(
+                    self._db, workspace_id, capability, risk_level, "approved"
+                )
         except Exception:
             logger.debug("Failed to record auto-execution trust outcome", exc_info=True)
 
-    def remember_auto_executed(self, run: TaskRun, capability: str, risk_level: str) -> None:
-        """Record an auto-executed (capability, risk_level) on the run checkpoint.
+    async def record_user_approval_outcome(
+        self, capability: str, risk_level: str, workspace_id: str, decision_type: str
+    ) -> None:
+        """Record a user-approved write's trust outcome AFTER it verified CONFIRMED.
 
-        This is the audit trail the verification feedback reads to reverse the
-        premature "approved" trust signal if the run later fails verification.
-        JSONB is reassigned (not mutated in place) so SQLAlchemy detects it."""
-        prior = list((run.checkpoint or {}).get("auto_executed") or [])
-        prior.append({"capability": capability, "risk_level": risk_level})
-        run.checkpoint = {**(run.checkpoint or {}), "auto_executed": prior}
+        The positive increment for a human-approved write fires here (on the verified
+        outcome), NOT at approval-click — mirroring record_auto_execution_outcome. Preserves
+        the user's decision_type ("approved"/"modified"). Best-effort in a SAVEPOINT so a
+        failed trust write never poisons the run's own commit."""
+        if not capability:
+            return
+        try:
+            from src.services.risk_assessor import record_approval_decision
+
+            async with self._db.begin_nested():
+                await record_approval_decision(
+                    self._db, workspace_id, capability, risk_level, decision_type
+                )
+        except Exception:
+            logger.debug("Failed to record user-approval trust outcome", exc_info=True)

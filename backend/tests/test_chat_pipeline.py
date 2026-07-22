@@ -129,13 +129,13 @@ class TestResolvePlanRouting:
         resolver = MagicMock()
         resolver.resolve_for_step = AsyncMock(return_value=[{"name": "send_email"}])
         monkeypatch.setattr(cp, "CapabilityResolver", lambda db, ws: resolver)
-        monkeypatch.setattr(cp, "route_step", AsyncMock(return_value="operator"))
+        monkeypatch.setattr(cp, "route_step", AsyncMock(return_value="executor"))
 
         steps = [_step(actor="agent", capability="email.send")]
         routing, user_steps = await cp.resolve_plan_routing(self._db_factory(), "ws_1", steps)
 
         assert user_steps == []
-        assert routing == [(steps[0], "operator", [{"name": "send_email"}])]
+        assert routing == [(steps[0], "executor", [{"name": "send_email"}])]
 
 
 if __name__ == "__main__":

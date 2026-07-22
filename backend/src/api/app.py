@@ -37,6 +37,7 @@ from src.api.routes_traces import router as traces_router
 from src.api.routes_trust import router as trust_router
 from src.api.routes_ui import router as ui_router
 from src.api.routes_webhooks import router as webhooks_router
+from src.api.routes_workspace_settings import router as workspace_settings_router
 from src.api.routes_ws import router as ws_router
 from src.api.schemas import HealthResponse
 from src.config.settings import get_settings
@@ -65,6 +66,24 @@ def create_app() -> FastAPI:
         except Exception:
             logger.warning("Redis unavailable — using in-memory fallback for rate limiting")
             app.state.redis = None
+
+        # Initialize the durable deep-runtime checkpointer (Step 6A.5).
+        app.state.deep_checkpointer = None
+        app.state.deep_checkpointer_pool = None
+        app.state.deep_checkpointer_degraded = False
+        try:
+            from src.deep_runtime.checkpointer import build_async_postgres_saver
+
+            saver, pool = await build_async_postgres_saver(settings.database_url)
+            app.state.deep_checkpointer = saver
+            app.state.deep_checkpointer_pool = pool
+            logger.info("[deep_runtime] durable checkpointer ready at lifespan")
+        except Exception:
+            logger.error(
+                "[deep_runtime] checkpointer init failed — falling back to MemorySaver",
+                exc_info=True,
+            )
+            app.state.deep_checkpointer_degraded = True
 
         # Initialize surface registry
         from src.services.surface_registry import SurfaceRegistry
@@ -106,18 +125,6 @@ def create_app() -> FastAPI:
                 "Registry seed skipped (DB not ready)",
                 exc_info=True,
             )
-
-        # Ensure filesystem MCP root exists before the server is spawned per workspace.
-        try:
-            from pathlib import Path
-
-            from src.integrations.seed_installations import _filesystem_mcp_root
-
-            fs_root = Path(_filesystem_mcp_root())
-            fs_root.mkdir(parents=True, exist_ok=True)
-            logger.info("Filesystem MCP root ready: %s", fs_root)
-        except Exception:
-            logger.warning("Failed to prepare filesystem MCP root", exc_info=True)
 
         # Re-seed integration installations for all workspaces.
         # Installation configs (transport, auth_provider, remote_url) change with
@@ -182,6 +189,66 @@ def create_app() -> FastAPI:
                     "JARVIS_SKIP_REGISTRY_VALIDATION=true to bypass."
                 )
             logger.info("Registry validation passed")
+
+        # Post-condition coverage gate (spec §4.5): every IRREVERSIBLE write
+        # capability must have a registered read-back post-condition (or be
+        # explicitly marked UNVERIFIABLE). Fail closed — a new write capability must
+        # not serve traffic able to silently skip verification on the irreversible
+        # path. Same emergency bypass as registry validation.
+        if settings.skip_registry_validation:
+            logger.warning("Post-condition coverage check SKIPPED (skip_registry_validation)")
+        else:
+            try:
+                from src.services.verification.post_conditions import (
+                    validate_post_condition_coverage,
+                )
+                from src.services.verification.predicate import write_capabilities
+
+                pc_errors = validate_post_condition_coverage(write_capabilities())
+            except Exception as exc:
+                logger.error("Post-condition coverage check failed to run", exc_info=True)
+                raise RuntimeError("Post-condition coverage check could not run") from exc
+
+            if pc_errors:
+                for err in pc_errors:
+                    logger.error("Post-condition coverage: %s", err)
+                raise RuntimeError(
+                    f"Post-condition coverage found {len(pc_errors)} error(s) — register a "
+                    "post-condition or mark UNVERIFIABLE, or set "
+                    "JARVIS_SKIP_REGISTRY_VALIDATION=true to bypass."
+                )
+            logger.info("Post-condition coverage passed")
+
+        # Identity coverage gate (spec §6 Step-3 carry-forward): every IRREVERSIBLE
+        # write capability must have a deliberate idempotency-key strategy (semantic
+        # IdentitySpec or explicit positional-accepted). Fail closed — a new write
+        # capability must not serve traffic able to silently fall back to positional
+        # keying unnoticed. Same emergency bypass as registry validation.
+        if settings.skip_registry_validation:
+            logger.warning("Identity coverage check SKIPPED (skip_registry_validation)")
+        else:
+            try:
+                from src.services.idempotency.identity import validate_identity_coverage_strict
+                from src.services.verification.predicate import (
+                    is_irreversible_capability,
+                    write_capabilities,
+                )
+
+                irreversible = {c for c in write_capabilities() if is_irreversible_capability(c)}
+                id_errors = validate_identity_coverage_strict(irreversible)
+            except Exception as exc:
+                logger.error("Identity coverage check failed to run", exc_info=True)
+                raise RuntimeError("Identity coverage check could not run") from exc
+
+            if id_errors:
+                for err in id_errors:
+                    logger.error("Identity coverage: %s", err)
+                raise RuntimeError(
+                    f"Identity coverage found {len(id_errors)} error(s) — add an IdentitySpec "
+                    "or list the capability in POSITIONAL_KEY_ACCEPTED, or set "
+                    "JARVIS_SKIP_REGISTRY_VALIDATION=true to bypass."
+                )
+            logger.info("Identity coverage passed")
 
         # Ensure Qdrant collections exist
         try:
@@ -263,14 +330,6 @@ def create_app() -> FastAPI:
 
         yield
 
-        # Shutdown: close shared Anthropic client
-        try:
-            from src.config.settings import close_anthropic_client
-
-            await close_anthropic_client()
-        except Exception:
-            pass
-
         # Shutdown: close MCP bridge
         try:
             from src.connectors.mcp_bridge import shutdown_mcp_bridge
@@ -289,6 +348,14 @@ def create_app() -> FastAPI:
             logger.info("Orchestrator shut down")
         except Exception:
             logger.debug("Orchestrator shutdown failed", exc_info=True)
+
+        # Shutdown: close the deep-runtime psycopg3 pool (if opened at startup).
+        if getattr(app.state, "deep_checkpointer_pool", None):
+            try:
+                await app.state.deep_checkpointer_pool.close()
+                logger.info("[deep_runtime] checkpointer pool closed")
+            except Exception:
+                logger.debug("deep_checkpointer_pool close failed", exc_info=True)
 
         # Shutdown: dispose DB engine pool (returns all connections)
         try:
@@ -422,6 +489,7 @@ def create_app() -> FastAPI:
 
     # Insight surfaces (dismiss + execute)
     app.include_router(insights_router, tags=["insights"])
+    app.include_router(workspace_settings_router, tags=["workspace-settings"])
 
     return app
 

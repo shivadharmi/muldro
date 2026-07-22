@@ -57,6 +57,41 @@ test("keyboard Enter/Space on the focused card activates it", async () => {
   expect(onClick).toHaveBeenCalledTimes(2);
 });
 
+test("renders trust_context label as a pill when present", () => {
+  render(
+    <SurfaceCard
+      surface={surface({
+        trust_context: { trust_level: "learning", label: "Similar to 4 approvals", variant: "default" },
+      })}
+      onClick={vi.fn()}
+    />,
+  );
+  expect(screen.getByText("Similar to 4 approvals")).toBeTruthy();
+});
+
+test("renders graduation_hint when present", () => {
+  render(
+    <SurfaceCard
+      surface={surface({
+        trust_context: {
+          trust_level: "learning",
+          label: "Similar to 4 approvals",
+          variant: "default",
+          graduation_hint: "6 more to auto-approve",
+        },
+      })}
+      onClick={vi.fn()}
+    />,
+  );
+  expect(screen.getByText("6 more to auto-approve")).toBeTruthy();
+});
+
+test("renders no trust element when trust_context is absent", () => {
+  render(<SurfaceCard surface={surface()} onClick={vi.fn()} />);
+  expect(screen.queryByText(/auto-approve/)).toBeNull();
+  expect(screen.queryByText(/approvals/)).toBeNull();
+});
+
 test("a nested interactive section renders without an illegal nested <button>", () => {
   // surface_data with a real Button — previously this lived inside a <button> root.
   const button: A2UIComponent = {

@@ -1,7 +1,7 @@
 """Execution state machine — enforces valid transitions for TaskRun and TaskStep.
 
 Single source of truth for allowed status transitions in the execution engine.
-Used by GraphExecutor, Operator, and recovery to validate state changes.
+Used by GraphExecutor, the Executor, and recovery to validate state changes.
 """
 
 import logging
@@ -38,12 +38,21 @@ RUN_TRANSITIONS: dict[str, set[str]] = {
     "timed_out": {"pending", "cancelled"},
 }
 
-# TaskStep allowed transitions (10 statuses)
+# TaskStep allowed transitions.
+# Step 3 adds two NET-NEW terminal-ish statuses (spec §4.5):
+#   completed_unverified — write fired but read-back not yet confirmed (non-terminal
+#     SUCCESS: upgradeable to completed on async confirm, or partially_completed on
+#     async divergence).
+#   partially_completed  — read-back CONTRADICTED the expected effect (surfaced +
+#     escalate-first). Terminal for the step (compensation is a user-triggered re-run
+#     that creates new steps, not an onward transition of this one).
 STEP_TRANSITIONS: dict[str, set[str]] = {
     "pending": {"ready", "skipped", "blocked"},
     "ready": {"running", "skipped"},
     "running": {
         "completed",
+        "completed_unverified",
+        "partially_completed",
         "failed",
         "waiting_approval",
         "awaiting_input",
@@ -59,11 +68,23 @@ STEP_TRANSITIONS: dict[str, set[str]] = {
     # ``awaiting_reauth``. A step never enters awaiting_reauth (M2).
     "blocked": {"pending", "skipped"},
     "completed": set(),
+    # Deferred-read executor upgrades to completed on confirm, or partially_completed
+    # on post-turn divergence.
+    "completed_unverified": {"completed", "partially_completed"},
+    "partially_completed": set(),
     "failed": {"pending"},  # Retry: failed → pending
     "skipped": set(),
     "cancelled": set(),
     "timed_out": {"pending", "skipped"},
 }
+
+# Step/run statuses that count as a terminal SUCCESS for progress, dependency
+# satisfaction, and rollup counters (spec §4.5: "Replace every literal
+# status == 'completed' counter with TERMINAL_SUCCESS membership, or a run whose last
+# step is completed_unverified never reaches 100%"). NOTE: partially_completed is
+# deliberately EXCLUDED — a diverged write is not a success. This set gates step-level
+# counting only; run-level `completed` is unchanged (D6).
+TERMINAL_SUCCESS: frozenset[str] = frozenset({"completed", "completed_unverified"})
 
 
 class InvalidTransitionError(ValueError):

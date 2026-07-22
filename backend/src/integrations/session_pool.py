@@ -493,9 +493,24 @@ class UserMCPSessionPool:
                     # this, a revoked/expired token is resent repeatedly
                     # until the 5-min circuit cooldown elapses — at which
                     # point the same stale session is still cached.
-                    should_refresh = not scope_failure and (
-                        error_code == MCPErrorCode.AUTH_ERROR
-                        or self._is_oauth_server(server_name, workspace_id)
+                    # Only cycle the session when the failure could plausibly be
+                    # session/token staleness. A client-fault error — VALIDATION
+                    # (bad/missing args) or NOT_FOUND (missing resource) — has
+                    # nothing to do with session health; refreshing on it would
+                    # tear down the *shared* OAuth session (and release the managed
+                    # process) out from under concurrent calls, cascading
+                    # "Session task completed unexpectedly" to unrelated tools.
+                    client_fault = error_code in (
+                        MCPErrorCode.VALIDATION,
+                        MCPErrorCode.NOT_FOUND,
+                    )
+                    should_refresh = (
+                        not scope_failure
+                        and not client_fault
+                        and (
+                            error_code == MCPErrorCode.AUTH_ERROR
+                            or self._is_oauth_server(server_name, workspace_id)
+                        )
                     )
                     if should_refresh:
                         try:
@@ -511,6 +526,22 @@ class UserMCPSessionPool:
                                 exc_info=True,
                             )
                     break
+
+                # A lost session will never recover by retrying the SAME dead
+                # session — rebuild it (refresh drops the dead entry; re-acquire
+                # spawns a fresh one) before the backoff retry.
+                if error_code == MCPErrorCode.SESSION_LOST:
+                    try:
+                        await self.refresh_session(server_name, user_id, workspace_id=workspace_id)
+                        session = await self.get_or_create_session(
+                            server_name, user_id, workspace_id
+                        )
+                    except Exception:
+                        logger.debug(
+                            "Rebuild of %s session after session-loss failed",
+                            server_name,
+                            exc_info=True,
+                        )
 
                 # Exponential backoff with jitter: 1s, 2s, 4s
                 delay = (2**attempt) + random.uniform(0, 0.5)
@@ -850,7 +881,7 @@ def _requires_stdio_token(server_name: str, config: dict) -> bool:
 
     A server is token-required when it has an env-var mapping (directly or via
     its inferred provider) — i.e. spawning it without a token guarantees a
-    fatal crash. No-auth stdio servers (filesystem, playwright; auth_provider
+    fatal crash. No-auth stdio servers (e.g. playwright; auth_provider
     "none") have no mapping and are excluded.
     """
     if config.get("auth_provider", "none") == "none":

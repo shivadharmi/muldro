@@ -21,7 +21,7 @@ from ulid import ULID
 
 from src.models.plans import Plan, PlanTask
 from src.models.task_graph import TaskCheckpoint, TaskRun, TaskStep
-from src.services.execution_state import transition_step
+from src.services.execution_state import TERMINAL_SUCCESS, transition_step
 
 logger = logging.getLogger(__name__)
 
@@ -50,8 +50,16 @@ class StepGraphStore:
                 edges.append({"from": dep_id, "to": task.task_id})
         return {"nodes": nodes, "edges": edges}
 
-    async def populate_steps(self, run: TaskRun, plan: Plan) -> None:
-        """Build step DAG from plan tasks onto an existing run."""
+    async def populate_steps(self, run: TaskRun, plan: Plan, jit: bool = False) -> None:
+        """Build step DAG from plan tasks onto an existing run.
+
+        Step 10C P6: ``jit`` (default ``False`` → byte-identical eager pack) is computed by
+        the caller (``GraphExecutor``, which holds ``settings``/``redis``) and forwarded to
+        the ContextBuilder. The store has no settings/redis so it cannot gate itself. When
+        ``True`` the persisted pack is the SLIM always-on core; it still carries the render-
+        read ``entities`` key (``build(jit=True)`` populates it), so the plan/summary detail
+        tabs stay render-safe.
+        """
         result = await self._db.execute(
             select(PlanTask).where(PlanTask.plan_id == plan.plan_id).order_by(PlanTask.id)
         )
@@ -68,12 +76,17 @@ class StepGraphStore:
                     user_id=run.user_id,
                     query=plan.goal or "",
                     task_type=first_type,
+                    jit=jit,
                 )
                 from src.services.context_builder import ContextBuilder
 
                 prompt = ContextBuilder.to_prompt(pack)
                 if prompt:
-                    run.context_pack_json = pack.model_dump()
+                    from src.services.run_detail_store import RunDetailStore
+
+                    await RunDetailStore(self._db).upsert_context_pack(
+                        run.run_id, run.workspace_id, pack.model_dump()
+                    )
             except Exception:
                 logger.debug("ContextBuilder failed at run creation", exc_info=True)
 
@@ -132,7 +145,7 @@ class StepGraphStore:
         resumes the DAG).
         """
         all_steps = await self.get_all_steps(run_id)
-        completed_ids = {s.step_id for s in all_steps if s.status == "completed"}
+        completed_ids = {s.step_id for s in all_steps if s.status in TERMINAL_SUCCESS}
 
         ready = []
         needs_flush = False
@@ -222,7 +235,7 @@ class StepGraphStore:
                     "output_summary": str(s.output_data) if s.output_data else None,
                 }
                 for s in all_steps
-                if s.status == "completed"
+                if s.status in TERMINAL_SUCCESS
             }
         except Exception:
             pass  # Non-critical — checkpoint still saved without outputs
@@ -243,9 +256,9 @@ class StepGraphStore:
         )
         self._db.add(checkpoint)
         # run.checkpoint shares its JSONB column with application-state keys
-        # written by other paths (the ``auto_executed`` trust audit trail, the
-        # ``verification`` verdict). checkpoint() owns only the execution-snapshot
-        # keys built above — merge so those other keys survive instead of being
-        # clobbered. The persisted TaskCheckpoint row still stores pure snapshot.
+        # written by other paths (the ``verification`` verdict). checkpoint()
+        # owns only the execution-snapshot keys built above — merge so those
+        # other keys survive instead of being clobbered. The persisted
+        # TaskCheckpoint row still stores pure snapshot.
         run.checkpoint = {**(run.checkpoint or {}), **snapshot}
         await self._db.flush()

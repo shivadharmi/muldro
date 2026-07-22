@@ -424,6 +424,7 @@ async def _build_store_health(
     vector_store,
     redis,
     db: AsyncSession,
+    deep_checkpointer_degraded: bool = False,
 ) -> dict:
     """Build health status for all data stores."""
     # Neo4j
@@ -476,18 +477,34 @@ async def _build_store_health(
     else:
         redis_health = {"status": "disabled"}
 
+    # Deep-runtime checkpointer
+    if deep_checkpointer_degraded:
+        deep_runtime_health: dict = {
+            "status": "degraded",
+            "durable": False,
+            "error": (
+                "durable checkpointer unavailable — using in-process MemorySaver"
+                " (checkpoint state will not survive restart)"
+            ),
+        }
+    else:
+        deep_runtime_health = {"status": "healthy", "durable": True}
+
     # Collect degraded configured services
     degraded = []
     if neo4j_health.get("configured") and neo4j_health["status"] != "healthy":
         degraded.append("neo4j")
     if qdrant_health.get("configured") and qdrant_health["status"] != "healthy":
         degraded.append("qdrant")
+    if deep_runtime_health.get("status") == "degraded":
+        degraded.append("deep_checkpointer")
 
     return {
         "neo4j": neo4j_health,
         "qdrant": qdrant_health,
         "postgres": postgres_health,
         "redis": redis_health,
+        "deep_runtime": deep_runtime_health,
         "degraded_services": degraded,
     }
 
@@ -502,6 +519,7 @@ async def health_stores(
     graph_engine = getattr(request.app.state, "graph_engine", None)
     vector_store = getattr(request.app.state, "vector_store", None)
     redis = getattr(request.app.state, "redis", None)
+    deep_checkpointer_degraded = getattr(request.app.state, "deep_checkpointer_degraded", False)
 
     return await _build_store_health(
         settings=settings,
@@ -509,4 +527,5 @@ async def health_stores(
         vector_store=vector_store,
         redis=redis,
         db=db,
+        deep_checkpointer_degraded=deep_checkpointer_degraded,
     )

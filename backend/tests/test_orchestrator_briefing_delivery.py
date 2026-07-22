@@ -5,7 +5,7 @@ push. A second run for the same date (slow tick / worker restart) must NOT
 re-deliver — the per-day briefing row is the idempotency key.
 """
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -22,19 +22,26 @@ def _build_orchestrator(notifier, *, briefing_exists: bool):
     """
     from src.orchestrator.jarvis import JarvisOrchestrator
 
-    settings = make_mock_settings(use_bedrock=False)
+    settings = make_mock_settings()
 
     mock_db = MagicMock()
     mock_db.add = MagicMock()
     mock_db.flush = AsyncMock()
     mock_db.commit = AsyncMock()
 
-    # db.execute → existing-briefing lookup returns a row iff briefing_exists.
-    existing_result = MagicMock()
-    existing_result.scalar_one_or_none.return_value = (
+    # db.execute → first call is the idempotency check (existing-briefing
+    # lookup, returns a row iff briefing_exists); subsequent calls are the
+    # delivery-path Briefing fetch (only reached when briefing_exists=False).
+    idem_result = MagicMock()
+    idem_result.scalar_one_or_none.return_value = (
         MagicMock(briefing_id="brief_existing") if briefing_exists else None
     )
-    mock_db.execute = AsyncMock(return_value=existing_result)
+    delivery_result = MagicMock()
+    delivery_result.scalar_one_or_none.return_value = MagicMock(
+        briefing_id="brief_new", created_at=None
+    )
+    # first execute() = idempotency check; subsequent = delivery Briefing fetch.
+    mock_db.execute = AsyncMock(side_effect=[idem_result, delivery_result, delivery_result])
 
     db_ctx = AsyncMock()
     db_ctx.__aenter__ = AsyncMock(return_value=mock_db)
@@ -43,18 +50,17 @@ def _build_orchestrator(notifier, *, briefing_exists: bool):
 
     services = ServiceContainer(notifier=notifier)
 
-    with patch("src.orchestrator.jarvis.get_anthropic_client", return_value=AsyncMock()):
-        orch = JarvisOrchestrator(
-            settings=settings,
-            db_factory=db_factory,
-            services=services,
-        )
+    orch = JarvisOrchestrator(
+        settings=settings,
+        db_factory=db_factory,
+        services=services,
+    )
 
     # Avoid real tool execution + agent calls.
     orch._execute_tool = AsyncMock(return_value={"headline": "quiet"})
     orch._call_agent = AsyncMock(return_value="Today is quiet.")
     orch._publish_event = AsyncMock()
-    orch._push_workspace_surface = AsyncMock()
+    orch._push_briefing_surface = AsyncMock()
     # request_services returns a container whose notifier is the one under test.
     orch._request_services = MagicMock(return_value=services)
     return orch
@@ -70,7 +76,7 @@ async def test_scheduled_briefing_delivers_once():
     await orch.generate_briefing(user_id=TEST_USER_ID, workspace_id=WS)
 
     assert notifier.notify.await_count == 1
-    assert orch._push_workspace_surface.await_count == 1
+    orch._push_briefing_surface.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -83,7 +89,7 @@ async def test_scheduled_briefing_second_run_does_not_redeliver():
     await orch.generate_briefing(user_id=TEST_USER_ID, workspace_id=WS)
 
     assert notifier.notify.await_count == 0
-    assert orch._push_workspace_surface.await_count == 0
+    orch._push_briefing_surface.assert_not_awaited()
 
 
 @pytest.mark.asyncio

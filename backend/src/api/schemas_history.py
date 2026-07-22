@@ -4,6 +4,8 @@ from datetime import datetime
 
 from pydantic import BaseModel
 
+from src.contracts import ApprovalContext
+
 
 class HistoryStepSummary(BaseModel):
     """Compact step info for the history list view (no output_data)."""
@@ -47,7 +49,10 @@ class HistoryItemResponse(BaseModel):
     cost_usd: float | None = None
     agent: str | None = None
     steps: list[HistoryStepSummary] = []
-    approval: HistoryApprovalContext | None = None
+    # Rich ``ApprovalContext`` (B12 / P3.2) when the run's persisted surface carries
+    # one, else the thin ``HistoryApprovalContext`` fallback (byte-neutral for data
+    # without a persisted rich context). Rich first so union matching prefers it.
+    approval: ApprovalContext | HistoryApprovalContext | None = None
     live_phase: str | None = None
     surface_id: str | None = None
 

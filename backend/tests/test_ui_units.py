@@ -45,12 +45,12 @@ def test_require_kind_accepts_known_and_rejects_unknown() -> None:
 
 
 def test_run_header_builds_card_with_phase_badge() -> None:
-    c = units.run_header(title="Test run", phase="executing", agent_name="operator", progress="2/5")
+    c = units.run_header(title="Test run", phase="executing", agent_name="executor", progress="2/5")
     assert c.type == "Card"
     serialized = c.model_dump()
     assert "Test run" in str(serialized)
     assert "executing" in str(serialized)
-    assert "operator" in str(serialized)
+    assert "executor" in str(serialized)
     assert "2/5" in str(serialized)
 
 
@@ -115,6 +115,29 @@ def test_step_list_renders_each_step_with_status() -> None:
     assert "pending" in s
 
 
+def test_step_list_renders_verification_nuance_not_pending() -> None:
+    # Regression: completed_unverified/partially_completed must render their own
+    # icon+variant, not fall back to the "○"/"default" pending look (which is
+    # what happened before these two statuses were added to the status maps).
+    steps = [
+        StepState(step_id="s1", description="Send email", status="completed_unverified"),
+        StepState(step_id="s2", description="Update record", status="partially_completed"),
+    ]
+    c = units.step_list(steps=steps, run_id="r1")
+
+    unverified_row = c.children[1]
+    marker = unverified_row.children[0]
+    badge = unverified_row.children[-1]
+    assert marker.properties["text"] == "  ✓?"
+    assert badge.properties["variant"] == "warning"
+
+    partial_row = c.children[2]
+    marker = partial_row.children[0]
+    badge = partial_row.children[-1]
+    assert marker.properties["text"] == "  ⚠"
+    assert badge.properties["variant"] == "danger"
+
+
 def test_step_list_coerces_dicts() -> None:
     steps = [
         {"step_id": "s1", "description": "Do thing", "status": "completed"},
@@ -153,6 +176,9 @@ def test_approval_card_renders_risk_and_actions() -> None:
     assert "irreversible" in s
     assert "Approve" in s
     assert "Reject" in s
+    # The dead edit no-op was retired — no Edit button / approval.edit payload.
+    assert "Edit" not in s
+    assert "approval.edit" not in s
 
 
 def test_approval_card_without_actions() -> None:
@@ -213,7 +239,7 @@ def test_trace_metrics_with_step_breakdown() -> None:
         },
         {
             "step_id": "s2",
-            "agent": "operator",
+            "agent": "executor",
             "calls": 3,
             "tokens": 900,
             "cost_usd": 0.02,
@@ -225,7 +251,7 @@ def test_trace_metrics_with_step_breakdown() -> None:
     assert "s1" in s
     assert "s2" in s
     assert "perceiver" in s
-    assert "operator" in s
+    assert "executor" in s
 
 
 # ── insight_body ────────────────────────────────────────────────────

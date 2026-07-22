@@ -6,6 +6,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.services.execution_state import TERMINAL_SUCCESS
 from src.ui import renderer as r
 from src.ui.contracts import A2UIComponent, DetailSection, DetailTabResponse
 
@@ -14,6 +15,7 @@ from ._shared import (
     _extract_run_id,
     _format_ts,
     _get_step_desc,
+    _load_context_pack,
     _section,
     _truncate,
 )
@@ -50,7 +52,7 @@ async def build_plan_overview(db: AsyncSession, surface: Any, **kwargs: Any) -> 
 
     step_children: list[A2UIComponent] = []
     for i, step in enumerate(steps):
-        variant = "success" if step.status == "completed" else "default"
+        variant = "success" if step.status in TERMINAL_SUCCESS else "default"
         step_children.append(
             r.row(
                 f"step_{i}",
@@ -62,7 +64,7 @@ async def build_plan_overview(db: AsyncSession, surface: Any, **kwargs: Any) -> 
             )
         )
 
-    completed = sum(1 for s in steps if s.status == "completed")
+    completed = sum(1 for s in steps if s.status in TERMINAL_SUCCESS)
     total = len(steps)
     sections = [_section("summary", "Run Summary", run_children, collapsed=False)]
     if step_children:
@@ -82,7 +84,7 @@ async def build_plan_context(db: AsyncSession, surface: Any, **kwargs: Any) -> D
     if run_id:
         run_result = await db.execute(select(TaskRun).where(TaskRun.run_id == run_id))
         run = run_result.scalar_one_or_none()
-        ctx = (run.context_pack_json if run else None) or {}
+        ctx = await _load_context_pack(db, run)
 
         if ctx.get("memories"):
             mem_children = [

@@ -1,0 +1,9 @@
+# Phase 0 spike deps (NOT added to backend/pyproject.toml until the spike passes).
+# Pin exact versions after the spike confirms the API surface — see the migration
+# assessment's appendix. These are the floors known to expose create_deep_agent +
+# the middleware decorators + adaptive-thinking pass-through.
+deepagents>=0.6.8
+langgraph>=0.2
+langchain>=1.0
+langchain-anthropic>=0.3
+langchain-core>=0.3

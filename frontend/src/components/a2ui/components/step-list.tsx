@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useMemo } from "react";
-import type { StepState } from "@/lib/a2ui-types";
+import { type StepState, isStepDone } from "@/lib/a2ui-types";
 import { statusTextColor } from "@/lib/design-tokens";
 import { stepStatusIcon, formatDuration } from "./step-presentation";
 
@@ -101,14 +101,14 @@ export function StepList({ steps, currentStep, triggeringStepId }: StepListProps
     });
   };
 
-  const completedSteps = useMemo(() => steps.filter((s) => s.status === "completed"), [steps]);
+  const completedSteps = useMemo(() => steps.filter((s) => isStepDone(s.status)), [steps]);
   const shouldGroup = completedSteps.length >= 5 && !showCompletedSteps;
   const totalCompletedMs = useMemo(
     () => completedSteps.reduce((sum, s) => sum + (s.duration_ms ?? 0), 0),
     [completedSteps],
   );
   const firstCompletedIdx = useMemo(
-    () => (shouldGroup ? steps.findIndex((s) => s.status === "completed") : -1),
+    () => (shouldGroup ? steps.findIndex((s) => isStepDone(s.status)) : -1),
     [steps, shouldGroup],
   );
 
@@ -130,7 +130,7 @@ export function StepList({ steps, currentStep, triggeringStepId }: StepListProps
         </button>
       )}
       {steps.map((step, idx) => {
-        if (step.status === "completed" && shouldGroup) {
+        if (isStepDone(step.status) && shouldGroup) {
           if (idx === firstCompletedIdx) {
             return (
               <CompletedGroupSummary
@@ -232,7 +232,7 @@ export function StepList({ steps, currentStep, triggeringStepId }: StepListProps
 
 /** Compact step list for surface card preview (shows counts, not full list). */
 export function StepListCompact({ steps }: { steps: StepState[] }) {
-  const completed = steps.filter((s) => s.status === "completed").length;
+  const completed = steps.filter((s) => isStepDone(s.status)).length;
   const failed = steps.filter((s) => s.status === "failed").length;
   const total = steps.length;
 

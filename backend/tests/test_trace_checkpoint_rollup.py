@@ -35,17 +35,15 @@ def mock_db():
 
 
 def _make_executor(settings, mock_db):
-    with patch("src.services.graph_executor.get_anthropic_client") as mock_client:
-        mock_client.return_value = MagicMock()
-        from src.services.graph_executor import GraphExecutor
+    from src.services.graph_executor import GraphExecutor
 
-        return GraphExecutor(settings, mock_db)
+    return GraphExecutor(settings, mock_db)
 
 
 def _trace_with_usage(trace_id, *, input_t, output_t, cost):
     """Build a finished-style trace whose totals equal the given numbers."""
     trace = JarvisTrace(trace_id=trace_id, trigger="execution:test")
-    span = trace.start_span("operator")
+    span = trace.start_span("executor")
     trace.end_span(
         span.span_id,
         input_tokens=input_t,
@@ -237,7 +235,6 @@ async def test_resume_run_checkpoints_when_paused_again(settings, mock_db):
     run.created_at = now
     run.checkpoint = {}
     run.error = None
-    run.context_pack_json = {}
 
     run_result = MagicMock()
     run_result.scalar_one_or_none.return_value = run

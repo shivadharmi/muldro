@@ -48,6 +48,8 @@ _STEP_STATUS_ICON: dict[str, str] = {
     "pending": "○",
     "executing": "◉",
     "completed": "✓",
+    "completed_unverified": "✓?",
+    "partially_completed": "⚠",
     "failed": "✗",
     "approval_needed": "⚠",
     "user_action": "👤",
@@ -57,6 +59,8 @@ _STEP_STATUS_VARIANT: dict[str, str] = {
     "pending": "default",
     "executing": "default",
     "completed": "success",
+    "completed_unverified": "warning",
+    "partially_completed": "danger",
     "failed": "danger",
     "approval_needed": "warning",
     "user_action": "warning",
@@ -247,12 +251,6 @@ def approval_card(
                         "Reject",
                         variant="secondary",
                         action_payload={"type": "approval.reject", "approval_id": a.approval_id},
-                    ),
-                    r.button(
-                        f"{base}_edit",
-                        "Edit",
-                        variant="secondary",
-                        action_payload={"type": "approval.edit", "approval_id": a.approval_id},
                     ),
                 ],
             )
@@ -561,9 +559,7 @@ def require_kind(kind: str) -> SurfaceKind:
     raise ValueError(f"Unknown surface kind: {kind!r}")
 
 
-_LEGACY_KINDS: frozenset[str] = frozenset(
-    {"plan", "checklist", "approval", "comparison", "timeline", "table", "activity"}
-)
+_LEGACY_KINDS: frozenset[str] = frozenset({"plan", "approval"})
 
 
 # ── Coercion helpers ────────────────────────────────────────────────

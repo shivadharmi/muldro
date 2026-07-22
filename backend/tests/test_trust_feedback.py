@@ -90,7 +90,15 @@ class TestAutoExecutionTrustFeedback:
 
         from src.services.graph_executor import GraphExecutor
 
-        executor = GraphExecutor(MagicMock(), AsyncMock())
+        # begin_nested() is a SAVEPOINT context manager (6C follow-up #4); mock it as
+        # a real async context manager, matching tests/test_resume_reaper.py.
+        db = AsyncMock()
+        nested_cm = MagicMock()
+        nested_cm.__aenter__ = AsyncMock(return_value=None)
+        nested_cm.__aexit__ = AsyncMock(return_value=False)
+        db.begin_nested = MagicMock(return_value=nested_cm)
+
+        executor = GraphExecutor(MagicMock(), db)
         with patch("src.services.risk_assessor.record_approval_decision", new=AsyncMock()) as rec:
             await executor._record_auto_execution_outcome("email.send", "low", "ws_test")
 
@@ -110,25 +118,6 @@ class TestAutoExecutionTrustFeedback:
             await executor._record_auto_execution_outcome("", "low", "ws_test")
 
         rec.assert_not_awaited()
-
-    def test_remember_auto_executed_records_on_checkpoint(self):
-        """Auto-executed (capability, risk_level) pairs are stamped on the run
-        so a later verification failure can reverse the trust reinforcement."""
-        from unittest.mock import AsyncMock, MagicMock
-
-        from src.services.graph_executor import GraphExecutor
-
-        executor = GraphExecutor(MagicMock(), AsyncMock())
-        run = MagicMock()
-        run.checkpoint = None
-
-        executor._remember_auto_executed(run, "email.send", "medium")
-        executor._remember_auto_executed(run, "calendar.create", "low")
-
-        assert run.checkpoint["auto_executed"] == [
-            {"capability": "email.send", "risk_level": "medium"},
-            {"capability": "calendar.create", "risk_level": "low"},
-        ]
 
 
 class TestVerificationIsAdvisory:
@@ -170,7 +159,7 @@ class TestVerificationIsAdvisory:
         executor._db.execute = AsyncMock(side_effect=_execute)
         return executor
 
-    def _make_run(self, auto_executed):
+    def _make_run(self):
         from unittest.mock import MagicMock
 
         run = MagicMock()
@@ -179,14 +168,14 @@ class TestVerificationIsAdvisory:
         run.workspace_id = "ws_1"
         run.status = "partially_completed"
         run.current_step_ids = []
-        run.checkpoint = {"auto_executed": auto_executed} if auto_executed is not None else {}
+        run.checkpoint = {}
         return run
 
     async def test_failed_verdict_does_not_demote_trust(self):
         from unittest.mock import AsyncMock, patch
 
         executor = self._make_executor("failed", ["completed"])
-        run = self._make_run([{"capability": "email.send", "risk_level": "medium"}])
+        run = self._make_run()
 
         with patch("src.services.risk_assessor.record_approval_decision", new=AsyncMock()) as rec:
             await executor._run_verification(run)
@@ -197,7 +186,7 @@ class TestVerificationIsAdvisory:
         from unittest.mock import patch
 
         executor = self._make_executor("failed", ["completed", "completed"])
-        run = self._make_run(None)
+        run = self._make_run()
 
         with patch("src.services.outcome_learner.transition_run") as tr:
             await executor._run_verification(run)
@@ -210,7 +199,7 @@ class TestVerificationIsAdvisory:
         from unittest.mock import patch
 
         executor = self._make_executor("failed", ["completed", "failed"])
-        run = self._make_run(None)
+        run = self._make_run()
 
         with patch("src.services.outcome_learner.transition_run") as tr:
             await executor._run_verification(run)
@@ -221,35 +210,8 @@ class TestVerificationIsAdvisory:
 
     async def test_verdict_recorded_in_checkpoint(self):
         executor = self._make_executor("failed", ["completed"])
-        run = self._make_run(None)
+        run = self._make_run()
 
         await executor._run_verification(run)
 
         assert run.checkpoint["verification"]["verdict"] == "failed"
-
-
-class TestCheckpointPreservation:
-    """_checkpoint owns only the execution-snapshot keys; it must merge-preserve
-    other application-state keys on run.checkpoint instead of clobbering them."""
-
-    async def test_checkpoint_preserves_auto_executed(self):
-        from unittest.mock import AsyncMock, MagicMock
-
-        from src.services.graph_executor import GraphExecutor
-
-        executor = GraphExecutor(MagicMock(), AsyncMock())
-        executor._get_all_steps = AsyncMock(return_value=[])
-        run = MagicMock()
-        run.run_id = "run_1"
-        run.workspace_id = "ws_1"
-        run.status = "running"
-        run.current_step_ids = ["s1"]
-        run.checkpoint = {"auto_executed": [{"capability": "email.send", "risk_level": "low"}]}
-
-        await executor._checkpoint(run, None, "step_completed")
-
-        assert run.checkpoint["auto_executed"] == [
-            {"capability": "email.send", "risk_level": "low"}
-        ]
-        assert run.checkpoint["status"] == "running"
-        assert "checkpoint_at" in run.checkpoint

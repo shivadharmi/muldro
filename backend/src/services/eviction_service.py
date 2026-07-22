@@ -43,7 +43,16 @@ LOW_STABILITY_BATCH = 100
 
 
 class EvictionService:
-    """Hard-delete expired records with cascade to external stores."""
+    """Hard-delete expired records with cascade to external stores.
+
+    Retention contract (Step 5 §6, one-owner-per-fact): the ``runtime_events`` table
+    is the durable **system-of-record** and is intentionally EXEMPT from eviction —
+    hard-deleting it would make reconcile-from-event-log (Step 10) impossible. This
+    service only hard-deletes derivable/replaceable data (normalized_events at 90d,
+    memories, sessions, surfaces, approvals, interaction_logs). If bounded retention
+    of runtime_events is ever required it MUST be an archive (cold storage), never a
+    hard-delete.
+    """
 
     def __init__(
         self,
@@ -67,6 +76,7 @@ class EvictionService:
         results["events"] = await self._evict_old_events()
         results["interaction_logs"] = await self._evict_interaction_logs()
         results["low_stability"] = await self._evict_low_stability_memories()
+        results["expired_context_packs"] = await self._evict_expired_context_packs()
 
         total = sum(results.values())
         if total > 0:
@@ -275,6 +285,33 @@ class EvictionService:
         if count:
             await self._db.flush()
             logger.info("Evicted %d interaction logs", count)
+        return count
+
+    # ------------------------------------------------------------------
+    # Context-pack TTL eviction (column-level, not a row delete)
+    # ------------------------------------------------------------------
+
+    async def _evict_expired_context_packs(self) -> int:
+        """NULL context_packs past their TTL (Step 5, D-C3), preserving policy_decision
+        on the same row. Not a row delete — the detail row and its durable
+        policy_decision survive; only the heavy ephemeral pack is released."""
+        from sqlalchemy import update
+
+        from src.models.task_graph import TaskRunDetail
+
+        result = await self._db.execute(
+            update(TaskRunDetail)
+            .where(
+                TaskRunDetail.context_pack.isnot(None),
+                TaskRunDetail.context_pack_expires_at.isnot(None),
+                TaskRunDetail.context_pack_expires_at < datetime.now(timezone.utc),
+            )
+            .values(context_pack=None)
+        )
+        await self._db.flush()
+        count = result.rowcount or 0
+        if count:
+            logger.info("Evicted %d expired context packs", count)
         return count
 
     # ------------------------------------------------------------------

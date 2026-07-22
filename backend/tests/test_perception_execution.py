@@ -130,8 +130,7 @@ class TestQueuePerceptionPlan:
 
 class TestPersistPlanIdempotency:
     @pytest.mark.asyncio
-    @patch("src.orchestrator.jarvis.get_anthropic_client")
-    async def test_idempotency_prevents_duplicate_plans(self, mock_client):
+    async def test_idempotency_prevents_duplicate_plans(self):
         """Same idempotency_key should skip plan creation."""
         from src.orchestrator.plan_store import PlanStore
 
@@ -169,8 +168,7 @@ class TestPersistPlanIdempotency:
         assert result.plan_id == "plan_existing_123"
 
     @pytest.mark.asyncio
-    @patch("src.orchestrator.jarvis.get_anthropic_client")
-    async def test_trigger_type_perception(self, mock_client):
+    async def test_trigger_type_perception(self):
         """Perception plans should be persisted with trigger_type='perception'."""
         from src.orchestrator.plan_store import PlanStore
 

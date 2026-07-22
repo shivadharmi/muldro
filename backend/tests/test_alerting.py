@@ -89,7 +89,7 @@ async def test_error_rate_ok(trace_store):
                     "output_tokens": 0,
                 },
                 {
-                    "agent_name": "operator",
+                    "agent_name": "executor",
                     "duration_ms": 200,
                     "input_tokens": 0,
                     "output_tokens": 0,

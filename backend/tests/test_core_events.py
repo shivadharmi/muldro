@@ -18,6 +18,7 @@ from src.orchestrator.core_events import (
     AgentThinking,
     AgentToolCall,
     AgentToolResult,
+    ApprovalRequired,
     CoreEvent,
     IntentClassified,
     InteractionLogged,
@@ -85,6 +86,24 @@ class TestSseMapping:
             "text": "hello",
         }
 
+    def test_approval_required_maps_to_frozen_approval_needed_frame(self):
+        # The frontend consumes this frozen frame to render the confirmation prompt AND to
+        # keep the paused checkpoint resumable — a dropped/renamed key strands the pause.
+        assert core_event_to_sse(
+            ApprovalRequired(
+                approval_id="apr_1",
+                capability="email.send",
+                risk_level="high",
+                thread_id="c:ws_1:t1",
+            )
+        ) == {
+            "event": "approval_needed",
+            "approval_id": "apr_1",
+            "capability": "email.send",
+            "risk_level": "high",
+            "thread_id": "c:ws_1:t1",
+        }
+
     def test_run_completed_without_surface(self):
         assert core_event_to_sse(RunCompleted(trace_id="t1", run_id=None)) == {
             "event": "done",
@@ -130,6 +149,9 @@ class TestDiscriminatedUnion:
             TraceStarted(trace_id="t1"),
             PlanReady(plan={"goal": "g"}),
             RunFailed(trace_id="t1", code="c", message="m", correlation_id="cid"),
+            ApprovalRequired(
+                approval_id="apr_1", capability="email.send", risk_level="high", thread_id="th_1"
+            ),
         ):
             dumped = original.model_dump()
             restored = adapter.validate_python(dumped)
@@ -146,10 +168,10 @@ _AGENT_SSE_DICTS = [
     {"event": "agent_start", "agent": "planner", "model": "claude-opus"},
     {"event": "thinking", "agent": "planner", "text": "hmm", "is_thinking": True},
     {"event": "text_delta", "agent": "planner", "text": "hello"},
-    {"event": "tool_call", "agent": "operator", "tool": "send", "input": {"to": "x"}},
+    {"event": "tool_call", "agent": "executor", "tool": "send", "input": {"to": "x"}},
     {
         "event": "tool_result",
-        "agent": "operator",
+        "agent": "executor",
         "tool": "send",
         "result": {"ok": True},
         "blocked": False,
@@ -200,7 +222,7 @@ class TestAgentEventRoundTrip:
         for the AgentDone validation crash that killed the live chat stream."""
         sse = {
             "event": "agent_done",
-            "agent": "operator",
+            "agent": "executor",
             "text": "done",
             "input_tokens": 10,
             "output_tokens": 5,

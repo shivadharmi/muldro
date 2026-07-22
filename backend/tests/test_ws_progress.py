@@ -15,8 +15,7 @@ class TestPublishProgress:
         settings = make_mock_settings()
         db = AsyncMock()
 
-        with patch("src.services.graph_executor.get_anthropic_client"):
-            executor = GraphExecutor(settings=settings, db=db)
+        executor = GraphExecutor(settings=settings, db=db)
         return executor
 
     async def test_publish_progress_sends_to_redis(self):

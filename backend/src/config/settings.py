@@ -1,6 +1,5 @@
 from functools import lru_cache
 
-import anthropic
 from pydantic_settings import BaseSettings
 
 
@@ -52,8 +51,6 @@ class Settings(BaseSettings):
     # Anthropic
     anthropic_api_key: str = ""
     anthropic_model: str = "claude-sonnet-4-6"
-    use_bedrock: bool = False
-    bedrock_region: str = "us-east-1"
 
     # Server
     host: str = "0.0.0.0"
@@ -62,15 +59,13 @@ class Settings(BaseSettings):
     environment: str = "development"  # Environment discriminator (development, staging, production)
     log_json: bool = False  # Use JSON structured logging
 
-    # Embeddings — Voyage AI (primary) or Bedrock Titan (fallback when no voyage_api_key)
-    embedding_model: str = "voyage-3"
-    voyage_api_key: str = ""
-    voyage_base_url: str = "https://api.voyageai.com/v1"
+    # Embeddings — local fastembed (ONNX, no external API). Model determines the vector
+    # dimension; keep it in sync with vector_store.VECTOR_SIZE (bge-base-en-v1.5 = 768).
+    embedding_model: str = "BAAI/bge-base-en-v1.5"
 
-    # Reranker (Bedrock) — available in: us-west-2, eu-central-1, ap-northeast-1, ca-central-1
-    reranker_model: str = "amazon.rerank-v1:0"
+    # Reranker — local fastembed cross-encoder (ONNX, no external API).
+    reranker_model: str = "Xenova/ms-marco-MiniLM-L-12-v2"
     reranker_enabled: bool = True
-    reranker_region: str = "us-west-2"
 
     # Thresholds
     importance_threshold: float = 0.7  # Events above this score trigger planning
@@ -167,9 +162,52 @@ class Settings(BaseSettings):
     # Registry validation
     skip_registry_validation: bool = False  # JARVIS_SKIP_REGISTRY_VALIDATION
 
-    # Filesystem MCP server root directory (seeded into filesystem installation args).
-    # Created at app startup if missing. Defaults to ~/jarvis-workspace.
-    filesystem_mcp_root: str = ""
+    # Deep-only inline-format augmentation (Step 7B1 P4, Fork-1): when True, the deep
+    # lead's system prompt is augmented with PRESENTER_VOICE so it formats the
+    # user-facing reply inline (chat reply + optional fenced surface spec) instead of
+    # delegating to a separate Presenter step. Off by default and legacy-untouched —
+    # live activation (dropping the separate presenter step) is a Step-10 gate.
+    deep_inline_format: bool = False  # JARVIS_DEEP_INLINE_FORMAT
+
+    # Deep delegate layer (Step 7B2): when True, the deep lead is built with
+    # read-only Jarvis sub-agents (e.g. Perceiver) registered via
+    # ``create_deep_agent(subagents=)`` so it can route reads through the built-in
+    # ``task`` tool. Off by default — the layer stays dormant (no live lead→delegate
+    # routing) until explicitly enabled; live wiring is a Step-8/10 gate.
+    deep_delegates_enabled: bool = False  # JARVIS_DEEP_DELEGATES_ENABLED
+
+    # Deep inline read-back verifier (Step 7C): when True, an inner-of-write_lock
+    # ``@wrap_tool_call`` middleware reads an irreversible/external write's effect back
+    # and ANNOTATES the verdict onto the ToolMessage content (never status, so the SSE
+    # frame does not flip to blocked). Off by default — dormant until Phase 3 wires it
+    # into the chain; live activation is a Step-10 gate.
+    deep_readback_enabled: bool = False  # JARVIS_DEEP_READBACK_ENABLED
+
+    # Step 8: gate the JIT-hybrid slim context pack. Deep chat path only; when
+    # False the deep path builds the full eager pack (byte-identical to legacy).
+    deep_context_jit: bool = False  # JARVIS_DEEP_CONTEXT_JIT
+
+    # Step 10D A-5: gate the deep-chat single-lead restructure. When True AND mode=="ask",
+    # the chat path runs ONE synthetic lead over the whole goal (built in 5a, wired in 5b)
+    # instead of the per-step loop + presenter step.
+    # Off by default — dormant until the 5b chat wiring lands and this flag is flipped.
+    deep_single_lead: bool = False  # JARVIS_DEEP_SINGLE_LEAD
+
+    # Step 10D P2.5c: drop the Planner from the deep chat single-lead path. When True (and only
+    # when the single-lead path is already active — deep_single_lead + permission_mode), a chat
+    # turn skips classify_intent + fast-path + Planner + plan record +
+    # resolve_plan_routing entirely and builds ONE lead from the connector-derived scope
+    # (resolve_connector_scope). Off by default — dormant; flag-off is byte-identical (Planner
+    # still called). Gates ONLY the P2.5c reroute, independently of deep_single_lead.
+    chat_planless: bool = False  # JARVIS_CHAT_PLANLESS
+
+    # Step-10A A3: opt-in fail-closed write lock. When True, a WRITE tool call is REFUSED
+    # (not executed unlocked) if Redis is unreachable — for prod where Redis is expected up.
+    # Default False preserves today's fail-OPEN behavior (authz is still enforced by
+    # capability_scope + trust_gate; autonomous double-fire is still guarded by the
+    # idempotency ledger the lock wraps). Applies to BOTH the deep middleware and the
+    # autonomous wrapper.
+    write_lock_require_redis: bool = False  # JARVIS_WRITE_LOCK_REQUIRE_REDIS
 
     # Webhook / push-notification infrastructure (OPTIONAL — empty = poll-only).
     # When unset, webhook registration is a graceful no-op and the system stays
@@ -194,9 +232,7 @@ class Settings(BaseSettings):
 
     @property
     def resolved_model(self) -> str:
-        """Return the model ID appropriate for the configured backend (direct API or Bedrock)."""
-        if self.use_bedrock:
-            return _to_bedrock_model_id(self.anthropic_model)
+        """Return the configured direct-Anthropic model ID."""
         return self.anthropic_model
 
     @property
@@ -211,11 +247,10 @@ class Settings(BaseSettings):
 
         Raises RuntimeError with an actionable message. Called once at app startup.
         """
-        if not self.use_bedrock and not self.anthropic_api_key:
+        if not self.anthropic_api_key:
             raise RuntimeError(
                 "JARVIS_ANTHROPIC_API_KEY is not set. Jarvis cannot talk to any agent "
-                "without it. Set it in your .env (get a key at https://console.anthropic.com), "
-                "or set JARVIS_USE_BEDROCK=true to use AWS Bedrock credentials instead."
+                "without it. Set it in your .env (get a key at https://console.anthropic.com)."
             )
 
         if self.is_production and not self.oauth_encryption_key:
@@ -227,63 +262,6 @@ class Settings(BaseSettings):
             )
 
 
-# Mapping from direct API model IDs to Bedrock inference profile IDs
-# Uses cross-region profiles (apac/global) that work in ap-south-1
-_BEDROCK_MODEL_MAP = {
-    # Claude 4 (legacy)
-    "claude-opus-4-20250514": "us.anthropic.claude-opus-4-5-20251101-v1:0",
-    "claude-sonnet-4-20250514": "us.anthropic.claude-sonnet-4-20250514-v1:0",
-    "claude-haiku-4-20250514": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
-    # Claude 4.5 (legacy)
-    "claude-sonnet-4-5-20250929": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
-    "claude-haiku-4-5-20251001": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
-    "claude-opus-4-5-20251101": "us.anthropic.claude-opus-4-5-20251101-v1:0",
-    # Claude 4.6 / 4.8 (latest)
-    "claude-sonnet-4-6": "us.anthropic.claude-sonnet-4-6",
-    "claude-opus-4-6": "us.anthropic.claude-opus-4-6-v1",
-    "claude-opus-4-8": "us.anthropic.claude-opus-4-8",
-}
-
-
-def _to_bedrock_model_id(model: str) -> str:
-    """Convert a direct API model ID to its Bedrock equivalent."""
-    if model in _BEDROCK_MODEL_MAP:
-        return _BEDROCK_MODEL_MAP[model]
-    # Already a Bedrock model ID
-    if model.startswith("anthropic."):
-        return model
-    # Fallback: wrap with Bedrock convention
-    return f"anthropic.{model}-v1:0"
-
-
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
-
-
-_anthropic_client: anthropic.AsyncAnthropic | None = None
-
-
-def get_anthropic_client(settings: Settings) -> anthropic.AsyncAnthropic:
-    """Return a shared Anthropic client (singleton).
-
-    Reusing a single client avoids leaking aiohttp/httpx sessions that each
-    new AsyncAnthropic() instance creates internally.
-    """
-    global _anthropic_client
-    if _anthropic_client is None:
-        if settings.use_bedrock:
-            from anthropic import AsyncAnthropicBedrock
-
-            _anthropic_client = AsyncAnthropicBedrock(aws_region=settings.bedrock_region)  # type: ignore[assignment]
-        else:
-            _anthropic_client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
-    return _anthropic_client
-
-
-async def close_anthropic_client() -> None:
-    """Close the shared Anthropic client. Call at app shutdown."""
-    global _anthropic_client
-    if _anthropic_client is not None:
-        await _anthropic_client.close()
-        _anthropic_client = None

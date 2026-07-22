@@ -9,7 +9,7 @@ All service wiring happens here. Three tiers control startup behaviour:
 
 Session model (P2 #4 — reverses the old "one long-lived session" ADR §10):
   * ``build_shared(settings)`` builds **session-free** singletons (Qdrant /
-    Neo4j / Bedrock clients, the Redis client, the shared EventBus, the
+    Neo4j / Bedrock embedding+reranker clients, the Redis client, the shared EventBus, the
     OAuthManager which uses a db_factory). These are safe to share across
     concurrent requests.
   * ``attach_session(shared, settings, db)`` builds the **DB-bound** services

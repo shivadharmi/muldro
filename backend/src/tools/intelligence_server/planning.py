@@ -210,7 +210,7 @@ async def approve_action(
 
 
 @intelligence.tool(
-    tags={"operator", "write"},
+    tags={"executor", "write"},
     annotations=ToolAnnotations(readOnlyHint=False, idempotentHint=True),
 )
 async def update_execution(
@@ -265,7 +265,7 @@ async def update_execution(
 
 
 @intelligence.tool(
-    tags={"operator", "read"},
+    tags={"executor", "read"},
     annotations=ToolAnnotations(readOnlyHint=True),
 )
 async def verify_run(

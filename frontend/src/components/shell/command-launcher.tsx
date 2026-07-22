@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useShellStore } from "@/stores/shell-store";
-import { useCommandStore, type CommandMode } from "@/stores/command-store";
+import { useCommandStore, type PermissionMode } from "@/stores/command-store";
 
 const COMMANDS = [
   { name: "/brief", description: "Morning briefing", route: "/briefings" },
@@ -16,21 +16,21 @@ const COMMANDS = [
   { name: "/approvals", description: "Pending approvals", route: "/approvals" },
 ] as const;
 
-const MODES: { value: CommandMode; label: string; icon: string }[] = [
+const MODES: { value: PermissionMode; label: string; icon: string }[] = [
+  { value: "auto", label: "Auto", icon: "◐" },
   { value: "ask", label: "Ask", icon: "?" },
-  { value: "plan", label: "Plan", icon: "◈" },
-  { value: "execute", label: "Execute", icon: "▶" },
+  { value: "bypass", label: "Bypass", icon: "▶" },
 ];
 
-const SUGGESTIONS: { mode: CommandMode; text: string }[] = [
-  { mode: "ask", text: "Triage my inbox from this morning" },
-  { mode: "plan", text: "Plan a weekly digest for my team" },
-  { mode: "execute", text: "Sync Linear issues to Notion" },
+const SUGGESTIONS: { mode: PermissionMode; text: string }[] = [
+  { mode: "auto", text: "Triage my inbox from this morning" },
+  { mode: "ask", text: "Plan a weekly digest for my team" },
+  { mode: "bypass", text: "Sync Linear issues to Notion" },
 ];
 
 export function CommandLauncher() {
   const { commandLauncherOpen, closeCommandLauncher } = useShellStore();
-  const { mode, setMode } = useCommandStore();
+  const { permissionMode, setPermissionMode } = useCommandStore();
   const [value, setValue] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -89,10 +89,10 @@ export function CommandLauncher() {
 
   const selectSuggestion = useCallback(
     (suggestion: (typeof SUGGESTIONS)[number]) => {
-      setMode(suggestion.mode);
+      setPermissionMode(suggestion.mode);
       submitText(suggestion.text);
     },
-    [setMode, submitText]
+    [setPermissionMode, submitText]
   );
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -137,9 +137,9 @@ export function CommandLauncher() {
               <button
                 key={m.value}
                 type="button"
-                onClick={() => setMode(m.value)}
+                onClick={() => setPermissionMode(m.value)}
                 className={`flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-full transition-all duration-150 cursor-pointer ${
-                  mode === m.value
+                  permissionMode === m.value
                     ? "bg-j-primary text-j-primary-fg font-medium"
                     : "text-t-muted hover:text-t-secondary hover:bg-surface-2"
                 }`}
@@ -164,11 +164,9 @@ export function CommandLauncher() {
               }}
               onKeyDown={handleKeyDown}
               placeholder={
-                mode === "ask"
-                  ? "Ask Jarvis anything…"
-                  : mode === "plan"
-                    ? "Describe what you want to plan…"
-                    : "What should Jarvis execute?"
+                permissionMode === "bypass"
+                  ? "What should Jarvis do?"
+                  : "Ask Jarvis anything…"
               }
               className="w-full bg-transparent text-base sm:text-[15px] text-t-primary placeholder-t-muted focus:outline-none"
               autoFocus

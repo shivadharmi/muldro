@@ -12,12 +12,7 @@ export type SurfaceKind =
   | "message"
   // Legacy kinds retained so existing persisted surfaces still render
   | "plan"
-  | "checklist"
-  | "approval"
-  | "comparison"
-  | "timeline"
-  | "table"
-  | "activity";
+  | "approval";
 
 /** Surfaces for which the frontend fetches detail tabs from the API. */
 export const SYSTEM_SURFACE_KINDS: ReadonlySet<SurfaceKind> = new Set([
@@ -45,12 +40,7 @@ export const ALL_SURFACE_KINDS: ReadonlySet<string> = new Set([
   ...SYSTEM_SURFACE_KINDS,
   ...AGENT_SURFACE_KINDS,
   "plan",
-  "checklist",
   "approval",
-  "comparison",
-  "timeline",
-  "table",
-  "activity",
 ]);
 
 /**

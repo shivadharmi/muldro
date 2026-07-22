@@ -21,10 +21,7 @@ def mock_settings():
 
 @pytest.fixture
 def verifier(mock_settings, mock_db):
-    with patch("src.services.verifier.get_anthropic_client") as mock_client:
-        mock_client.return_value = AsyncMock()
-        v = Verifier(mock_settings, mock_db)
-    return v
+    return Verifier(mock_settings, mock_db)
 
 
 def _make_run(
@@ -314,39 +311,70 @@ class TestLLMJudgeNonJSONResponse:
     judge response must degrade quietly to a not-passed verdict — NOT raise a
     JSONDecodeError that spews a full traceback on every run (see log2.log)."""
 
-    def _judge_response(self, text: str):
-        block = MagicMock()
-        block.text = text
-        resp = MagicMock()
-        resp.content = [block]
-        return resp
-
     @pytest.mark.asyncio
     async def test_non_json_judge_response_returns_false_without_raising(self, verifier):
-        verifier._client.messages.create = AsyncMock(
-            return_value=self._judge_response("The run looks fine to me.")
-        )
         condition = {"type": "llm_judge", "criteria": "Did the run succeed?"}
-        # Must not raise; advisory failure is a clean False.
-        result = await verifier._llm_judge(condition, _make_run(), [_make_step()])
+        # Must not raise; advisory failure is a clean False. parse_llm_json finds no
+        # JSON value in prose and degrades to the not-passed default.
+        with patch(
+            "src.services.verifier.complete_text",
+            AsyncMock(return_value="The run looks fine to me."),
+        ):
+            result = await verifier._llm_judge(condition, _make_run(), [_make_step()])
         assert result is False
 
     @pytest.mark.asyncio
     async def test_empty_judge_response_returns_false_without_raising(self, verifier):
-        verifier._client.messages.create = AsyncMock(return_value=self._judge_response(""))
         condition = {"type": "llm_judge", "criteria": "Did the run succeed?"}
-        result = await verifier._llm_judge(condition, _make_run(), [_make_step()])
+        with patch("src.services.verifier.complete_text", AsyncMock(return_value="")):
+            result = await verifier._llm_judge(condition, _make_run(), [_make_step()])
         assert result is False
 
     @pytest.mark.asyncio
     async def test_valid_json_judge_response_still_parsed(self, verifier):
-        # With assistant-prefill forcing JSON, the model's text begins after "{".
-        verifier._client.messages.create = AsyncMock(
-            return_value=self._judge_response('"passed": true, "reason": "all good"}')
-        )
+        # No prefill: the judge returns a full JSON object, parsed directly.
         condition = {"type": "llm_judge", "criteria": "Did the run succeed?"}
-        result = await verifier._llm_judge(condition, _make_run(), [_make_step()])
+        with patch(
+            "src.services.verifier.complete_text",
+            AsyncMock(return_value='{"passed": true, "reason": "all good"}'),
+        ):
+            result = await verifier._llm_judge(condition, _make_run(), [_make_step()])
         assert result is True
+
+
+class TestLLMJudgeAdaptiveThinkingContract:
+    """Regression: adaptive-thinking models (Sonnet 4.6, Opus 4.7/4.8 — every model
+    Jarvis runs) reject a conversation that ends with an assistant message with a
+    400 ``does not support assistant message prefill``. The old ``prefill='{'`` path
+    produced exactly that, so the judge silently caught the 400 and always returned
+    False (verification was 100% broken). Drive the real chain through a model that
+    enforces the contract and assert we send a user-terminal conversation."""
+
+    @pytest.mark.asyncio
+    async def test_llm_judge_sends_user_terminal_conversation(self, verifier):
+        from langchain_core.messages import AIMessage
+
+        captured: dict = {}
+
+        class _ContractModel:
+            async def ainvoke(self, messages):
+                captured["messages"] = messages
+                # Mimic the real adaptive-thinking-model API contract.
+                if isinstance(messages[-1], AIMessage):
+                    raise RuntimeError(
+                        "This model does not support assistant message prefill. "
+                        "The conversation must end with a user message."
+                    )
+                return AIMessage(content='{"passed": true, "reason": "all good"}')
+
+        condition = {"type": "llm_judge", "criteria": "Did the run succeed?"}
+        with patch("src.llm.utility.build_utility_model", return_value=_ContractModel()):
+            result = await verifier._llm_judge(condition, _make_run(), [_make_step()])
+
+        # The judge must produce a real verdict, not swallow a 400 into False.
+        assert result is True
+        # And the conversation we sent must not end with an assistant turn.
+        assert not isinstance(captured["messages"][-1], AIMessage)
 
 
 class TestStatusEqualsDefaultValue:

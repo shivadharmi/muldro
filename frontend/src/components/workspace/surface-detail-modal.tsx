@@ -32,12 +32,12 @@ export function SurfaceDetailModal({ surface, open, onClose }: Props) {
   const queryClient = useQueryClient();
   const { addToast } = useToast();
 
-  // A2UI button clicks: approval.* actions go to REST (approveAction/rejectAction/
-  // editApproval) — the WS registry does not handle them. Everything else keeps
-  // going through the WS action handler. Only a *successful* approve/reject refreshes
-  // the workspace surfaces (the run leaves awaiting_approval; resume is scheduler-driven)
-  // and closes the modal — on a REST failure or an unsupported edit the modal stays open
-  // so the user can retry, with the reason shown via toast.
+  // A2UI button clicks: approval.* actions go to REST (approveAction/rejectAction)
+  // — the WS registry does not handle them. Everything else keeps going through the
+  // WS action handler. Only a *successful* approve/reject refreshes the workspace
+  // surfaces (the run leaves awaiting_approval; resume is scheduler-driven) and closes
+  // the modal — on a REST failure the modal stays open so the user can retry, with the
+  // reason shown via toast.
   const handleAction = useCallback(
     (action: string, payload: Record<string, unknown>) => {
       const enriched = { ...payload, surface_id: surface.id };
@@ -48,7 +48,6 @@ export function SurfaceDetailModal({ surface, open, onClose }: Props) {
           void queryClient.invalidateQueries({ queryKey: ["workspace-surfaces"] });
           onClose();
         },
-        (msg) => addToast(msg, "info"),
       ).then((handled) => {
         if (!handled) handleA2UIAction(sendAction, action, enriched);
       });
@@ -61,10 +60,17 @@ export function SurfaceDetailModal({ surface, open, onClose }: Props) {
   // like plan/approval that don't carry Presenter content.
   const presenterSections = surface.surface_data?.sections ?? [];
   const hasPresenterContent = presenterSections.length > 0;
-  const tabs = hasPresenterContent ? [] : (surface.detail_config?.tabs ?? []);
-  const defaultTabId = hasPresenterContent
-    ? null
-    : (surface.detail_config?.default_tab ?? tabs[0]?.id ?? null);
+  // Live execution surface takes precedence over DB-derived detail tabs — a run
+  // with a live phase renders its own step list, so suppress the tabs to avoid a
+  // double step list in one pane.
+  const showLiveExec = !hasPresenterContent && !!surface.phase;
+  // The DB-derived detail tabs (loading/error/data/empty states below) render only
+  // when neither Presenter content nor a live execution surface owns the pane.
+  const showTabs = !hasPresenterContent && !showLiveExec;
+  const tabs = showTabs ? (surface.detail_config?.tabs ?? []) : [];
+  const defaultTabId = showTabs
+    ? (surface.detail_config?.default_tab ?? tabs[0]?.id ?? null)
+    : null;
 
   const [activeTabId, setActiveTabId] = useState<string | null>(defaultTabId);
   const [tabCache, setTabCache] = useState<Record<string, DetailTabResponse>>({});
@@ -207,20 +213,20 @@ export function SurfaceDetailModal({ surface, open, onClose }: Props) {
             />
           )}
 
-          {!hasPresenterContent && loading && (
+          {showTabs && loading && (
             <div className="flex items-center justify-center py-8">
               <div className="w-5 h-5 border-2 border-accent-primary/30 border-t-accent-primary rounded-full animate-spin" />
               <span className="ml-2 text-sm text-t-tertiary">Loading {activeTab?.label}...</span>
             </div>
           )}
 
-          {!hasPresenterContent && error && !loading && (
+          {showTabs && error && !loading && (
             <div className="rounded-[var(--radius-md)] bg-j-error-soft border border-j-error/20 p-4">
               <p className="text-sm text-j-error">{error}</p>
             </div>
           )}
 
-          {!hasPresenterContent && activeData && !loading && (
+          {showTabs && activeData && !loading && (
             <div className="space-y-3">
               {activeData.sections.map((section) => (
                 <CollapsibleSection
@@ -243,7 +249,7 @@ export function SurfaceDetailModal({ surface, open, onClose }: Props) {
           )}
 
           {/* Live execution surface */}
-          {surface.phase && (
+          {showLiveExec && (
             <A2UIExecutionSurface
               component={{
                 type: "ExecutionSurface",
@@ -263,7 +269,7 @@ export function SurfaceDetailModal({ surface, open, onClose }: Props) {
             />
           )}
 
-          {!hasPresenterContent && !loading && !error && !activeData && tabs.length === 0 && (
+          {showTabs && !loading && !error && !activeData && tabs.length === 0 && (
             <p className="text-sm text-t-tertiary text-center py-8">
               No detail tabs available for this surface.
             </p>

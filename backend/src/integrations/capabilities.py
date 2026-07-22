@@ -33,7 +33,6 @@ class CapabilityFamily(StrEnum):
     BROWSER = "browser"
     SEARCH = "search"
     INTERNAL = "internal"
-    FILESYSTEM = "filesystem"
     SYSTEM = "system"
 
 
@@ -158,18 +157,15 @@ CAPABILITY_CATALOG: dict[str, CapabilityMeta] = {
     "internal.push_ui": _cap(CapabilityFamily.INTERNAL, False),
     "internal.store_memory": _cap(CapabilityFamily.INTERNAL, False),
     "internal.store_preference": _cap(CapabilityFamily.INTERNAL, False),
+    "internal.get_entity": _cap(CapabilityFamily.INTERNAL, True),
+    "internal.query_facts": _cap(CapabilityFamily.INTERNAL, True),
+    "internal.traverse": _cap(CapabilityFamily.INTERNAL, True),
+    "internal.get_provenance": _cap(CapabilityFamily.INTERNAL, True),
     # Drive
     "doc.drive_list": _cap(CapabilityFamily.DOC, True),
     "doc.drive_search": _cap(CapabilityFamily.DOC, True),
     "doc.drive_create": _cap(CapabilityFamily.DOC, False, "medium"),
     "doc.drive_delete": _cap(CapabilityFamily.DOC, False, "critical"),
-    # Filesystem
-    "filesystem.read": _cap(CapabilityFamily.FILESYSTEM, True),
-    "filesystem.read_media": _cap(CapabilityFamily.FILESYSTEM, True),
-    "filesystem.write": _cap(CapabilityFamily.FILESYSTEM, False, "high"),
-    "filesystem.move": _cap(CapabilityFamily.FILESYSTEM, False, "high"),
-    "filesystem.list": _cap(CapabilityFamily.FILESYSTEM, True),
-    "filesystem.search": _cap(CapabilityFamily.FILESYSTEM, True),
     # Browser (new — additions to existing browser family)
     "browser.execute": _cap(CapabilityFamily.BROWSER, False, "high"),
     "browser.install": _cap(CapabilityFamily.BROWSER, False, "medium"),
@@ -211,7 +207,31 @@ CAPABILITY_CATALOG: dict[str, CapabilityMeta] = {
     "doc.get_users": _cap(CapabilityFamily.DOC, True),
     # System meta-tools (Spec 1A)
     "system.discovery": _cap(CapabilityFamily.SYSTEM, True, "none"),
+    # System action capabilities (P2.5a) — promoted from Planner-step-strings to internal
+    # MCP tools. Writes into Jarvis's own data layer (the user's memory/goals/schedule);
+    # ALWAYS-ALLOWED on the chat path (exempt from permission_gate + write_lock, D5).
+    "system.set_goal": _cap(CapabilityFamily.SYSTEM, False, "low"),
+    "system.set_instruction": _cap(CapabilityFamily.SYSTEM, False, "low"),
+    "system.schedule_reminder": _cap(CapabilityFamily.SYSTEM, False, "low"),
+    "system.add_to_brief": _cap(CapabilityFamily.SYSTEM, False, "low"),
 }
+
+
+# The 4 promoted system.* ACTION capabilities (P2.5a) — internal writes into the user's own
+# data layer (goals / instructions / reminders / briefing). Single source of truth, shared by:
+#   * the chat middleware exemptions (permission_gate + write_lock) — ALWAYS-ALLOWED (D5);
+#   * verification.predicate.REVERSIBLE_INTERNAL_CAPABILITIES — reversible/self, skip read-back;
+#   * (P2.5b) the planless connector-scope's SYSTEM_CAPS floor.
+# An EXPLICIT set (not a `system.` prefix) so a future/renamed system.* capability is gated by
+# default until deliberately added here — safe-by-construction, not safe-by-current-catalog.
+SYSTEM_ACTION_CAPABILITIES: frozenset[str] = frozenset(
+    {
+        "system.set_goal",
+        "system.set_instruction",
+        "system.schedule_reminder",
+        "system.add_to_brief",
+    }
+)
 
 
 def get_family_for_capability(capability: str) -> CapabilityFamily | None:

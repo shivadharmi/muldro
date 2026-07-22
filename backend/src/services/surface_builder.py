@@ -6,6 +6,7 @@ the two-layer surface model. No legacy A2UISurface children.
 
 import logging
 from datetime import date, datetime, timedelta, timezone
+from typing import TYPE_CHECKING
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,9 +17,13 @@ from src.models.ids import ensure_prefix
 from src.models.task_graph import TaskRun, TaskStep
 from src.models.trust_state import TrustState
 from src.models.ui_state import UISurface
+from src.services.execution_state import TERMINAL_SUCCESS
 from src.services.surface_mapping import apply_surface_cap
 from src.ui.contracts import SurfaceMetric, SurfacePreview
 from src.ui.renderer import build_detail_config
+
+if TYPE_CHECKING:
+    from src.models.approvals import Approval
 
 logger = logging.getLogger(__name__)
 
@@ -105,14 +110,8 @@ class SurfaceService:
             "variant": "success" if level in ("trusted", "autonomous") else "default",
         }
 
-    async def _approval_risk_and_flags(self, run_id: str) -> tuple[str | None, list[str]]:
-        """Resolve risk level + flags for a run awaiting approval.
-
-        Looks up the most recent pending Approval for the run. ``risk`` comes
-        from the approval's risk_level (clamped to the SurfacePreview literal);
-        ``flags`` carries "Irreversible" when the action is not reversible plus
-        the capability's trust level uppercased (e.g. "LEARNING") when known.
-        """
+    async def _latest_pending_approval(self, run_id: str) -> "Approval | None":
+        """Most recent pending Approval for a run (or None)."""
         from src.models.approvals import Approval
 
         result = await self._db.execute(
@@ -125,9 +124,24 @@ class SurfaceService:
             .order_by(Approval.created_at.desc())
             .limit(1)
         )
-        approval = result.scalar_one_or_none()
+        return result.scalar_one_or_none()
+
+    async def _approval_risk_and_flags(
+        self, run_id: str
+    ) -> tuple[str | None, list[str], dict[str, str] | None]:
+        """Resolve risk level + flags + trust context for a run awaiting approval.
+
+        Looks up the most recent pending Approval for the run. ``risk`` comes
+        from the approval's risk_level (clamped to the SurfacePreview literal);
+        ``flags`` carries "Irreversible" when the action is not reversible.
+        ``trust_context`` is the full trust dict for the capability, returned so
+        callers don't need a second pending-approval + trust-state round trip —
+        it's the sole place trust level is surfaced on the card (rendered as a
+        pill), so it is not duplicated into ``flags``.
+        """
+        approval = await self._latest_pending_approval(run_id)
         if not approval:
-            return None, []
+            return None, [], None
 
         raw_risk = (approval.risk_level or "").lower()
         risk_value = raw_risk if raw_risk in ("low", "medium", "high", "critical") else None
@@ -138,12 +152,8 @@ class SurfaceService:
             flags.append("Irreversible")
 
         trust_context = await self._get_trust_context(approval)
-        if trust_context:
-            level = trust_context.get("trust_level")
-            if level and level != "first_use":
-                flags.append(level.upper())
 
-        return risk_value, flags
+        return risk_value, flags, trust_context
 
     async def _build_briefing_surface(self, user_id: str) -> WorkspaceSurfacePush | None:
         # Prefer today's briefing; if it hasn't been generated yet, fall back to
@@ -176,27 +186,10 @@ class SurfaceService:
         if not briefing:
             return None
 
+        from src.services.surface_mapping import build_briefing_preview
+
         surface_id = f"briefing_{briefing.briefing_id}"
-        priorities = briefing.top_priorities or []
-        actions = briefing.recommended_actions or []
-
-        # Priority titles → subtitle (first) + items[] (top 5) for the card.
-        def _priority_title(p) -> str:
-            return (p.get("title", "") if isinstance(p, dict) else str(p)).strip()
-
-        priority_titles = [t for t in (_priority_title(p) for p in priorities) if t]
-        first_priority = priority_titles[0] if priority_titles else ""
-
-        preview = SurfacePreview(
-            title=briefing.headline or "Daily Briefing",
-            subtitle=first_priority[:100] if first_priority else None,
-            metrics=[
-                SurfaceMetric(label="Priorities", value=str(len(priorities))),
-                SurfaceMetric(label="Actions", value=str(len(actions))),
-            ],
-            items=priority_titles[:5],
-            tags=["briefing"],
-        )
+        preview = build_briefing_preview(briefing)
         detail_config = build_detail_config("briefing", surface_id)
 
         return WorkspaceSurfacePush(
@@ -238,7 +231,7 @@ class SurfaceService:
                 select(TaskStep).where(TaskStep.run_id == run.run_id).order_by(TaskStep.created_at)
             )
             steps = list(step_result.scalars().all())
-            completed = sum(1 for s in steps if s.status == "completed")
+            completed = sum(1 for s in steps if s.status in TERMINAL_SUCCESS)
             total = len(steps)
 
             current_step_name = None
@@ -288,8 +281,9 @@ class SurfaceService:
             # Approval context (risk + flags) when the run is gated on a decision.
             risk_value: str | None = None
             flags: list[str] = []
+            trust_context: dict[str, str] | None = None
             if awaiting:
-                risk_value, flags = await self._approval_risk_and_flags(run.run_id)
+                risk_value, flags, trust_context = await self._approval_risk_and_flags(run.run_id)
 
             preview = SurfacePreview(
                 title=title,
@@ -326,6 +320,7 @@ class SurfaceService:
                     created_at=(
                         run.started_at.isoformat() if run.started_at else run.created_at.isoformat()
                     ),
+                    trust_context=trust_context,
                 )
             )
 

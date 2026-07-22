@@ -16,7 +16,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from ulid import ULID
 
-from src.config.settings import Settings, get_anthropic_client
+from src.config.settings import Settings
 from src.connectors.mcp_bridge import close_turn_sessions
 from src.contracts import PolicyDecision
 from src.integrations.turn_scope import turn_scope
@@ -26,7 +26,12 @@ from src.models.task_graph import TaskRun, TaskStep
 from src.orchestrator.tracing import JarvisTrace
 from src.services.audit import AuditService
 from src.services.dag_runner import DagRunner
-from src.services.execution_state import transition_run, transition_step
+from src.services.execution_state import (
+    RUN_TRANSITIONS,
+    TERMINAL_SUCCESS,
+    transition_run,
+    transition_step,
+)
 from src.services.execution_support import _safe_error_fields, _step_to_state
 from src.services.execution_surface_emitter import SurfaceEmitter
 
@@ -75,10 +80,13 @@ class GraphExecutor:
         redis=None,
         # Trace persistence for background runs
         trace_store=None,
+        # Step 10C P1b: durable autonomous deep step-executor callable
+        # (AgentInvoker.run_autonomous_deep_step). None keeps the deep step path
+        # dormant/byte-neutral; the worker lifespan wires the real runner in P2.
+        deep_step_runner=None,
     ):
         self._settings = settings
         self._db = db
-        self._client = get_anthropic_client(settings)
         self._audit = AuditService(db)
         self._event_bus = event_bus
         self._notifier = notifier
@@ -115,13 +123,13 @@ class GraphExecutor:
         # white-box suite (which calls _get_all_steps/_checkpoint/etc. directly)
         # keeps passing unchanged.
         self._store = StepGraphStore(db=db, context_builder=context_builder)
-        # Agentic step execution (Operator agent loop + minimal-Claude fallback)
+        # Agentic step execution (Executor agent loop + minimal-Claude fallback)
         # lives in an injected collaborator. db_factory + the per-run trace map
         # are resolved live via providers so the coordinator stays the single
         # source of truth (tests reassign _db_factory; _active_traces is owned here).
         self._runner = StepRunner(
             settings=settings,
-            client=self._client,
+            client=None,
             store=self._store,
             emitter=self._surface_emitter,
             db_factory_provider=lambda: self._db_factory,
@@ -129,8 +137,8 @@ class GraphExecutor:
             tool_registry=tool_registry,
             context_builder=context_builder,
             execute_tool_fn=execute_tool_fn,
-            budget=budget,
-            circuit_breaker=circuit_breaker,
+            redis=redis,
+            deep_step_runner=deep_step_runner,
         )
         # The side-effecting helpers of the single TrustEngine approval gate
         # (risk assessment, approval persistence + pause, auto-execute trust
@@ -139,7 +147,7 @@ class GraphExecutor:
         # step pipeline below; this holds the helpers it calls.
         self._trust_gate = TrustGate(
             db=db,
-            client=self._client,
+            client=None,
             redis=redis,
             notifier_provider=lambda: self._notifier,
             store=self._store,
@@ -236,11 +244,67 @@ class GraphExecutor:
 
         await self._populate_steps(run, plan)
 
+    async def _autonomous_jit(self) -> bool:
+        """Whether the AUTONOMOUS context builds should slim to the JIT core (P6).
+
+        Gated solely on ``deep_context_jit`` now that deep is the only runtime (Step 11
+        Phase 4)."""
+        return self._settings.deep_context_jit
+
     async def _populate_steps(self, run: TaskRun, plan: Plan) -> None:
-        """Facade → StepGraphStore.populate_steps."""
-        await self._store.populate_steps(run, plan)
+        """Facade → StepGraphStore.populate_steps.
+
+        P6: the store has no settings/redis, so the JIT gate is computed HERE (this facade
+        is the single forwarding point for both ``create_run`` and Governor's
+        ``populate_run_steps``) and passed down. Byte-neutral when ``deep_context_jit`` is off.
+        """
+        jit = await self._autonomous_jit()
+        await self._store.populate_steps(run, plan, jit=jit)
+
+    async def _load_run(self, run_id: str) -> TaskRun:
+        """Re-fetch a run by id — the P3 lease back-off path uses this so a worker
+        that did NOT acquire the durable lease still returns a valid TaskRun to its
+        caller (the scheduler tick) instead of double-driving. Same fetch mechanism
+        as ``_execute_run_body`` / ``_resume_run_body``."""
+        result = await self._db.execute(select(TaskRun).where(TaskRun.run_id == run_id))
+        run = result.scalar_one_or_none()
+        if not run:
+            raise ValueError(f"Run not found: {run_id}")
+        return run
 
     async def execute_run(
+        self, run_id: str, trace_id: str | None = None, surface_id: str | None = None
+    ) -> TaskRun:
+        """Execute a run's DAG — single-flight lease guard, then the body.
+
+        A per-run Redis lease ensures exactly ONE worker drives a durable run; a
+        second concurrent scheduler tick backs off and returns the run's current DB
+        state without re-driving (avoids a wasted ``ainvoke(None, cfg)`` replay +
+        checkpoint contention — the idempotency ledger already makes tool effects
+        exactly-once). The lease requires Redis, so when ``self._redis is None`` the
+        gate is skipped straight to the body.
+
+        The TurnScope activation — ``turn_scope(on_close=close_turn_sessions)`` —
+        that fences per-turn MCP sessions lives in the delegated
+        ``_execute_run_body`` below (unchanged); this thin lease gate wraps it.
+        """
+        redis = getattr(self, "_redis", None)
+        if redis is not None:
+            from src.services.autonomous_lease import acquire_run_lease
+
+            async with acquire_run_lease(redis, run_id) as acquired:
+                if not acquired:
+                    logger.info(
+                        "run %s durable lease held by another worker — backing off",
+                        run_id,
+                    )
+                    return await self._load_run(run_id)
+                return await self._execute_run_body(
+                    run_id, trace_id=trace_id, surface_id=surface_id
+                )
+        return await self._execute_run_body(run_id, trace_id=trace_id, surface_id=surface_id)
+
+    async def _execute_run_body(
         self, run_id: str, trace_id: str | None = None, surface_id: str | None = None
     ) -> TaskRun:
         """Execute a run's DAG to completion (or pause at approval gate).
@@ -257,7 +321,7 @@ class GraphExecutor:
             if not run:
                 raise ValueError(f"Run not found: {run_id}")
 
-            # Create a live JarvisTrace so agent_loop can accumulate spans.
+            # Create a live JarvisTrace so the deep runtime can accumulate spans.
             effective_trace_id = trace_id or f"trace_{ULID()}"
             # Always stamp run.trace_id BEFORE step execution so the detail
             # endpoint can resolve token/cost totals on a running or completed
@@ -350,12 +414,40 @@ class GraphExecutor:
                     workspace_id=run.workspace_id,
                 )
             except Exception as exc:
+                # A durable state-recording event flush inside the DAG (§4.8,
+                # SurfaceEmitter.emit_event(durable=True)) can transiently fail and
+                # deactivate the shared session ("partial rollback" state); the tail commit
+                # would then raise PendingRollbackError. session.is_active only reflects this
+                # AFTER a flush is attempted against the aborted transaction — an ordinary
+                # Python-level failure never touches the DB, so is_active reads True until we
+                # actually try one. Mark failed in memory, then flush to both (a) persist the
+                # common case and (b) probe for poisoning. ONLY when that flush fails do we
+                # roll back + re-hydrate: rollback() expires ORM state AND reverts the
+                # flushed-but-uncommitted "running" transition, so re-establish an in-flight
+                # status before re-marking failed (the machine forbids e.g. pending→failed).
+                # A healthy session's flush succeeds here and the tail commit is then a cheap
+                # no-op re-flush, preserving the run's partial step progress + trace (the DAG
+                # never commits mid-run).
                 transition_run(run, "failed")
                 run.completed_at = datetime.now(timezone.utc)
                 # run.error is rendered in execution surfaces + run history (client-facing).
                 # Store the safe message + code + correlation id; raw str(exc) → logs only.
                 safe = _safe_error_fields(exc)
                 run.error = {"type": "execution_error", **safe}
+                try:
+                    await self._db.flush()
+                except Exception:
+                    logger.debug(
+                        "Mark-failed probe flush failed; session likely poisoned", exc_info=True
+                    )
+                if not self._db.is_active:
+                    await self._db.rollback()
+                    await self._db.refresh(run)
+                    if "failed" not in RUN_TRANSITIONS.get(run.status, set()):
+                        transition_run(run, "running")
+                    transition_run(run, "failed")
+                    run.completed_at = datetime.now(timezone.utc)
+                    run.error = {"type": "execution_error", **safe}
                 logger.error("Run %s failed: %s", run_id, exc, exc_info=True)
                 await self._emit_event(
                     "run.failed",
@@ -386,6 +478,28 @@ class GraphExecutor:
             return run
 
     async def resume_run(self, run_id: str) -> TaskRun:
+        """Resume a paused/awaiting run — single-flight lease guard, then the body.
+
+        Same lease/back-off contract as ``execute_run``: a per-run Redis lease lets
+        exactly one worker resume a durable run; a second concurrent tick backs off
+        and returns the run's current DB state without re-driving. When ``redis is
+        None`` the gate is skipped straight to the body.
+        """
+        redis = getattr(self, "_redis", None)
+        if redis is not None:
+            from src.services.autonomous_lease import acquire_run_lease
+
+            async with acquire_run_lease(redis, run_id) as acquired:
+                if not acquired:
+                    logger.info(
+                        "run %s durable resume lease held by another worker — backing off",
+                        run_id,
+                    )
+                    return await self._load_run(run_id)
+                return await self._resume_run_body(run_id)
+        return await self._resume_run_body(run_id)
+
+    async def _resume_run_body(self, run_id: str) -> TaskRun:
         """Resume a paused/awaiting run from its last checkpoint.
 
         If the run has been paused for >30 minutes and a ContextBuilder is
@@ -407,12 +521,22 @@ class GraphExecutor:
         ).total_seconds()
         if pause_duration > 1800 and hasattr(self, "_context_builder") and self._context_builder:
             try:
+                from src.services.run_detail_store import RunDetailStore
+
+                _prior = await RunDetailStore(self._db).get_context_pack(run.run_id)
+                if _prior is None:
+                    _prior = {}
                 fresh_pack = await self._context_builder.build(
                     user_id=run.user_id,
-                    query=(run.context_pack_json or {}).get("task_summary", "")[:500],
+                    query=_prior.get("task_summary", "")[:500],
                     workspace_id=run.workspace_id,
+                    # P6: slim the refreshed (persisted) pack under the same autonomous gate;
+                    # byte-neutral (jit=False) on the default flag-off path.
+                    jit=await self._autonomous_jit(),
                 )
-                run.context_pack_json = fresh_pack.model_dump()
+                await RunDetailStore(self._db).upsert_context_pack(
+                    run.run_id, run.workspace_id, fresh_pack.model_dump()
+                )
                 logger.info(
                     "Refreshed stale context for run %s (paused %ds)",
                     run_id,
@@ -425,14 +549,14 @@ class GraphExecutor:
         if run.checkpoint:
             cp_completed = set(run.checkpoint.get("completed_steps", {}).keys())
             actual_steps = await self._get_all_steps(run.run_id)
-            actual_completed = {s.step_id for s in actual_steps if s.status == "completed"}
+            actual_completed = {s.step_id for s in actual_steps if s.status in TERMINAL_SUCCESS}
             if cp_completed != actual_completed:
-                logger.warning(
-                    "Checkpoint/DB mismatch for run %s: checkpoint=%d completed, DB=%d completed",
-                    run.run_id,
-                    len(cp_completed),
-                    len(actual_completed),
-                )
+                # Step 10C P4: reconcile the run's truth rows from the runtime_events
+                # log (a crash can leave the DB behind the log).
+                from src.services.run_reconcile import reconcile_run_from_events
+
+                summary = await reconcile_run_from_events(self._db, run)
+                logger.info("run %s reconciled from event log on resume: %s", run.run_id, summary)
 
         transition_run(run, "running")
         await self._db.flush()
@@ -464,12 +588,37 @@ class GraphExecutor:
             if run.status in ("awaiting_approval", "awaiting_input", "paused"):
                 await self._checkpoint_trace(run)
         except Exception as exc:
+            # Same poisoned-session recovery as execute_run (CF-2): a durable flush inside
+            # the resumed DAG can deactivate the session ("partial rollback" state) and make
+            # the tail commit raise PendingRollbackError. session.is_active only reflects this
+            # AFTER a flush is attempted against the aborted transaction — an ordinary
+            # Python-level failure never touches the DB, so is_active reads True until we
+            # actually try one. Mark failed in memory, then flush to both (a) persist the
+            # common case and (b) probe for poisoning. ONLY when that flush fails do we roll
+            # back + re-hydrate: rollback() reverts the flushed-but-uncommitted "running", so
+            # re-establish an in-flight status before re-marking failed (e.g.
+            # paused→running→failed). A healthy session's flush succeeds here and the tail
+            # commit is then a cheap no-op re-flush, preserving partial resume progress.
             transition_run(run, "failed")
             run.completed_at = datetime.now(timezone.utc)
             # Client-facing (served by the history API) — safe message + code only;
             # raw str(exc) goes to logs.
             safe = _safe_error_fields(exc)
             run.error = {"type": "resume_error", **safe}
+            try:
+                await self._db.flush()
+            except Exception:
+                logger.debug(
+                    "Mark-failed probe flush failed; session likely poisoned", exc_info=True
+                )
+            if not self._db.is_active:
+                await self._db.rollback()
+                await self._db.refresh(run)
+                if "failed" not in RUN_TRANSITIONS.get(run.status, set()):
+                    transition_run(run, "running")
+                transition_run(run, "failed")
+                run.completed_at = datetime.now(timezone.utc)
+                run.error = {"type": "resume_error", **safe}
             logger.error("Resume run %s failed: %s", run.run_id, exc, exc_info=True)
         finally:
             self._cancel_events.pop(run.run_id, None)
@@ -598,10 +747,6 @@ class GraphExecutor:
         """Facade → TrustGate.record_auto_execution_outcome."""
         await self._trust_gate.record_auto_execution_outcome(capability, risk_level, workspace_id)
 
-    def _remember_auto_executed(self, run: TaskRun, capability: str, risk_level: str) -> None:
-        """Facade → TrustGate.remember_auto_executed."""
-        self._trust_gate.remember_auto_executed(run, capability, risk_level)
-
     async def _handle_step_failure(
         self,
         run: TaskRun,
@@ -633,15 +778,6 @@ class GraphExecutor:
     ) -> dict:
         """Facade → StepRunner.run_step_action."""
         return await self._runner.run_step_action(step, run, cancel_event=cancel_event)
-
-    async def _run_step_via_agent_loop(
-        self,
-        step: TaskStep,
-        run: TaskRun,
-        cancel_event: asyncio.Event | None = None,
-    ) -> dict:
-        """Facade → StepRunner.run_step_via_agent_loop."""
-        return await self._runner.run_step_via_agent_loop(step, run, cancel_event=cancel_event)
 
     def _roll_trace_onto_run(self, run: TaskRun, trace: JarvisTrace) -> tuple[int, int, float]:
         """Accumulate one segment's trace totals onto the run's rollup columns.

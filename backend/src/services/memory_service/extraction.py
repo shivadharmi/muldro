@@ -4,7 +4,9 @@ import logging
 
 from ulid import ULID
 
+from src.llm.utility import complete_text_with_usage
 from src.models.memory import Memory
+from src.orchestrator.budget import record_token_span
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +81,9 @@ class MemoryExtraction:
         provenance_extra: dict | None = None,
     ) -> list[str]:
         """Extract memories from text and store them. Returns memory_ids."""
-        extracted = await self._call_extraction(source_text, prompt_addendum=prompt_addendum)
+        extracted = await self._call_extraction(
+            source_text, prompt_addendum=prompt_addendum, workspace_id=workspace_id
+        )
         memory_ids = []
         new_facts: list[tuple[str, str]] = []  # (memory_id, fact_text)
 
@@ -185,7 +189,7 @@ class MemoryExtraction:
         workspace_id: str = "",
     ) -> list[str]:
         """Extract user preferences from interactions. Returns memory_ids."""
-        extracted = await self._call_preference_extraction(source_text)
+        extracted = await self._call_preference_extraction(source_text, workspace_id=workspace_id)
         memory_ids = []
 
         for pref_data in extracted.get("preferences", []):
@@ -251,37 +255,59 @@ class MemoryExtraction:
 
         return memory_ids
 
-    async def _call_extraction(self, source_text: str, prompt_addendum: str | None = None) -> dict:
-        """Call Claude to extract memories from text."""
+    async def _call_extraction(
+        self, source_text: str, prompt_addendum: str | None = None, workspace_id: str = ""
+    ) -> dict:
+        """Call Claude to extract memories from text. Records a perception token span."""
         try:
             system_prompt = MEMORY_EXTRACTION_PROMPT
             if prompt_addendum:
                 system_prompt = system_prompt + prompt_addendum
-            response = await self._client.messages.create(
-                model=self._settings.resolved_model,
-                max_tokens=1024,
+            text, usage = await complete_text_with_usage(
                 system=system_prompt,
-                messages=[{"role": "user", "content": source_text}],
+                user=source_text,
+                tier="resolved",
+                max_tokens=1024,
             )
-            from src.llm_utils import parse_llm_json
+            await record_token_span(
+                agent_name="memory",
+                model=usage.model,
+                input_tokens=usage.input_tokens,
+                output_tokens=usage.output_tokens,
+                cache_creation_input_tokens=usage.cache_creation_input_tokens,
+                cache_read_input_tokens=usage.cache_read_input_tokens,
+                trigger="perception",
+                workspace_id=workspace_id,
+            )
+            from src.llm_utils import coerce_to_object, parse_llm_json
 
-            return parse_llm_json(response.content[0].text)
+            return coerce_to_object(parse_llm_json(text), list_key="memories")
         except Exception:
             logger.debug("Memory extraction returned non-JSON", exc_info=True)
             return {"memories": []}
 
-    async def _call_preference_extraction(self, source_text: str) -> dict:
-        """Call Claude to extract preferences from text."""
+    async def _call_preference_extraction(self, source_text: str, workspace_id: str = "") -> dict:
+        """Call Claude to extract preferences from text. Records a perception token span."""
         try:
-            response = await self._client.messages.create(
-                model=self._settings.resolved_model,
-                max_tokens=1024,
+            text, usage = await complete_text_with_usage(
                 system=PREFERENCE_EXTRACTION_PROMPT,
-                messages=[{"role": "user", "content": source_text}],
+                user=source_text,
+                tier="resolved",
+                max_tokens=1024,
             )
-            from src.llm_utils import parse_llm_json
+            await record_token_span(
+                agent_name="memory",
+                model=usage.model,
+                input_tokens=usage.input_tokens,
+                output_tokens=usage.output_tokens,
+                cache_creation_input_tokens=usage.cache_creation_input_tokens,
+                cache_read_input_tokens=usage.cache_read_input_tokens,
+                trigger="perception",
+                workspace_id=workspace_id,
+            )
+            from src.llm_utils import coerce_to_object, parse_llm_json
 
-            return parse_llm_json(response.content[0].text)
+            return coerce_to_object(parse_llm_json(text), list_key="preferences")
         except Exception:
             logger.debug("Preference extraction returned non-JSON", exc_info=True)
             return {"preferences": []}

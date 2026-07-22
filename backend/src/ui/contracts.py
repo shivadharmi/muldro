@@ -3,13 +3,13 @@
 Declarative JSON protocol for agent-driven interfaces. The Presenter agent
 generates these surfaces, which the frontend renders using native React components.
 
-Component Types (25+):
-  Layout: Row, Column, Card, Tabs, Modal, Divider
-  Text: Text, CodeBlock, Badge, Alert
-  Data: Table, DataGrid, Timeline, Metric, Progress, Chart
-  Input: Button, TextField, Select, Toggle, Form
-  Display: Avatar, StatusIndicator, EntityCard, MemoryCard
-  Specialized: ExecutionTrace, KanbanBoard, Calendar
+Component Types (17 — the set actually produced by renderer.py builders):
+  Layout: Row, Card, Divider
+  Text: Text, Markdown, CodeBlock, Badge, Alert
+  Data: Table, Timeline, Metric, Progress
+  Input: Button
+  Display: List, EntityCard, MemoryCard
+  Specialized: ExecutionTrace
 """
 
 import logging
@@ -20,6 +20,10 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 logger = logging.getLogger(__name__)
+
+# Current A2UI schema version. Bump on contract changes readers must distinguish.
+# Readers MUST tolerate unknown future values and missing values (defaults applied).
+A2UI_SCHEMA_VERSION = 1
 
 # ── Surface kind taxonomy ───────────────────────────────────────
 
@@ -33,15 +37,10 @@ SurfaceKind = Literal[
     "proactive_insight",
     # Agent-managed (inline children, no detail API)
     "message",  # Presenter-authored rich response promoted to workspace feed
-    # Legacy kinds retained for backward compatibility with existing persisted surfaces
-    # and REST-polled fallbacks; new code SHOULD NOT create these.
+    # Legacy kinds retained: `plan` is still produced by derive_surface_kind;
+    # `approval` is demoted-to-inline but its detail tabs are still used.
     "plan",
-    "checklist",
     "approval",
-    "comparison",
-    "timeline",
-    "table",
-    "activity",
 ]
 
 
@@ -75,39 +74,27 @@ def is_agent_surface(kind: str) -> bool:
 class ComponentType(str, Enum):
     # Layout
     ROW = "Row"
-    COLUMN = "Column"
     CARD = "Card"
-    TABS = "Tabs"
-    MODAL = "Modal"
     DIVIDER = "Divider"
     # Text
     TEXT = "Text"
+    MARKDOWN = "Markdown"
     CODE_BLOCK = "CodeBlock"
     BADGE = "Badge"
     ALERT = "Alert"
     # Data
     TABLE = "Table"
-    DATA_GRID = "DataGrid"
     TIMELINE = "Timeline"
     METRIC = "Metric"
     PROGRESS = "Progress"
-    CHART = "Chart"
     # Input
     BUTTON = "Button"
-    TEXT_FIELD = "TextField"
-    SELECT = "Select"
-    TOGGLE = "Toggle"
-    FORM = "Form"
     # Display
     LIST = "List"
-    AVATAR = "Avatar"
-    STATUS_INDICATOR = "StatusIndicator"
     ENTITY_CARD = "EntityCard"
     MEMORY_CARD = "MemoryCard"
     # Specialized
     EXECUTION_TRACE = "ExecutionTrace"
-    KANBAN_BOARD = "KanbanBoard"
-    CALENDAR = "Calendar"
 
 
 class A2UIAction(BaseModel):
@@ -118,6 +105,7 @@ class A2UIAction(BaseModel):
 
 class A2UIComponent(BaseModel):
     model_config = ConfigDict(extra="ignore")
+    version: int = A2UI_SCHEMA_VERSION
     type: str
     id: str
     properties: dict = Field(default_factory=dict)
@@ -151,6 +139,7 @@ class A2UIComponent(BaseModel):
 
 class A2UISurface(BaseModel):
     model_config = ConfigDict(extra="ignore")
+    version: int = A2UI_SCHEMA_VERSION
     type: str = "surface"
     id: str
     children: list[A2UIComponent] = Field(default_factory=list)

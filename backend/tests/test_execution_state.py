@@ -238,6 +238,11 @@ class TestStepTransitions:
             "awaiting_input",
             "blocked",
             "completed",
+            # Step 3 net-new step statuses (see execution_state.STEP_TRANSITIONS):
+            # completed_unverified (non-terminal success, upgradeable) and step-level
+            # partially_completed (read-back contradicted, terminal).
+            "completed_unverified",
+            "partially_completed",
             "failed",
             "skipped",
             "timed_out",

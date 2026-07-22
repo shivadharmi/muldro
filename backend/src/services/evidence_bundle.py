@@ -85,9 +85,13 @@ class EvidenceBundleService:
                     )
                 )
 
+        from src.services.run_detail_store import RunDetailStore
+
+        route_info = await RunDetailStore(self._db).get_policy_decision(run.run_id)
+
         return EvidenceBundle(
             sources=sources,
-            route_info=run.policy_decision,
+            route_info=route_info,
         )
 
     async def build_for_briefing(self, briefing_id: str) -> EvidenceBundle:

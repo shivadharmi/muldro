@@ -77,173 +77,6 @@ class TestInsightBuilders:
         assert len(result.sections) > 0
 
 
-class TestComparisonBuilders:
-    @pytest.mark.asyncio
-    async def test_build_comparison_options_with_data(self):
-        from src.services.surface_detail_builders import build_comparison_options
-
-        surface = _mock_surface(
-            payload={
-                "surface_data": {
-                    "options": [
-                        {
-                            "name": "Option A",
-                            "description": "Fast",
-                            "pros": ["Speed"],
-                            "cons": ["Cost"],
-                        },
-                        {
-                            "name": "Option B",
-                            "description": "Cheap",
-                            "pros": ["Price"],
-                            "cons": ["Slow"],
-                        },
-                    ]
-                }
-            }
-        )
-        result = await build_comparison_options(AsyncMock(), surface)
-        assert result.tab_id == "options"
-        assert len(result.sections) > 0
-
-    @pytest.mark.asyncio
-    async def test_build_comparison_options_fallback(self):
-        from src.services.surface_detail_builders import build_comparison_options
-
-        surface = _mock_surface(payload={"response_preview": "Some text"})
-        result = await build_comparison_options(AsyncMock(), surface)
-        assert result.tab_id == "options"
-
-    @pytest.mark.asyncio
-    async def test_build_comparison_criteria_with_data(self):
-        from src.services.surface_detail_builders import build_comparison_criteria
-
-        surface = _mock_surface(
-            payload={"surface_data": {"criteria": ["Speed", "Cost", "Reliability"]}}
-        )
-        result = await build_comparison_criteria(AsyncMock(), surface)
-        assert result.tab_id == "criteria"
-        assert len(result.sections) > 0
-
-    @pytest.mark.asyncio
-    async def test_build_comparison_criteria_empty(self):
-        from src.services.surface_detail_builders import build_comparison_criteria
-
-        surface = _mock_surface(payload={})
-        result = await build_comparison_criteria(AsyncMock(), surface)
-        assert result.tab_id == "criteria"
-
-
-class TestActivityBuilders:
-    @pytest.mark.asyncio
-    async def test_build_activity_runs_no_workspace(self):
-        from src.services.surface_detail_builders import build_activity_runs
-
-        surface = _mock_surface()
-        surface.workspace_id = None
-        result = await build_activity_runs(AsyncMock(), surface)
-        assert result.tab_id == "runs"
-
-    @pytest.mark.asyncio
-    async def test_build_activity_stats_no_workspace(self):
-        from src.services.surface_detail_builders import build_activity_stats
-
-        surface = _mock_surface()
-        surface.workspace_id = None
-        result = await build_activity_stats(AsyncMock(), surface)
-        assert result.tab_id == "stats"
-
-
-class TestChecklistBuilders:
-    @pytest.mark.asyncio
-    async def test_build_checklist_items_with_data(self):
-        from src.services.surface_detail_builders import build_checklist_items
-
-        surface = _mock_surface(
-            payload={
-                "surface_data": {
-                    "items": [
-                        {"title": "Task 1", "status": "completed"},
-                        {"title": "Task 2", "status": "pending"},
-                    ]
-                }
-            }
-        )
-        result = await build_checklist_items(AsyncMock(), surface)
-        assert result.tab_id == "items"
-        assert len(result.sections) > 0
-
-    @pytest.mark.asyncio
-    async def test_build_checklist_items_no_data(self):
-        from src.services.surface_detail_builders import build_checklist_items
-
-        surface = _mock_surface(payload={})
-        result = await build_checklist_items(AsyncMock(), surface)
-        assert result.tab_id == "items"
-
-
-class TestTableBuilders:
-    @pytest.mark.asyncio
-    async def test_build_table_data_with_data(self):
-        from src.services.surface_detail_builders import build_table_data
-
-        surface = _mock_surface(
-            payload={
-                "surface_data": {
-                    "columns": [{"key": "name", "label": "Name"}],
-                    "rows": [{"name": "Row 1"}, {"name": "Row 2"}],
-                }
-            }
-        )
-        result = await build_table_data(AsyncMock(), surface)
-        assert result.tab_id == "data"
-        assert len(result.sections) > 0
-
-    @pytest.mark.asyncio
-    async def test_build_table_data_fallback(self):
-        from src.services.surface_detail_builders import build_table_data
-
-        surface = _mock_surface(payload={"response_preview": "Fallback text"})
-        result = await build_table_data(AsyncMock(), surface)
-        assert result.tab_id == "data"
-
-    @pytest.mark.asyncio
-    async def test_build_table_sources_no_run(self):
-        from src.services.surface_detail_builders import build_table_sources
-
-        surface = _mock_surface(payload={})
-        result = await build_table_sources(AsyncMock(), surface)
-        assert result.tab_id == "sources"
-
-
-class TestTimelineBuilders:
-    @pytest.mark.asyncio
-    async def test_build_timeline_events_with_data(self):
-        from src.services.surface_detail_builders import build_timeline_events
-
-        surface = _mock_surface(
-            payload={
-                "surface_data": {
-                    "events": [
-                        {"label": "Event 1", "timestamp": "2026-04-13"},
-                        {"label": "Event 2", "timestamp": "2026-04-12"},
-                    ]
-                }
-            }
-        )
-        result = await build_timeline_events(AsyncMock(), surface)
-        assert result.tab_id == "events"
-        assert len(result.sections) > 0
-
-    @pytest.mark.asyncio
-    async def test_build_timeline_context_no_run(self):
-        from src.services.surface_detail_builders import build_timeline_context
-
-        surface = _mock_surface(payload={})
-        result = await build_timeline_context(AsyncMock(), surface)
-        assert result.tab_id == "context"
-
-
 class TestAlertDiagnostics:
     @pytest.mark.asyncio
     async def test_build_alert_diagnostics_no_run(self):
@@ -265,13 +98,14 @@ class TestRecommendationEvidence:
 
 
 class TestRegistryComplete:
-    def test_tab_builders_has_40_entries(self):
+    def test_tab_builders_has_30_entries(self):
         from src.services.surface_detail_builders import TAB_BUILDERS
 
-        # 38 original + ("run","approval") + ("summary","approval") (A2UI Phase 1).
-        assert len(TAB_BUILDERS) == 40
+        # 40 before Step 9 P1; the 5 dead surface kinds (checklist/comparison/
+        # timeline/table/activity) removed 10 rows -> 30.
+        assert len(TAB_BUILDERS) == 30
 
-    def test_all_13_kinds_covered(self):
+    def test_all_kinds_covered(self):
         from src.services.surface_detail_builders import TAB_BUILDERS
 
         kinds = {k for k, _ in TAB_BUILDERS.keys()}
@@ -282,11 +116,6 @@ class TestRegistryComplete:
             "approval",
             "recommendation",
             "alert",
-            "checklist",
-            "comparison",
-            "timeline",
-            "table",
-            "activity",
             "proactive_insight",
             "run",
         }
@@ -338,16 +167,6 @@ class TestRegistryComplete:
             ("recommendation", "context"): "build_recommendation_context",
             ("alert", "overview"): "build_alert_overview",
             ("alert", "diagnostics"): "build_alert_diagnostics",
-            ("checklist", "items"): "build_checklist_items",
-            ("checklist", "context"): "build_checklist_context",
-            ("comparison", "options"): "build_comparison_options",
-            ("comparison", "criteria"): "build_comparison_criteria",
-            ("timeline", "events"): "build_timeline_events",
-            ("timeline", "context"): "build_timeline_context",
-            ("table", "data"): "build_table_data",
-            ("table", "sources"): "build_table_sources",
-            ("activity", "runs"): "build_activity_runs",
-            ("activity", "stats"): "build_activity_stats",
             ("proactive_insight", "signal"): "build_insight_signal",
             ("proactive_insight", "actions"): "build_insight_actions",
             ("proactive_insight", "context"): "build_insight_context",

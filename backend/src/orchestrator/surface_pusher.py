@@ -135,6 +135,52 @@ class SurfacePusher:
             await redis.expire(key, window)
         return count <= limit
 
+    async def _publish_and_persist(
+        self,
+        event_bus,
+        *,
+        surface_id: str,
+        user_id: str,
+        workspace_id: str,
+        surface_type: str,
+        payload: dict,
+        preview: dict,
+        detail_config: dict | None,
+    ) -> None:
+        """Broadcast a surface over the user's a2ui channel and persist it to ui_surfaces.
+
+        The published WS ``surface`` body and the stored ``UISurface.payload`` are the
+        SAME ``payload`` dict — every caller builds one dict for both, including the
+        insight path whose payload carries an extra ``insight_data`` key. DB-persist
+        failure is swallowed (logged) so a live push still succeeds even when the
+        durable copy cannot be written: the row is re-derivable, the live push is not.
+        """
+        from datetime import datetime, timedelta, timezone
+
+        channel = f"jarvis:a2ui:{user_id}"
+        ws_msg = json.dumps({"type": "surface", "surface": payload})
+        await event_bus.publish_to_channel(channel, ws_msg)
+
+        try:
+            from src.models.ui_state import UISurface
+
+            async with self._db_factory() as db:
+                db.add(
+                    UISurface(
+                        surface_id=surface_id,
+                        user_id=user_id,
+                        workspace_id=workspace_id,
+                        surface_type=surface_type,
+                        payload=payload,
+                        preview=preview,
+                        detail_config=detail_config,
+                        expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
+                    )
+                )
+                await db.commit()
+        except Exception:
+            logger.debug("Failed to persist %s surface to DB", surface_type, exc_info=True)
+
     async def push_presenter_surface(
         self,
         spec,
@@ -147,7 +193,7 @@ class SurfacePusher:
 
         Builds WorkspaceSurfacePush from a SurfaceSpec produced by the Presenter agent.
         """
-        from datetime import datetime, timedelta, timezone
+        from datetime import datetime, timezone
 
         from ulid import ULID
 
@@ -217,36 +263,16 @@ class SurfacePusher:
                 surface_data=surface_data_dict,
             )
 
-            channel = f"jarvis:a2ui:{user_id}"
-            ws_msg = json.dumps({"type": "surface", "surface": surface.model_dump(mode="json")})
-            await event_bus.publish_to_channel(channel, ws_msg)
-
-            # Persist to DB
-            try:
-                from src.models.ui_state import UISurface
-
-                async with self._db_factory() as db:
-                    payload = surface.model_dump(mode="json")
-                    # Keep the persisted payload consistent with the WS shape;
-                    # surface_data is already serialized on the model.
-                    db.add(
-                        UISurface(
-                            surface_id=surface.id,
-                            user_id=user_id,
-                            workspace_id=workspace_id,
-                            surface_type=spec.kind,
-                            payload=payload,
-                            preview=preview.model_dump(mode="json"),
-                            detail_config=(
-                                detail_config.model_dump(mode="json") if detail_config else None
-                            ),
-                            expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
-                        )
-                    )
-                    await db.commit()
-            except Exception:
-                logger.debug("Failed to persist presenter surface", exc_info=True)
-
+            await self._publish_and_persist(
+                event_bus,
+                surface_id=surface.id,
+                user_id=user_id,
+                workspace_id=workspace_id,
+                surface_type=spec.kind,
+                payload=surface.model_dump(mode="json"),
+                preview=preview.model_dump(mode="json"),
+                detail_config=(detail_config.model_dump(mode="json") if detail_config else None),
+            )
             return surface_id
         except Exception:
             logger.warning("Failed to push presenter surface", exc_info=True)
@@ -266,7 +292,7 @@ class SurfacePusher:
         Only pushes for plans with visual value beyond the chat response.
         Returns the generated surface_id on success, None otherwise.
         """
-        from datetime import datetime, timedelta, timezone
+        from datetime import datetime, timezone
 
         from src.contracts import WorkspaceSurfacePush
         from src.ui.renderer import build_detail_config
@@ -303,43 +329,79 @@ class SurfacePusher:
                 created_at=datetime.now(timezone.utc).isoformat(),
             )
 
-            channel = f"jarvis:a2ui:{user_id}"
-            ws_msg = json.dumps(
-                {
-                    "type": "surface",
-                    "surface": surface.model_dump(mode="json"),
-                }
+            await self._publish_and_persist(
+                event_bus,
+                surface_id=surface.id,
+                user_id=user_id,
+                workspace_id=workspace_id,
+                surface_type=kind,
+                payload=surface.model_dump(mode="json"),
+                preview=preview.model_dump(mode="json"),
+                detail_config=(detail_config.model_dump(mode="json") if detail_config else None),
             )
-            await event_bus.publish_to_channel(channel, ws_msg)
-
-            # Persist to ui_surfaces table so the workspace survives page refresh
-            try:
-                from src.models.ui_state import UISurface
-
-                async with self._db_factory() as db:
-                    db.add(
-                        UISurface(
-                            surface_id=surface.id,
-                            user_id=user_id,
-                            workspace_id=workspace_id,
-                            surface_type=kind,
-                            payload=surface.model_dump(mode="json"),
-                            preview=preview.model_dump(mode="json"),
-                            detail_config=(
-                                detail_config.model_dump(mode="json") if detail_config else None
-                            ),
-                            expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
-                        )
-                    )
-                    await db.commit()
-            except Exception:
-                logger.debug(
-                    "Failed to persist workspace surface to DB",
-                    exc_info=True,
-                )
             return surface_id
         except Exception:
             logger.warning("Failed to push workspace surface", exc_info=True)
+            return None
+
+    async def push_briefing_surface(
+        self,
+        briefing,
+        user_id: str,
+        workspace_id: str,
+    ) -> str | None:
+        """Push a structured briefing surface, deduped with the REST rebuild.
+
+        Uses surface_id = "briefing_<briefing_id>" (identical to
+        SurfaceService._build_briefing_surface) so the live WS card and the REST
+        card merge into one in the frontend store. Structured preview via
+        build_briefing_preview — never the markdown-blob plan path.
+        """
+        from datetime import datetime, timezone
+
+        from src.contracts import WorkspaceSurfacePush
+        from src.models.ids import ensure_prefix
+        from src.services.surface_mapping import build_briefing_preview
+        from src.ui.renderer import build_detail_config
+
+        if not await self.check_surface_rate(user_id, "workspace"):
+            logger.debug("Briefing surface push rate-limited for user %s", user_id)
+            return None
+
+        try:
+            event_bus = await self._events.ensure_event_bus()
+            if not event_bus:
+                return None
+
+            surface_id = ensure_prefix("briefing", briefing.briefing_id)
+            preview = build_briefing_preview(briefing)
+            detail_config = build_detail_config("briefing", surface_id)
+
+            surface = WorkspaceSurfacePush(
+                id=surface_id,
+                kind="briefing",
+                preview=preview.model_dump(mode="json"),
+                detail_config=(detail_config.model_dump(mode="json") if detail_config else None),
+                created_at=(
+                    briefing.created_at.isoformat()
+                    if getattr(briefing, "created_at", None)
+                    else datetime.now(timezone.utc).isoformat()
+                ),
+            )
+
+            await self._publish_and_persist(
+                event_bus,
+                surface_id=surface.id,
+                user_id=user_id,
+                workspace_id=workspace_id,
+                surface_type="briefing",
+                payload=surface.model_dump(mode="json"),
+                preview=preview.model_dump(mode="json"),
+                detail_config=(detail_config.model_dump(mode="json") if detail_config else None),
+            )
+            return surface_id
+        except Exception:
+            logger.warning("Failed to push briefing surface", exc_info=True)
             return None
 
     async def push_insight_surface(
@@ -355,7 +417,7 @@ class SurfacePusher:
         Creates a WorkspaceSurfacePush with kind='proactive_insight' and
         persists to ui_surfaces for workspace reconnection.
         """
-        from datetime import datetime, timedelta, timezone
+        from datetime import datetime, timezone
 
         from ulid import ULID
 
@@ -428,30 +490,16 @@ class SurfacePusher:
             surface_payload = surface.model_dump(mode="json")
             surface_payload["insight_data"] = insight_data.model_dump(mode="json")
 
-            channel = f"jarvis:a2ui:{user_id}"
-            ws_msg = json.dumps({"type": "surface", "surface": surface_payload})
-            await event_bus.publish_to_channel(channel, ws_msg)
-
-            # Persist to ui_surfaces
-            try:
-                from src.models.ui_state import UISurface
-
-                async with self._db_factory() as db:
-                    db.add(
-                        UISurface(
-                            surface_id=surface_id,
-                            user_id=user_id,
-                            workspace_id=workspace_id,
-                            surface_type="proactive_insight",
-                            payload=surface_payload,
-                            preview=preview.model_dump(mode="json"),
-                            detail_config=None,
-                            expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
-                        )
-                    )
-                    await db.commit()
-            except Exception:
-                logger.debug("Failed to persist insight surface to DB", exc_info=True)
+            await self._publish_and_persist(
+                event_bus,
+                surface_id=surface_id,
+                user_id=user_id,
+                workspace_id=workspace_id,
+                surface_type="proactive_insight",
+                payload=surface_payload,
+                preview=preview.model_dump(mode="json"),
+                detail_config=None,
+            )
 
         except Exception:
             logger.warning("Failed to push insight surface", exc_info=True)

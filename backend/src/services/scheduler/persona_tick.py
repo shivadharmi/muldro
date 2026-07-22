@@ -8,6 +8,25 @@ from src.models.database import get_session_factory
 logger = logging.getLogger(__name__)
 
 
+def _format_interaction(i) -> str:
+    """Render one InteractionLog row as a full trace line (not a lossy summary).
+
+    Carries timestamp + message_preview + intent + plan_summary + response_preview
+    so Persona learns from the whole recorded interaction, not just message->intent.
+    Fields are skipped gracefully when empty.
+    """
+    created_at = getattr(i, "created_at", None)
+    when = f"{created_at:%Y-%m-%d %H:%M}" if created_at else "unknown-time"
+    parts = [f"[{when}] user: {i.message_preview or '(no preview)'}"]
+    if i.intent:
+        parts.append(f"intent={i.intent}")
+    if i.plan_summary:
+        parts.append(f"plan: {i.plan_summary}")
+    if i.response_preview:
+        parts.append(f"jarvis: {i.response_preview}")
+    return " | ".join(parts)
+
+
 class PersonaTickMixin:
     """Batches recent interactions to the Persona agent every 10th tick."""
 
@@ -35,7 +54,7 @@ class PersonaTickMixin:
                     select(InteractionLog)
                     .where(InteractionLog.created_at > last_batch)
                     .order_by(InteractionLog.created_at.desc())
-                    .limit(20)
+                    .limit(50)  # budget-bounded window, was 20 (Step 7A T1)
                 )
 
                 result = await db.execute(query)
@@ -53,15 +72,12 @@ class PersonaTickMixin:
                 for (ws_id, uid), group in grouped.items():
                     if len(group) < 5:
                         continue
-                    summary = "\n".join(
-                        f"- {i.message_preview or '(no preview)'} → {i.intent or 'unknown'}"
-                        for i in group
-                    )
+                    trace = "\n".join(_format_interaction(i) for i in group)
                     await self._orchestrator._call_agent(
                         "persona",
                         message=(
-                            "Analyze these recent user interactions and extract"
-                            f" preference patterns:\n{summary}"
+                            "Analyze the recent interaction trace and extract"
+                            f" preference patterns:\n{trace}"
                         ),
                         user_id=uid,
                         workspace_id=ws_id,

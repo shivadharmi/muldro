@@ -46,6 +46,7 @@ APPROVAL_EXPIRED = "approval.expired"
 MEMORY_CREATED = "memory.created"
 MEMORY_UPDATED = "memory.updated"
 MEMORY_SUPERSEDED = "memory.superseded"
+ENTITY_FACT_SUPERSEDED = "entity_fact.superseded"
 MEMORY_CONSOLIDATED = "memory.consolidated"
 
 # Connector events

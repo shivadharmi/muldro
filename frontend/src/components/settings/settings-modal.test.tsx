@@ -19,6 +19,8 @@ vi.mock("@/lib/theme", () => ({
 vi.mock("@/lib/api", () => ({
   fetchPolicyMode: vi.fn().mockResolvedValue({ mode: "approval_required" }),
   setPolicyMode: vi.fn().mockResolvedValue({}),
+  fetchWorkspaceDefaultPermissionMode: vi.fn().mockResolvedValue({ default_permission_mode: "auto" }),
+  setWorkspaceDefaultPermissionMode: vi.fn().mockResolvedValue({ default_permission_mode: "ask" }),
   fetchBudget: vi.fn().mockResolvedValue({ daily_limit_usd: 25 }),
   updateBudgetLimit: vi.fn().mockResolvedValue({ daily_limit_usd: 30 }),
   fetchTrustDashboard: vi.fn().mockResolvedValue({ capabilities: [] }),

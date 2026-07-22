@@ -424,10 +424,9 @@ async def test_get_ready_steps_includes_running_steps():
     resumed-from-approval steps actually get executed."""
     from src.services.graph_executor import GraphExecutor
 
-    with patch("src.services.graph_executor.get_anthropic_client"):
-        settings = make_mock_settings()
-        db = AsyncMock()
-        executor = GraphExecutor(settings, db)
+    settings = make_mock_settings()
+    db = AsyncMock()
+    executor = GraphExecutor(settings, db)
 
     # Simulate three steps: one completed, one running (approved), one pending
     step_completed = MagicMock()
@@ -472,10 +471,9 @@ async def test_get_ready_steps_promotes_pending_after_running_completes():
     is already completed, the pending step should be promoted to ready."""
     from src.services.graph_executor import GraphExecutor
 
-    with patch("src.services.graph_executor.get_anthropic_client"):
-        settings = make_mock_settings()
-        db = AsyncMock()
-        executor = GraphExecutor(settings, db)
+    settings = make_mock_settings()
+    db = AsyncMock()
+    executor = GraphExecutor(settings, db)
 
     step_completed = MagicMock()
     step_completed.step_id = "s1"

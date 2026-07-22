@@ -217,6 +217,15 @@ class RunHealthTickMixin:
                             execute_tool_fn=self._orchestrator._execute_tool,
                             budget=self._orchestrator._budget,
                             circuit_breaker=getattr(self._orchestrator, "_circuit_breaker", None),
+                            # Step 10C P2: durable autonomous deep step-executor. Defensively
+                            # resolved (None when the invoker/method is unavailable). Byte-neutral
+                            # — the per-surface effective-runtime gate is off by default, so
+                            # StepRunner.run_step_action never routes to it.
+                            deep_step_runner=getattr(
+                                getattr(self._orchestrator, "_invoker", None),
+                                "run_autonomous_deep_step",
+                                None,
+                            ),
                         )
                         # Match the background tick: reset source so a retry
                         # (failed → pending) goes through execute_run, and so a

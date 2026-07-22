@@ -25,6 +25,28 @@ READY_TIMEOUT_SECONDS = 30.0
 READY_POLL_INTERVAL = 0.5
 TERMINATE_GRACE_SECONDS = 5.0
 
+# Content substrings (case-insensitive) that elevate a forwarded stderr line
+# above INFO. Local MCP children write all their operational logging to stderr,
+# so a fixed WARNING level would bury real problems under routine chatter.
+_STDERR_ERROR_TOKENS = ("traceback", "critical", "fatal", "panic", "exception", "error")
+_STDERR_WARN_TOKENS = ("warning", "warn", "fail")
+
+
+def _classify_stderr_level(text: str) -> int:
+    """Infer a log level for one forwarded subprocess stderr line from its content.
+
+    Defaults to INFO (routine chatter) and elevates only on danger signals, so an
+    untagged crash reason (e.g. ``uvx: failed to resolve package ...``) stays
+    visible while the child's normal ``[INFO]``/``[TOOL]`` output does not
+    masquerade as a backend warning.
+    """
+    low = text.lower()
+    if any(token in low for token in _STDERR_ERROR_TOKENS):
+        return logging.ERROR
+    if any(token in low for token in _STDERR_WARN_TOKENS):
+        return logging.WARNING
+    return logging.INFO
+
 
 @dataclass
 class LocalServerSpec:
@@ -52,6 +74,9 @@ class LocalMCPProcessManager:
     ready_timeout: float = READY_TIMEOUT_SECONDS
     _running: dict[str, _Running] = field(default_factory=dict)
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    # Strong refs to stderr-drain tasks so they aren't garbage-collected before
+    # the subprocess exits (asyncio only holds weak refs to bare tasks).
+    _stderr_tasks: set[Any] = field(default_factory=set)
 
     def refcount(self, server_name: str) -> int:
         r = self._running.get(server_name)
@@ -104,10 +129,40 @@ class LocalMCPProcessManager:
             *spec.argv,
             env=full_env,
             stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
         )
         logger.info("[mcp:local] spawned %s pid=%s port=%d", spec.server_name, proc.pid, port)
+        # Forward the child's stderr to the log so a crash reason (uvx resolve
+        # failure, auth error, traceback) is visible instead of silently dropped.
+        task = asyncio.create_task(self._drain_stderr(spec.server_name, proc))
+        self._stderr_tasks.add(task)
+        task.add_done_callback(self._stderr_tasks.discard)
         return proc, port
+
+    async def _drain_stderr(self, server_name: str, proc: Any) -> None:
+        """Forward the subprocess's stderr to the logger, line by line.
+
+        Ends naturally when the process exits (readline returns EOF). Draining is
+        also required so a chatty child never blocks on a full stderr pipe.
+        """
+        stream = proc.stderr
+        if stream is None:
+            return
+        try:
+            level_to_log = {
+                logging.ERROR: logger.error,
+                logging.WARNING: logger.warning,
+                logging.INFO: logger.info,
+            }
+            while True:
+                line = await stream.readline()
+                if not line:
+                    break
+                text = line.decode(errors="replace").rstrip()
+                log = level_to_log[_classify_stderr_level(text)]
+                log("[mcp:local:%s] %s", server_name, text)
+        except Exception:
+            logger.debug("stderr drain for %s ended", server_name, exc_info=True)
 
     async def _wait_ready(self, proc: Any, port: int, path: str) -> None:
         deadline = asyncio.get_event_loop().time() + self.ready_timeout

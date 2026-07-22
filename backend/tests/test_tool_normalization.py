@@ -4,18 +4,18 @@ from src.tools.catalog import EXTERNAL_TOOL_SEEDS, INTERNAL_TOOLS
 
 
 class TestAgentScopeDeduplication:
-    def test_operator_capability_scope_has_no_duplicates(self):
+    def test_executor_capability_scope_has_no_duplicates(self):
         from src.orchestrator.agents import AGENT_CAPABILITY_SCOPES
 
-        operator_scope = AGENT_CAPABILITY_SCOPES["operator"]
+        executor_scope = AGENT_CAPABILITY_SCOPES["executor"]
         # Sets inherently have no dupes — verify it's actually a set
-        assert isinstance(operator_scope, set)
+        assert isinstance(executor_scope, set)
 
-    def test_operator_capability_scope_has_expected_capabilities(self):
-        """Operator scope should have read + write capabilities for autonomous tool use."""
+    def test_executor_capability_scope_has_expected_capabilities(self):
+        """Executor scope should have read + write capabilities for autonomous tool use."""
         from src.orchestrator.agents import AGENT_CAPABILITY_SCOPES
 
-        scope = AGENT_CAPABILITY_SCOPES["operator"]
+        scope = AGENT_CAPABILITY_SCOPES["executor"]
 
         # Write capabilities
         assert "email.send" in scope

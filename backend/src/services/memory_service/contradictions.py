@@ -4,6 +4,7 @@ import logging
 
 from sqlalchemy import update
 
+from src.llm.utility import complete_text
 from src.models.memory import Memory
 
 logger = logging.getLogger(__name__)
@@ -97,23 +98,18 @@ class MemoryContradictions:
     async def _check_contradiction_pair(self, fact_a: str, fact_b: str) -> bool:
         """Check if two facts contradict each other using Claude."""
         try:
-            response = await self._client.messages.create(
-                model=self._settings.resolved_model,
-                max_tokens=64,
+            text = await complete_text(
                 system=(
                     "You check if two facts contradict each other. "
                     'Respond with JSON: {"contradicts": true/false}'
                 ),
-                messages=[
-                    {
-                        "role": "user",
-                        "content": f"Fact A: {fact_a}\nFact B: {fact_b}",
-                    }
-                ],
+                user=f"Fact A: {fact_a}\nFact B: {fact_b}",
+                tier="resolved",
+                max_tokens=64,
             )
             from src.llm_utils import parse_llm_json
 
-            return parse_llm_json(response.content[0].text).get("contradicts", False)
+            return parse_llm_json(text).get("contradicts", False)
         except Exception:
             logger.debug("Contradiction check failed", exc_info=True)
             return False

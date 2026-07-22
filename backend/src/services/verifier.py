@@ -8,8 +8,10 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.config.settings import Settings, get_anthropic_client
+from src.config.settings import Settings
+from src.llm.utility import complete_text
 from src.models.task_graph import TaskRun, TaskStep
+from src.services.execution_state import TERMINAL_SUCCESS
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +38,6 @@ class Verifier:
     def __init__(self, settings: Settings, db: AsyncSession):
         self._settings = settings
         self._db = db
-        self._client = get_anthropic_client(settings)
 
     async def verify_run(
         self,
@@ -189,7 +190,7 @@ class Verifier:
             return run.status == expected
 
         if cond_type == "all_steps_completed":
-            return all(s.status == "completed" for s in steps)
+            return all(s.status in TERMINAL_SUCCESS for s in steps)
 
         if cond_type == "output_contains":
             needle = condition.get("value", "")
@@ -231,26 +232,21 @@ class Verifier:
         )
 
         try:
-            response = await self._client.messages.create(
-                model=self._settings.resolved_model,
-                max_tokens=256,
+            # No assistant-message prefill: Jarvis's adaptive-thinking models reject a
+            # conversation ending in an assistant turn (400). Instead we instruct JSON-only
+            # in the system prompt and rely on parse_llm_json to tolerate any stray prose.
+            text = await complete_text(
                 system=(
                     "You are a quality verification engine. "
                     "Evaluate whether the run met the criteria. "
                     'Respond with ONLY a JSON object: {"passed": true/false, "reason": "..."}'
                 ),
-                messages=[
-                    {"role": "user", "content": prompt},
-                    # Prefill the assistant turn with "{" so the model is forced
-                    # to continue a JSON object instead of prose — the canonical
-                    # fix for the judge returning "No JSON value found".
-                    {"role": "assistant", "content": "{"},
-                ],
+                user=prompt,
+                tier="resolved",
+                max_tokens=256,
             )
             from src.llm_utils import parse_llm_json
 
-            # Re-attach the prefilled "{" the model continued from.
-            text = "{" + (response.content[0].text or "")
             # Advisory verification: a malformed/empty judge response must NOT
             # raise (it is informational, not failing). Degrade to not-passed.
             result = parse_llm_json(text, default={"passed": False, "reason": "unparseable"})

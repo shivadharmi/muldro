@@ -1,8 +1,16 @@
 """Tests for the relevance assessor: tier logic and LLM call."""
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
+
+# The UtilityLLM seam imported into the relevance_assessor module.
+_CT = "src.services.relevance_assessor.complete_text"
+
+
+def _patch_complete(text: str):
+    """Patch complete_text to return a scripted JSON string."""
+    return patch(_CT, AsyncMock(return_value=text))
 
 
 class TestDetermineTier:
@@ -78,7 +86,7 @@ class TestDetermineTier:
 
 
 class TestAssessRelevance:
-    """Test the assess_relevance() async function with mocked Haiku."""
+    """Test the assess_relevance() async function with the mocked UtilityLLM seam."""
 
     @pytest.mark.asyncio
     async def test_returns_assessment_from_llm_response(self):
@@ -88,15 +96,10 @@ class TestAssessRelevance:
             assess_relevance,
         )
 
-        mock_client = AsyncMock()
-        mock_client.messages.create.return_value = MagicMock(
-            content=[
-                MagicMock(
-                    text='{"relevance_score": 0.8, "reasoning": "PR from key collaborator",'
-                    ' "relates_to_goals": ["ship v2"], "urgency": "today",'
-                    ' "suggested_actions": []}'
-                )
-            ]
+        text = (
+            '{"relevance_score": 0.8, "reasoning": "PR from key collaborator",'
+            ' "relates_to_goals": ["ship v2"], "urgency": "today",'
+            ' "suggested_actions": []}'
         )
         signal = PerceptionSignal(
             source="github",
@@ -104,11 +107,12 @@ class TestAssessRelevance:
             summary="PR #42 review requested by Alice",
         )
         context = UserContext(goals=["ship v2 by Friday"])
-        result = await assess_relevance(signal, context, mock_client)
+        with _patch_complete(text) as ct:
+            result = await assess_relevance(signal, context)
         assert result.relevance_score == 0.8
         assert result.notification_tier == "push"  # 0.8 + today = push
         assert result.urgency == "today"
-        mock_client.messages.create.assert_called_once()
+        ct.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_returns_silent_on_llm_error(self):
@@ -118,11 +122,10 @@ class TestAssessRelevance:
             assess_relevance,
         )
 
-        mock_client = AsyncMock()
-        mock_client.messages.create.side_effect = Exception("API error")
         signal = PerceptionSignal(source="gmail", event_type="new_email", summary="Newsletter")
         context = UserContext()
-        result = await assess_relevance(signal, context, mock_client)
+        with patch(_CT, AsyncMock(side_effect=Exception("API error"))):
+            result = await assess_relevance(signal, context)
         assert result.relevance_score == 0.0
         assert result.notification_tier == "silent"
 
@@ -134,16 +137,15 @@ class TestAssessRelevance:
             assess_relevance,
         )
 
-        mock_client = AsyncMock()
         fenced_json = (
             '```json\n{"relevance_score": 0.9, "reasoning": "Important PR",'
             ' "relates_to_goals": [], "urgency": "immediate",'
             ' "suggested_actions": []}\n```'
         )
-        mock_client.messages.create.return_value = MagicMock(content=[MagicMock(text=fenced_json)])
         signal = PerceptionSignal(source="github", event_type="pr_merged", summary="PR merged")
         context = UserContext(goals=["ship v2"])
-        result = await assess_relevance(signal, context, mock_client)
+        with _patch_complete(fenced_json):
+            result = await assess_relevance(signal, context)
         assert result.relevance_score == 0.9
         assert result.notification_tier == "push"
 
@@ -155,16 +157,15 @@ class TestAssessRelevance:
             assess_relevance,
         )
 
-        mock_client = AsyncMock()
         fenced_json = (
             '```\n{"relevance_score": 0.5, "reasoning": "Meh",'
             ' "relates_to_goals": [], "urgency": "whenever",'
             ' "suggested_actions": []}\n```'
         )
-        mock_client.messages.create.return_value = MagicMock(content=[MagicMock(text=fenced_json)])
         signal = PerceptionSignal(source="slack", event_type="msg", summary="Hey")
         context = UserContext()
-        result = await assess_relevance(signal, context, mock_client)
+        with _patch_complete(fenced_json):
+            result = await assess_relevance(signal, context)
         assert result.relevance_score == 0.5
         assert result.notification_tier == "briefing"
 
@@ -179,15 +180,11 @@ class TestAssessRelevance:
             assess_relevance,
         )
 
-        mock_client = AsyncMock()
         response_text = (
             '{"relevance_score": 0.8, "reasoning": "PR from key collaborator",'
             ' "relates_to_goals": ["ship v2"], "urgency": "today",'
             ' "suggested_actions": []}\n\nHere is why I scored it this way: the PR'
             " touches the release-critical path and was opened by a teammate."
-        )
-        mock_client.messages.create.return_value = MagicMock(
-            content=[MagicMock(text=response_text)]
         )
         signal = PerceptionSignal(
             source="github",
@@ -195,34 +192,33 @@ class TestAssessRelevance:
             summary="PR #42 review requested by Alice",
         )
         context = UserContext(goals=["ship v2 by Friday"])
-        result = await assess_relevance(signal, context, mock_client)
+        with _patch_complete(response_text):
+            result = await assess_relevance(signal, context)
         assert result.relevance_score == 0.8
         assert result.notification_tier == "push"  # 0.8 + today = push, NOT silent
         assert result.urgency == "today"
 
     @pytest.mark.asyncio
-    async def test_accepts_custom_model_parameter(self):
+    async def test_uses_haiku_tier_and_no_system(self):
+        # Re-homing: assess_relevance no longer takes a model override; it routes through
+        # complete_text on the haiku tier and passes NO system (the prompt is all in the user turn).
         from src.services.relevance_assessor import (
             PerceptionSignal,
             UserContext,
             assess_relevance,
         )
 
-        mock_client = AsyncMock()
-        mock_client.messages.create.return_value = MagicMock(
-            content=[
-                MagicMock(
-                    text='{"relevance_score": 0.5, "reasoning": "ok",'
-                    ' "relates_to_goals": [], "urgency": "whenever",'
-                    ' "suggested_actions": []}'
-                )
-            ]
+        text = (
+            '{"relevance_score": 0.5, "reasoning": "ok",'
+            ' "relates_to_goals": [], "urgency": "whenever",'
+            ' "suggested_actions": []}'
         )
         signal = PerceptionSignal(source="test", event_type="test", summary="test")
         context = UserContext()
-        await assess_relevance(signal, context, mock_client, model="custom-model-id")
-        call_kwargs = mock_client.messages.create.call_args[1]
-        assert call_kwargs["model"] == "custom-model-id"
+        with _patch_complete(text) as ct:
+            await assess_relevance(signal, context)
+        assert ct.await_args.kwargs["tier"] == "haiku"
+        assert ct.await_args.kwargs["system"] is None
 
     @pytest.mark.asyncio
     async def test_returns_silent_on_malformed_json(self):
@@ -232,13 +228,10 @@ class TestAssessRelevance:
             assess_relevance,
         )
 
-        mock_client = AsyncMock()
-        mock_client.messages.create.return_value = MagicMock(
-            content=[MagicMock(text="not json at all")]
-        )
         signal = PerceptionSignal(source="slack", event_type="message", summary="Hey")
         context = UserContext()
-        result = await assess_relevance(signal, context, mock_client)
+        with _patch_complete("not json at all"):
+            result = await assess_relevance(signal, context)
         assert result.relevance_score == 0.0
         assert result.notification_tier == "silent"
 
@@ -246,18 +239,12 @@ class TestAssessRelevance:
 class TestRelevancePenalty:
     """The deterministic engagement penalty downgrades the effective tier."""
 
-    def _client_returning(self, score: float, urgency: str) -> AsyncMock:
-        mock_client = AsyncMock()
-        mock_client.messages.create.return_value = MagicMock(
-            content=[
-                MagicMock(
-                    text=f'{{"relevance_score": {score}, "reasoning": "x",'
-                    f' "relates_to_goals": [], "urgency": "{urgency}",'
-                    ' "suggested_actions": []}'
-                )
-            ]
+    def _text_returning(self, score: float, urgency: str) -> str:
+        return (
+            f'{{"relevance_score": {score}, "reasoning": "x",'
+            f' "relates_to_goals": [], "urgency": "{urgency}",'
+            ' "suggested_actions": []}'
         )
-        return mock_client
 
     @pytest.mark.asyncio
     async def test_penalty_downgrades_push_to_briefing(self):
@@ -269,9 +256,9 @@ class TestRelevancePenalty:
 
         # LLM says 0.8/today → would be push; a 0.2 penalty drops effective
         # score to 0.6 (< 0.7) → briefing.
-        client = self._client_returning(0.8, "today")
         signal = PerceptionSignal(source="slack", event_type="message", summary="m")
-        result = await assess_relevance(signal, UserContext(), client, relevance_penalty=0.2)
+        with _patch_complete(self._text_returning(0.8, "today")):
+            result = await assess_relevance(signal, UserContext(), relevance_penalty=0.2)
         assert result.relevance_score == pytest.approx(0.6)
         assert result.notification_tier == "briefing"
 
@@ -284,9 +271,9 @@ class TestRelevancePenalty:
         )
 
         # 0.45/whenever → briefing; 0.2 penalty → 0.25 (< 0.4) → silent.
-        client = self._client_returning(0.45, "whenever")
         signal = PerceptionSignal(source="slack", event_type="message", summary="m")
-        result = await assess_relevance(signal, UserContext(), client, relevance_penalty=0.2)
+        with _patch_complete(self._text_returning(0.45, "whenever")):
+            result = await assess_relevance(signal, UserContext(), relevance_penalty=0.2)
         assert result.relevance_score == pytest.approx(0.25)
         assert result.notification_tier == "silent"
 
@@ -298,9 +285,9 @@ class TestRelevancePenalty:
             assess_relevance,
         )
 
-        client = self._client_returning(0.8, "today")
         signal = PerceptionSignal(source="slack", event_type="message", summary="m")
-        result = await assess_relevance(signal, UserContext(), client, relevance_penalty=0.0)
+        with _patch_complete(self._text_returning(0.8, "today")):
+            result = await assess_relevance(signal, UserContext(), relevance_penalty=0.0)
         assert result.relevance_score == pytest.approx(0.8)
         assert result.notification_tier == "push"
 
@@ -313,8 +300,8 @@ class TestRelevancePenalty:
         )
 
         # A full 1.0 penalty (suppression race) floors the score at 0.0.
-        client = self._client_returning(0.9, "immediate")
         signal = PerceptionSignal(source="slack", event_type="message", summary="m")
-        result = await assess_relevance(signal, UserContext(), client, relevance_penalty=1.0)
+        with _patch_complete(self._text_returning(0.9, "immediate")):
+            result = await assess_relevance(signal, UserContext(), relevance_penalty=1.0)
         assert result.relevance_score == pytest.approx(0.0)
         assert result.notification_tier == "silent"

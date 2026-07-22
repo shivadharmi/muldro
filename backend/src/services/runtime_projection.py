@@ -1,10 +1,14 @@
-"""Runtime projection service — derives live system state from TaskRun/TaskStep/events.
+"""Runtime projection service — audience-scoped READ/analytics projections.
 
-Provides the read-model for:
+These are derived read models for UI/history/analytics over the mutable
+``TaskRun``/``TaskStep`` rows (and ``ModelCall`` for workload) — NOT execution
+truth (execution control-flow reads stay read-your-writes; see the class docstring,
+Step 5 §4.8). Provides the read-model for:
 - Active runs and their current stage
 - Blocked runs awaiting approval or input
 - Agent workload distribution
-- Route quality metrics
+- ``rebuild_run_projection``: proves the ``runtime_events`` log is a faithful
+  system-of-record for the run-status projection (seq-ordered replay).
 """
 
 import logging
@@ -16,12 +20,30 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.models.runtime_event import RuntimeEvent
 from src.models.task_graph import TaskRun, TaskStep
 from src.models.traces import ModelCall
+from src.services.execution_state import TERMINAL_SUCCESS
 
 logger = logging.getLogger(__name__)
 
+# Fallback run status when a pre-enrichment run-terminal event lacks payload["status"].
+_EVENT_TYPE_TO_RUN_STATUS = {
+    "run_completed": "completed",
+    "run_failed": "failed",
+    "run_cancelled": "cancelled",
+}
+
 
 class RuntimeProjectionService:
-    """Derives runtime projections from existing data models."""
+    """Audience-scoped READ/analytics projections over the current data model.
+
+    IMPORTANT (Step 5 §4.8): these are derived read models for UI/history/analytics.
+    They read the mutable ``TaskRun``/``TaskStep`` rows (and ``ModelCall`` for
+    workload) — they are NOT execution truth. Execution control-flow reads
+    (readiness, resume cursor, dependency checks) stay read-your-writes on the state
+    row/checkpointer and must never be folded from these projections (§7: "agent
+    reading a stale projection"). ``rebuild_run_projection`` additionally proves the
+    ``runtime_events`` log is a faithful system-of-record for the run-status
+    projection (the seat Step 10's reconcile-from-event-log builds on).
+    """
 
     def __init__(self, db: AsyncSession, workspace_id: str):
         self._db = db
@@ -47,7 +69,7 @@ class RuntimeProjectionService:
             )
             steps = steps_result.scalars().all()
             total = len(steps)
-            completed = sum(1 for s in steps if s.status == "completed")
+            completed = sum(1 for s in steps if s.status in TERMINAL_SUCCESS)
             blocking_step = next(
                 (s for s in steps if s.status in ("awaiting_approval", "blocked")), None
             )
@@ -249,6 +271,61 @@ class RuntimeProjectionService:
             }
             for e in events
         ]
+
+    async def rebuild_run_projection(self, run_id: str) -> dict:
+        """Reconstruct a run's status/progress projection from the runtime_events log
+        ALONE, ordered by the monotonic ``seq`` (Step 5 §4.8, D-B2).
+
+        Folds step_started/step_completed/run-terminal events into
+        {status, total_steps, completed_steps, progress_pct}. ``status`` comes from the
+        run-terminal event payload (enriched, Task 4), falling back to the event type
+        for pre-enrichment events. completed_steps counts step_completed events whose
+        payload status is a TERMINAL_SUCCESS (matches get_active_runs()'s live count).
+        Read/analytics only — NOT execution truth.
+        """
+        rows = (
+            (
+                await self._db.execute(
+                    select(RuntimeEvent)
+                    .where(
+                        RuntimeEvent.workspace_id == self._workspace_id,
+                        RuntimeEvent.run_id == run_id,
+                    )
+                    .order_by(RuntimeEvent.seq)
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+        status: str | None = None
+        started: set[str] = set()
+        completed: set[str] = set()
+        for e in rows:
+            p = e.payload or {}
+            sid = p.get("step_id") or e.step_id
+            if e.event_type in ("step_started", "tool_call_started") and sid:
+                started.add(sid)
+            elif e.event_type == "step_completed" and sid:
+                if p.get("status", "completed") in TERMINAL_SUCCESS:
+                    completed.add(sid)
+            elif e.event_type in _EVENT_TYPE_TO_RUN_STATUS:
+                status = p.get("status") or _EVENT_TYPE_TO_RUN_STATUS[e.event_type]
+
+        total = len(started)
+        done = len(completed)
+        return {
+            "run_id": run_id,
+            "status": status,
+            "total_steps": total,
+            "completed_steps": done,
+            "progress_pct": round(done / total * 100) if total else 0,
+            # ADDITIVE (Step 10C P4): the SET of step_ids the log folds as terminal-success,
+            # so the reconcile-from-event-log consumer can upgrade individual step rows
+            # (not just read the count). Existing callers read status/completed_steps/etc.
+            # and ignore this key.
+            "completed_step_ids": sorted(completed),
+        }
 
     async def emit_event(
         self,

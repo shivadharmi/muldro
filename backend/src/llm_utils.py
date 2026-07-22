@@ -60,3 +60,18 @@ def _value_start_candidates(text: str):
     """
     candidates = sorted(idx for idx in range(len(text)) if text[idx] == "{" or text[idx] == "[")
     yield from candidates
+
+
+def coerce_to_object(parsed: dict | list, *, list_key: str) -> dict:
+    """Coerce a ``parse_llm_json`` result into a dict for object-expecting callers.
+
+    ``parse_llm_json`` returns whatever JSON shape the model emitted. Extraction
+    prompts ask for ``{list_key: [...]}`` but the model sometimes returns a **bare
+    array** ``[...]`` — which crashes callers that do ``.get(list_key)``. This wraps a
+    bare list under ``list_key`` and turns any other non-dict into ``{list_key: []}``.
+    """
+    if isinstance(parsed, dict):
+        return parsed
+    if isinstance(parsed, list):
+        return {list_key: parsed}
+    return {list_key: []}

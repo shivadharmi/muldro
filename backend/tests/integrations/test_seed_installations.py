@@ -32,7 +32,7 @@ def test_http_schemas_not_cleared_on_seed():
 
 
 def test_npx_servers_are_version_pinned():
-    for name in ("slack", "playwright", "filesystem", "notion"):
+    for name in ("slack", "playwright", "notion"):
         inst = _by_name(name)
         pkg = next(
             (a for a in inst["args"] if not a.startswith("-") and "@" in a),

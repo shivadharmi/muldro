@@ -11,7 +11,6 @@ Responsibilities:
 - Merge duplicates and resolve aliases
 """
 
-import json
 import logging
 import re
 from datetime import datetime, timezone
@@ -21,134 +20,23 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from ulid import ULID
 
-from src.config.settings import Settings, get_anthropic_client
+from src.config.settings import Settings
 from src.models.entities import Entity, EntityAlias, EntityRelationship
-from src.models.events import NormalizedEvent
+from src.services.entity_facts.confidence import (
+    compute_confidence,
+    current_confidence,
+    days_since,
+)
+from src.services.entity_resolver import EntityResolver
+from src.services.provenance import SourceRef, merge_source_refs
+from src.services.world_model_extraction import (
+    ENTITY_EXTRACTION_PROMPT,  # noqa: F401 -- re-export for external importers
+    ENTITY_TYPES,  # noqa: F401 -- re-export for external importers
+    RELATION_TYPES,  # noqa: F401 -- re-export for external importers
+    WorldModelExtractionMixin,
+)
 
 logger = logging.getLogger(__name__)
-
-ENTITY_TYPES = frozenset(
-    {
-        # Work domain
-        "person",
-        "organization",
-        "project",
-        "meeting",
-        "goal",
-        "task",
-        "document",
-        "message_thread",
-        "repository",
-        "channel",
-        "product",
-        "investment",
-        "website",
-        "tool",
-        "watcher",
-        # Personal domain
-        "location",
-        "health_record",
-        "hobby",
-        "family_member",
-        "financial_account",
-        "media_item",
-        "recipe",
-        "course",
-        "contact_group",
-        # Financial / money-movement domain
-        "financial_transaction",
-        "merchant",
-    }
-)
-
-RELATION_TYPES = frozenset(
-    {
-        # Work domain
-        "works_on",
-        "related_to",
-        "scheduled_with",
-        "reports_to",
-        "owns",
-        "member_of",
-        "assigned_to",
-        "mentioned_in",
-        "depends_on",
-        "attends",
-        "authored",
-        "invested_in",
-        "blocked_by",
-        "sent_by",
-        "attached_to",
-        "derived_from",
-        "monitors",
-        # Personal domain
-        "lives_at",
-        "prescribed_by",
-        "enrolled_in",
-        "follows",
-        "subscribes_to",
-        "shares_with",
-        "cares_for",
-        # Financial / money-movement domain
-        "paid_to",
-        "charged_to",
-    }
-)
-
-ENTITY_EXTRACTION_PROMPT = """\
-You are Jarvis's entity extraction engine. Given an event, extract ALL entities \
-and relationships mentioned.
-
-You MUST respond with valid JSON matching this schema:
-{
-  "entities": [
-    {
-      "entity_type": "<type>",
-      "canonical_name": "Full Name or Title",
-      "aliases": ["email@addr", "nickname", "handle"],
-      "attributes": {"role": "...", "company": "...", ...},
-      "importance": float 0.0-1.0
-    }
-  ],
-  "relationships": [
-    {
-      "from_name": "Entity A canonical name",
-      "relation_type": "<relation>",
-      "to_name": "Entity B canonical name"
-    }
-  ]
-}
-
-Entity types: person, organization, project, meeting, goal, task, document, \
-message_thread, repository, channel, product, investment, website, tool, watcher, \
-location, health_record, hobby, family_member, financial_account, media_item, \
-recipe, course, contact_group, financial_transaction, merchant
-
-Relation types: works_on, related_to, scheduled_with, reports_to, owns, \
-member_of, assigned_to, mentioned_in, depends_on, attends, authored, invested_in, \
-blocked_by, sent_by, attached_to, derived_from, monitors, lives_at, prescribed_by, \
-enrolled_in, follows, subscribes_to, shares_with, cares_for, paid_to, charged_to
-
-Rules:
-- Always extract the sender/actor as a person entity
-- Include email addresses as aliases, NOT as the canonical_name
-- Privacy: canonical_name MUST be a human display name. If you cannot determine \
-one, use a descriptive label such as "Sender (example.com)" derived from the \
-domain, and keep the raw email address only in aliases. NEVER use a bare email \
-address as canonical_name.
-- For spend/charge/payment/transaction events (e.g. a card was charged, money was \
-sent or received), extract a `financial_transaction` entity. Put structured detail \
-in its `attributes` dict: amount (number), currency (ISO code like "INR"/"USD"), \
-merchant (name), account_last4 (last 4 digits of the card/account), and direction \
-("debit" for money out, "credit" for money in). Use a concise canonical_name like \
-"INR 1087 at <merchant>" or "Card charge INR 1087". Also extract the `merchant` as \
-its own entity when named, and link the transaction with `paid_to` (merchant) and \
-`charged_to` (the financial_account / card).
-- Only extract relationships you are reasonably confident about
-- Set importance: 1.0 for key people/active projects, 0.5 for mentioned entities, \
-0.2 for incidental references
-- Extract document/repo/channel entities when they are directly referenced
-"""
 
 
 # Simple, deterministic check for a bare email address used as a display name.
@@ -186,7 +74,70 @@ def sanitize_canonical_name(
     return (label, out_aliases)
 
 
-class WorldModel:
+def _find_entity_stmt(user_id: str, query: str, workspace_id: str):
+    """Build the find_entity SELECT. Extracted so isolation tests compile it."""
+    pattern = f"%{query}%"
+    return (
+        select(Entity)
+        .where(
+            Entity.user_id == user_id,
+            Entity.workspace_id == workspace_id,
+            or_(
+                Entity.canonical_name.ilike(pattern),
+                Entity.entity_id.in_(
+                    select(EntityAlias.entity_id).where(
+                        EntityAlias.alias.ilike(pattern),
+                        EntityAlias.workspace_id == workspace_id,
+                    )
+                ),
+            ),
+        )
+        .order_by(Entity.importance_score.desc())
+    )
+
+
+def _find_by_alias_stmt(user_id: str, alias: str, workspace_id: str):
+    """Build the exact-alias lookup SELECT for _find_by_name_or_alias.
+
+    Extracted so the isolation test can compile it and guard the alias
+    subquery's workspace_id scoping against regression.
+    """
+    return (
+        select(Entity)
+        .where(
+            Entity.user_id == user_id,
+            Entity.workspace_id == workspace_id,
+            Entity.entity_id.in_(
+                select(EntityAlias.entity_id).where(
+                    EntityAlias.alias == alias,
+                    EntityAlias.workspace_id == workspace_id,
+                )
+            ),
+        )
+        # Oldest-first + limit(1): an alias can resolve to multiple (duplicate) entities;
+        # converge deterministically and keep scalar_one_or_none from raising.
+        .order_by(Entity.created_at)
+        .limit(1)
+    )
+
+
+def _entity_vector_payload(
+    entity_type: str, canonical_name: str, user_id: str, workspace_id: str
+) -> dict:
+    """Qdrant payload for an entity vector. Includes workspace_id so
+    workspace-scoped vector search actually matches — it was previously omitted,
+    silently breaking scoped entity resolution/dedup."""
+    payload = {
+        "entity_type": entity_type,
+        "canonical_name": canonical_name,
+        "user_id": user_id,
+    }
+    if workspace_id:
+        payload["workspace_id"] = workspace_id
+    return payload
+
+
+class WorldModel(WorldModelExtractionMixin):
     """Manage the entity graph."""
 
     def __init__(
@@ -200,7 +151,6 @@ class WorldModel:
     ):
         self._settings = settings
         self._db = db
-        self._client = get_anthropic_client(settings)
         self._event_bus = event_bus
         self._embedding_service = embedding_service
         self._vector_store = vector_store
@@ -231,51 +181,6 @@ class WorldModel:
                 exc_info=True,
             )
 
-    async def extract_from_event(
-        self, event_id: str, user_id: str, workspace_id: str = ""
-    ) -> list[str]:
-        """Extract entities from a normalized event. Returns list of entity_ids."""
-        result = await self._db.execute(
-            select(NormalizedEvent).where(NormalizedEvent.event_id == event_id)
-        )
-        event = result.scalar_one_or_none()
-        if not event:
-            logger.warning("Event not found for extraction: %s", event_id)
-            return []
-
-        extracted = await self._call_extraction(event)
-        entity_ids = []
-
-        for ent_data in extracted.get("entities", []):
-            raw_type = ent_data.get("entity_type", "person")
-            entity_type = raw_type if raw_type in ENTITY_TYPES else "person"
-            importance = min(max(float(ent_data.get("importance", 0.5)), 0.0), 1.0)
-
-            entity_id = await self.upsert_entity(
-                user_id=user_id,
-                entity_type=entity_type,
-                canonical_name=ent_data.get("canonical_name", "Unknown"),
-                attributes=ent_data.get("attributes"),
-                aliases=ent_data.get("aliases"),
-                importance=importance,
-                workspace_id=workspace_id,
-            )
-            if entity_id:
-                entity_ids.append(entity_id)
-
-        for rel_data in extracted.get("relationships", []):
-            raw_rel = rel_data.get("relation_type", "related_to")
-            relation_type = raw_rel if raw_rel in RELATION_TYPES else "related_to"
-            await self._create_relationship_by_name(
-                user_id=user_id,
-                from_name=rel_data.get("from_name", ""),
-                relation_type=relation_type,
-                to_name=rel_data.get("to_name", ""),
-                workspace_id=workspace_id,
-            )
-
-        return entity_ids
-
     async def upsert_entity(
         self,
         user_id: str,
@@ -283,11 +188,17 @@ class WorldModel:
         canonical_name: str,
         attributes: dict | None = None,
         aliases: list[str] | None = None,
-        source_refs: list[dict] | None = None,
+        source_ref: SourceRef | None = None,
         importance: float | None = None,
         workspace_id: str = "",
+        origin: str = "unknown",
     ) -> str:
-        """Create or update an entity. Returns entity_id."""
+        """Create or update an entity. Returns entity_id.
+
+        ``origin`` labels the provenance of this observation (e.g. ``user_message``,
+        ``perception``); it drives per-attribute fact recording (bi-temporal
+        supersede) and the evidence-derived ``confidence_score``.
+        """
         now = datetime.now(timezone.utc)
         # Privacy guard: never persist a bare email address as the canonical name.
         canonical_name, aliases = sanitize_canonical_name(canonical_name, aliases)
@@ -296,15 +207,31 @@ class WorldModel:
         )
         if existing:
             if attributes:
-                merged = {**(existing.attributes or {}), **attributes}
-                existing.attributes = merged
+                await self._record_attribute_facts(
+                    existing.entity_id,
+                    user_id,
+                    workspace_id,
+                    attributes,
+                    origin,
+                    now,
+                    source_ref=source_ref,
+                )
+                # entities.attributes stays the denormalized current snapshot (D2).
+                existing.attributes = {**(existing.attributes or {}), **attributes}
             if aliases:
                 await self._add_aliases(existing.entity_id, aliases, workspace_id=workspace_id)
+            if source_ref is not None:
+                existing.source_refs = merge_source_refs(existing.source_refs, source_ref)
             # Update temporal tracking
             existing.last_seen_at = now
             existing.interaction_count = (existing.interaction_count or 0) + 1
             if importance is not None:
                 existing.importance_score = max(existing.importance_score or 0.0, importance)
+            existing.confidence_score = compute_confidence(
+                origin=origin,
+                corroboration_count=existing.interaction_count or 1,
+                age_days=0.0,
+            )
             await self._db.commit()
             await self._emit_event(
                 "entity.updated",
@@ -328,10 +255,11 @@ class WorldModel:
             entity_type=entity_type,
             canonical_name=canonical_name,
             attributes=attributes,
-            source_refs=source_refs,
+            source_refs=[source_ref.to_dict()] if source_ref else None,
             last_seen_at=now,
             interaction_count=1,
             importance_score=importance or 0.5,
+            confidence_score=compute_confidence(origin=origin, corroboration_count=1, age_days=0.0),
         )
         self._db.add(entity)
 
@@ -354,12 +282,22 @@ class WorldModel:
                 "Entity race condition, retrying lookup: name=%s",
                 canonical_name,
             )
+            # Pass aliases too: the conflict may be a strong-identifier (email/handle)
+            # unique-index violation rather than a name collision, so resolve to whoever
+            # already owns the name OR the alias.
             retry = await self._find_by_name_or_alias(
-                user_id, canonical_name, None, workspace_id=workspace_id
+                user_id, canonical_name, aliases, workspace_id=workspace_id
             )
             if retry:
                 return retry.entity_id
             raise
+
+        # Record each attribute as a bi-temporal fact now that the entity row exists.
+        if attributes:
+            await self._record_attribute_facts(
+                entity_id, user_id, workspace_id, attributes, origin, now, source_ref=source_ref
+            )
+            await self._db.commit()
 
         # Upsert entity vector to Qdrant
         emb = embedding
@@ -376,11 +314,7 @@ class WorldModel:
                         "entities",
                         entity_id,
                         emb,
-                        {
-                            "entity_type": entity_type,
-                            "canonical_name": canonical_name,
-                            "user_id": user_id,
-                        },
+                        _entity_vector_payload(entity_type, canonical_name, user_id, workspace_id),
                         user_id,
                     )
                 except Exception:
@@ -402,6 +336,42 @@ class WorldModel:
         )
         return entity_id
 
+    async def _record_attribute_facts(
+        self,
+        entity_id: str,
+        user_id: str,
+        workspace_id: str,
+        attributes: dict,
+        origin: str,
+        now: datetime,
+        source_ref: SourceRef | None = None,
+    ) -> None:
+        """Record each attribute as a bi-temporal fact (supersede-on-change). The
+        entities.attributes JSONB stays the denormalized current snapshot (D2)."""
+        from src.services.entity_facts.store import EntityFactStore
+
+        store = EntityFactStore(self._db)
+        ref_dict = source_ref.to_dict() if source_ref else None
+        for attr_key, attr_value in attributes.items():
+            try:
+                await store.record_fact(
+                    entity_id=entity_id,
+                    workspace_id=workspace_id,
+                    user_id=user_id,
+                    attr_key=str(attr_key),
+                    attr_value=attr_value,
+                    origin=origin,
+                    source_ref=ref_dict,
+                    now=now,
+                )
+            except Exception:
+                logger.debug(
+                    "entity_fact record failed: entity=%s key=%s",
+                    entity_id,
+                    attr_key,
+                    exc_info=True,
+                )
+
     async def add_relationship(
         self,
         user_id: str,
@@ -413,11 +383,15 @@ class WorldModel:
     ) -> str:
         """Add a relationship between entities. Returns relation_id."""
         existing = await self._db.execute(
-            select(EntityRelationship).where(
+            select(EntityRelationship)
+            .where(
                 EntityRelationship.from_entity_id == from_entity_id,
                 EntityRelationship.relation_type == relation_type,
                 EntityRelationship.to_entity_id == to_entity_id,
             )
+            # Existence check — limit(1) tolerates duplicate triples (no unique constraint;
+            # concurrent adds can race) instead of crashing on scalar_one_or_none.
+            .limit(1)
         )
         if existing.scalar_one_or_none():
             return ""
@@ -444,21 +418,7 @@ class WorldModel:
 
     async def find_entity(self, user_id: str, query: str, workspace_id: str = "") -> list[dict]:
         """Search entities by name or alias. Ordered by importance."""
-        pattern = f"%{query}%"
-        result = await self._db.execute(
-            select(Entity)
-            .where(
-                Entity.user_id == user_id,
-                Entity.workspace_id == workspace_id,
-                or_(
-                    Entity.canonical_name.ilike(pattern),
-                    Entity.entity_id.in_(
-                        select(EntityAlias.entity_id).where(EntityAlias.alias.ilike(pattern))
-                    ),
-                ),
-            )
-            .order_by(Entity.importance_score.desc())
-        )
+        result = await self._db.execute(_find_entity_stmt(user_id, query, workspace_id))
         entities = result.scalars().all()
         return [
             {
@@ -469,9 +429,27 @@ class WorldModel:
                 "importance_score": e.importance_score,
                 "interaction_count": e.interaction_count,
                 "last_seen_at": (e.last_seen_at.isoformat() if e.last_seen_at else None),
+                "confidence": current_confidence(
+                    e.confidence_score, age_days=days_since(e.last_seen_at)
+                ),
+                "provenance": {"origin_hint": e.entity_type},
             }
             for e in entities
         ]
+
+    async def resolve_entities(
+        self, user_id: str, text: str, workspace_id: str = "", limit: int = 10
+    ) -> list[dict]:
+        """Resolve entity mentions in free text via span extraction + exact + FTS
+        + vector (replaces the ILIKE-on-raw-message find_entity path). Returns the
+        same dict shape as find_entity so callers/ranking are unchanged."""
+        resolver = EntityResolver(
+            self._db,
+            workspace_id,
+            embedding_service=self._embedding_service,
+            vector_store=self._vector_store,
+        )
+        return await resolver.resolve(user_id, text, limit=limit)
 
     async def _find_by_name_or_alias(
         self,
@@ -482,11 +460,18 @@ class WorldModel:
     ) -> Entity | None:
         """Find an existing entity by canonical name or any alias."""
         result = await self._db.execute(
-            select(Entity).where(
+            select(Entity)
+            .where(
                 Entity.user_id == user_id,
                 Entity.workspace_id == workspace_id,
                 Entity.canonical_name == canonical_name,
             )
+            # Entity dedup is best-effort — concurrent extraction can create duplicate
+            # name/alias entities. order_by + limit(1) picks the OLDEST deterministically
+            # (repeated upserts converge on one canonical entity) and keeps
+            # scalar_one_or_none from raising MultipleResultsFound.
+            .order_by(Entity.created_at)
+            .limit(1)
         )
         entity = result.scalar_one_or_none()
         if entity:
@@ -494,15 +479,7 @@ class WorldModel:
 
         if aliases:
             for alias in aliases:
-                result = await self._db.execute(
-                    select(Entity).where(
-                        Entity.user_id == user_id,
-                        Entity.workspace_id == workspace_id,
-                        Entity.entity_id.in_(
-                            select(EntityAlias.entity_id).where(EntityAlias.alias == alias)
-                        ),
-                    )
-                )
+                result = await self._db.execute(_find_by_alias_stmt(user_id, alias, workspace_id))
                 entity = result.scalar_one_or_none()
                 if entity:
                     return entity
@@ -537,22 +514,42 @@ class WorldModel:
     async def _add_aliases(
         self, entity_id: str, aliases: list[str], workspace_id: str = ""
     ) -> None:
-        """Add new aliases to an entity (skip existing)."""
+        """Add new aliases to an entity, skipping aliases already on this entity and any
+        strong identifier (email/handle) already owned by a *different* entity — the
+        partial unique index would reject the latter, and the existing ownership means
+        dedup should target that other entity, not duplicate the mapping here."""
         result = await self._db.execute(
             select(EntityAlias.alias).where(EntityAlias.entity_id == entity_id)
         )
         existing_aliases = set(result.scalars().all())
 
         for alias in aliases:
-            if alias not in existing_aliases:
-                self._db.add(
-                    EntityAlias(
-                        entity_id=entity_id,
-                        alias=alias,
-                        alias_type=self._guess_alias_type(alias),
-                        workspace_id=workspace_id,
+            if alias in existing_aliases:
+                continue
+            alias_type = self._guess_alias_type(alias)
+            if alias_type in ("email", "handle"):
+                owner = await self._db.execute(
+                    select(EntityAlias.entity_id)
+                    .where(
+                        EntityAlias.workspace_id == workspace_id,
+                        EntityAlias.alias == alias,
+                        EntityAlias.alias_type == alias_type,
                     )
+                    .limit(1)
                 )
+                if owner.scalar_one_or_none() not in (None, entity_id):
+                    logger.debug(
+                        "Strong alias already owned by another entity; skipping: %s", alias
+                    )
+                    continue
+            self._db.add(
+                EntityAlias(
+                    entity_id=entity_id,
+                    alias=alias,
+                    alias_type=alias_type,
+                    workspace_id=workspace_id,
+                )
+            )
 
     async def _create_relationship_by_name(
         self,
@@ -573,83 +570,6 @@ class WorldModel:
                 to_entity_id=to_entities[0]["entity_id"],
                 workspace_id=workspace_id,
             )
-
-    async def extract_from_text(self, text: str, user_id: str, workspace_id: str = "") -> list[str]:
-        """Extract entities from free text (e.g. user messages). Returns entity_ids."""
-        try:
-            response = await self._client.messages.create(
-                model=self._settings.resolved_model,
-                max_tokens=1024,
-                system=ENTITY_EXTRACTION_PROMPT,
-                messages=[{"role": "user", "content": f"Source: user_message\nSummary: {text}"}],
-            )
-            from src.llm_utils import parse_llm_json
-
-            extracted = parse_llm_json(
-                response.content[0].text,
-                default={"entities": [], "relationships": []},
-            )
-        except Exception:
-            logger.warning("Text entity extraction failed", exc_info=True)
-            return []
-
-        entity_ids = []
-        for ent_data in extracted.get("entities", []):
-            raw_type = ent_data.get("entity_type", "person")
-            entity_type = raw_type if raw_type in ENTITY_TYPES else "person"
-            importance = min(max(float(ent_data.get("importance", 0.5)), 0.0), 1.0)
-            entity_id = await self.upsert_entity(
-                user_id=user_id,
-                entity_type=entity_type,
-                canonical_name=ent_data.get("canonical_name", "Unknown"),
-                attributes=ent_data.get("attributes"),
-                aliases=ent_data.get("aliases"),
-                importance=importance,
-                workspace_id=workspace_id,
-            )
-            if entity_id:
-                entity_ids.append(entity_id)
-
-        for rel_data in extracted.get("relationships", []):
-            raw_rel = rel_data.get("relation_type", "related_to")
-            relation_type = raw_rel if raw_rel in RELATION_TYPES else "related_to"
-            await self._create_relationship_by_name(
-                user_id=user_id,
-                from_name=rel_data.get("from_name", ""),
-                relation_type=relation_type,
-                to_name=rel_data.get("to_name", ""),
-                workspace_id=workspace_id,
-            )
-
-        return entity_ids
-
-    async def _call_extraction(self, event: NormalizedEvent) -> dict:
-        """Call Claude to extract entities from an event."""
-        parts = [f"Event type: {event.event_type}", f"Source: {event.source}"]
-        if event.title:
-            parts.append(f"Title: {event.title}")
-        if event.summary:
-            parts.append(f"Summary: {event.summary}")
-        if event.actor_entities:
-            parts.append(f"Actors: {json.dumps(event.actor_entities)}")
-        user_message = "\n".join(parts)
-
-        try:
-            response = await self._client.messages.create(
-                model=self._settings.resolved_model,
-                max_tokens=1024,
-                system=ENTITY_EXTRACTION_PROMPT,
-                messages=[{"role": "user", "content": user_message}],
-            )
-            from src.llm_utils import parse_llm_json
-
-            return parse_llm_json(
-                response.content[0].text,
-                default={"entities": [], "relationships": []},
-            )
-        except Exception:
-            logger.warning("Entity extraction failed", exc_info=True)
-            return {"entities": [], "relationships": []}
 
     @staticmethod
     def _guess_alias_type(alias: str) -> str:

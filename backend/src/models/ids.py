@@ -24,6 +24,7 @@ ID_PREFIXES = {
     "exec": "execution",
     "run": "task_run",
     "step": "task_step",
+    "idem": "idempotency_ledger",
     "apr": "approval",
     "sched": "schedule",
     "trg": "trigger",

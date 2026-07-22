@@ -9,8 +9,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from src.llm.utility import LLMUsage
 from src.services.world_model import ENTITY_TYPES, RELATION_TYPES, WorldModel
 from tests.conftest import TEST_USER_ID, make_mock_settings
+
+_USAGE = LLMUsage(model="claude-sonnet-5", input_tokens=1, output_tokens=1)
 
 
 @pytest.fixture
@@ -116,11 +119,9 @@ class TestEntityRelationTypes:
 
 
 class TestTemporalTracking:
-    @patch("src.services.world_model.get_anthropic_client")
     @pytest.mark.asyncio
-    async def test_new_entity_gets_temporal_fields(self, mock_get_client, settings, mock_db):
+    async def test_new_entity_gets_temporal_fields(self, settings, mock_db):
         """New entities should have last_seen_at, interaction_count=1, importance."""
-        mock_get_client.return_value = MagicMock()
         wm = WorldModel(settings=settings, db=mock_db)
 
         entity_id = await wm.upsert_entity(
@@ -136,9 +137,8 @@ class TestTemporalTracking:
         assert added.interaction_count == 1
         assert added.importance_score == 0.8
 
-    @patch("src.services.world_model.get_anthropic_client")
     @pytest.mark.asyncio
-    async def test_existing_entity_increments_interaction(self, mock_get_client, settings, mock_db):
+    async def test_existing_entity_increments_interaction(self, settings, mock_db):
         """Upserting existing entity should increment interaction_count."""
         existing = MagicMock()
         existing.entity_id = "ent_existing"
@@ -150,7 +150,6 @@ class TestTemporalTracking:
         result_mock = MagicMock()
         result_mock.scalar_one_or_none.return_value = existing
         mock_db.execute = AsyncMock(return_value=result_mock)
-        mock_get_client.return_value = MagicMock()
 
         wm = WorldModel(settings=settings, db=mock_db)
         entity_id = await wm.upsert_entity(
@@ -165,9 +164,8 @@ class TestTemporalTracking:
         assert existing.importance_score == 0.9  # max(0.5, 0.9)
         assert existing.last_seen_at is not None
 
-    @patch("src.services.world_model.get_anthropic_client")
     @pytest.mark.asyncio
-    async def test_importance_keeps_maximum(self, mock_get_client, settings, mock_db):
+    async def test_importance_keeps_maximum(self, settings, mock_db):
         """Importance should keep the higher value."""
         existing = MagicMock()
         existing.entity_id = "ent_existing"
@@ -179,7 +177,6 @@ class TestTemporalTracking:
         result_mock = MagicMock()
         result_mock.scalar_one_or_none.return_value = existing
         mock_db.execute = AsyncMock(return_value=result_mock)
-        mock_get_client.return_value = MagicMock()
 
         wm = WorldModel(settings=settings, db=mock_db)
         await wm.upsert_entity(
@@ -196,9 +193,10 @@ class TestTemporalTracking:
 
 
 class TestEntityExtractionExpanded:
-    @patch("src.services.world_model.get_anthropic_client")
+    @patch("src.services.world_model_extraction.record_token_span", new=AsyncMock())
+    @patch("src.services.world_model_extraction.complete_text_with_usage")
     @pytest.mark.asyncio
-    async def test_extracts_document_entity(self, mock_get_client, settings, mock_db):
+    async def test_extracts_document_entity(self, mock_complete, settings, mock_db):
         """Should extract document entities from events."""
         mock_event = MagicMock()
         mock_event.event_type = "file_modified"
@@ -233,11 +231,7 @@ class TestEntityExtractionExpanded:
             ],
         }
 
-        mock_client = MagicMock()
-        response = MagicMock()
-        response.content = [MagicMock(text=json.dumps(extraction_result))]
-        mock_client.messages.create = AsyncMock(return_value=response)
-        mock_get_client.return_value = mock_client
+        mock_complete.return_value = (json.dumps(extraction_result), _USAGE)
 
         event_result = MagicMock()
         event_result.scalar_one_or_none.return_value = mock_event
@@ -246,18 +240,19 @@ class TestEntityExtractionExpanded:
         no_result.scalar_one_or_none.return_value = None
         no_result.scalars.return_value.all.return_value = []
 
-        mock_db.execute = AsyncMock(
-            side_effect=[event_result, no_result, no_result, no_result, no_result]
-        )
+        # First execute() is the event lookup; all later lookups (dedup, per-attribute
+        # fact recording current_fact, find_entity for relationships) return no match.
+        mock_db.execute = AsyncMock(side_effect=[event_result] + [no_result] * 30)
 
         wm = WorldModel(settings=settings, db=mock_db)
         entity_ids = await wm.extract_from_event("evt_001", TEST_USER_ID)
 
         assert len(entity_ids) == 2
 
-    @patch("src.services.world_model.get_anthropic_client")
+    @patch("src.services.world_model_extraction.record_token_span", new=AsyncMock())
+    @patch("src.services.world_model_extraction.complete_text_with_usage")
     @pytest.mark.asyncio
-    async def test_invalid_type_falls_back_to_person(self, mock_get_client, settings, mock_db):
+    async def test_invalid_type_falls_back_to_person(self, mock_complete, settings, mock_db):
         """Unknown entity_type should fall back to 'person'."""
         mock_event = MagicMock()
         mock_event.event_type = "test"
@@ -279,11 +274,7 @@ class TestEntityExtractionExpanded:
             "relationships": [],
         }
 
-        mock_client = MagicMock()
-        response = MagicMock()
-        response.content = [MagicMock(text=json.dumps(extraction_result))]
-        mock_client.messages.create = AsyncMock(return_value=response)
-        mock_get_client.return_value = mock_client
+        mock_complete.return_value = (json.dumps(extraction_result), _USAGE)
 
         event_result = MagicMock()
         event_result.scalar_one_or_none.return_value = mock_event
@@ -301,10 +292,11 @@ class TestEntityExtractionExpanded:
         added = mock_db.add.call_args_list[0][0][0]
         assert added.entity_type == "person"
 
-    @patch("src.services.world_model.get_anthropic_client")
+    @patch("src.services.world_model_extraction.record_token_span", new=AsyncMock())
+    @patch("src.services.world_model_extraction.complete_text_with_usage")
     @pytest.mark.asyncio
     async def test_invalid_relation_falls_back_to_related_to(
-        self, mock_get_client, settings, mock_db
+        self, mock_complete, settings, mock_db
     ):
         """Unknown relation_type should fall back to 'related_to'."""
         mock_event = MagicMock()
@@ -340,11 +332,7 @@ class TestEntityExtractionExpanded:
             ],
         }
 
-        mock_client = MagicMock()
-        response = MagicMock()
-        response.content = [MagicMock(text=json.dumps(extraction_result))]
-        mock_client.messages.create = AsyncMock(return_value=response)
-        mock_get_client.return_value = mock_client
+        mock_complete.return_value = (json.dumps(extraction_result), _USAGE)
 
         event_result = MagicMock()
         event_result.scalar_one_or_none.return_value = mock_event
@@ -363,6 +351,7 @@ class TestEntityExtractionExpanded:
                 importance_score=0.5,
                 interaction_count=1,
                 last_seen_at=None,
+                confidence_score=0.7,
             )
         ]
         entity_match2 = MagicMock()
@@ -375,6 +364,7 @@ class TestEntityExtractionExpanded:
                 importance_score=0.5,
                 interaction_count=1,
                 last_seen_at=None,
+                confidence_score=0.7,
             )
         ]
         # Check existing relationship
@@ -408,14 +398,15 @@ class TestEntityExtractionExpanded:
 
 class TestEntityMemoryLinking:
     @patch("src.services.memory_service._base.EmbeddingService")
-    @patch("src.services.memory_service._base.get_anthropic_client")
+    @patch("src.services.memory_service.extraction.record_token_span", new=AsyncMock())
+    @patch("src.services.memory_service.extraction.complete_text_with_usage")
     @pytest.mark.asyncio
     async def test_extract_and_store_with_entity_ids(
-        self, mock_get_client, mock_embedder_cls, settings, mock_db
+        self, mock_complete, mock_embedder_cls, settings, mock_db
     ):
         """Memories should store entity_ids when provided."""
         mock_embedder = MagicMock()
-        mock_embedder.embed_text = AsyncMock(return_value=[0.1] * 1024)
+        mock_embedder.embed_text = AsyncMock(return_value=[0.1] * 768)
         mock_embedder_cls.return_value = mock_embedder
 
         extraction_result = {
@@ -430,11 +421,7 @@ class TestEntityMemoryLinking:
             ]
         }
 
-        mock_client = MagicMock()
-        response = MagicMock()
-        response.content = [MagicMock(text=json.dumps(extraction_result))]
-        mock_client.messages.create = AsyncMock(return_value=response)
-        mock_get_client.return_value = mock_client
+        mock_complete.return_value = (json.dumps(extraction_result), _USAGE)
 
         # No duplicate found
         no_result = MagicMock()
@@ -460,9 +447,8 @@ class TestEntityMemoryLinking:
 
 
 class TestFindEntityTemporal:
-    @patch("src.services.world_model.get_anthropic_client")
     @pytest.mark.asyncio
-    async def test_find_returns_temporal_fields(self, mock_get_client, settings, mock_db):
+    async def test_find_returns_temporal_fields(self, settings, mock_db):
         """find_entity should return importance, interaction_count, last_seen_at."""
         from datetime import datetime, timezone
 
@@ -475,12 +461,12 @@ class TestFindEntityTemporal:
         mock_entity.importance_score = 0.85
         mock_entity.interaction_count = 12
         mock_entity.last_seen_at = now
+        mock_entity.confidence_score = 0.9
 
         result_mock = MagicMock()
         result_mock.scalars.return_value.all.return_value = [mock_entity]
         mock_db.execute = AsyncMock(return_value=result_mock)
 
-        mock_get_client.return_value = MagicMock()
         wm = WorldModel(settings=settings, db=mock_db)
         results = await wm.find_entity(TEST_USER_ID, "Alice")
 
@@ -494,9 +480,8 @@ class TestFindEntityTemporal:
 
 
 class TestFinancialEntities:
-    @patch("src.services.world_model.get_anthropic_client")
     @pytest.mark.asyncio
-    async def test_financial_transaction_type_preserved(self, mock_get_client, settings, mock_db):
+    async def test_financial_transaction_type_preserved(self, settings, mock_db):
         """A financial_transaction type from the extractor must NOT be coerced to person."""
         extracted = {
             "entities": [
@@ -521,7 +506,6 @@ class TestFinancialEntities:
             "relationships": [],
         }
 
-        mock_get_client.return_value = MagicMock()
         wm = WorldModel(settings=settings, db=mock_db)
 
         event = MagicMock(
@@ -595,11 +579,9 @@ class TestSanitizeCanonicalName:
         name, aliases = sanitize_canonical_name("", None)
         assert name == "Unknown"
 
-    @patch("src.services.world_model.get_anthropic_client")
     @pytest.mark.asyncio
-    async def test_upsert_entity_enforces_pii_guard(self, mock_get_client, settings, mock_db):
+    async def test_upsert_entity_enforces_pii_guard(self, settings, mock_db):
         """upsert_entity stores a non-email canonical name and aliases the raw email."""
-        mock_get_client.return_value = MagicMock()
         wm = WorldModel(settings=settings, db=mock_db)
 
         await wm.upsert_entity(

@@ -35,6 +35,14 @@ def _make_db(entity=None):
     db.commit = AsyncMock()
     db.rollback = AsyncMock()
     db.add = MagicMock()
+
+    # record_fact wraps its close+insert in a begin_nested() SAVEPOINT; model it as a no-op
+    # async context manager so the mocked-DB path exercises the real code without a real txn.
+    @asynccontextmanager
+    async def _savepoint():
+        yield
+
+    db.begin_nested = MagicMock(side_effect=lambda: _savepoint())
     return db
 
 

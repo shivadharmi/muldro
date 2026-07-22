@@ -11,6 +11,7 @@ from src.ui.contracts import DetailTabResponse
 from ._shared import (
     _empty_tab,
     _extract_run_id,
+    _get_payload,
     _section,
     _truncate,
 )
@@ -178,6 +179,10 @@ async def build_run_approval_tab(
     persisted detail modal — not only from a transient WS frame.
     """
     from src.models.approvals import Approval
+    from src.services.approval_resolution import (
+        PersistedApprovalStatus,
+        extract_persisted_rich_approval,
+    )
     from src.ui import units
 
     run_id = _extract_run_id(surface)
@@ -199,8 +204,21 @@ async def build_run_approval_tab(
     if not approvals:
         return _empty_tab("approval", "No pending approval for this run.")
 
+    # B12 / P3.2: prefer the rich ApprovalContext persisted on the surface
+    # (last_surface_update.approval) for the approval it matches. ABSENT/MALFORMED
+    # fall through to today's thin card built from the Approval row — a COMPLETE,
+    # actionable card (never a half-render), byte-neutral when no rich context.
+    rich_status, rich_ctx = extract_persisted_rich_approval(_get_payload(surface))
+
     cards = []
     for apr in approvals:
+        if (
+            rich_status is PersistedApprovalStatus.RICH
+            and rich_ctx is not None
+            and rich_ctx.approval_id == apr.approval_id
+        ):
+            cards.append(units.approval_card(rich_ctx, include_actions=True))
+            continue
         refs = apr.artifact_refs if isinstance(apr.artifact_refs, dict) else {}
         card_data = {
             "approval_id": apr.approval_id,
@@ -278,7 +296,8 @@ async def build_run_trace_tab(db: AsyncSession, surface: Any, **kwargs: Any) -> 
             (
                 await db.execute(
                     select(TaskStep).where(
-                        TaskStep.run_id == run_id, TaskStep.status == "completed"
+                        TaskStep.run_id == run_id,
+                        TaskStep.status.in_(("completed", "completed_unverified")),
                     )
                 )
             )

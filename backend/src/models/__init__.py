@@ -10,8 +10,9 @@ from src.models.browser_sessions import BrowserAction
 from src.models.conversations import Conversation, Message
 from src.models.dead_letter import DeadLetterEntry
 from src.models.engagement_history import EngagementHistory
-from src.models.entities import Entity, EntityAlias, EntityRelationship
+from src.models.entities import Entity, EntityAlias, EntityFact, EntityRelationship
 from src.models.events import NormalizedEvent
+from src.models.idempotency_ledger import IdempotencyLedgerEntry
 from src.models.integration_audit import IntegrationAuditEvent
 from src.models.integration_installation import IntegrationInstallation
 from src.models.interaction_log import InteractionLog
@@ -47,8 +48,10 @@ __all__ = [
     "Agent",
     "Base",
     "NormalizedEvent",
+    "IdempotencyLedgerEntry",
     "Entity",
     "EntityAlias",
+    "EntityFact",
     "EntityRelationship",
     "Memory",
     "Plan",

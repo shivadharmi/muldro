@@ -40,7 +40,7 @@ async def build_briefing_priorities(
         why = p.get("why", "") if isinstance(p, dict) else ""
         children.append(r.text(f"pri_{i}_title", title))
         if why:
-            children.append(r.caption(f"pri_{i}_why", why))
+            children.append(r.markdown(f"pri_{i}_why", why))
         if i < len(priorities) - 1:
             children.append(r.divider(f"pri_{i}_div"))
 
@@ -125,7 +125,7 @@ async def build_briefing_actions(
         desc = action.get("description", "") if isinstance(action, dict) else ""
         children.append(r.text(f"act_{i}_title", title))
         if desc:
-            children.append(r.caption(f"act_{i}_desc", desc))
+            children.append(r.markdown(f"act_{i}_desc", desc))
         if i < len(actions) - 1:
             children.append(r.divider(f"act_{i}_div"))
 

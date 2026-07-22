@@ -15,6 +15,7 @@ from ._shared import (
     _extract_run_id,
     _format_ts,
     _get_payload,
+    _load_context_pack,
     _section,
     _truncate,
 )
@@ -99,7 +100,7 @@ async def build_summary_context(db: AsyncSession, surface: Any, **kwargs: Any) -
 
     run_result = await db.execute(select(TaskRun).where(TaskRun.run_id == run_id))
     run = run_result.scalar_one_or_none()
-    ctx = (run.context_pack_json if run else None) or {}
+    ctx = await _load_context_pack(db, run)
 
     sections: list[DetailSection] = []
     if ctx.get("memories"):

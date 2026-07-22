@@ -72,6 +72,7 @@ export default function WorkspacePage() {
       response_preview: s.response_preview ?? null,
       created_at: s.created_at ?? new Date().toISOString(),
       surface_data: s.surface_data ?? null,
+      trust_context: s.trust_context ?? null,
       // Execution state from persisted last_surface_update
       ...(s.phase && { phase: s.phase }),
       ...(s.steps && { steps: s.steps }),
@@ -113,6 +114,7 @@ export default function WorkspacePage() {
         response_preview: push.response_preview,
         created_at: push.created_at || new Date().toISOString(),
         surface_data: push.surface_data ?? null,
+        trust_context: push.trust_context ?? null,
       });
     },
     [addSurface]

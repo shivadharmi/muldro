@@ -280,27 +280,21 @@ class TestConversationEmbedding:
         from src.orchestrator.context_assembler import ContextAssembler
 
         settings = make_mock_settings()
-        mock_client = MagicMock()
-
-        mock_response = MagicMock()
-        mock_text_block = MagicMock()
-        mock_text_block.type = "text"
-        mock_text_block.text = "Discussion about project planning."
-        mock_response.content = [mock_text_block]
-        mock_client.messages = AsyncMock()
-        mock_client.messages.create = AsyncMock(return_value=mock_response)
-
         ctx = ContextAssembler(
             settings=settings,
             services=None,
             db_factory_provider=MagicMock(),
-            client=mock_client,
+            client=MagicMock(),
         )
-        summary = await ctx._summarize_history(
-            lines=["User: hello", "Assistant: hi"],
-            conversation_id="conv_123",
-            user_id="usr_456",
-        )
+        with patch(
+            "src.orchestrator.context_assembler.complete_text",
+            AsyncMock(return_value="Discussion about project planning."),
+        ):
+            summary = await ctx._summarize_history(
+                lines=["User: hello", "Assistant: hi"],
+                conversation_id="conv_123",
+                user_id="usr_456",
+            )
 
         assert summary == "Discussion about project planning."
 

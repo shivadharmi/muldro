@@ -14,6 +14,25 @@ from src.config.settings import Settings
 logger = logging.getLogger(__name__)
 
 
+def _mcp_servers_for_sources(sources: list[str]) -> list[str]:
+    """Order-preserving, deduped MCP server names backing ``sources``.
+
+    Perception sources (``gmail``, ``calendar``) are not MCP server names: both
+    are served by the single ``google-workspace`` server. Eager schema discovery
+    must key off server names, so translate each source through its OAuth
+    provider via ``provider_map`` (the single source of truth for the
+    source -> provider -> server relationship).
+    """
+    from src.integrations.provider_map import provider_for_source, servers_for_provider
+
+    servers: list[str] = []
+    for source in sources:
+        for server in servers_for_provider(provider_for_source(source)):
+            if server not in servers:
+                servers.append(server)
+    return servers
+
+
 async def _trigger_initial_observation(user_id: str, sources: list[str], workspace_id: str) -> None:
     """Run initial perception cycle and MCP schema discovery for newly connected sources."""
     try:
@@ -31,7 +50,9 @@ async def _trigger_initial_observation(user_id: str, sources: list[str], workspa
         svc_db = db_factory()
         try:
             svc = build_runtime(settings, svc_db)
-            configure_tool_servers(db_factory, settings, svc)
+            # Pass None: internal tools resolve the thread-local (per-loop) session
+            # factory rather than a shared global bound to another loop (Step 11 Phase 3).
+            configure_tool_servers(None, settings, svc)
             orchestrator = JarvisOrchestrator(
                 settings=settings,
                 db_factory=db_factory,
@@ -64,11 +85,14 @@ async def _trigger_initial_observation(user_id: str, sources: list[str], workspa
                             exc_info=True,
                         )
 
-                # Eagerly create MCP session to discover tool schemas.
-                # Stdio servers are lazy (per-user), so schemas aren't
-                # available until the first session. Creating it here
-                # populates the DB so tools appear in agent tool lists
-                # immediately after OAuth connection.
+            # Eagerly create an MCP session per server to discover tool schemas.
+            # Stdio servers are lazy (per-user), so schemas aren't available until
+            # the first session; creating it here populates the DB so tools appear
+            # in agent tool lists immediately after OAuth connection. Keyed on MCP
+            # server names (not source names): gmail + calendar share the single
+            # google-workspace server, so discovery runs once for it — reloading
+            # "gmail"/"calendar" as servers would just warn "no active installation".
+            for server_name in _mcp_servers_for_sources(sources):
                 try:
                     from src.integrations.mcp_pool import get_workspace_pool
 
@@ -76,19 +100,19 @@ async def _trigger_initial_observation(user_id: str, sources: list[str], workspa
                     if pool:
                         # Ensure config is registered (may have been activated
                         # after startup via this OAuth callback)
-                        if not pool.session_pool.has_server_config(source, workspace_id):
-                            await pool.reload_server(workspace_id, source)
+                        if not pool.session_pool.has_server_config(server_name, workspace_id):
+                            await pool.reload_server(workspace_id, server_name)
 
                         session = await pool.session_pool.get_or_create_session(
-                            source, user_id=user_id, workspace_id=workspace_id
+                            server_name, user_id=user_id, workspace_id=workspace_id
                         )
                         logger.info(
                             "MCP schema discovery for %s: %d tools",
-                            source,
+                            server_name,
                             len(session.tools),
                         )
                 except Exception:
-                    logger.debug("MCP schema discovery skipped for %s", source, exc_info=True)
+                    logger.debug("MCP schema discovery skipped for %s", server_name, exc_info=True)
         finally:
             await svc_db.close()
     except Exception:

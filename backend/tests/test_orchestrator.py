@@ -197,8 +197,7 @@ class TestAgents:
             "perceiver",
             "librarian",
             "planner",
-            "governor",
-            "operator",
+            "executor",
             "presenter",
             "persona",
         }
@@ -230,7 +229,6 @@ class TestAgents:
             return tool
 
         # Mock registry
-        from unittest.mock import patch
 
         with patch("src.services.tool_registry.ToolRegistry") as mock_reg_cls:
             mock_reg = MagicMock()
@@ -253,9 +251,9 @@ class TestAgents:
             assert await AGENTS["perceiver"].can_use_tool("ingest_event", mock_db) is True
             assert await AGENTS["perceiver"].can_use_tool("gmail_send", mock_db) is False
 
-            # Operator can send email but not plan
-            assert await AGENTS["operator"].can_use_tool("gmail_send", mock_db) is True
-            assert await AGENTS["operator"].can_use_tool("get_active_plans", mock_db) is False
+            # Executor can send email but not plan
+            assert await AGENTS["executor"].can_use_tool("gmail_send", mock_db) is True
+            assert await AGENTS["executor"].can_use_tool("get_active_plans", mock_db) is False
 
             # Perceiver can search but not write (read-only)
             assert await AGENTS["perceiver"].can_use_tool("search", mock_db) is True
@@ -267,11 +265,6 @@ class TestAgents:
 
         assert AGENTS["planner"].max_tokens == 8192
         assert AGENTS["perceiver"].max_tokens == 4096
-
-    def test_governor_has_low_temperature(self):
-        from src.orchestrator.agents import AGENTS
-
-        assert AGENTS["governor"].temperature == 0.1
 
 
 # ── Hooks Tests ──────────────────────────────────────────────────────────
@@ -290,7 +283,7 @@ class TestHooks:
         from src.orchestrator.hooks import governor_pre_tool_hook
 
         result = await governor_pre_tool_hook(
-            "API-delete-block", {}, "operator", user_id=TEST_USER_ID
+            "API-delete-block", {}, "executor", user_id=TEST_USER_ID
         )
         assert result["allowed"] is True
 
@@ -299,7 +292,7 @@ class TestHooks:
         from src.orchestrator.hooks import governor_pre_tool_hook
 
         result = await governor_pre_tool_hook(
-            "send_gmail_message", {}, "operator", user_id=TEST_USER_ID
+            "send_gmail_message", {}, "executor", user_id=TEST_USER_ID
         )
         assert result["allowed"] is True
 
@@ -333,8 +326,7 @@ class TestPrompts:
             "perceiver",
             "librarian",
             "planner",
-            "governor",
-            "operator",
+            "executor",
             "presenter",
             "persona",
         }
@@ -351,24 +343,17 @@ class TestPrompts:
 
         assert "JSON" in PLANNER_PROMPT_V2
 
-    def test_governor_prompt_mentions_approval(self):
-        from src.orchestrator.prompts import GOVERNOR_PROMPT
-
-        assert "approval" in GOVERNOR_PROMPT.lower()
-
 
 # ── Orchestrator Tests ───────────────────────────────────────────────────
 
 
 class TestOrchestrator:
-    @patch("src.orchestrator.jarvis.get_anthropic_client")
-    async def test_process_message_routes_to_planner(self, mock_get_client):
+    async def test_process_message_routes_to_planner(self):
         from unittest.mock import AsyncMock
 
         from src.orchestrator.jarvis import JarvisOrchestrator
 
         mock_client = AsyncMock()
-        mock_get_client.return_value = mock_client
 
         # Mock Claude response (text only, no tool use)
         mock_response = MagicMock()
@@ -383,7 +368,6 @@ class TestOrchestrator:
 
         settings = make_mock_settings(
             daily_token_budget_usd=5.0,
-            use_bedrock=False,
         )
 
         # Build a mock db session where sync methods (add) are MagicMock
@@ -426,8 +410,7 @@ class TestOrchestrator:
         assert "plan" in result or "trace_id" in result
         assert result["trace_id"].startswith("trace_")
 
-    @patch("src.orchestrator.jarvis.get_anthropic_client")
-    async def test_extract_plan_from_json(self, mock_get_client):
+    async def test_extract_plan_from_json(self):
         from src.orchestrator.intent_classifier import extract_plan
 
         # Test JSON extraction — returns PlanOutput
@@ -440,8 +423,7 @@ class TestOrchestrator:
         assert result.goal == "Create task"
         assert result.priority == "high"
 
-    @patch("src.orchestrator.jarvis.get_anthropic_client")
-    async def test_extract_plan_fallback(self, mock_get_client):
+    async def test_extract_plan_fallback(self):
         from src.orchestrator.intent_classifier import extract_plan
 
         # No JSON in response — fallback to PlanOutput defaults

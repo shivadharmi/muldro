@@ -332,7 +332,7 @@ class TestVectorStoreMetrics:
         await store.upsert(
             collection="memories",
             id="mem_001",
-            vector=[0.1] * 1024,
+            vector=[0.1] * 768,
             payload={"text": "hello"},
             user_id="usr_001",
         )
@@ -353,7 +353,7 @@ class TestVectorStoreMetrics:
             await store.upsert(
                 collection="memories",
                 id="mem_001",
-                vector=[0.1] * 1024,
+                vector=[0.1] * 768,
                 payload={"text": "hello"},
                 user_id="usr_001",
             )

@@ -122,12 +122,42 @@ def main():
                     # worker orchestrator must NOT hold a shared long-lived
                     # AsyncSession either (P2 #4).
                     services = build_shared(settings)
-                    configure_tool_servers(db_factory, settings, services)
+                    # Pass None: internal tools resolve the thread-local (per-loop)
+                    # session factory. A shared global factory set here would be used
+                    # cross-loop by the API thread and vice versa (Step 11 Phase 3).
+                    configure_tool_servers(None, settings, services)
+
+                    # Step 10C P2: build the durable worker-side AsyncPostgresSaver so the
+                    # autonomous deep step-executor (run_autonomous_deep_step) persists its
+                    # LangGraph checkpoints durably instead of the per-call MemorySaver.
+                    # RESILIENT: any failure degrades to None (MemorySaver fallback) so a
+                    # saver problem can NEVER crash the worker.
+                    checkpointer_provider = None
+                    try:
+                        from src.deep_runtime.checkpointer import (
+                            build_async_postgres_saver,
+                        )
+
+                        saver, _pool = await build_async_postgres_saver(settings.database_url)
+                        # TODO(10D): the worker is a daemon thread running
+                        # asyncio.gather with no clean shutdown seam, so the psycopg3
+                        # pool lives for the worker's lifetime (a long-lived worker
+                        # pool is acceptable). Wire _pool.close() when a worker
+                        # shutdown hook lands.
+                        checkpointer_provider = lambda s=saver: s  # noqa: E731
+                        logger.info("[deep_runtime] worker durable checkpointer ready")
+                    except Exception:
+                        logger.error(
+                            "[deep_runtime] worker checkpointer init failed — "
+                            "autonomous deep steps fall back to MemorySaver",
+                            exc_info=True,
+                        )
 
                     return JarvisOrchestrator(
                         settings=settings,
                         db_factory=db_factory,
                         services=services,
+                        checkpointer_provider=checkpointer_provider,
                     )
 
                 orchestrator = loop.run_until_complete(_build())

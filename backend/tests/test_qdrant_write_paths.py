@@ -12,9 +12,9 @@ from tests.conftest import TEST_USER_ID, TEST_WORKSPACE_ID, make_mock_settings, 
 # ---------------------------------------------------------------------------
 
 
-@patch("src.services.event_processor.get_anthropic_client")
+@patch("src.services.event_processor.complete_text")
 @pytest.mark.asyncio
-async def test_event_embedding_called_for_important_events(mock_get_client):
+async def test_event_embedding_called_for_important_events(mock_complete):
     """Events with importance_score >= 0.3 should be embedded into Qdrant."""
     from src.services.event_processor import EventProcessor
 
@@ -25,11 +25,7 @@ async def test_event_embedding_called_for_important_events(mock_get_client):
         "importance_signals": {},
         "summary": "Important update from investor",
     }
-    mock_client = MagicMock()
-    mock_client.messages.create = AsyncMock(
-        return_value=MagicMock(content=[MagicMock(text=json.dumps(scores))])
-    )
-    mock_get_client.return_value = mock_client
+    mock_complete.return_value = json.dumps(scores)
 
     mock_db = MagicMock()
     mock_db.add = MagicMock()
@@ -40,7 +36,7 @@ async def test_event_embedding_called_for_important_events(mock_get_client):
 
     mock_vs = AsyncMock()
     mock_es = AsyncMock()
-    mock_es.embed_text = AsyncMock(return_value=[0.1] * 1024)
+    mock_es.embed_text = AsyncMock(return_value=[0.1] * 768)
 
     settings = make_mock_settings()
     processor = EventProcessor(
@@ -65,9 +61,9 @@ async def test_event_embedding_called_for_important_events(mock_get_client):
     assert payload["workspace_id"] == TEST_WORKSPACE_ID
 
 
-@patch("src.services.event_processor.get_anthropic_client")
+@patch("src.services.event_processor.complete_text")
 @pytest.mark.asyncio
-async def test_event_embedding_skipped_for_low_importance(mock_get_client):
+async def test_event_embedding_skipped_for_low_importance(mock_complete):
     """Events with importance_score < 0.3 should NOT be embedded."""
     from src.services.event_processor import EventProcessor
 
@@ -78,11 +74,7 @@ async def test_event_embedding_skipped_for_low_importance(mock_get_client):
         "importance_signals": {},
         "summary": "Newsletter",
     }
-    mock_client = MagicMock()
-    mock_client.messages.create = AsyncMock(
-        return_value=MagicMock(content=[MagicMock(text=json.dumps(scores))])
-    )
-    mock_get_client.return_value = mock_client
+    mock_complete.return_value = json.dumps(scores)
 
     mock_db = MagicMock()
     mock_db.add = MagicMock()
@@ -107,9 +99,9 @@ async def test_event_embedding_skipped_for_low_importance(mock_get_client):
     mock_vs.upsert.assert_not_called()
 
 
-@patch("src.services.event_processor.get_anthropic_client")
+@patch("src.services.event_processor.complete_text")
 @pytest.mark.asyncio
-async def test_event_embedding_failure_does_not_block(mock_get_client):
+async def test_event_embedding_failure_does_not_block(mock_complete):
     """Embedding failure should not prevent event from being stored."""
     from src.services.event_processor import EventProcessor
 
@@ -120,11 +112,7 @@ async def test_event_embedding_failure_does_not_block(mock_get_client):
         "importance_signals": {},
         "summary": "Critical update",
     }
-    mock_client = MagicMock()
-    mock_client.messages.create = AsyncMock(
-        return_value=MagicMock(content=[MagicMock(text=json.dumps(scores))])
-    )
-    mock_get_client.return_value = mock_client
+    mock_complete.return_value = json.dumps(scores)
 
     mock_db = MagicMock()
     mock_db.add = MagicMock()
@@ -136,7 +124,7 @@ async def test_event_embedding_failure_does_not_block(mock_get_client):
     mock_vs = AsyncMock()
     mock_vs.upsert = AsyncMock(side_effect=RuntimeError("Qdrant down"))
     mock_es = AsyncMock()
-    mock_es.embed_text = AsyncMock(return_value=[0.1] * 1024)
+    mock_es.embed_text = AsyncMock(return_value=[0.1] * 768)
 
     settings = make_mock_settings()
     processor = EventProcessor(
@@ -166,12 +154,11 @@ async def test_conversation_summary_embedded():
 
     mock_vs = AsyncMock()
     mock_es = AsyncMock()
-    mock_es.embed_text = AsyncMock(return_value=[0.1] * 1024)
+    mock_es.embed_text = AsyncMock(return_value=[0.1] * 768)
 
     lines = ["User: Hello", "Assistant: Hi there", "User: What's my schedule?"]
 
     with (
-        patch("src.orchestrator.jarvis.get_anthropic_client") as mock_get_client,
         patch(
             "src.services.vector_store.VectorStore",
             return_value=mock_vs,
@@ -181,21 +168,17 @@ async def test_conversation_summary_embedded():
             return_value=mock_es,
         ) as _mock_es_cls,
     ):
-        mock_client = MagicMock()
-        mock_client.messages.create = AsyncMock(
-            return_value=MagicMock(
-                content=[MagicMock(type="text", text="User greeted and asked about schedule.")]
-            )
-        )
-        mock_get_client.return_value = mock_client
-
         from src.orchestrator.jarvis import JarvisOrchestrator
 
         orch = JarvisOrchestrator(settings=settings, db_factory=MagicMock(), services=MagicMock())
 
-        summary = await orch._context._summarize_history(
-            lines, conversation_id="conv_test123", user_id=TEST_USER_ID
-        )
+        with patch(
+            "src.orchestrator.context_assembler.complete_text",
+            AsyncMock(return_value="User greeted and asked about schedule."),
+        ):
+            summary = await orch._context._summarize_history(
+                lines, conversation_id="conv_test123", user_id=TEST_USER_ID
+            )
 
         assert summary == "User greeted and asked about schedule."
         mock_vs.upsert.assert_called_once()
@@ -218,23 +201,20 @@ async def test_conversation_embedding_skipped_without_conversation_id():
     mock_vs = AsyncMock()
 
     with (
-        patch("src.orchestrator.jarvis.get_anthropic_client") as mock_get_client,
         patch("src.services.vector_store.VectorStore", return_value=mock_vs),
         patch("src.services.embedding_service.EmbeddingService"),
     ):
-        mock_client = MagicMock()
-        mock_client.messages.create = AsyncMock(
-            return_value=MagicMock(content=[MagicMock(type="text", text="Summary")])
-        )
-        mock_get_client.return_value = mock_client
-
         from src.orchestrator.jarvis import JarvisOrchestrator
 
         orch = JarvisOrchestrator(settings=settings, db_factory=MagicMock(), services=MagicMock())
 
-        summary = await orch._context._summarize_history(
-            ["line1"], conversation_id=None, user_id=TEST_USER_ID
-        )
+        with patch(
+            "src.orchestrator.context_assembler.complete_text",
+            AsyncMock(return_value="Summary"),
+        ):
+            summary = await orch._context._summarize_history(
+                ["line1"], conversation_id=None, user_id=TEST_USER_ID
+            )
         assert summary == "Summary"
         mock_vs.upsert.assert_not_called()
 
@@ -250,7 +230,7 @@ async def test_approval_embed_includes_required_fields():
     from src.api.routes_approvals import _embed_approval_decision
 
     mock_es = AsyncMock()
-    mock_es.embed_text = AsyncMock(return_value=[0.1] * 1024)
+    mock_es.embed_text = AsyncMock(return_value=[0.1] * 768)
     mock_vs = AsyncMock()
 
     await _embed_approval_decision(
@@ -309,7 +289,7 @@ async def test_artifact_embed_includes_required_fields():
     from src.api.routes_artifacts import _embed_artifact
 
     mock_es = AsyncMock()
-    mock_es.embed_text = AsyncMock(return_value=[0.1] * 1024)
+    mock_es.embed_text = AsyncMock(return_value=[0.1] * 768)
     mock_vs = AsyncMock()
 
     await _embed_artifact(

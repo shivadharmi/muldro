@@ -1,6 +1,6 @@
 """Tests for _handle_system_capability, plan persistence, and public orchestrator methods."""
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -12,7 +12,6 @@ def _make_orchestrator():
     from src.orchestrator.jarvis import JarvisOrchestrator
 
     settings = MagicMock()
-    settings.use_bedrock = False
     settings.daily_token_budget_usd = 10.0
     settings.redis_url = "redis://localhost:6379"
     db_factory = MagicMock()
@@ -23,9 +22,55 @@ def _make_orchestrator():
     services.memory_service.store_briefing_memory = AsyncMock(return_value="mem_brief789")
     services.redis = None
 
-    with patch("src.orchestrator.jarvis.get_anthropic_client"):
-        orch = JarvisOrchestrator(settings=settings, db_factory=db_factory, services=services)
+    orch = JarvisOrchestrator(settings=settings, db_factory=db_factory, services=services)
     return orch
+
+
+class TestCoerceInstructionInput:
+    """``step.input`` shape variance for set_instruction is normalized to a flat dict."""
+
+    def test_nested_string_becomes_instruction_text(self):
+        from src.orchestrator.system_capability_handler import _coerce_instruction_input
+
+        assert _coerce_instruction_input({"instruction": "Remind me daily"}) == {
+            "instruction_text": "Remind me daily"
+        }
+
+    def test_nested_dict_lifts_keys(self):
+        from src.orchestrator.system_capability_handler import _coerce_instruction_input
+
+        raw = {
+            "instruction": {
+                "instruction_text": "x",
+                "instruction_type": "trigger",
+                "trigger_conditions": {"event": "calendar.created"},
+            }
+        }
+        coerced = _coerce_instruction_input(raw)
+        assert coerced["instruction_text"] == "x"
+        assert coerced["instruction_type"] == "trigger"
+        assert coerced["trigger_conditions"] == {"event": "calendar.created"}
+
+    def test_flat_dict_passes_through(self):
+        from src.orchestrator.system_capability_handler import _coerce_instruction_input
+
+        raw = {"instruction_text": "x", "instruction_type": "trigger"}
+        coerced = _coerce_instruction_input(raw)
+        assert coerced["instruction_text"] == "x"
+        assert coerced["instruction_type"] == "trigger"
+
+    def test_non_dict_top_level_becomes_empty_dict(self):
+        from src.orchestrator.system_capability_handler import _coerce_instruction_input
+
+        assert _coerce_instruction_input(None) == {}
+        assert _coerce_instruction_input(["a", "b"]) == {}
+        assert _coerce_instruction_input(42) == {}
+        assert _coerce_instruction_input("Remind me daily") == {}
+
+    def test_nested_non_string_non_dict_becomes_empty_dict(self):
+        from src.orchestrator.system_capability_handler import _coerce_instruction_input
+
+        assert _coerce_instruction_input({"instruction": 42}) == {}
 
 
 class TestHandleSystemCapability:
@@ -76,6 +121,118 @@ class TestHandleSystemCapability:
         assert result["memory_id"] == "mem_instr456"
 
     @pytest.mark.asyncio
+    async def test_system_set_instruction_string_input(self):
+        # The LLM planner sometimes emits input["instruction"] as a bare string
+        # (the instruction text) instead of the structured dict. This must NOT
+        # crash — the string is normalized to the instruction_text.
+        orch = _make_orchestrator()
+        step = PlanStep(
+            step_id="s1",
+            description="Notify me when calendar events are created",
+            capability="system.set_instruction",
+            input={"instruction": "Notify me when calendar events are created"},
+        )
+        plan = PlanOutput(goal="Set instruction", steps=[step])
+        result = await orch._handle_system_capability(step, plan, "usr_1", "ws_1")
+        assert result["status"] == "created"
+        assert result["text"] == "Notify me when calendar events are created"
+        assert result["instruction_type"] == "preference"
+
+    @pytest.mark.asyncio
+    async def test_system_set_instruction_nested_trigger_creates_trigger(self):
+        orch = _make_orchestrator()
+        mock_db = AsyncMock()
+        mock_db.commit = AsyncMock()
+        mock_db.add = MagicMock()
+        ctx = AsyncMock()
+        ctx.__aenter__ = AsyncMock(return_value=mock_db)
+        ctx.__aexit__ = AsyncMock(return_value=False)
+        orch._db_factory = MagicMock(return_value=ctx)
+
+        step = PlanStep(
+            step_id="s1",
+            description="Notify me when calendar events are created",
+            capability="system.set_instruction",
+            input={
+                "instruction": {
+                    "instruction_text": "Notify me when calendar events are created",
+                    "instruction_type": "trigger",
+                    "trigger_conditions": {"event": "calendar.event.created"},
+                }
+            },
+        )
+        plan = PlanOutput(goal="Set trigger instruction", steps=[step])
+        result = await orch._handle_system_capability(step, plan, "usr_1", "ws_1")
+        assert result["status"] == "created"
+        assert "trigger_id" in result
+
+    @pytest.mark.asyncio
+    async def test_system_set_instruction_schedule_creates_schedule(self):
+        # A valid typed schedule_config drives Schedule creation via attribute
+        # access (schedule_config.type/.cron_expr/...), not raw dict .get().
+        orch = _make_orchestrator()
+        mock_db = AsyncMock()
+        mock_db.commit = AsyncMock()
+        mock_db.add = MagicMock()
+        ctx = AsyncMock()
+        ctx.__aenter__ = AsyncMock(return_value=mock_db)
+        ctx.__aexit__ = AsyncMock(return_value=False)
+        orch._db_factory = MagicMock(return_value=ctx)
+
+        step = PlanStep(
+            step_id="s1",
+            description="Send me a daily digest at 8am",
+            capability="system.set_instruction",
+            input={
+                "instruction": {
+                    "instruction_text": "Send me a daily digest at 8am",
+                    "instruction_type": "schedule",
+                    "schedule_config": {"type": "recurring", "cron_expr": "0 8 * * *"},
+                }
+            },
+        )
+        plan = PlanOutput(goal="Set schedule instruction", steps=[step])
+        result = await orch._handle_system_capability(step, plan, "usr_1", "ws_1")
+        assert result["status"] == "created"
+        assert "schedule_id" in result
+
+    @pytest.mark.asyncio
+    async def test_system_set_instruction_bad_cron_returns_error(self):
+        # A malformed cron in schedule_config is rejected at model validation,
+        # so no poison Schedule row is ever persisted.
+        orch = _make_orchestrator()
+        step = PlanStep(
+            step_id="s1",
+            description="Digest on a bad schedule",
+            capability="system.set_instruction",
+            input={
+                "instruction": {
+                    "instruction_text": "Digest on a bad schedule",
+                    "instruction_type": "schedule",
+                    "schedule_config": {"cron_expr": "whenever"},
+                }
+            },
+        )
+        plan = PlanOutput(goal="?", steps=[step])
+        result = await orch._handle_system_capability(step, plan, "usr_1", "ws_1")
+        assert result["status"] == "error"
+
+    @pytest.mark.asyncio
+    async def test_system_set_instruction_garbage_input_returns_error(self):
+        # A malformed instruction value (neither string nor dict) must not crash
+        # the handler — it fails validation and returns a structured error.
+        orch = _make_orchestrator()
+        step = PlanStep(
+            step_id="s1",
+            description="?",
+            capability="system.set_instruction",
+            input={"instruction": 42},
+        )
+        plan = PlanOutput(goal="?", steps=[step])
+        result = await orch._handle_system_capability(step, plan, "usr_1", "ws_1")
+        assert result["status"] == "error"
+
+    @pytest.mark.asyncio
     async def test_system_add_to_brief(self):
         orch = _make_orchestrator()
         step = PlanStep(
@@ -106,6 +263,93 @@ class TestHandleSystemCapability:
             description="Remind me to call John at 3pm",
             capability="system.schedule_reminder",
             input={"cron_expr": "0 15 * * *"},
+        )
+        plan = PlanOutput(goal="Schedule reminder", priority="medium", steps=[step])
+        result = await orch._handle_system_capability(step, plan, "usr_1", "ws_1")
+        assert result["status"] == "created"
+        assert "schedule_id" in result
+
+    @pytest.mark.asyncio
+    async def test_system_schedule_reminder_run_at_sets_next_run_at(self):
+        from datetime import datetime, timezone
+
+        from src.models.schedules import Schedule
+
+        orch = _make_orchestrator()
+        mock_db = AsyncMock()
+        mock_db.commit = AsyncMock()
+        mock_db.add = MagicMock()
+        ctx = AsyncMock()
+        ctx.__aenter__ = AsyncMock(return_value=mock_db)
+        ctx.__aexit__ = AsyncMock(return_value=False)
+        orch._db_factory = MagicMock(return_value=ctx)
+
+        step = PlanStep(
+            step_id="s1",
+            description="Remind me to call John",
+            capability="system.schedule_reminder",
+            input={"title": "Call John", "run_at": "2026-07-23T15:00:00Z"},
+        )
+        plan = PlanOutput(goal="Schedule reminder", steps=[step])
+        orch._system_capability_handler._db_factory = orch._db_factory
+        result = await orch._handle_system_capability(step, plan, "usr_1", "ws_1")
+        assert result["status"] == "created"
+
+        scheds = [c.args[0] for c in mock_db.add.call_args_list if isinstance(c.args[0], Schedule)]
+        assert len(scheds) == 1
+        want = datetime(2026, 7, 23, 15, 0, tzinfo=timezone.utc)
+        # A concrete one-time reminder fires at run_at (both columns set).
+        assert scheds[0].run_at == want
+        assert scheds[0].next_run_at == want
+
+    @pytest.mark.asyncio
+    async def test_system_schedule_reminder_without_time_still_fires(self):
+        # The closed gap: a reminder with neither run_at nor cron previously left
+        # next_run_at=None forever (never fired). Now it fires on the next tick.
+        from src.models.schedules import Schedule
+
+        orch = _make_orchestrator()
+        mock_db = AsyncMock()
+        mock_db.commit = AsyncMock()
+        mock_db.add = MagicMock()
+        ctx = AsyncMock()
+        ctx.__aenter__ = AsyncMock(return_value=mock_db)
+        ctx.__aexit__ = AsyncMock(return_value=False)
+        orch._db_factory = MagicMock(return_value=ctx)
+
+        step = PlanStep(
+            step_id="s1",
+            description="Remind me about the thing",
+            capability="system.schedule_reminder",
+            input={"title": "the thing"},
+        )
+        plan = PlanOutput(goal="Schedule reminder", steps=[step])
+        orch._system_capability_handler._db_factory = orch._db_factory
+        result = await orch._handle_system_capability(step, plan, "usr_1", "ws_1")
+        assert result["status"] == "created"
+
+        scheds = [c.args[0] for c in mock_db.add.call_args_list if isinstance(c.args[0], Schedule)]
+        assert len(scheds) == 1
+        assert scheds[0].next_run_at is not None
+
+    @pytest.mark.asyncio
+    async def test_system_schedule_reminder_malformed_tasks_does_not_crash(self):
+        # The LLM planner sometimes emits a legacy "tasks" wrapper with a
+        # malformed (non-list) value. This must not crash with AttributeError.
+        orch = _make_orchestrator()
+        mock_db = AsyncMock()
+        mock_db.commit = AsyncMock()
+        mock_db.add = MagicMock()
+        ctx = AsyncMock()
+        ctx.__aenter__ = AsyncMock(return_value=mock_db)
+        ctx.__aexit__ = AsyncMock(return_value=False)
+        orch._db_factory = MagicMock(return_value=ctx)
+
+        step = PlanStep(
+            step_id="s1",
+            description="Remind me to call John at 3pm",
+            capability="system.schedule_reminder",
+            input={"tasks": "not a list"},
         )
         plan = PlanOutput(goal="Schedule reminder", priority="medium", steps=[step])
         result = await orch._handle_system_capability(step, plan, "usr_1", "ws_1")

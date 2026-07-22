@@ -66,7 +66,7 @@ def test_single_init_wires_collaborators():
     from tests.conftest import make_mock_settings
 
     svc = MemoryService(settings=make_mock_settings(), db=MagicMock())
-    for attr in ("_settings", "_db", "_client", "_embedder", "_event_bus", "_vector_store"):
+    for attr in ("_settings", "_db", "_embedder", "_event_bus", "_vector_store"):
         assert hasattr(svc, attr)
 
 

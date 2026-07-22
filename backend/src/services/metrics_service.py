@@ -32,6 +32,11 @@ AGENT_CALLS = Counter(
     "Total agent calls",
     ["agent_name", "model"],
 )
+AGENT_RUNTIME_CALLS = Counter(
+    "jarvis_agent_runtime_calls_total",
+    'Streaming agent calls on the deep Deep-Agents runtime (runtime label is always "deep")',
+    ["runtime"],
+)
 TOOL_CALLS = Counter(
     "jarvis_tool_calls_total",
     "Total tool calls",
@@ -53,6 +58,33 @@ MEMORY_WRITES = Counter(
     ["memory_type"],
 )
 
+# Step-10 safety-invariant observability signals. double_fire is wired NOW at the
+# idempotency wrapper (autonomous path only); the other three are dormant until
+# their producers land (see the per-counter notes below).
+DOUBLE_FIRE = Counter(
+    "jarvis_double_fire_total",
+    "Idempotency double-fire detections (already-completed or in-flight re-fire blocked)",
+    ["surface", "kind"],
+)
+# verification_false_negative: dormant until a real read_fn is wired in (10D) —
+# the read_fn=None invariant is locked in Step 10A/A2.
+VERIFICATION_FALSE_NEGATIVE = Counter(
+    "jarvis_verification_false_negative_total",
+    "Verified writes later found to have not actually taken effect (false-negative on read-back)",
+    ["surface"],
+)
+# double_prompt: dormant until the approval-creation observation hook lands (10C/10D).
+DOUBLE_PROMPT = Counter(
+    "jarvis_double_prompt_total",
+    "User re-prompted for approval of an action they had already authorized",
+    ["surface"],
+)
+# ungated_perception_write: dormant until perception-provenance wiring lands (10C).
+UNGATED_PERCEPTION_WRITE = Counter(
+    "jarvis_ungated_perception_write_total",
+    "Perception-sourced write that executed without passing an approval gate",
+    ["surface"],
+)
 # Gauges
 ACTIVE_RUNS = Gauge(
     "jarvis_active_runs",
@@ -123,6 +155,10 @@ class MetricsService:
         AGENT_CALL_LATENCY.labels(agent_name=agent_name).observe(duration_ms / 1000)
 
     @staticmethod
+    def record_runtime_call(runtime: str) -> None:
+        AGENT_RUNTIME_CALLS.labels(runtime=runtime).inc()
+
+    @staticmethod
     def record_event_processing(source: str, duration_ms: float) -> None:
         EVENT_PROCESSING_LATENCY.labels(source=source).observe(duration_ms / 1000)
 
@@ -157,6 +193,22 @@ class MetricsService:
     @staticmethod
     def record_memory_write(memory_type: str = "general") -> None:
         MEMORY_WRITES.labels(memory_type=memory_type).inc()
+
+    @staticmethod
+    def record_double_fire(surface: str, kind: str) -> None:
+        DOUBLE_FIRE.labels(surface=surface, kind=kind).inc()
+
+    @staticmethod
+    def record_verification_false_negative(surface: str) -> None:
+        VERIFICATION_FALSE_NEGATIVE.labels(surface=surface).inc()
+
+    @staticmethod
+    def record_double_prompt(surface: str) -> None:
+        DOUBLE_PROMPT.labels(surface=surface).inc()
+
+    @staticmethod
+    def record_ungated_perception_write(surface: str) -> None:
+        UNGATED_PERCEPTION_WRITE.labels(surface=surface).inc()
 
     @staticmethod
     def generate_metrics() -> bytes:

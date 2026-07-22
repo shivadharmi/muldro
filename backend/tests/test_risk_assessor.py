@@ -2,7 +2,7 @@
 
 import json
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -14,26 +14,24 @@ from src.services.risk_assessor import (
     graduate_trust,
 )
 
+_LOW_RISK_JSON = json.dumps(
+    {
+        "risk_level": "low",
+        "reasoning": "Casual lunch message to known contact",
+        "reversible": True,
+        "blast_radius": "external_single",
+    }
+)
+
 
 @pytest.fixture
-def mock_client():
-    client = AsyncMock()
-    response = MagicMock()
-    response.content = [
-        MagicMock(
-            text=json.dumps(
-                {
-                    "risk_level": "low",
-                    "reasoning": "Casual lunch message to known contact",
-                    "reversible": True,
-                    "blast_radius": "external_single",
-                }
-            )
-        )
-    ]
-    response.usage = MagicMock(input_tokens=100, output_tokens=50)
-    client.messages.create = AsyncMock(return_value=response)
-    return client
+def mock_complete():
+    """Patch the UtilityLLM seam to return a low-risk JSON string."""
+    with patch(
+        "src.services.risk_assessor.complete_text",
+        AsyncMock(return_value=_LOW_RISK_JSON),
+    ) as m:
+        yield m
 
 
 class TestGraduateTrust:
@@ -104,44 +102,34 @@ class TestRiskAssessment:
 
 
 class TestAssessRisk:
-    async def test_returns_risk_assessment(self, mock_client):
+    async def test_returns_risk_assessment(self, mock_complete):
         result = await assess_risk(
             capability="email.send",
             step_input={"to": "friend@example.com", "body": "Hey lunch?"},
             user_context={"relationships": {"friend@example.com": "close friend"}},
-            client=mock_client,
-            model="claude-haiku-4-5-20251001",
         )
         assert isinstance(result, RiskAssessment)
         assert result.risk_level == "low"
-        mock_client.messages.create.assert_called_once()
+        mock_complete.assert_awaited_once()
 
-    async def test_falls_back_on_api_error(self, mock_client):
+    async def test_falls_back_on_api_error(self, mock_complete):
         # Fail closed (SVC-P2-1): an assessment outage must default to 'high', which
         # maps to approval_required at every trust level — never auto-execute a write.
-        mock_client.messages.create = AsyncMock(side_effect=Exception("API down"))
+        mock_complete.side_effect = Exception("API down")
         result = await assess_risk(
             capability="email.send",
             step_input={"to": "ceo@corp.com", "body": "Revenue report"},
             user_context={},
-            client=mock_client,
-            model="claude-haiku-4-5-20251001",
         )
         assert result.risk_level == "high"
         assert "fallback" in result.reasoning.lower() or "failed" in result.reasoning.lower()
 
-    async def test_falls_back_on_invalid_json(self, mock_client):
-        response = MagicMock()
-        response.content = [MagicMock(text="not json")]
-        response.usage = MagicMock(input_tokens=100, output_tokens=50)
-        mock_client.messages.create = AsyncMock(return_value=response)
-
+    async def test_falls_back_on_invalid_json(self, mock_complete):
+        mock_complete.return_value = "not json"
         result = await assess_risk(
             capability="email.send",
             step_input={},
             user_context={},
-            client=mock_client,
-            model="claude-haiku-4-5-20251001",
         )
         # Fail closed (SVC-P2-1): unparseable LLM output → high, not medium.
         assert result.risk_level == "high"
@@ -160,7 +148,7 @@ class TestCacheKey:
 
 
 class TestGetOrAssessRisk:
-    async def test_cache_hit(self, mock_client):
+    async def test_cache_hit(self, mock_complete):
         cached = RiskAssessment(
             risk_level="low", reasoning="cached", reversible=True, blast_radius="self"
         )
@@ -172,14 +160,12 @@ class TestGetOrAssessRisk:
             step_input={"to": "a@b.com"},
             user_context={},
             workspace_id="ws_test",
-            client=mock_client,
             redis=redis,
-            model="claude-haiku-4-5-20251001",
         )
         assert result.reasoning == "cached"
-        mock_client.messages.create.assert_not_called()
+        mock_complete.assert_not_awaited()
 
-    async def test_cache_miss_calls_llm(self, mock_client):
+    async def test_cache_miss_calls_llm(self, mock_complete):
         redis = AsyncMock()
         redis.get = AsyncMock(return_value=None)
         redis.setex = AsyncMock()
@@ -189,9 +175,7 @@ class TestGetOrAssessRisk:
             step_input={"to": "a@b.com"},
             user_context={},
             workspace_id="ws_test",
-            client=mock_client,
             redis=redis,
-            model="claude-haiku-4-5-20251001",
         )
         assert result.risk_level == "low"
         redis.setex.assert_called_once()
@@ -199,7 +183,7 @@ class TestGetOrAssessRisk:
         call_args = redis.setex.call_args
         assert call_args[0][1] == 86400
 
-    async def test_cache_error_falls_through(self, mock_client):
+    async def test_cache_error_falls_through(self, mock_complete):
         redis = AsyncMock()
         redis.get = AsyncMock(side_effect=Exception("Redis down"))
         redis.setex = AsyncMock(side_effect=Exception("Redis down"))
@@ -209,8 +193,6 @@ class TestGetOrAssessRisk:
             step_input={"to": "a@b.com"},
             user_context={},
             workspace_id="ws_test",
-            client=mock_client,
             redis=redis,
-            model="claude-haiku-4-5-20251001",
         )
         assert result.risk_level == "low"  # LLM still works

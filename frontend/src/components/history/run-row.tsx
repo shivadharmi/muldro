@@ -1,10 +1,18 @@
 "use client";
 
 import { useCallback } from "react";
-import type { HistoryItem, HistoryStepSummary } from "@/stores/history-store";
+import type { HistoryItem, HistoryStepSummary, RunApproval } from "@/stores/history-store";
 import { useHistoryStore } from "@/stores/history-store";
+import type { ApprovalContext } from "@/lib/a2ui-types";
 import { StatusBadge } from "@/components/ui/status-badge";
+import { InlineApprovalCard } from "@/components/a2ui/components/inline-approval";
 import { stepStatusIcon, formatDuration } from "@/components/a2ui/components/step-presentation";
+
+/** A rich unified `ApprovalContext` carries evidence fields (e.g. `risk_reasoning`)
+ *  the thin `HistoryApprovalContext` fallback never has. */
+function isRichApproval(a: RunApproval | null | undefined): a is ApprovalContext {
+  return a != null && "risk_reasoning" in a;
+}
 
 // ── Props ────────────────────────────────────────────────────────────────────
 
@@ -297,8 +305,16 @@ export function RunRow({ item, onRetry, onApprove, onReject }: RunRowProps) {
             </div>
           )}
 
-          {/* Approval card */}
+          {/* Approval card — the unified InlineApprovalCard when the REST/WS payload
+              carries a rich ApprovalContext (self-wires approve/edit/reject via the
+              WS action store); the legacy thin RunApprovalCard is the fallback. */}
+          {item.status === "awaiting_approval" && isRichApproval(item.approval) && (
+            <div className="px-3 pb-3">
+              <InlineApprovalCard approval={item.approval} />
+            </div>
+          )}
           {item.status === "awaiting_approval" &&
+            !isRichApproval(item.approval) &&
             item.approval != null &&
             item.approval.approval_id != null &&
             onApprove != null &&

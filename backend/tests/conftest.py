@@ -58,8 +58,6 @@ def make_mock_settings(**overrides) -> MagicMock:
         ses_from_address="",
         ses_region="ap-south-1",
         ses_enabled=False,
-        bedrock_region="us-east-1",
-        use_bedrock=False,
         event_processor_concurrency=5,
         max_perception_per_tick=5,
         webhook_lag_threshold=5000,
@@ -68,6 +66,32 @@ def make_mock_settings(**overrides) -> MagicMock:
         scheduler_subtick_timeout_s=90.0,
         resume_reaper_stale_after_s=300.0,
         resume_reaper_max_attempts=5,
+        # Mirror the real Settings default (False) so a mock Settings never trips the
+        # dormant Step-7B2 deep delegate layer: MagicMock's unset attrs are truthy, which
+        # would otherwise flip this flag ON for every runtime="deep" test.
+        deep_delegates_enabled=False,
+        # Same MagicMock-truthiness hazard: _augment_system_blocks_for_inline does
+        # `if not inline_format: return`, so a truthy unset attr would inject PRESENTER_VOICE
+        # into every deep test's prompt. Mirror the real Settings default (False).
+        deep_inline_format=False,
+        # Same MagicMock-truthiness hazard (Step 7C): a truthy unset attr would wire the
+        # deep read-back middleware into the chain for every runtime="deep" test. Mirror
+        # the real Settings default (False).
+        deep_readback_enabled=False,
+        # Step 8: an unset MagicMock bool is truthy, which would route every
+        # runtime="deep" test through the slim JIT pack. Default OFF to mirror prod.
+        deep_context_jit=False,
+        # Step 10D A-5: MagicMock unset bool is truthy — would flip the single-lead path ON
+        # for every runtime="deep" test. Mirror the real Settings default (False).
+        deep_single_lead=False,
+        # Step 10D P2.5c: MagicMock unset bool is truthy — would flip the planless reroute ON
+        # for every test, firing the early planless gate in _process_core and skipping the
+        # Planner. Mirror the real Settings default (False) so the flag-off path stays exercised.
+        chat_planless=False,
+        # Step-10A A3: MagicMock unset bool is truthy — would flip the fail-closed write lock
+        # ON for every test that builds the lock wrapper from a mock Settings. Mirror the real
+        # default (False = fail-open).
+        write_lock_require_redis=False,
     )
     defaults.update(overrides)
     for k, v in defaults.items():
@@ -109,13 +133,28 @@ def iter_app_routes(routes, _prefix=""):
     included routers / mounts.
 
     Newer Starlette/FastAPI no longer flatten ``include_router`` into
-    ``app.routes`` — they leave Mount-style wrapper objects (e.g.
-    ``_IncludedRouter``) that carry the prefix and hold the real routes under
-    ``.routes`` with prefix-relative paths. Accumulating the wrapper prefix
-    reconstructs the full path in BOTH the flattened (older) and wrapped (newer)
-    representations, so route-introspection tests survive the version change.
+    ``app.routes`` — they leave ``_IncludedRouter`` wrapper objects. Two shapes
+    exist across versions and BOTH must be traversed:
+
+    * FastAPI >= ~0.136 (Starlette >= 1.3): the wrapper's ``path`` is ``None`` and
+      it has no ``.routes``; the real ``APIRouter`` and its prefix live under
+      ``.include_context.included_router`` / ``.include_context.prefix``.
+    * Older: the wrapper (Mount-style) exposes the real routes under ``.routes``
+      with a ``path``/``prefix`` prefix.
+
+    Accumulating the prefix reconstructs the full path in either representation,
+    so route-introspection tests survive the framework version change.
     """
     for r in routes:
+        # Newer FastAPI: the included APIRouter is reachable via include_context.
+        ctx = getattr(r, "include_context", None)
+        if ctx is not None:
+            inner = getattr(ctx, "included_router", None)
+            sub = getattr(inner, "routes", None)
+            if sub:
+                yield from iter_app_routes(sub, _prefix + (getattr(ctx, "prefix", "") or ""))
+                continue
+        # Older: Mount-style wrapper exposes the routes directly.
         sub = getattr(r, "routes", None)
         if sub:
             wrapper_prefix = getattr(r, "path", "") or getattr(r, "prefix", "") or ""

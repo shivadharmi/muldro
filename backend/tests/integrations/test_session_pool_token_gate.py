@@ -85,11 +85,11 @@ async def test_slack_stdio_with_token_spawns_client():
 
 
 async def test_no_auth_stdio_server_still_spawns_without_token():
-    """filesystem (auth_provider=none, not token-required) must still spawn."""
+    """No-auth stdio servers (auth_provider=none) must still spawn without a token."""
     pool = UserMCPSessionPool()
     pool.register_server_config(
-        "filesystem",
-        {"transport": "stdio", "auth_provider": "none", "command": "npx", "args": ["fs-mcp"]},
+        "playwright",
+        {"transport": "stdio", "auth_provider": "none", "command": "npx", "args": ["pw-mcp"]},
         workspace_id="ws_1",
     )
 
@@ -104,7 +104,7 @@ async def test_no_auth_stdio_server_still_spawns_without_token():
         patch("src.integrations.session_pool.Client", client_mock),
         patch.object(pool, "_register_discovered_tools", AsyncMock()),
     ):
-        entry = await pool.get_or_create_session("filesystem", user_id="u1", workspace_id="ws_1")
+        entry = await pool.get_or_create_session("playwright", user_id="u1", workspace_id="ws_1")
 
     client_mock.assert_called_once()
-    assert entry.server_name == "filesystem"
+    assert entry.server_name == "playwright"

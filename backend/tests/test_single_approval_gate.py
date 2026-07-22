@@ -31,11 +31,9 @@ def mock_trust_engine():
 
 
 def _make_executor(settings, mock_db, trust_engine=None):
-    with patch("src.services.graph_executor.get_anthropic_client") as mock_client:
-        mock_client.return_value = MagicMock()
-        from src.services.graph_executor import GraphExecutor
+    from src.services.graph_executor import GraphExecutor
 
-        return GraphExecutor(settings, mock_db, trust_engine=trust_engine)
+    return GraphExecutor(settings, mock_db, trust_engine=trust_engine)
 
 
 def _make_step(step_id="step_001", capability="email.send", status="pending"):
@@ -188,12 +186,18 @@ class TestSingleGateAutoExecuteSilent:
 
 
 class TestSingleGateResumedStep:
-    """Step already running (resumed after approval) -> skip gate."""
+    """Step already running (resumed after approval) -> skip the approval GATE.
+
+    The resumed path still re-derives risk (Redis-cached 24h) to feed the §4.5
+    read-back verification of the approved write, but it must NOT re-run the
+    TrustEngine gate — the human already approved this step at pause time.
+    """
 
     @patch("src.services.trust_gate.get_or_assess_risk")
-    async def test_resumed_step_skips_trust_check(
+    async def test_resumed_step_skips_trust_gate_but_still_verifies(
         self, mock_risk, settings, mock_db, mock_trust_engine
     ):
+        mock_risk.return_value = RiskAssessment(risk_level="low", reasoning="cached")
         executor = _make_executor(settings, mock_db, trust_engine=mock_trust_engine)
         executor._runner.run_step_action = AsyncMock(return_value={"ok": True})
         executor._surface_emitter.emit_event = AsyncMock()
@@ -202,14 +206,24 @@ class TestSingleGateResumedStep:
             return_value={"capability": "email.send"}
         )
         executor._dag_runner.finalize_step = AsyncMock()
+        # Step 6C: the resumed path reads the persisted decision_type + records the
+        # verified-outcome trust increment; stub both so this test stays focused on the
+        # gate-skip/verify wiring and does not depend on a real DB.
+        executor._dag_runner._read_approval_decision_type = AsyncMock(return_value="approved")
+        executor._trust_gate.record_user_approval_outcome = AsyncMock()
 
         step = _make_step(status="running")
         run = _make_run()
 
         await executor._execute_step(run, step)
 
-        mock_risk.assert_not_called()
+        # The approval GATE is skipped (already approved) ...
         mock_trust_engine.evaluate.assert_not_called()
+        # ... but risk IS re-derived to drive read-back verification of the write,
+        # and finalize_step runs with the verdict's status (email.send -> UNVERIFIED
+        # -> completed_unverified; asserted end-to-end in test_finalize_verification).
+        mock_risk.assert_called_once()
+        executor._dag_runner.finalize_step.assert_called_once()
         executor._runner.run_step_action.assert_called_once()
 
 

@@ -130,3 +130,16 @@ def _format_ts(dt: datetime | None) -> str:
     if not dt:
         return ""
     return dt.strftime("%Y-%m-%d %H:%M")
+
+
+async def _load_context_pack(db, run) -> dict:
+    """Read the context pack from RunDetailStore (Step 5, D-C4). Post-contract the
+    detail table is authoritative; a run with no detail row renders with an empty pack."""
+    if run is None:
+        return {}
+    from src.services.run_detail_store import RunDetailStore
+
+    pack = await RunDetailStore(db).get_context_pack(run.run_id)
+    if pack is not None:
+        return pack
+    return {}

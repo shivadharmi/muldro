@@ -1,9 +1,6 @@
 """Tests for Phase 5 — missing capabilities, tool mappings, and agent scope fixes."""
 
-from src.integrations.capabilities import (
-    CAPABILITY_CATALOG,
-    CapabilityFamily,
-)
+from src.integrations.capabilities import CAPABILITY_CATALOG
 from src.orchestrator.agents import AGENT_CAPABILITY_SCOPES
 from src.tools.catalog import EXTERNAL_TOOL_SEEDS, INTERNAL_TOOLS
 
@@ -22,45 +19,6 @@ def _get_cap(tool_name: str) -> str | None:
 def _all_catalog_names() -> set[str]:
     """Return all tool names from the catalog."""
     return {t.name for t in INTERNAL_TOOLS} | {s.name for s in EXTERNAL_TOOL_SEEDS}
-
-
-class TestFilesystemCapabilities:
-    def test_filesystem_family_exists(self):
-        assert hasattr(CapabilityFamily, "FILESYSTEM")
-        assert CapabilityFamily.FILESYSTEM == "filesystem"
-
-    def test_filesystem_capabilities_in_catalog(self):
-        expected = [
-            "filesystem.read",
-            "filesystem.read_media",
-            "filesystem.write",
-            "filesystem.move",
-            "filesystem.list",
-            "filesystem.search",
-        ]
-        for cap in expected:
-            assert cap in CAPABILITY_CATALOG, f"Missing capability: {cap}"
-
-    def test_filesystem_tools_mapped(self):
-        expected_mappings = {
-            "read_text_file": "filesystem.read",
-            "read_file": "filesystem.read",
-            "read_media_file": "filesystem.read_media",
-            "read_multiple_files": "filesystem.read",
-            "write_file": "filesystem.write",
-            "edit_file": "filesystem.write",
-            "create_directory": "filesystem.write",
-            "move_file": "filesystem.move",
-            "list_directory": "filesystem.list",
-            "list_directory_with_sizes": "filesystem.list",
-            "directory_tree": "filesystem.list",
-            "get_file_info": "filesystem.read",
-            "search_files": "filesystem.search",
-            "list_allowed_directories": "filesystem.list",
-        }
-        for tool, cap in expected_mappings.items():
-            actual = _get_cap(tool)
-            assert actual == cap, f"{tool} should map to {cap}, got {actual}"
 
 
 class TestNewBrowserCapabilities:
@@ -160,24 +118,13 @@ class TestNewDocCapabilities:
 
 
 class TestAgentScopeFixes:
-    def test_perceiver_has_filesystem_read(self):
-        scope = AGENT_CAPABILITY_SCOPES["perceiver"]
-        for cap in ("filesystem.read", "filesystem.list", "filesystem.search"):
-            assert cap in scope, f"Perceiver missing {cap}"
-
     def test_perceiver_has_workflow_get_teams(self):
         assert "workflow.get_teams" in AGENT_CAPABILITY_SCOPES["perceiver"]
 
-    def test_operator_has_calendar_delete(self):
-        assert "calendar.delete" in AGENT_CAPABILITY_SCOPES["operator"]
+    def test_executor_has_calendar_delete(self):
+        assert "calendar.delete" in AGENT_CAPABILITY_SCOPES["executor"]
 
-    def test_operator_has_workflow_delete(self):
-        scope = AGENT_CAPABILITY_SCOPES["operator"]
+    def test_executor_has_workflow_delete(self):
+        scope = AGENT_CAPABILITY_SCOPES["executor"]
         for cap in ("workflow.delete", "workflow.delete_comment", "workflow.delete_milestone"):
-            assert cap in scope, f"Operator missing {cap}"
-
-    def test_perceiver_has_filesystem_read_from_researcher(self):
-        """Perceiver absorbed researcher scope — verify filesystem read capabilities."""
-        scope = AGENT_CAPABILITY_SCOPES["perceiver"]
-        for cap in ("filesystem.read", "filesystem.list", "filesystem.search"):
-            assert cap in scope, f"Perceiver missing {cap}"
+            assert cap in scope, f"Executor missing {cap}"

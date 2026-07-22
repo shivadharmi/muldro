@@ -213,8 +213,6 @@ export function kindStyle(kind: string): { bg: string; text: string } {
     case "proactive_insight":
     case "recommendation":
       return { bg: "bg-j-secondary-soft", text: "text-j-secondary" };
-    case "execution":
-      return { bg: "bg-j-info-soft", text: "text-j-info" };
     default:
       return { bg: "bg-surface-3", text: "text-t-secondary" };
   }
@@ -293,10 +291,4 @@ export const KIND_LABELS: Record<string, string> = {
   summary: "Summary",
   recommendation: "Rec",
   proactive_insight: "Insight",
-  execution: "Execution",
-  checklist: "Checklist",
-  comparison: "Compare",
-  timeline: "Timeline",
-  table: "Table",
-  activity: "Activity",
 };

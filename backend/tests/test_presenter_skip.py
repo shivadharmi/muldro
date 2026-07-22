@@ -43,7 +43,7 @@ def test_two_executable_steps_is_not_single_read():
 
 
 def test_write_step_is_not_single_read():
-    routing = _routing(("email.send", "operator"))
+    routing = _routing(("email.send", "executor"))
     assert single_read_step(routing, user_steps=[]) is None
 
 

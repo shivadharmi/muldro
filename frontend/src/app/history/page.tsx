@@ -7,6 +7,7 @@ import { useHistoryStore } from "@/stores/history-store";
 import type { HistoryItem } from "@/stores/history-store";
 import { useAuth } from "@/lib/auth";
 import { useJarvisWs } from "@/hooks/use-jarvis-ws";
+import { useWsActionStore } from "@/stores/ws-action-store";
 import { RunRow } from "@/components/history/run-row";
 import { HistoryFilters } from "@/components/history/history-filters";
 import { RunDetailModal } from "@/components/history/run-detail-modal";
@@ -45,32 +46,33 @@ export default function HistoryPage() {
     else appendItems(data.items as HistoryItem[], data.total);
   }, [data, offset, setItems, appendItems]);
 
-  // WebSocket — live execution updates
-  // SurfaceUpdate.steps (StepState[]) differs from HistoryStepSummary[], so we
-  // forward only the phase and approval fields to updateRunLiveState.
+  const setGlobalSendAction = useWsActionStore((s) => s.setSendAction);
+
+  // WebSocket — live execution updates. SurfaceUpdate.steps (StepState[]) differs
+  // from HistoryStepSummary[], so we forward only phase + approval. The approval is
+  // already the rich unified ApprovalContext — pass it through so the same
+  // InlineApprovalCard renders live and from REST (no lossy thin conversion).
   const handleSurfaceUpdate = useCallback(
     (update: SurfaceUpdate) => {
       updateRunLiveState(update.surface_id, {
         phase: update.phase,
-        approval: update.approval
-          ? {
-              approval_id: update.approval.approval_id,
-              step_id: null,
-              step_description: update.approval.step_description,
-              risk_level: update.approval.risk_level,
-              trust_level: update.approval.trust_level,
-            }
-          : null,
+        approval: update.approval,
       });
     },
     [updateRunLiveState]
   );
 
-  useJarvisWs({
+  const { sendAction } = useJarvisWs({
     userId: user?.user_id ?? "",
     onSurfaceUpdate: handleSurfaceUpdate,
     enabled: !!user,
   });
+
+  // Wire this socket's action sender into the global store so the unified
+  // InlineApprovalCard's approve/edit/reject dispatch works on the history page.
+  useEffect(() => {
+    setGlobalSendAction(sendAction);
+  }, [sendAction, setGlobalSendAction]);
 
   const handleRetry = useCallback(
     async (runId: string) => {

@@ -5,7 +5,7 @@ proactive notifications, schedule seeding, and perception wiring.
 """
 
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -35,8 +35,7 @@ def _make_processor(**kwargs):
         "db": db,
     }
     defaults.update(kwargs)
-    with patch("src.services.event_processor.get_anthropic_client"):
-        return EventProcessor(**defaults)
+    return EventProcessor(**defaults)
 
 
 def _make_event_model(

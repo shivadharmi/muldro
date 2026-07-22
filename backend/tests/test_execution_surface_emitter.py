@@ -22,14 +22,13 @@ def _make_executor(redis_mock=None, event_bus=None, db_factory=None):
 
     settings = make_mock_settings()
     db = AsyncMock()
-    with patch("src.services.graph_executor.get_anthropic_client"):
-        executor = GraphExecutor(
-            settings=settings,
-            db=db,
-            event_bus=event_bus,
-            redis=redis_mock,
-            db_factory=db_factory,
-        )
+    executor = GraphExecutor(
+        settings=settings,
+        db=db,
+        event_bus=event_bus,
+        redis=redis_mock,
+        db_factory=db_factory,
+    )
     return executor
 
 

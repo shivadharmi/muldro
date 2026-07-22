@@ -1,15 +1,18 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ApiError, streamChat, type ChatSSEEvent, type ConversationMessage, type PlanOutput } from "@/lib/api";
+import { ApiError, streamChat, streamResume, fetchWorkspaceDefaultPermissionMode, type ChatSSEEvent, type ConversationMessage, type PlanOutput } from "@/lib/api";
 import { formatApiError, parseSseError } from "@/lib/api-error";
-import { useCommandStore } from "@/stores/command-store";
+import { useCommandStore, type PermissionMode } from "@/stores/command-store";
 import { useShellStore } from "@/stores/shell-store";
 import { CommandInput } from "./command-input";
 import { MarkdownRenderer } from "./markdown-renderer";
 import { AgentTrace, type AgentStep } from "./agent-trace";
+import { ChatTodos } from "./chat-todos";
+import { todosFromToolCall, type Todo } from "@/lib/todos";
 import { StepList } from "@/components/a2ui/components/step-list";
-import type { StepState } from "@/lib/a2ui-types";
+import { InlineApprovalCard } from "@/components/a2ui/components/inline-approval";
+import type { ApprovalContext, StepState } from "@/lib/a2ui-types";
 
 interface ChatMessage {
   id: string;
@@ -20,6 +23,35 @@ interface ChatMessage {
   plan?: PlanOutput;
   agents: AgentStep[];
   streaming?: boolean;
+  // P3a: the lead's `write_todos` plan, rendered as an inline Claude-Code-style checklist.
+  // Ephemeral per-turn — rewritten in place on each `write_todos` call (deep path only).
+  todos?: Todo[];
+  // Chat permission model (P2.6): the action-time gate PAUSED this turn — the in-chat
+  // approval card is shown; approve/reject resumes via `/chat/resume` into this same bubble.
+  approval?: ApprovalContext | null;
+}
+
+/** Build an ``ApprovalContext`` for the in-chat card from the ``approval_needed`` SSE frame.
+ * The frame carries only {approval_id, capability, risk_level, thread_id}; the richer
+ * evidence fields (trust context, counts, expiry) are not on the chat path in P2 and default
+ * empty — the card renders the essentials (risk + approve/reject). */
+function buildApprovalContext(event: ChatSSEEvent): ApprovalContext {
+  return {
+    approval_id: event.approval_id || "",
+    step_description: event.capability || "",
+    risk_level: event.risk_level || "medium",
+    trust_level: "",
+    expires_at: null,
+    triggering_step_id: event.thread_id ?? null,
+    graduation_hint: "",
+    risk_reasoning: "",
+    trust_context: "",
+    reversible: true,
+    blast_radius: "",
+    effective_trust_level: "",
+    approved_count: 0,
+    rejected_count: 0,
+  };
 }
 
 interface ChatPanelProps {
@@ -153,6 +185,10 @@ function planToStepStates(msg: ChatMessage): StepState[] {
   });
 }
 
+// P3c: seed the permission-mode picker from the per-workspace default ONCE per app load, so a
+// remount never clobbers a user's deliberate mid-session change.
+let permissionSeeded = false;
+
 export function ChatPanel({
   conversationId,
   initialMessages,
@@ -189,6 +225,23 @@ export function ChatPanel({
     activeConvoRef.current = conversationId ?? null;
     useCommandStore.getState().setConversationId(conversationId ?? null);
   }, [conversationId]);
+
+  // P3c: seed the permission-mode picker from the per-workspace default (once per app load).
+  useEffect(() => {
+    if (permissionSeeded) return;
+    permissionSeeded = true;
+    let cancelled = false;
+    fetchWorkspaceDefaultPermissionMode()
+      .then((r) => {
+        if (!cancelled) {
+          useCommandStore.getState().setPermissionMode(r.default_permission_mode as PermissionMode);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Reset messages when conversation changes:
   // - sidebar selection: initialMessages populated → render them
@@ -230,6 +283,253 @@ export function ChatPanel({
     });
   }, []);
 
+  const updateMessageById = useCallback(
+    (id: string, updater: (m: ChatMessage) => ChatMessage) =>
+      setMessages((prev) => prev.map((m) => (m.id === id ? updater(m) : m))),
+    []
+  );
+
+  // Shared SSE event handler for BOTH the initial turn (streamChat) and the approval-resume
+  // continuation (streamResume). ``ctx`` tracks which message the frames target: ``getId``/
+  // ``setId`` follow the backend ``message_id`` on the initial turn; ``suppressMessageId`` (the
+  // resume) keeps the pre-pause id so the continuation stays in the SAME bubble. Carrying the
+  // ``approval_needed`` case here means a CHAINED pause (a 2nd write in the resumed turn)
+  // re-shows the card (recursion via handleResumeDecision → streamResume → this handler).
+  const applyStreamEvent = (
+    event: ChatSSEEvent,
+    ctx: { getId: () => string; setId: (id: string) => void; suppressMessageId?: boolean }
+  ) => {
+    const updateAssistant = (updater: (msg: ChatMessage) => ChatMessage) =>
+      updateMessageById(ctx.getId(), updater);
+
+    switch (event.event) {
+      case "conversation":
+        if (event.conversation_id && onConversationCreated) {
+          activeConvoRef.current = event.conversation_id;
+          onConversationCreated(event.conversation_id);
+        }
+        break;
+
+      case "trace":
+        updateAssistant((m) => ({ ...m, traceId: event.trace_id }));
+        break;
+
+      case "message_id": {
+        // Single-bubble continuity: the resume stream mints a fresh backend id, but the
+        // continuation must stay in the pre-pause bubble — so suppress it there.
+        if (ctx.suppressMessageId) break;
+        const newId = event.message_id || ctx.getId();
+        updateAssistant((m) => ({ ...m, id: newId }));
+        ctx.setId(newId);
+        break;
+      }
+
+      case "approval_needed":
+        // The action-time permission gate PAUSED the turn. Attach the approval to the bubble
+        // (rendered as an InlineApprovalCard) and stop streaming; the stream has ended. The
+        // card's approve/reject calls handleResumeDecision → /chat/resume.
+        updateAssistant((m) => ({
+          ...m,
+          approval: buildApprovalContext(event),
+          streaming: false,
+        }));
+        scrollToBottom();
+        break;
+
+      case "agent_start":
+        updateAssistant((m) => ({
+          ...m,
+          agents: [
+            ...m.agents,
+            {
+              agent: event.agent || "unknown",
+              model: event.model,
+              status: "running",
+              thinking: [],
+              realThinking: [],
+              streamingText: "",
+              toolCalls: [],
+            },
+          ],
+        }));
+        scrollToBottom();
+        break;
+
+      case "thinking":
+        updateAssistant((m) => ({
+          ...m,
+          agents: m.agents.map((a) =>
+            a.agent === event.agent && a.status === "running"
+              ? event.is_thinking
+                ? { ...a, realThinking: [...a.realThinking, event.text || ""] }
+                : { ...a, thinking: [...a.thinking, event.text || ""] }
+              : a
+          ),
+        }));
+        scrollToBottom();
+        break;
+
+      case "text_delta":
+        updateAssistant((m) => ({
+          ...m,
+          agents: m.agents.map((a) =>
+            a.agent === event.agent && a.status === "running"
+              ? { ...a, streamingText: a.streamingText + (event.text || "") }
+              : a
+          ),
+        }));
+        scrollToBottom();
+        break;
+
+      case "plan":
+        updateAssistant((m) => ({ ...m, plan: event.plan }));
+        break;
+
+      case "agent_done":
+        updateAssistant((m) => ({
+          ...m,
+          agents: m.agents.map((a) =>
+            a.agent === event.agent && a.status === "running"
+              ? {
+                  ...a,
+                  status: "done" as const,
+                  text: event.text,
+                  inputTokens: event.input_tokens,
+                  outputTokens: event.output_tokens,
+                  cacheCreationTokens: event.cache_creation_tokens,
+                  cacheReadTokens: event.cache_read_tokens,
+                  costUsd: event.cost_usd,
+                  latencyMs: event.latency_ms,
+                }
+              : a
+          ),
+        }));
+        scrollToBottom();
+        break;
+
+      case "response":
+        updateAssistant((m) => ({ ...m, content: event.text || "" }));
+        scrollToBottom();
+        break;
+
+      case "error": {
+        const parsed = parseSseError(event);
+        updateAssistant((m) => ({
+          ...m,
+          content: m.content || `Error: ${formatApiError(parsed)}`,
+          streaming: false,
+        }));
+        break;
+      }
+
+      case "surface":
+        if (onSurface && event.id && event.metadata) {
+          onSurface({
+            id: event.id,
+            children: event.children ?? [],
+            metadata: event.metadata,
+          });
+        }
+        break;
+
+      case "tool_call": {
+        // P3a: `write_todos` is the lead's plan channel — render it as an inline checklist
+        // (rewritten in place each call) instead of a generic tool chip.
+        const todos = todosFromToolCall(event);
+        if (todos) {
+          updateAssistant((m) => ({ ...m, todos }));
+          break;
+        }
+        updateAssistant((m) => ({
+          ...m,
+          agents: m.agents.map((a) =>
+            a.agent === event.agent && a.status === "running"
+              ? {
+                  ...a,
+                  toolCalls: [
+                    ...a.toolCalls,
+                    {
+                      tool: event.tool || "unknown",
+                      input: (event.input ?? {}) as Record<string, unknown>,
+                    },
+                  ],
+                }
+              : a
+          ),
+        }));
+        break;
+      }
+
+      case "tool_result":
+        // P3a: `write_todos` produced no chip, so skip its result (else it would attach to
+        // an unrelated tool chip).
+        if (event.tool === "write_todos") break;
+        updateAssistant((m) => ({
+          ...m,
+          agents: m.agents.map((a) =>
+            a.agent === event.agent && a.status === "running"
+              ? {
+                  ...a,
+                  toolCalls: a.toolCalls.map((tc, i) =>
+                    i === a.toolCalls.length - 1 ? { ...tc, result: event.result } : tc
+                  ),
+                }
+              : a
+          ),
+        }));
+        break;
+
+      case "done":
+        updateAssistant((m) => ({ ...m, streaming: false }));
+        scrollToBottom();
+        break;
+    }
+  };
+
+  // Resume a paused turn after the user approves/rejects the in-chat card. Reuses the
+  // pre-pause bubble (msg.id) + suppresses the resume stream's message_id (single bubble),
+  // and clears the card while the continuation streams in.
+  const handleResumeDecision = async (
+    msg: ChatMessage,
+    decision: "approve" | "reject",
+    reason?: string
+  ) => {
+    const approvalId = msg.approval?.approval_id;
+    if (!approvalId) return;
+
+    updateMessageById(msg.id, (m) => ({ ...m, approval: null, streaming: true }));
+    setLoading(true);
+    scrollToBottom();
+
+    const abort = new AbortController();
+    abortRef.current = abort;
+    const ctx = { getId: () => msg.id, setId: () => {}, suppressMessageId: true };
+
+    try {
+      await streamResume(
+        approvalId,
+        decision,
+        (event: ChatSSEEvent) => applyStreamEvent(event, ctx),
+        abort.signal,
+        activeConvoRef.current,
+        reason
+      );
+    } catch (err) {
+      if ((err as Error).name !== "AbortError") {
+        const safe = err instanceof ApiError ? err.displayMessage : "Something went wrong.";
+        updateMessageById(msg.id, (m) => ({
+          ...m,
+          content: m.content || safe,
+          streaming: false,
+        }));
+      }
+    } finally {
+      setLoading(false);
+      abortRef.current = null;
+      onMessageSent?.();
+    }
+  };
+
   const handleSubmit = async (message: string) => {
     const userMsg: ChatMessage = {
       id: crypto.randomUUID(),
@@ -256,190 +556,20 @@ export function ChatPanel({
     const abort = new AbortController();
     abortRef.current = abort;
 
-    const updateAssistant = (updater: (msg: ChatMessage) => ChatMessage) => {
-      setMessages((prev) =>
-        prev.map((m) => (m.id === assistantId ? updater(m) : m))
-      );
+    const ctx = {
+      getId: () => assistantId,
+      setId: (id: string) => {
+        assistantId = id;
+      },
     };
 
     try {
       await streamChat(
         message,
-        (event: ChatSSEEvent) => {
-          switch (event.event) {
-            case "conversation":
-              if (event.conversation_id && onConversationCreated) {
-                activeConvoRef.current = event.conversation_id;
-                onConversationCreated(event.conversation_id);
-              }
-              break;
-
-            case "trace":
-              updateAssistant((m) => ({
-                ...m,
-                traceId: event.trace_id,
-              }));
-              break;
-
-            case "message_id": {
-              const newId = event.message_id || assistantId;
-              updateAssistant((m) => ({ ...m, id: newId }));
-              assistantId = newId; // keep closure in sync
-              break;
-            }
-
-            case "agent_start":
-              updateAssistant((m) => ({
-                ...m,
-                agents: [
-                  ...m.agents,
-                  {
-                    agent: event.agent || "unknown",
-                    model: event.model,
-                    status: "running",
-                    thinking: [],
-                    realThinking: [],
-                    streamingText: "",
-                    toolCalls: [],
-                  },
-                ],
-              }));
-              scrollToBottom();
-              break;
-
-            case "thinking":
-              updateAssistant((m) => ({
-                ...m,
-                agents: m.agents.map((a) =>
-                  a.agent === event.agent && a.status === "running"
-                    ? event.is_thinking
-                      ? { ...a, realThinking: [...a.realThinking, event.text || ""] }
-                      : { ...a, thinking: [...a.thinking, event.text || ""] }
-                    : a
-                ),
-              }));
-              scrollToBottom();
-              break;
-
-            case "text_delta":
-              updateAssistant((m) => ({
-                ...m,
-                agents: m.agents.map((a) =>
-                  a.agent === event.agent && a.status === "running"
-                    ? { ...a, streamingText: a.streamingText + (event.text || "") }
-                    : a
-                ),
-              }));
-              scrollToBottom();
-              break;
-
-            case "plan":
-              updateAssistant((m) => ({
-                ...m,
-                plan: event.plan,
-              }));
-              break;
-
-            case "agent_done":
-              updateAssistant((m) => ({
-                ...m,
-                agents: m.agents.map((a) =>
-                  a.agent === event.agent && a.status === "running"
-                    ? {
-                        ...a,
-                        status: "done" as const,
-                        text: event.text,
-                        inputTokens: event.input_tokens,
-                        outputTokens: event.output_tokens,
-                        cacheCreationTokens: event.cache_creation_tokens,
-                        cacheReadTokens: event.cache_read_tokens,
-                        costUsd: event.cost_usd,
-                        latencyMs: event.latency_ms,
-                      }
-                    : a
-                ),
-              }));
-              scrollToBottom();
-              break;
-
-            case "response":
-              updateAssistant((m) => ({
-                ...m,
-                content: event.text || "",
-              }));
-              scrollToBottom();
-              break;
-
-            case "error": {
-              const parsed = parseSseError(event);
-              updateAssistant((m) => ({
-                ...m,
-                content: m.content || `Error: ${formatApiError(parsed)}`,
-                streaming: false,
-              }));
-              break;
-            }
-
-            case "surface":
-              if (onSurface && event.id && event.metadata) {
-                onSurface({
-                  id: event.id,
-                  children: event.children ?? [],
-                  metadata: event.metadata,
-                });
-              }
-              break;
-
-            case "tool_call":
-              updateAssistant((m) => ({
-                ...m,
-                agents: m.agents.map((a) =>
-                  a.agent === event.agent && a.status === "running"
-                    ? {
-                        ...a,
-                        toolCalls: [
-                          ...a.toolCalls,
-                          {
-                            tool: event.tool || "unknown",
-                            input: (event.input ?? {}) as Record<string, unknown>,
-                          },
-                        ],
-                      }
-                    : a
-                ),
-              }));
-              break;
-
-            case "tool_result":
-              updateAssistant((m) => ({
-                ...m,
-                agents: m.agents.map((a) =>
-                  a.agent === event.agent && a.status === "running"
-                    ? {
-                        ...a,
-                        toolCalls: a.toolCalls.map((tc, i) =>
-                          i === a.toolCalls.length - 1
-                            ? { ...tc, result: event.result }
-                            : tc
-                        ),
-                      }
-                    : a
-                ),
-              }));
-              break;
-
-            case "done":
-              updateAssistant((m) => ({
-                ...m,
-                streaming: false,
-              }));
-              scrollToBottom();
-              break;
-          }
-        },
+        (event: ChatSSEEvent) => applyStreamEvent(event, ctx),
         abort.signal,
         activeConvoRef.current,
-        useCommandStore.getState().mode,
+        useCommandStore.getState().permissionMode,
       );
     } catch (err) {
       if ((err as Error).name !== "AbortError") {
@@ -447,14 +577,14 @@ export function ChatPanel({
           err instanceof ApiError
             ? err.displayMessage
             : "Something went wrong.";
-        updateAssistant((m) => ({
+        updateMessageById(ctx.getId(), (m) => ({
           ...m,
           content: `Error: ${safe}`,
           streaming: false,
         }));
       }
     } finally {
-      updateAssistant((m) => ({ ...m, streaming: false }));
+      updateMessageById(ctx.getId(), (m) => ({ ...m, streaming: false }));
       setLoading(false);
       abortRef.current = null;
       onMessageSent?.();
@@ -479,7 +609,7 @@ export function ChatPanel({
             {msg.role === "user" ? (
               <UserBubble content={msg.content} />
             ) : (
-              <AssistantMessage msg={msg} />
+              <AssistantMessage msg={msg} onResumeDecision={handleResumeDecision} />
             )}
           </div>
         ))}
@@ -501,7 +631,17 @@ function UserBubble({ content }: { content: string }) {
   );
 }
 
-function AssistantMessage({ msg }: { msg: ChatMessage }) {
+function AssistantMessage({
+  msg,
+  onResumeDecision,
+}: {
+  msg: ChatMessage;
+  onResumeDecision?: (
+    msg: ChatMessage,
+    decision: "approve" | "reject",
+    reason?: string
+  ) => void;
+}) {
   const focusedId = useCommandStore((s) => s.focusedMessageId);
   const setFocused = useCommandStore((s) => s.setFocusedMessageId);
   const isFocused = focusedId === msg.id;
@@ -526,6 +666,9 @@ function AssistantMessage({ msg }: { msg: ChatMessage }) {
       <div className="max-w-[95%] w-full space-y-2">
         {/* Agent pipeline ("how Jarvis answered") */}
         <AgentTrace agents={msg.agents} plan={msg.plan ?? null} streaming={!!msg.streaming} />
+
+        {/* P3a: the lead's live write_todos plan (deep path) */}
+        {msg.todos && msg.todos.length > 0 && <ChatTodos todos={msg.todos} />}
 
         {/* Inline plan → pipeline steps (reuses the faithful StepList so a
             chat-only user sees the pipeline, not just the surfaces pane). */}
@@ -560,6 +703,18 @@ function AssistantMessage({ msg }: { msg: ChatMessage }) {
             })()}
           </div>
         ) : null}
+
+        {/* Chat permission model (P2.6): the paused turn's approval card. approve/reject
+            resumes via /chat/resume into THIS bubble. stopPropagation so button clicks
+            don't also toggle the message-focus handler on the wrapper. */}
+        {msg.approval && (
+          <div onClick={(e) => e.stopPropagation()}>
+            <InlineApprovalCard
+              approval={msg.approval}
+              onDecision={(decision, reason) => onResumeDecision?.(msg, decision, reason)}
+            />
+          </div>
+        )}
 
         {/* Message footer: trace id + rolled-up tokens / cost / latency */}
         {!msg.streaming && (msg.traceId || metrics.hasData) && (

@@ -27,13 +27,6 @@ MODEL_PRICING = {
     "claude-opus-4-20250514": {"input": 15.0, "output": 75.0},
     "claude-sonnet-4-20250514": {"input": 3.0, "output": 15.0},
     "claude-haiku-4-20250514": {"input": 0.80, "output": 4.0},
-    # Bedrock us.* inference profiles
-    "us.anthropic.claude-opus-4-8": {"input": 15.0, "output": 75.0},
-    "us.anthropic.claude-sonnet-4-6": {"input": 3.0, "output": 15.0},
-    "us.anthropic.claude-haiku-4-5-20251001-v1:0": {"input": 0.80, "output": 4.0},
-    # Legacy Bedrock
-    "anthropic.claude-opus-4-20250514-v1:0": {"input": 15.0, "output": 75.0},
-    "anthropic.claude-sonnet-4-20250514-v1:0": {"input": 3.0, "output": 15.0},
 }
 CACHE_WRITE_MULTIPLIER = 1.25
 CACHE_READ_MULTIPLIER = 0.10
@@ -93,7 +86,7 @@ class BudgetTracker:
         if not pricing:
             logger.warning(
                 "Unknown model %r not in MODEL_PRICING — billing at Sonnet rates; "
-                "Opus/Bedrock would be under-billed. Add it to MODEL_PRICING.",
+                "Opus would be under-billed. Add it to MODEL_PRICING.",
                 model,
             )
             pricing = MODEL_PRICING["claude-sonnet-4-6"]
@@ -272,3 +265,51 @@ class BudgetTracker:
     def check_cycle_budget(self, input_tokens_so_far: int) -> bool:
         """Check if we're within the per-cycle token budget."""
         return input_tokens_so_far < PERCEPTION_CYCLE_BUDGET
+
+
+async def record_token_span(
+    *,
+    agent_name: str,
+    model: str,
+    input_tokens: int,
+    output_tokens: int,
+    trigger: str,
+    workspace_id: str,
+    cache_creation_input_tokens: int = 0,
+    cache_read_input_tokens: int = 0,
+    trace_id: str | None = None,
+) -> None:
+    """Best-effort: record one ``TokenUsage`` row for a direct (non-deep-runtime) LLM call.
+
+    Perception's triage/extraction calls go through ``complete_text``, bypassing the
+    deep-runtime budget middleware, so their cost was invisible. This routes them
+    through the same ``BudgetTracker.record_usage`` writer (single source of cost).
+    Opens its own short-lived session via the global factory — callers on the perception
+    path (triage) hold no db handle. NEVER raises: instrumentation must not break the
+    caller. No-op when ``workspace_id`` is empty (the ``token_usage`` FK requires it, and
+    ``record_usage`` rejects a blank workspace).
+    """
+    if not workspace_id:
+        return
+    try:
+        from src.models.database import get_session_factory
+
+        factory = get_session_factory()
+        async with factory() as db:
+            await BudgetTracker().record_usage(
+                db,
+                agent_name=agent_name,
+                model=model,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                cache_creation_input_tokens=cache_creation_input_tokens,
+                cache_read_input_tokens=cache_read_input_tokens,
+                trigger=trigger,
+                trace_id=trace_id,
+                workspace_id=workspace_id,
+            )
+            await db.commit()
+    except Exception:  # noqa: BLE001 — best-effort telemetry, never break the caller
+        logger.debug(
+            "record_token_span failed (agent=%s trigger=%s)", agent_name, trigger, exc_info=True
+        )

@@ -6,7 +6,7 @@ export interface A2UIAction {
 }
 
 export interface A2UIComponent {
-  type: string; // Text, Button, Card, List, Row, Column, TextField, etc.
+  type: string; // Text, Card, Row, List, Table, Badge, etc.
   id: string;
   properties: Record<string, unknown>;
   children: A2UIComponent[];
@@ -167,10 +167,27 @@ export type ExecutionPhase =
   | "failed"
   | "partial";
 
+// Mirrors backend execution_state.TERMINAL_SUCCESS: a step counts as "done" for
+// progress/grouping whether it is confirmed (completed) or fired-but-unconfirmed
+// (completed_unverified). partially_completed (read-back diverged) is NOT done.
+export const STEP_TERMINAL_SUCCESS = ["completed", "completed_unverified"] as const;
+
+export function isStepDone(status: string): boolean {
+  return (STEP_TERMINAL_SUCCESS as readonly string[]).includes(status);
+}
+
 export interface StepState {
   step_id: string;
   description: string;
-  status: "pending" | "executing" | "completed" | "failed" | "approval_needed" | "user_action";
+  status:
+    | "pending"
+    | "executing"
+    | "completed"
+    | "completed_unverified"
+    | "partially_completed"
+    | "failed"
+    | "approval_needed"
+    | "user_action";
   output_summary: string | null;
   duration_ms: number | null;
   started_at: string | null;

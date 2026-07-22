@@ -24,14 +24,15 @@ import asyncio
 import logging
 import time
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING
 
 from src.contracts import ResultSummary, StepResult
 from src.integrations.mcp_errors import McpAuthRequiredError
 from src.integrations.provider_map import provider_for_server
 from src.models.task_graph import TaskRun, TaskStep
-from src.orchestrator.agent_loop import CancellationRequested
-from src.services.execution_state import transition_run, transition_step
+from src.services.execution_state import TERMINAL_SUCCESS, transition_run, transition_step
 from src.services.execution_support import (
+    CancellationRequested,
     _compute_retry_delay,
     _detect_auth_required,
     _safe_error_fields,
@@ -43,7 +44,30 @@ from src.services.step_graph_store import StepGraphStore
 from src.services.step_runner import StepRunner
 from src.services.trust_gate import TrustGate
 
+if TYPE_CHECKING:
+    from src.services.verification import VerifyVerdict
+
 logger = logging.getLogger(__name__)
+
+
+def build_verification_meta(capability: str, risk, verdict, output: dict | None) -> dict:
+    """Metadata attached to a verified write's output_data so the deferred-read tick
+    and escalation can act on a completed_unverified / partially_completed step
+    without re-deriving risk. artifact_ref carries the exact observed effect."""
+    out = output if isinstance(output, dict) else {}
+    return {
+        "capability": capability,
+        "risk_level": getattr(risk, "risk_level", "high"),
+        "reversible": getattr(risk, "reversible", False),
+        "blast_radius": getattr(risk, "blast_radius", "self"),
+        "verdict": verdict.value if hasattr(verdict, "value") else str(verdict),
+        "attempts": 1,
+        "artifact_ref": {
+            k: out.get(k)
+            for k in ("event_id", "id", "message_id", "url", "thread_id")
+            if out.get(k) is not None
+        },
+    }
 
 
 class DagRunner:
@@ -112,8 +136,9 @@ class DagRunner:
                     await self._emitter.emit_event(
                         "run_completed",
                         run.user_id,
-                        {"run_id": run.run_id, "plan_id": run.plan_id},
+                        {"run_id": run.run_id, "plan_id": run.plan_id, "status": run.status},
                         workspace_id=run.workspace_id,
+                        durable=True,
                     )
                     # Run verifier if available
                     if self._learner.verification_enabled:
@@ -186,7 +211,7 @@ class DagRunner:
                     )
                     for s in _all_for_surface
                 ]
-                _done_count = sum(1 for s in _all_for_surface if s.status == "completed")
+                _done_count = sum(1 for s in _all_for_surface if s.status in TERMINAL_SUCCESS)
                 await self._emitter.emit_surface_update(
                     surface_id=surface_id,
                     user_id=run.user_id,
@@ -377,17 +402,42 @@ class DagRunner:
             if decision.decision == "auto_execute_notify":
                 await self._trust_gate.notify_auto_executed(run, step, risk, output)
 
-            await self.finalize_step(run, step, output, elapsed_ms)
-            # Reinforce trust: a successful auto-execution graduates trust the
-            # same way an explicit user approval does, so the autonomous path
-            # learns from its own outcomes (not only from approval prompts).
-            risk_level = getattr(risk, "risk_level", risk)
-            await self._trust_gate.record_auto_execution_outcome(
-                capability, risk_level, run.workspace_id or ""
+            # Read-back verification BEFORE marking terminal (spec §4.5), shared with
+            # the approved-resume path so NO write path emits a terminal status without
+            # a verdict. Only irreversible writes are verified; everything else is
+            # trivially CONFIRMED.
+            from src.services.verification import VerifyVerdict
+
+            verdict = await self._finalize_with_verification(
+                run, step, output, elapsed_ms, capability, risk
             )
-            # Remember the auto-executed (capability, risk_level) so a later
-            # verification failure can reverse this reinforcement (SVC).
-            self._trust_gate.remember_auto_executed(run, capability, risk_level)
+
+            # Post-action reconciliation (spec §4.5): feed the verdict to the world model
+            # so a confirmed read-back RAISES a belief and a divergent one LOWERS it.
+            # Abstention feed only — never the gate (§4.3). Best-effort.
+            try:
+                from src.services.entity_facts.reconciliation import reconcile_verdict
+
+                await reconcile_verdict(
+                    self._db,
+                    workspace_id=run.workspace_id or "",
+                    user_id=run.user_id,
+                    verdict=verdict,
+                    write_input=step.input_data or {},
+                    write_output=output if isinstance(output, dict) else {},
+                )
+            except Exception:
+                logger.debug("world-model reconciliation failed (auto-exec path)", exc_info=True)
+
+            # Trust reinforcement fires ONLY on a confirmed-verified completion, and
+            # ONLY on the auto-execute path (the approved-resume path records trust at
+            # approval time in routes_approvals). Task 7 moves the completed_unverified
+            # deferred-increment to the tick.
+            risk_level = getattr(risk, "risk_level", risk)
+            if verdict == VerifyVerdict.CONFIRMED:
+                await self._trust_gate.record_auto_execution_outcome(
+                    capability, risk_level, run.workspace_id or ""
+                )
             return
 
         # ── Common execution path (step resumed after approval) ──────
@@ -440,7 +490,108 @@ class DagRunner:
         if await self._defer_for_reauth(run, step, output, surface_id=surface_id):
             return
 
-        await self.finalize_step(run, step, output, elapsed_ms)
+        # Approved-resume path: a HUMAN-approved write is the highest-risk write class,
+        # so it must be read-back verified too (spec §4.5 — "ANY write path"). Re-derive
+        # the verifier inputs: capability from the step, risk via assess_step_risk (the
+        # RiskAssessor is Redis-cached 24h, and this capability was already assessed at
+        # pause time, so a resume within the window is a cache hit — cheap).
+        from src.services.verification import VerifyVerdict
+
+        capability = (step.input_data or {}).get(
+            "capability", (step.input_data or {}).get("task_type", "unknown")
+        )
+        risk = await self._trust_gate.assess_step_risk(capability, step, run)
+        verdict = await self._finalize_with_verification(
+            run, step, output, elapsed_ms, capability, risk
+        )
+        # Step 6C: the user-approval positive increment fires HERE on the CONFIRMED verified
+        # outcome (mirrors the auto-exec increment above), NOT at approval click.
+        if verdict == VerifyVerdict.CONFIRMED:
+            decision_type = await self._read_approval_decision_type(run, step)
+            await self._trust_gate.record_user_approval_outcome(
+                capability,
+                getattr(risk, "risk_level", risk),
+                run.workspace_id or "",
+                decision_type,
+            )
+        elif verdict == VerifyVerdict.UNVERIFIED:
+            # completed_unverified: stamp the user's decision_type into the verification meta
+            # so the deferred tick increments with it (auto-exec has none → defaults to
+            # "approved").
+            decision_type = await self._read_approval_decision_type(run, step)
+            if isinstance(step.output_data, dict) and isinstance(
+                step.output_data.get("verification"), dict
+            ):
+                step.output_data = {
+                    **step.output_data,
+                    "verification": {
+                        **step.output_data["verification"],
+                        "decision_type": decision_type,
+                    },
+                }
+                await self._db.flush()
+
+    async def _read_approval_decision_type(self, run: TaskRun, step: TaskStep) -> str:
+        """Read the persisted decision_type ("approved"/"modified") for this step's decided
+        Approval. Defaults to "approved" (the auto-exec-equivalent) if none is found."""
+        from sqlalchemy import select
+
+        from src.models.approvals import Approval
+
+        stmt = (
+            select(Approval)
+            .where(Approval.run_id == run.run_id, Approval.step_id == step.step_id)
+            .order_by(Approval.decided_at.desc().nullslast())
+        )
+        result = await self._db.execute(stmt)
+        approval = result.scalars().first()
+        if approval is None:
+            return "approved"
+        return (approval.artifact_refs or {}).get("decision_type", "approved")
+
+    async def _finalize_with_verification(
+        self,
+        run: TaskRun,
+        step: TaskStep,
+        output: dict | None,
+        elapsed_ms: int,
+        capability: str,
+        risk,
+    ) -> "VerifyVerdict":
+        """Read-back verify a write step BEFORE marking it terminal, then finalize with
+        the verdict's status (spec §4.5). Shared by the auto-execute and approved-resume
+        paths so neither can emit a terminal status without a verdict. A CONTRADICTED
+        irreversible write escalates to the user (escalate-first — wired in Task 8).
+        Returns the verdict; the caller owns any path-specific trust bookkeeping (this
+        helper deliberately does NOT touch trust)."""
+        from src.services.verification import ReadBackVerifier, VerifyVerdict
+        from src.services.verification.readback import verdict_to_step_status
+
+        verifier = ReadBackVerifier(
+            read_fn=lambda cap, args: self._runner.run_readback(cap, args, run)
+        )
+        verdict = await verifier.verify_step(
+            capability=capability,
+            write_input=step.input_data or {},
+            write_output=output if isinstance(output, dict) else {},
+            risk=risk,
+        )
+        step_status = verdict_to_step_status(verdict)
+
+        # Attach verification metadata so the deferred tick / escalation can act
+        # on a completed_unverified / partially_completed step (JSONB, no migration).
+        # A CONFIRMED write finalizes as "completed" and needs no deferred re-check.
+        if step_status != "completed" and isinstance(output, dict):
+            output = {
+                **output,
+                "verification": build_verification_meta(capability, risk, verdict, output),
+            }
+
+        await self.finalize_step(run, step, output, elapsed_ms, status=step_status)
+
+        if verdict == VerifyVerdict.CONTRADICTED:
+            await self._escalate_divergence(run, step, capability, risk, output)
+        return verdict
 
     async def _defer_for_reauth(
         self,
@@ -630,8 +781,11 @@ class DagRunner:
         step: TaskStep,
         output: dict | None,
         elapsed_ms: int,
+        status: str = "completed",
     ) -> None:
-        """Mark step completed, emit events, checkpoint."""
+        """Mark step terminal (status defaults to completed; a write step passes the
+        read-back verdict status — completed / completed_unverified / partially_completed).
+        Emit events, checkpoint."""
         await self._emitter.emit_event(
             "tool_call_completed",
             run.user_id,
@@ -647,14 +801,14 @@ class DagRunner:
             workspace_id=run.workspace_id,
         )
 
-        transition_step(step, "completed")
+        transition_step(step, status)
         step.output_data = output
         step.completed_at = datetime.now(timezone.utc)
         await self._db.flush()
 
         result = StepResult(
             step_id=step.step_id,
-            status="completed",
+            status=status,
             output_data=output,
             duration_ms=elapsed_ms,
         )
@@ -669,8 +823,10 @@ class DagRunner:
                 "step_id": step.step_id,
                 "task_id": step.task_id,
                 "duration_ms": result.duration_ms,
+                "status": status,
             },
             workspace_id=run.workspace_id,
+            durable=True,
         )
 
         # Emit surface.updated for A2UI live streaming
@@ -685,4 +841,36 @@ class DagRunner:
                     "preview": str(output.get("result", output.get("summary", "")))[:200],
                 },
                 workspace_id=run.workspace_id,
+            )
+
+    async def _escalate_divergence(self, run, step, capability, risk, output) -> None:
+        """Escalate-first: a contradicted read-back on an irreversible write surfaces
+        the exact artifact_ref + observed divergence to the present user, offering the
+        registered compensator (if any). No compensator -> escalate anyway (§4.5)."""
+        from src.services.verification.compensation import build_divergence_escalation
+
+        out = output if isinstance(output, dict) else {}
+        meta = out.get("verification", {})
+        artifact_ref = meta.get("artifact_ref") or {}
+        escalation = build_divergence_escalation(
+            capability=capability,
+            artifact_ref=artifact_ref,
+            observed="Read-back could not confirm the expected effect of this write.",
+        )
+        try:
+            await self._emitter.emit_event(
+                "surface_created",
+                run.user_id,
+                {
+                    "run_id": run.run_id,
+                    "step_id": step.step_id,
+                    "surface_type": "verification_divergence",
+                    "preview": f"Could not confirm {capability} — review needed",
+                    "escalation": escalation,
+                },
+                workspace_id=run.workspace_id,
+            )
+        except Exception:
+            logger.warning(
+                "Failed to emit divergence escalation for step %s", step.step_id, exc_info=True
             )

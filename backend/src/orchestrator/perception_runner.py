@@ -19,6 +19,7 @@ from src.config.settings import Settings
 from src.contracts import PlanOutput
 from src.errors import classify, new_correlation_id
 from src.middleware.observability import get_correlation_id
+from src.orchestrator import perception_triage_gate as triage_gate
 from src.orchestrator.agent_invoker import AgentInvoker
 from src.orchestrator.budget import BudgetTracker
 from src.orchestrator.connector_poller import ConnectorPoller
@@ -140,6 +141,13 @@ class PerceptionRunner:
         """
         trace = self._trace_manager.start_trace("cross_source_synthesis")
         try:
+            run_synthesis = await self._has_actionable_for_sources(source_names, workspace_id)
+            if not run_synthesis:
+                logger.info(
+                    "Cross-source synthesis skipped: no actionable events (%s)", source_names
+                )
+                return {"status": "skipped", "reason": "no_actionable_events"}
+
             planner_result = await self._invoker.call_agent(
                 "planner",
                 message=(
@@ -177,6 +185,14 @@ class PerceptionRunner:
             await self._trace_manager.finish_trace(
                 trace.trace_id, user_id=user_id, workspace_id=workspace_id
             )
+
+    async def _has_actionable(self, raw_events: list, workspace_id: str) -> bool:
+        """Step-3 Planner gate — see ``perception_triage_gate.has_actionable_events``."""
+        return await triage_gate.has_actionable_events(self._db_factory, raw_events, workspace_id)
+
+    async def _has_actionable_for_sources(self, sources: list[str], workspace_id: str) -> bool:
+        """Synthesis gate — see ``perception_triage_gate.has_actionable_for_sources``."""
+        return await triage_gate.has_actionable_for_sources(self._db_factory, sources, workspace_id)
 
     async def run_perception_cycle(self, source: str, user_id: str, workspace_id: str = "") -> dict:
         """Run a perception cycle for a specific data source.
@@ -273,15 +289,11 @@ class PerceptionRunner:
                             sender = msg.get("from", "unknown")
                             observer_summary += f"\n  [{sender}]: {snippet}"
 
-            # Step 2: Librarian extracts entities and memories
-            librarian_result = await self._invoker.call_agent(
-                "librarian",
-                message=f"Process these observations from {source} and extract "
-                f"entities and memories:\n{observer_summary}",
-                user_id=user_id,
-                trace=trace,
-                workspace_id=workspace_id,
-            )
+            # Step 2: entity/memory extraction is owned by the tier-gated worker
+            # consumers (event_processed stream); the routine Librarian pass here
+            # would be a redundant second extraction, so it is not run. The result
+            # field is kept (always None) to preserve the return-dict shape.
+            librarian_result = None
 
             # Enrich with correlation context for thread-aware planning
             correlation_context = ""
@@ -378,7 +390,6 @@ class PerceptionRunner:
                 assessment = await assess_relevance(
                     signal,
                     user_context,
-                    self._client,
                     engagement_context=engagement_context,
                     relevance_penalty=relevance_penalty,
                 )
@@ -443,13 +454,18 @@ class PerceptionRunner:
             if correlation_context:
                 planner_message += f"\n\n--- Correlation Context ---{correlation_context}"
 
-            planner_result = await self._invoker.call_agent(
-                "planner",
-                message=planner_message,
-                user_id=user_id,
-                trace=trace,
-                workspace_id=workspace_id,
-            )
+            planner_result = None
+            run_planner = await self._has_actionable(raw_events, workspace_id)
+            if run_planner:
+                planner_result = await self._invoker.call_agent(
+                    "planner",
+                    message=planner_message,
+                    user_id=user_id,
+                    trace=trace,
+                    workspace_id=workspace_id,
+                )
+            else:
+                logger.info("Perception poll %s: no actionable events, skip Planner", source)
 
             # Step 4: Extract and apply perception policy if present
             await self._apply_perception_policy_from_planner(
@@ -457,13 +473,15 @@ class PerceptionRunner:
             )
 
             # Step 5: Extract plan and queue execution if actionable
-            perception_plan = await self._queue_perception_plan(
-                planner_result,
-                source,
-                user_id,
-                workspace_id,
-                trace.trace_id,
-            )
+            perception_plan = None
+            if planner_result:
+                perception_plan = await self._queue_perception_plan(
+                    planner_result,
+                    source,
+                    user_id,
+                    workspace_id,
+                    trace.trace_id,
+                )
 
             # Publish perception completed event
             await self._events.publish_event(

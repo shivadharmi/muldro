@@ -358,9 +358,10 @@ def _make_ingest_mocks():
 class TestAtomicIngestCursorAdvance:
     """P4: cursor upsert shares the ingestion unit of work.
 
-    Goal: the cursor is not advanced unless the event loop ran to completion.
-    EventProcessor commits per-event internally; the cursor upsert is executed
-    on the same session after the loop and committed by the trailing commit.
+    Goal: the cursor is not advanced unless ``process_batch`` ran to
+    completion. ``process_batch`` commits once per ``BATCH_SIZE`` chunk
+    internally; the cursor upsert is executed on the same session after it
+    returns and committed by the trailing commit.
     """
 
     @pytest.mark.asyncio
@@ -376,7 +377,7 @@ class TestAtomicIngestCursorAdvance:
         # EventProcessor / DeadLetterService are imported locally inside the
         # method, so we must patch them at their source modules.
         mock_processor = MagicMock()
-        mock_processor.process = AsyncMock(return_value="evt_001")
+        mock_processor.process_batch = AsyncMock(return_value=["evt_001"])
 
         mock_req = MagicMock()
         mock_req.world_model = MagicMock()
@@ -469,19 +470,21 @@ class TestAtomicIngestCursorAdvance:
         mock_db.commit.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_per_event_failure_sends_to_dlq_cursor_still_advances(self):
-        """(d) Per-event failure path: failed events land in DLQ but the loop
-        completes and the cursor IS advanced on the shared session."""
+    async def test_batch_failure_propagates_and_does_not_advance_cursor(self):
+        """(d) ``process_batch`` failure: unlike the old per-event loop, a
+        scoring failure is no longer isolated to one event — a chunk's Claude
+        call is shared across up to ``BATCH_SIZE`` events, so a failure
+        propagates out of ``ingest_raw_events`` (same as a pre-loop setup
+        failure) instead of being caught and forwarded to the DLQ. The cursor
+        does not advance; the next poll cycle re-fetches the same window and
+        ``process_batch``'s own idempotency-key dedup skips anything already
+        stored by an earlier, successful chunk."""
         from src.orchestrator.connector_poller import ConnectorPoller
 
         poller, mock_db, mock_factory, captured_stmts = _make_ingest_mocks()
 
-        # EventProcessor.process raises for every event
         mock_processor = MagicMock()
-        mock_processor.process = AsyncMock(side_effect=Exception("score api down"))
-
-        mock_dlq = MagicMock()
-        mock_dlq.enqueue = AsyncMock()
+        mock_processor.process_batch = AsyncMock(side_effect=Exception("score api down"))
 
         mock_req = MagicMock()
         mock_req.world_model = MagicMock()
@@ -493,32 +496,22 @@ class TestAtomicIngestCursorAdvance:
         with (
             patch.object(poller, "_request_services", return_value=mock_req),
             patch("src.services.event_processor.EventProcessor", return_value=mock_processor),
-            patch("src.services.dead_letter.DeadLetterService", return_value=mock_dlq),
+            patch("src.services.dead_letter.DeadLetterService"),
         ):
-            summaries = await ConnectorPoller.ingest_raw_events(
-                poller,
-                [make_raw_event()],
-                TEST_USER_ID,
-                TEST_WORKSPACE_ID,
-                source="gmail",
-                new_cursor="hist_55",
-                cursor_type="history_id",
-            )
+            with pytest.raises(Exception, match="score api down"):
+                await ConnectorPoller.ingest_raw_events(
+                    poller,
+                    [make_raw_event()],
+                    TEST_USER_ID,
+                    TEST_WORKSPACE_ID,
+                    source="gmail",
+                    new_cursor="hist_55",
+                    cursor_type="history_id",
+                )
 
-        # Summary reflects the failure
-        assert len(summaries) == 1
-        assert "ingest error" in summaries[0]
-
-        # DLQ enqueue was attempted
-        mock_dlq.enqueue.assert_awaited_once()
-
-        # Cursor upsert was still executed (loop completed, cursor advances)
-        assert len(captured_stmts) == 1
-        sql = _compile(captured_stmts[0]).upper()
-        assert "INSERT INTO OBSERVATION_CURSORS" in sql
-
-        # Single trailing commit
-        mock_db.commit.assert_awaited_once()
+        # No cursor write: process_batch did not run to completion
+        assert len(captured_stmts) == 0, "cursor must not advance if process_batch raises"
+        mock_db.commit.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_ingest_without_cursor_params_does_not_execute_cursor_upsert(self):
@@ -529,7 +522,7 @@ class TestAtomicIngestCursorAdvance:
         poller, mock_db, mock_factory, captured_stmts = _make_ingest_mocks()
 
         mock_processor = MagicMock()
-        mock_processor.process = AsyncMock(return_value="evt_002")
+        mock_processor.process_batch = AsyncMock(return_value=["evt_002"])
 
         mock_req = MagicMock()
         mock_req.world_model = MagicMock()

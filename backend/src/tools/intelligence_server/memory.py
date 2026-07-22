@@ -94,13 +94,25 @@ async def update_entity(
             if attributes:
                 import json
 
+                from src.services.entity_facts.store import EntityFactStore
+
                 try:
                     new_attrs = json.loads(attributes)
-                    existing = entity.attributes or {}
-                    existing.update(new_attrs)
-                    entity.attributes = existing
                 except json.JSONDecodeError:
                     return {"status": "error", "error": "Invalid JSON for attributes"}
+
+                store = EntityFactStore(db)
+                for attr_key, attr_value in new_attrs.items():
+                    await store.record_fact(
+                        entity_id=entity.entity_id,
+                        workspace_id=workspace_id,
+                        user_id=user_id,
+                        attr_key=str(attr_key),
+                        attr_value=attr_value,
+                        origin="tool_output",
+                    )
+                # entities.attributes stays the denormalized current snapshot (D2).
+                entity.attributes = {**(entity.attributes or {}), **new_attrs}
 
             if add_alias:
                 from src.models.entities import EntityAlias
@@ -311,40 +323,13 @@ async def store_memory(
                 )
             await db.commit()
 
-            # Best-effort entity extraction from the stored text so that
-            # entities mentioned in chat (e.g. company names, people) are
-            # captured in the knowledge graph.
+            # Entity extraction from stored text is now owned solely by the
+            # tier-gated worker consumers (_handle_entity_extraction), which
+            # process the same normalized_events content. Re-running
+            # WorldModel.extract_from_text here duplicated that work on every
+            # store_memory call. The entity_ids field is kept (empty) for
+            # return-shape stability — callers that inspect it still get a list.
             entity_ids: list[str] = []
-            try:
-                from src.services.world_model import WorldModel
-
-                wm = WorldModel(
-                    _shared._settings,
-                    db,
-                    embedding_service=_shared._services.extras.get("embedding_service"),
-                    vector_store=_shared._services.vector_store,
-                )
-                entity_ids = await wm.extract_from_text(
-                    text, user_id=user_id, workspace_id=workspace_id
-                )
-                if entity_ids:
-                    await db.commit()
-            except Exception:
-                logger.debug("Entity extraction from memory text failed", exc_info=True)
-
-            # Sync extracted entities + their relationships to Neo4j
-            if entity_ids and _shared._settings and _shared._settings.neo4j_url:
-                try:
-                    from src.services.graph_sync import GraphSyncService
-
-                    gs = GraphSyncService(_shared._settings, db)
-                    await gs.batch_sync_entities(entity_ids)
-                    await gs.close()
-                except Exception:
-                    logger.debug(
-                        "Neo4j sync after store_memory entity extraction failed",
-                        exc_info=True,
-                    )
 
             await ctx.info(f"Stored {memory_type} memory: {text[:80]}")
             return {

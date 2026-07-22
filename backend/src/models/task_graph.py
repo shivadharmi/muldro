@@ -32,7 +32,6 @@ class TaskRun(Base, TimestampMixin):
     # user_message, event, schedule, trigger, plan
     execution_mode: Mapped[str | None] = mapped_column(String(32))
     # auto_execute, approval_required, blocked, suggest_only
-    policy_decision: Mapped[dict | None] = mapped_column(JSONB)
     conversation_id: Mapped[str | None] = mapped_column(String(64))
     graph_definition: Mapped[dict | None] = mapped_column(JSONB)
     current_step_ids: Mapped[list[str] | None] = mapped_column(ARRAY(String(64)))
@@ -41,7 +40,6 @@ class TaskRun(Base, TimestampMixin):
     runtime_version: Mapped[str | None] = mapped_column(String(32))
     planner_version: Mapped[str | None] = mapped_column(String(32))
     verifier_version: Mapped[str | None] = mapped_column(String(32))
-    context_pack_json: Mapped[dict | None] = mapped_column(JSONB)
     trace_id: Mapped[str | None] = mapped_column(String(64))
     retry_count: Mapped[int] = mapped_column(Integer, default=0)
     max_retries: Mapped[int] = mapped_column(Integer, default=3)
@@ -114,6 +112,30 @@ class TaskStep(Base, TimestampMixin):
     run: Mapped["TaskRun"] = relationship(back_populates="steps")
 
     __table_args__ = (Index("ix_task_steps_run_status", "run_id", "status"),)
+
+
+class TaskRunDetail(Base, TimestampMixin):
+    """1:1 side table for audience-specific run fields extracted off the hot TaskRun
+    row (Step 5 §4.8). Owns policy_decision (durable, evidence/audit) and context_pack
+    (heavy, ephemeral working context — by-ref + TTL via context_pack_expires_at with a
+    dereference/expiry render fallback). run_id is the PK (structural 1:1)."""
+
+    __tablename__ = "task_run_details"
+
+    run_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("task_runs.run_id", ondelete="CASCADE"), primary_key=True
+    )
+    workspace_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("workspaces.workspace_id", ondelete="CASCADE"), nullable=False
+    )
+    policy_decision: Mapped[dict | None] = mapped_column(JSONB)
+    context_pack: Mapped[dict | None] = mapped_column(JSONB)
+    context_pack_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (
+        Index("ix_task_run_details_ws", "workspace_id"),
+        Index("ix_task_run_details_ctx_expiry", "context_pack_expires_at"),
+    )
 
 
 class TaskCheckpoint(Base):

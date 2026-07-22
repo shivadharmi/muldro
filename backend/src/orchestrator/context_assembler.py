@@ -2,15 +2,15 @@
 
 Extracted from ``JarvisOrchestrator`` (god-object decomposition, 2026-06-19).
 A leaf collaborator: it loads conversation history (summarizing overflow via
-Haiku), connected-integration identities, and a ``ContextPack`` from the
-``ContextBuilder``, returning prompt-ready text. Depends only on settings, the
-Anthropic client, the service container, and the DB session factory.
+Haiku through the shared LLM seam), connected-integration identities, and a
+``ContextPack`` from the ``ContextBuilder``, returning prompt-ready text. Depends
+only on settings, the service container, and the DB session factory.
 """
 
 import logging
 
-from src.config.models import BEDROCK_MODEL_TIERS, MODEL_TIERS
 from src.config.settings import Settings
+from src.llm.utility import complete_text
 from src.orchestrator.services import ServiceContainer
 from src.services.context_builder import ContextBuilder, ContextPack
 
@@ -23,9 +23,16 @@ CONTEXT_ENRICHED_AGENTS = {
     "presenter",
     "perceiver",
     "librarian",
-    "operator",
-    "governor",
+    "executor",
+    # Step 10D P1: the synthetic single-lead chat agent (name=="lead") gathers, acts, and
+    # replies inline over a whole turn, so it needs the same ambient enrichment the routed
+    # agents get. NOT added to JIT_ENABLED_AGENTS — JIT is a separate dormant concern.
+    "lead",
 }
+
+# Step 8: agents that hold the JIT read tools and can therefore run on the slim
+# pack. Presenter/Executor lack world-model reads → they keep the eager pack.
+JIT_ENABLED_AGENTS = {"planner", "perceiver", "librarian"}
 
 
 class ContextAssembler:
@@ -145,16 +152,8 @@ class ContextAssembler:
     ) -> str:
         """Summarize older conversation messages using Haiku (cheap, fast)."""
         try:
-            if self._settings.use_bedrock:
-                model = BEDROCK_MODEL_TIERS["haiku"]
-            else:
-                model = MODEL_TIERS["haiku"]
-
             text = "\n".join(lines)
-            response = await self._client.messages.create(
-                model=model,
-                max_tokens=300,
-                temperature=0,
+            summary = await complete_text(
                 system=[
                     {
                         "type": "text",
@@ -165,9 +164,11 @@ class ContextAssembler:
                         ),
                     }
                 ],
-                messages=[{"role": "user", "content": text}],
+                user=text,
+                tier="haiku",
+                max_tokens=300,
+                temperature=0,
             )
-            summary = "".join(b.text for b in response.content if b.type == "text")
 
             # Embed conversation summary into Qdrant for semantic search
             if summary and conversation_id:
@@ -209,16 +210,29 @@ class ContextAssembler:
             return "\n".join(lines)
 
     async def assemble_context(
-        self, agent_name: str, message: str, user_id: str, workspace_id: str = ""
+        self,
+        agent_name: str,
+        message: str,
+        user_id: str,
+        workspace_id: str = "",
+        jit: bool = False,
     ) -> str:
         """Pre-load relevant context for context-enriched agents using ContextBuilder.
 
         Returns a context block to append to the system prompt, giving the
         agent ambient awareness of the user's world without requiring it to
         explicitly call search_memory.
+
+        ``jit`` (Step 8, dormant unless the caller opts in) requests the slim JIT
+        context pack from ``ContextBuilder``. It is gated per-agent here: only
+        agents in ``JIT_ENABLED_AGENTS`` (the ones that hold the JIT read tools)
+        actually get the slim pack — other enriched agents keep the eager one even
+        when the caller passes ``jit=True``.
         """
         if agent_name not in CONTEXT_ENRICHED_AGENTS:
             return ""
+
+        use_jit = jit and agent_name in JIT_ENABLED_AGENTS
 
         sections: list[str] = []
 
@@ -243,8 +257,9 @@ class ContextAssembler:
                     user_id=user_id,
                     query=message,
                     workspace_id=workspace_id,
+                    jit=use_jit,
                 )
-                context_text = ContextBuilder.to_prompt(pack)
+                context_text = ContextBuilder.to_prompt(pack, jit=use_jit)
                 if context_text:
                     sections.append(context_text)
         except Exception:

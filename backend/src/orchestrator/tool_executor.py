@@ -64,6 +64,24 @@ def _enrich_internal_input(tool_name: str, tool_input: dict, user_id: str, works
     return enriched
 
 
+def _missing_required_args(input_schema, tool_input: dict) -> list[str]:
+    """Return the JSON-Schema ``required`` fields absent from ``tool_input``.
+
+    Fail-open by design: a non-dict schema, a missing/malformed ``required`` list, or
+    a ``required`` entry the schema doesn't actually describe in ``properties`` yields
+    no violations — we only enforce fields the authoritative schema both requires and
+    defines, so a degraded schema never blocks an otherwise-valid call.
+    """
+    if not isinstance(input_schema, dict):
+        return []
+    required = input_schema.get("required")
+    if not isinstance(required, list):
+        return []
+    props = input_schema.get("properties")
+    props = props if isinstance(props, dict) else {}
+    return [f for f in required if isinstance(f, str) and f in props and f not in tool_input]
+
+
 class ToolExecutor:
     """Tool definition building and registry-driven tool dispatch."""
 
@@ -164,8 +182,11 @@ class ToolExecutor:
                     "input_schema": mcp_tool.get("input_schema", {}),
                 }
 
-            # Add external tools from DB registry, filtered by capability
-            all_db_tools = await registry.list_tools(enabled_only=True)
+            # Add external tools from DB registry, filtered by capability. workspace_scoped=True:
+            # this builds the agent's ACTUAL callable tool set, so a workspace-specific
+            # ToolDefinition from another tenant must never leak in — bound to this workspace +
+            # the global catalog (mirrors the get_tool scoping used for internal tools above).
+            all_db_tools = await registry.list_tools(enabled_only=True, workspace_scoped=True)
 
             # Lazy "discover-once": if any in-scope external tool lacks a
             # persisted schema and has no live session schema yet, run a single
@@ -187,7 +208,9 @@ class ToolExecutor:
                     in_scope_missing, workspace_id=workspace_id
                 )
                 if discovered:
-                    all_db_tools = await registry.list_tools(enabled_only=True)
+                    all_db_tools = await registry.list_tools(
+                        enabled_only=True, workspace_scoped=True
+                    )
                     for mcp_tool in list_mcp_tools(workspace_id=workspace_id):
                         mcp_schemas[mcp_tool["name"]] = {
                             "description": mcp_tool.get("description", ""),
@@ -333,6 +356,29 @@ class ToolExecutor:
         # events — it carries the governor's structured verdict, not a side-effecting call.
         if backend is ToolBackend.SPECIAL:
             return tool_input
+
+        # Dispatch-time required-arg validation for external MCP tools. An agent
+        # offered a tool with a degraded/propertyless schema (e.g. query_freebusy
+        # during flaky google-workspace discovery) can call it with no args, which
+        # then hard-fails at the server. Validate against the AUTHORITATIVE persisted
+        # schema and reject BEFORE the round-trip with a message the agent can act on
+        # (agents self-correct on tool errors). External-only: internal tools' context
+        # args (user_id/workspace_id) are injected below, not supplied by the agent.
+        if backend is ToolBackend.EXTERNAL_MCP:
+            missing = _missing_required_args(tool.input_schema, tool_input)
+            if missing:
+                logger.warning(
+                    "[mcp] %s rejected — missing required arg(s): %s",
+                    tool_name,
+                    ", ".join(missing),
+                )
+                return {
+                    "error": (
+                        f"Missing required argument(s) for '{tool_name}': "
+                        f"{', '.join(missing)}. Supply them and call the tool again."
+                    ),
+                    "error_code": "missing_required_args",
+                }
 
         logger.info(
             "[mcp] dispatch %s via %s/%s",

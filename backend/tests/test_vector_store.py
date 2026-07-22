@@ -38,7 +38,7 @@ async def test_upsert_no_op_without_client(store_no_qdrant):
     await store_no_qdrant.upsert(
         collection="memories",
         id="mem_001",
-        vector=[0.1] * 1024,
+        vector=[0.1] * 768,
         payload={"text": "test"},
         user_id="user_001",
     )
@@ -49,7 +49,7 @@ async def test_search_returns_empty_without_client(store_no_qdrant):
     """Test search returns empty list when client not available."""
     results = await store_no_qdrant.search(
         collection="memories",
-        query_vector=[0.1] * 1024,
+        query_vector=[0.1] * 768,
         user_id="user_001",
         limit=10,
     )
@@ -68,7 +68,7 @@ async def test_hybrid_search_returns_empty_without_client(store_no_qdrant):
     """Test hybrid_search returns empty when client not available."""
     results = await store_no_qdrant.hybrid_search(
         user_id="user_001",
-        query_vector=[0.1] * 1024,
+        query_vector=[0.1] * 768,
         collections=["memories", "entities"],
         limit=20,
     )
@@ -101,7 +101,7 @@ async def test_hybrid_search_merges_results():
 
     results = await store.hybrid_search(
         user_id="user_001",
-        query_vector=[0.1] * 1024,
+        query_vector=[0.1] * 768,
         collections=["memories", "entities"],
         limit=20,
     )
@@ -139,7 +139,7 @@ async def test_hybrid_search_respects_limit():
 
     results = await store.hybrid_search(
         user_id="user_001",
-        query_vector=[0.1] * 1024,
+        query_vector=[0.1] * 768,
         collections=["memories", "entities", "events"],
         limit=5,  # Should return only top 5
     )
