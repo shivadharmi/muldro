@@ -44,10 +44,17 @@ class Entity(Base, TimestampMixin):
     __table_args__ = (
         Index("ix_entities_user_type_name", "user_id", "entity_type", "canonical_name"),
         Index("ix_entities_search_vector", "search_vector", postgresql_using="gin"),
-        # One entity per (workspace, type, name) — closes the concurrent-extraction
-        # insert race (the pre-existing IntegrityError retry in upsert_entity activates).
+        # One entity per (user, workspace, type, name). Entity identity is per-user — reads and
+        # upserts filter by user_id AND workspace_id — so the key must include user_id, else a
+        # second user in the same workspace can't own an entity another user already named
+        # (the workspace-scoped constraint rejected the insert and the user-scoped retry could
+        # not resolve the other user's row). See migration 8bed72861ada.
         UniqueConstraint(
-            "workspace_id", "entity_type", "canonical_name", name="uq_entities_ws_type_name"
+            "user_id",
+            "workspace_id",
+            "entity_type",
+            "canonical_name",
+            name="uq_entities_user_ws_type_name",
         ),
     )
 
