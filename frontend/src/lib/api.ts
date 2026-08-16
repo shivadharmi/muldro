@@ -790,6 +790,8 @@ export interface UnifiedIntegration {
   slug?: string;
   // Access scopes granted to Jarvis, a subset of read/write.
   access_scopes?: ("read" | "write")[];
+  // OpenConnector provider when gateway-backed (popup-poll connect flow); null = native OAuth redirect.
+  oc_provider?: string | null;
 }
 
 export function fetchInstallations(): Promise<Installation[]> {
@@ -813,6 +815,28 @@ export function checkInstallationHealth(
   installId: string
 ): Promise<{ install_id?: string; server_name?: string; health_status: string }> {
   return api(`/integrations/${installId}/health`);
+}
+
+export interface BeginConnectionResponse {
+  authorization_url: string;
+}
+
+export interface ConfirmConnectionResponse {
+  status: "active" | "pending";
+}
+
+export function beginConnection(
+  provider: string,
+  alias = "default",
+): Promise<BeginConnectionResponse> {
+  return post<BeginConnectionResponse>("/connections/begin", { provider, alias });
+}
+
+export function confirmConnection(
+  provider: string,
+  alias = "default",
+): Promise<ConfirmConnectionResponse> {
+  return post<ConfirmConnectionResponse>("/connections/confirm", { provider, alias });
 }
 
 // ── Knowledge Page ──────────────────────────────────────────────
