@@ -2,14 +2,17 @@
 
 Task 8 wired ``run_adapter.warm_start()`` to run before ``adapter.run(...)`` in
 ``if __name__ == "__main__":``, so a live adapter process serves one named
-FastMCP tool per allowlisted action (e.g. ``hackernews.get_top_stories``) in
-addition to the generic ``execute_action`` / ``list_connections`` tools. This
-connects a real FastMCP client to the adapter's ``/mcp`` and checks the named
-tool shows up with a non-empty object input schema — the actual regression this
-task guards against: warm-start silently not running, or running but never
-reaching the served tool list. (Under the ``hackernews`` profile the served
-schema is the opaque fallback, since ``GMAIL_ACTION_SCHEMAS`` is gmail-only;
-this test verifies the named tool is *served*, not its exact schema shape.)
+FastMCP tool per allowlisted action (e.g. ``hackernews_get_top_stories`` — the
+agent-legal, underscore form of the dotted OC actionId
+``hackernews.get_top_stories``; see ``gateway_naming.action_id_to_tool_name``)
+in addition to the generic ``execute_action`` / ``list_connections`` tools.
+This connects a real FastMCP client to the adapter's ``/mcp`` and checks the
+named tool shows up with a non-empty object input schema — the actual
+regression this task guards against: warm-start silently not running, or
+running but never reaching the served tool list. (Under the ``hackernews``
+profile the served schema is the opaque fallback, since
+``gateway_actions.GMAIL_ACTIONS`` is gmail-only; this test verifies the named
+tool is *served*, not its exact schema shape.)
 
 Runs only when the stack is up (conftest gates on adapter :8100) AND the
 adapter was started under ``JARVIS_GATEWAY_PROVIDER=hackernews`` (spike
@@ -27,8 +30,10 @@ import os
 import pytest
 from fastmcp import Client
 
+from src.integrations.gateway_naming import action_id_to_tool_name
+
 _ADAPTER_MCP = "http://127.0.0.1:8100/mcp"
-_HN_TOOL = "hackernews.get_top_stories"
+_HN_TOOL = action_id_to_tool_name("hackernews.get_top_stories")
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("JARVIS_GATEWAY_PROVIDER", "gmail") != "hackernews",
