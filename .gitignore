@@ -47,3 +47,6 @@ pytest-of-sivasankarreddybogala/
 
 # Local Claude Code planning/scratch docs — not tracked
 docs/superpowers/
+
+# git worktrees for isolated feature work
+.worktrees/
