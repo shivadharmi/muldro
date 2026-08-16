@@ -1,10 +1,15 @@
 """Warm-start the gateway adapter's named-action tool surface.
 
-Registers one FastMCP tool per allowlisted OpenConnector action. Each tool
-advertises a HAND-TYPED JSON Schema (transcribed from OpenConnector v1.3.5's
-``get_action_guide`` "## Input Parameters" tables — OC exposes no
-machine-readable per-action schema; see ``infra/gateway/spike-findings-guide.md``).
-Each tool's handler forwards to the four-step-enforced ``handle_execute_action``.
+Registers one FastMCP tool per allowlisted OpenConnector action, named with the
+agent-legal (underscore) form of the actionId (``gmail.get_profile`` ->
+``gmail_get_profile`` via ``gateway_naming.action_id_to_tool_name``) — Anthropic
+and OpenAI-compatible tool-calling APIs forbid dots in tool names. Each tool's
+schema comes from ``gateway_actions.GMAIL_ACTIONS`` (the single hand-typed
+source of truth — OC exposes no machine-readable per-action schema; see
+``infra/gateway/spike-findings-guide.md``), and its handler stays bound to the
+DOTTED actionId, forwarding to the four-step-enforced ``handle_execute_action``.
+So the LLM calls ``gmail_get_profile`` and the adapter calls OpenConnector with
+``gmail.get_profile``.
 
 Hybrid drift check: at warm-start we still call ``get_action_guide`` live and
 compare OpenConnector's *current* parameter names to our hand-typed schema,
@@ -28,6 +33,8 @@ from src.adapter.enforcement import GatewayProfile
 from src.adapter.http_context import bearer_token
 from src.adapter.openconnector_client import get_action_guide
 from src.adapter.server import handle_execute_action
+from src.integrations.gateway_actions import GMAIL_ACTIONS
+from src.integrations.gateway_naming import action_id_to_tool_name
 from src.models.database import get_session_factory
 
 logger = logging.getLogger(__name__)
@@ -36,117 +43,10 @@ _OPAQUE_SCHEMA = {"type": "object", "additionalProperties": True}
 
 GuideFetcher = Callable[[str], Awaitable[dict]]
 
-# Hand-typed JSON Schemas transcribed verbatim from OpenConnector v1.3.5's
-# get_action_guide "## Input Parameters" tables (infra/gateway/spike-findings-guide.md).
-# OC emits no machine-readable schema, so these are the source of truth for what the
-# agent sees. Keep the keys in sync with GMAIL_ACTION_ALLOWLIST in enforcement.py
-# (a test enforces every allowlisted action has an entry here).
-GMAIL_ACTION_SCHEMAS: dict[str, dict] = {
-    "gmail.get_profile": {
-        "type": "object",
-        "properties": {
-            "userId": {
-                "type": "string",
-                "description": "Gmail user ID. Omit to use the connected mailbox.",
-            },
-        },
-    },
-    "gmail.fetch_emails": {
-        "type": "object",
-        "properties": {
-            "query": {"type": "string", "description": "Gmail search query."},
-            "labelIds": {
-                "type": "array",
-                "items": {"type": "string"},
-                "description": "Gmail label IDs.",
-            },
-            "includeSpamTrash": {
-                "type": "boolean",
-                "description": "Whether to include Spam and Trash.",
-            },
-            "detail": {
-                "type": "string",
-                "enum": ["ids", "summary", "full"],
-                "description": "Message detail level.",
-            },
-            "maxResults": {
-                "type": "integer",
-                "description": "Maximum number of results to return.",
-            },
-            "pageToken": {
-                "type": "string",
-                "description": "Opaque pagination token returned by Gmail.",
-            },
-        },
-    },
-    "gmail.search_threads": {
-        "type": "object",
-        "properties": {
-            "query": {"type": "string", "description": "Gmail search query."},
-            "maxResults": {
-                "type": "integer",
-                "description": "Maximum number of results to return.",
-            },
-        },
-        "required": ["query"],
-    },
-    "gmail.get_message": {
-        "type": "object",
-        "properties": {
-            "messageId": {"type": "string", "description": "Gmail message ID."},
-        },
-        "required": ["messageId"],
-    },
-    "gmail.list_threads": {
-        "type": "object",
-        "properties": {
-            "query": {"type": "string", "description": "Gmail search query."},
-            "verbose": {"type": "boolean", "description": "Hydrate each thread."},
-            "maxResults": {
-                "type": "integer",
-                "description": "Maximum number of results to return.",
-            },
-            "pageToken": {
-                "type": "string",
-                "description": "Opaque pagination token returned by Gmail.",
-            },
-        },
-    },
-    "gmail.list_labels": {
-        "type": "object",
-        "properties": {
-            "userId": {
-                "type": "string",
-                "description": "Gmail user ID. Omit to use the connected mailbox.",
-            },
-        },
-    },
-    "gmail.send_email": {
-        "type": "object",
-        "properties": {
-            "recipientEmail": {"type": "string", "description": "Primary recipient email address."},
-            "to": {"type": "string", "description": "Primary recipient email address."},
-            "extraRecipients": {
-                "type": "array",
-                "items": {"type": "string"},
-                "description": "Additional To recipients.",
-            },
-            "cc": {
-                "anyOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}],
-                "description": "Cc recipients.",
-            },
-            "bcc": {
-                "anyOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}],
-                "description": "Bcc recipients.",
-            },
-            "subject": {"type": "string", "description": "Email subject line."},
-            "body": {"type": "string", "description": "Email body content."},
-            "messageBody": {"type": "string", "description": "Reply or draft body content."},
-            "isHtml": {"type": "boolean", "description": "Whether the body is HTML."},
-            "fromEmail": {"type": "string", "description": "Verified Gmail send-as alias."},
-        },
-    },
-}
+# Hand-typed JSON Schemas, keyed by dotted OC actionId. gateway_actions.GMAIL_ACTIONS
+# is the single source of truth (enforcement.py, warm_start.py, and catalog.py all
+# derive from it), so this module holds no schema data of its own.
+_SCHEMA_BY_ACTION: dict[str, dict] = {a.action_id: a.input_schema for a in GMAIL_ACTIONS}
 
 
 def _describe(action_id: str) -> str:
@@ -236,7 +136,7 @@ async def register_gateway_tools(
     """
     count = 0
     for action_id in sorted(profile.action_allowlist):
-        schema = GMAIL_ACTION_SCHEMAS.get(action_id)
+        schema = _SCHEMA_BY_ACTION.get(action_id)
         if schema is None:
             logger.warning("warm-start: no hand-typed schema for %s — serving opaque", action_id)
             schema = dict(_OPAQUE_SCHEMA)
@@ -256,12 +156,16 @@ async def register_gateway_tools(
                 logger.warning(
                     "warm-start: drift check skipped for %s (guide fetch failed)", action_id
                 )
-            # Serve a deep copy so FastMCP can never mutate GMAIL_ACTION_SCHEMAS,
-            # the module-level source of truth, through the served tool's schema.
+            # Serve a deep copy so FastMCP can never mutate GMAIL_ACTIONS, the
+            # module-level source of truth, through the served tool's schema.
             schema = copy.deepcopy(schema)
         adapter.add_tool(
             FunctionTool(
-                name=action_id,
+                # Agent-legal name (dots -> underscores): Anthropic/OpenAI tool
+                # names forbid dots. The handler below stays bound to the
+                # DOTTED actionId, so the LLM calls e.g. gmail_get_profile and
+                # the adapter forwards gmail.get_profile to OpenConnector.
+                name=action_id_to_tool_name(action_id),
                 description=_describe(action_id),
                 parameters=schema,
                 fn=_make_handler(action_id),

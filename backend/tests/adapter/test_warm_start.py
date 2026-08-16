@@ -4,11 +4,12 @@ from unittest.mock import AsyncMock, patch
 from fastmcp import FastMCP
 
 from src.adapter.enforcement import GMAIL_PROFILE, GatewayProfile
-from src.adapter.warm_start import (
-    GMAIL_ACTION_SCHEMAS,
-    _param_names_from_guide,
-    register_gateway_tools,
-)
+from src.adapter.warm_start import _param_names_from_guide, register_gateway_tools
+from src.integrations.gateway_actions import GMAIL_ACTIONS
+from src.integrations.gateway_naming import action_id_to_tool_name
+
+_BY_ID = {a.action_id: a for a in GMAIL_ACTIONS}
+_EMPTY_GUIDE = {"data": {"markdown": ""}}
 
 
 def _guide(markdown: str) -> dict:
@@ -32,41 +33,79 @@ _FETCH_EMAILS_MD = """\
 """
 
 
-def test_every_allowlisted_action_has_a_hand_typed_schema():
-    assert set(GMAIL_PROFILE.action_allowlist) <= set(GMAIL_ACTION_SCHEMAS)
-
-
-def test_send_email_schema_models_cc_as_string_or_array():
-    cc = GMAIL_ACTION_SCHEMAS["gmail.send_email"]["properties"]["cc"]
-    assert cc == {
-        "anyOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}],
-        "description": "Cc recipients.",
-    }
-
-
-def test_search_threads_marks_query_required():
-    assert GMAIL_ACTION_SCHEMAS["gmail.search_threads"].get("required") == ["query"]
-
-
 def test_param_names_from_guide_extracts_the_table_column():
     names = _param_names_from_guide(_guide(_FETCH_EMAILS_MD))
     assert names == {"query", "labelIds", "includeSpamTrash", "detail", "maxResults", "pageToken"}
+
+
+def test_param_names_from_guide_extracts_table_column():
+    md = (
+        "## Input Parameters\n\n"
+        "| Name | Required | Type |\n| ---- | -------- | ---- |\n"
+        "| `query` | No | `string` |\n| `maxResults` | No | `integer` |\n"
+    )
+    assert _param_names_from_guide({"data": {"markdown": md}}) == {"query", "maxResults"}
 
 
 def test_param_names_from_guide_returns_empty_when_no_markdown():
     assert _param_names_from_guide({"nope": 1}) == set()
 
 
-async def test_register_serves_hand_typed_schemas_not_the_live_guide():
-    adapter = FastMCP("test")
-    fetcher = AsyncMock(return_value=_guide(_FETCH_EMAILS_MD))
+async def test_registers_agent_legal_names_not_dotted():
+    adapter = FastMCP("t")
+    await register_gateway_tools(
+        adapter, GMAIL_PROFILE, guide_fetcher=AsyncMock(return_value=_EMPTY_GUIDE)
+    )
+    names = {t.name for t in await adapter.list_tools()}
+    assert "gmail.get_profile" not in names  # dotted (illegal) must NOT be exposed
+    assert "gmail_get_profile" in names
+    for a in GMAIL_ACTIONS:
+        assert action_id_to_tool_name(a.action_id) in names
 
-    count = await register_gateway_tools(adapter, GMAIL_PROFILE, guide_fetcher=fetcher)
 
-    tools = {t.name: t for t in await adapter.list_tools()}
-    assert count == len(GMAIL_PROFILE.action_allowlist)
-    for action_id in GMAIL_PROFILE.action_allowlist:
-        assert tools[action_id].parameters == GMAIL_ACTION_SCHEMAS[action_id]
+async def test_named_tool_carries_the_table_schema():
+    adapter = FastMCP("t")
+    await register_gateway_tools(
+        adapter, GMAIL_PROFILE, guide_fetcher=AsyncMock(return_value=_EMPTY_GUIDE)
+    )
+    tool = await adapter.get_tool("gmail_send_email")
+    assert tool.parameters == _BY_ID["gmail.send_email"].input_schema
+
+
+async def test_handler_forwards_the_dotted_actionid():
+    adapter = FastMCP("t")
+    await register_gateway_tools(
+        adapter, GMAIL_PROFILE, guide_fetcher=AsyncMock(return_value=_EMPTY_GUIDE)
+    )
+    captured = {}
+
+    async def _fake(db, *, token, args):
+        captured.update(args)
+        return {"ok": True}
+
+    class _CM:
+        async def __aenter__(self):
+            return "DB"
+
+        async def __aexit__(self, *e):
+            return False
+
+    with (
+        patch("src.adapter.warm_start.bearer_token", return_value="tok"),
+        patch("src.adapter.warm_start.handle_execute_action", _fake),
+        patch("src.adapter.warm_start.get_session_factory", lambda: lambda: _CM()),
+    ):
+        await (await adapter.get_tool("gmail_get_profile")).run({})
+    assert captured["actionId"] == "gmail.get_profile"  # dotted actionId reaches the adapter
+
+
+async def test_guide_fetch_failure_still_ships_table_schema():
+    adapter = FastMCP("t")
+    await register_gateway_tools(
+        adapter, GMAIL_PROFILE, guide_fetcher=AsyncMock(side_effect=RuntimeError("down"))
+    )
+    tool = await adapter.get_tool("gmail_get_message")
+    assert tool.parameters == _BY_ID["gmail.get_message"].input_schema
 
 
 async def test_register_still_registers_when_guide_fetch_fails():
@@ -75,9 +114,7 @@ async def test_register_still_registers_when_guide_fetch_fails():
 
     count = await register_gateway_tools(adapter, GMAIL_PROFILE, guide_fetcher=fetcher)
 
-    tools = {t.name: t for t in await adapter.list_tools()}
     assert count == len(GMAIL_PROFILE.action_allowlist)
-    assert tools["gmail.get_message"].parameters == GMAIL_ACTION_SCHEMAS["gmail.get_message"]
 
 
 async def test_register_warns_on_param_drift(caplog):
@@ -106,7 +143,7 @@ async def test_register_opaque_fallback_for_action_without_hand_typed_schema():
 
     await register_gateway_tools(adapter, profile, guide_fetcher=fetcher)
 
-    tool = await adapter.get_tool("gmail.unknown_action")
+    tool = await adapter.get_tool(action_id_to_tool_name("gmail.unknown_action"))
     assert tool.parameters == {"type": "object", "additionalProperties": True}
 
 
@@ -136,7 +173,7 @@ async def test_named_tool_handler_forwards_actionid_input_and_token():
         patch("src.adapter.warm_start.handle_execute_action", _fake_handle),
         patch("src.adapter.warm_start.get_session_factory", lambda: lambda: _FakeCM()),
     ):
-        tool = await adapter.get_tool("gmail.get_message")
+        tool = await adapter.get_tool("gmail_get_message")
         await tool.run({"messageId": "m1"})
 
     assert captured["db"] == "FAKE_DB"

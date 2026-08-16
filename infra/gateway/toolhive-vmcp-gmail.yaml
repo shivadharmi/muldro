@@ -26,9 +26,10 @@
 #
 # 2. NAMED PER-ACTION TOOL SURFACE (execute_action / search_actions NOT EXPOSED):
 #      The Connection Context Adapter (backend/run_adapter.py) exposes named
-#      per-action gmail tools (gmail.get_profile, gmail.fetch_emails,
-#      gmail.search_threads, gmail.get_message, gmail.list_threads,
-#      gmail.list_labels, gmail.send_email) plus `list_connections`, rather
+#      per-action gmail tools (gmail_get_profile, gmail_fetch_emails,
+#      gmail_search_threads, gmail_get_message, gmail_list_threads,
+#      gmail_list_labels, gmail_send_email — agent-legal underscore names, since
+#      Anthropic/OpenAI forbid dots) plus `list_connections`, rather
 #      than a single generic `execute_action` tool. `execute_action` remains
 #      implemented on the adapter directly (useful for ops/debug callers that
 #      talk to the adapter without going through the vMCP), but it is
@@ -97,14 +98,18 @@ spec:
       tools:
         - workload: connection-adapter  # VERIFY key name — see caveat 5 above
           filter:
+            # Agent-legal tool names (underscore): dots are illegal in
+            # Anthropic/OpenAI tool names, so the adapter exposes gmail_<verb>
+            # (mapped to the OC actionId gmail.<verb> internally). See
+            # src/integrations/gateway_naming.py.
             - list_connections
-            - gmail.get_profile
-            - gmail.fetch_emails
-            - gmail.search_threads
-            - gmail.get_message
-            - gmail.list_threads
-            - gmail.list_labels
-            - gmail.send_email
+            - gmail_get_profile
+            - gmail_fetch_emails
+            - gmail_search_threads
+            - gmail_get_message
+            - gmail_list_threads
+            - gmail_list_labels
+            - gmail_send_email
 
     operational:
       failureHandling:
@@ -143,13 +148,13 @@ spec:
             when {
               resource.name in [
                 "list_connections",
-                "gmail.get_profile",
-                "gmail.fetch_emails",
-                "gmail.search_threads",
-                "gmail.get_message",
-                "gmail.list_threads",
-                "gmail.list_labels",
-                "gmail.send_email"
+                "gmail_get_profile",
+                "gmail_fetch_emails",
+                "gmail_search_threads",
+                "gmail_get_message",
+                "gmail_list_threads",
+                "gmail_list_labels",
+                "gmail_send_email"
               ]
             };
 
