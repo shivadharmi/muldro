@@ -459,6 +459,17 @@ EXTERNAL_TOOL_SEEDS: list[ExternalToolSeed] = [
     _ext("list_calendars", "calendar.list", "google-workspace", "low", False, True),
     _ext("manage_event", "calendar.create", "google-workspace", "medium", True, True),
     _ext("query_freebusy", "calendar.get", "google-workspace", "low", False, True),
+    # google-workspace via ToolHive+OpenConnector gateway (native OC actionIds).
+    # AUGMENTS the native names above: same server, so the schema-presence gate in
+    # tool_executor serves whichever set the flag-selected backend actually offers.
+    # These seeds are the hand-authored verb->capability+risk policy layer (north-star).
+    _ext("gmail.get_profile", "email.read", "google-workspace", "low", False, True),
+    _ext("gmail.fetch_emails", "email.search", "google-workspace", "low", False, True),
+    _ext("gmail.search_threads", "email.search", "google-workspace", "low", False, True),
+    _ext("gmail.get_message", "email.read", "google-workspace", "low", False, True),
+    _ext("gmail.list_threads", "email.list", "google-workspace", "low", False, True),
+    _ext("gmail.list_labels", "email.list", "google-workspace", "low", False, True),
+    _ext("gmail.send_email", "email.send", "google-workspace", "high", True, True),
     # github (22 tools, verified=False)
     _ext("issue_write", "issue.create", "github", "medium", True, False),
     _ext("issue_read", "issue.get", "github", "low", False, False),
