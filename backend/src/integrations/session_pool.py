@@ -866,11 +866,17 @@ class UserMCPSessionPool:
             from src.orchestrator.platform_jwt import mint_platform_jwt
 
             tenant = workspace_id or user_id
+            # Blanket read+write email caps (stopgap; the proper fix is step-scoped
+            # minting — carry only the current step's capability). Read caps
+            # (email.read/list) are REQUIRED alongside the writes: without them the
+            # adapter's capability gate denies read-only gmail actions
+            # (get_profile/get_message/list_*), and omitting them also violates the
+            # read-before-write principle (never grant a write cap without its read).
             token = mint_platform_jwt(
                 principal_id=user_id,
                 tenant_id=tenant,
                 workspace_id=tenant,
-                capabilities=["email.search", "email.send"],
+                capabilities=["email.read", "email.search", "email.list", "email.send"],
             )
             return BearerAuth(token=token)
 
