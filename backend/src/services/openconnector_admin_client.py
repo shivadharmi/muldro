@@ -29,8 +29,11 @@ class OpenConnectorAdminClient:
                 f"{self._base_url}/api/oauth/authorizations", json=body, headers=self._headers
             )
         if resp.status_code // 100 != 2:
+            # resp.text (not resp.json()) — an infra-level error (502/504 HTML,
+            # upstream reset) has no JSON body, and decoding it here would raise
+            # inside the error path and mask the real status code.
             raise OpenConnectorAdminError(
-                f"start_authorization failed: {resp.status_code} {resp.json()}"
+                f"start_authorization failed: {resp.status_code} {resp.text[:500]}"
             )
         return resp.json()
 
@@ -40,6 +43,6 @@ class OpenConnectorAdminClient:
             resp = await http.get(f"{self._base_url}/api/connections", headers=self._headers)
         if resp.status_code // 100 != 2:
             raise OpenConnectorAdminError(
-                f"list_connections failed: {resp.status_code} {resp.json()}"
+                f"list_connections failed: {resp.status_code} {resp.text[:500]}"
             )
         return resp.json()
