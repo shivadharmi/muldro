@@ -15,6 +15,14 @@ from src.adapter.enforcement import (
     force_connection_name,
     strip_secrets,
 )
+from src.integrations.gateway_actions import GMAIL_ACTIONS
+
+
+def test_gmail_profile_is_derived_from_the_table():
+    assert GMAIL_PROFILE.action_allowlist == frozenset(a.action_id for a in GMAIL_ACTIONS)
+    for a in GMAIL_ACTIONS:
+        assert GMAIL_PROFILE.action_required_capability[a.action_id] == a.capability
+
 
 CURATED = {
     "gmail.get_profile": "email.read",

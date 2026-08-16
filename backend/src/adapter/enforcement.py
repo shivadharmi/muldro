@@ -13,23 +13,10 @@ import re
 from dataclasses import dataclass
 from types import MappingProxyType
 
-GMAIL_ACTION_ALLOWLIST = frozenset(
-    {
-        "gmail.get_profile",  # zero-input: returns the connected account + counts
-        "gmail.fetch_emails",  # list / search messages
-        "gmail.search_threads",
-        "gmail.get_message",
-        "gmail.list_threads",
-        "gmail.list_labels",
-        "gmail.send_email",
-    }
-)
+from src.integrations.gateway_actions import GMAIL_ACTIONS
 
-# Each allowlisted action's REQUIRED Jarvis capability. The allowlist proves an
-# action is a known Gmail action; this map proves the *caller* was authorized
-# for it. ``ensure_capability_allowed`` rejects any call whose principal was
-# not granted the mapped capability, so a read-scoped token can never invoke
-# ``gmail.send_email``. Fail-closed: an action absent from this map is denied.
+# Derived from the single source of truth (gateway_actions.GMAIL_ACTIONS) so the
+# allowlist, capability map, warm-start schemas, and catalog seeds never drift.
 #
 # NOTE: this boundary check is only as tight as the minted token. Today
 # ``session_pool._resolve_auth`` mints a blanket ``["email.search","email.send"]``
@@ -38,15 +25,8 @@ GMAIL_ACTION_ALLOWLIST = frozenset(
 # the current step needs) for this gate to be load-bearing. Tracked as part of
 # the connect-flow / per-step-JWT work; enforcing here is the correct boundary
 # regardless of how the token is currently scoped.
-ACTION_REQUIRED_CAPABILITY = {
-    "gmail.get_profile": "email.read",
-    "gmail.fetch_emails": "email.search",
-    "gmail.search_threads": "email.search",
-    "gmail.get_message": "email.read",
-    "gmail.list_threads": "email.list",
-    "gmail.list_labels": "email.list",
-    "gmail.send_email": "email.send",
-}
+GMAIL_ACTION_ALLOWLIST = frozenset(a.action_id for a in GMAIL_ACTIONS)
+ACTION_REQUIRED_CAPABILITY = {a.action_id: a.capability for a in GMAIL_ACTIONS}
 
 
 @dataclass(frozen=True)
