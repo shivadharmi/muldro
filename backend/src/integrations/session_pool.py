@@ -180,7 +180,7 @@ class UserMCPSessionPool:
                 config["env"] = dict(config["env"])
 
             # Resolve auth
-            auth = await self._resolve_auth(server_name, user_id, config)
+            auth = await self._resolve_auth(server_name, user_id, config, workspace_id=workspace_id)
             bound_token: str | None = None
             if auth is not None and isinstance(auth, BearerAuth):
                 bound_token = (
@@ -798,9 +798,28 @@ class UserMCPSessionPool:
         server_name: str,
         user_id: str,
         config: dict,
+        workspace_id: str = "",
     ) -> BearerAuth | str | None:
         """Resolve authentication for a server connection."""
         auth_provider = config.get("auth_provider", "none")
+
+        if auth_provider == "platform_jwt":
+            # Gmail gateway slice: mint a fresh short-lived platform JWT for the
+            # ToolHive vMCP instead of resolving a stored OAuth/static token. The
+            # JWT's tenant_id MUST match how connection_map rows are keyed (the
+            # workspace_id) so the downstream adapter can resolve the caller's
+            # connection. Falls back to user_id only when workspace_id is absent
+            # (the one-user-one-workspace invariant).
+            from src.orchestrator.platform_jwt import mint_platform_jwt
+
+            tenant = workspace_id or user_id
+            token = mint_platform_jwt(
+                principal_id=user_id,
+                tenant_id=tenant,
+                workspace_id=tenant,
+                capabilities=["email.search", "email.send"],
+            )
+            return BearerAuth(token=token)
 
         if auth_provider == "none":
             return None
