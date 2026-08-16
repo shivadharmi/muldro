@@ -17,7 +17,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.adapter.connection_resolver import resolve_connection
-from src.adapter.enforcement import ensure_action_allowed, force_connection_name, strip_secrets
+from src.adapter.enforcement import (
+    ensure_action_allowed,
+    ensure_capability_allowed,
+    force_connection_name,
+    strip_secrets,
+)
 from src.adapter.identity import verify_principal
 from src.adapter.openconnector_client import call_openconnector
 from src.models.connection_map import ConnectionMap
@@ -57,7 +62,10 @@ async def handle_execute_action(db: AsyncSession, *, token: str, args: dict) -> 
     """Six-step enforcement for one ``execute_action`` call (the sole tenant boundary)."""
     principal = verify_principal(token)  # 1. identity (never from args)
     action_id = args.get("actionId", "")
-    ensure_action_allowed(action_id)  # 5. allowlist actionId (fail fast)
+    ensure_action_allowed(action_id)  # 5a. allowlist actionId (fail fast)
+    ensure_capability_allowed(  # 5b. principal authorized for THIS action
+        action_id, principal.capabilities
+    )
     forced = await resolve_connection(  # 2. resolve OWNED connection
         db,
         principal,
