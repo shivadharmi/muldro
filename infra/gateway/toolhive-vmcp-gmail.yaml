@@ -24,17 +24,18 @@
 #      struct either way. See:
 #      https://docs.stacklok.com/toolhive/guides-vmcp/local-cli
 #
-# 2. TOOL ALLOWLIST INCLUDES A TOOL THE ADAPTER DOES NOT EXPOSE:
-#      `search_actions` is listed below because the task spec for this file
-#      named exactly three tools (execute_action, list_connections,
-#      search_actions). The Connection Context Adapter
-#      (backend/run_adapter.py) currently implements only TWO MCP tools —
-#      `execute_action` and `list_connections`. `search_actions` is an
-#      OpenConnector-native tool (see spike-findings.md §4) that the adapter
-#      does not proxy. Filtering it in here has no effect today (there is
-#      nothing behind it to allow) and is harmless, but it does not add real
-#      capability until/unless the adapter grows a `search_actions` passthrough.
-#      Confirm intent before relying on it; drop it if it was a mistake.
+# 2. NAMED PER-ACTION TOOL SURFACE (execute_action / search_actions NOT EXPOSED):
+#      The Connection Context Adapter (backend/run_adapter.py) exposes named
+#      per-action gmail tools (gmail.get_profile, gmail.fetch_emails,
+#      gmail.search_threads, gmail.get_message, gmail.list_threads,
+#      gmail.list_labels, gmail.send_email) plus `list_connections`, rather
+#      than a single generic `execute_action` tool. `execute_action` remains
+#      implemented on the adapter directly (useful for ops/debug callers that
+#      talk to the adapter without going through the vMCP), but it is
+#      deliberately NOT included in the vMCP filter/Cedar allowlist below —
+#      only the named tools are exposed through this vMCP. `search_actions` is
+#      an OpenConnector-native tool (see spike-findings.md §4) that the
+#      adapter has never proxied and remains out of scope here.
 #
 # 3. `issuer` IS DELIBERATELY NOT A URL:
 #      Jarvis's platform-JWT minter (src/orchestrator/platform_jwt.py) sets
@@ -92,13 +93,18 @@ spec:
     aggregation:
       # Single backend — no tool-name collisions possible, so no
       # conflictResolution prefixing is configured (avoids renaming
-      # execute_action/list_connections/search_actions unnecessarily).
+      # list_connections/gmail.* tools unnecessarily).
       tools:
         - workload: connection-adapter  # VERIFY key name — see caveat 5 above
           filter:
-            - execute_action
             - list_connections
-            - search_actions  # not yet implemented by the adapter — see caveat 2 above
+            - gmail.get_profile
+            - gmail.fetch_emails
+            - gmail.search_threads
+            - gmail.get_message
+            - gmail.list_threads
+            - gmail.list_labels
+            - gmail.send_email
 
     operational:
       failureHandling:
@@ -136,9 +142,14 @@ spec:
             )
             when {
               resource.name in [
-                "execute_action",
                 "list_connections",
-                "search_actions"
+                "gmail.get_profile",
+                "gmail.fetch_emails",
+                "gmail.search_threads",
+                "gmail.get_message",
+                "gmail.list_threads",
+                "gmail.list_labels",
+                "gmail.send_email"
               ]
             };
 
