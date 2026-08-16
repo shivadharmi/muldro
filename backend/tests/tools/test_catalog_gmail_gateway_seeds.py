@@ -1,25 +1,23 @@
+from src.integrations.gateway_actions import GMAIL_ACTIONS
+from src.integrations.gateway_naming import action_id_to_tool_name
 from src.tools.catalog import EXTERNAL_TOOL_SEEDS
 
-BY_NAME = {s.name: s for s in EXTERNAL_TOOL_SEEDS}
-
-EXPECTED = {
-    "gmail.get_profile": ("email.read", "low", False),
-    "gmail.fetch_emails": ("email.search", "low", False),
-    "gmail.search_threads": ("email.search", "low", False),
-    "gmail.get_message": ("email.read", "low", False),
-    "gmail.list_threads": ("email.list", "low", False),
-    "gmail.list_labels": ("email.list", "low", False),
-    "gmail.send_email": ("email.send", "high", True),
-}
+BY = {s.name: s for s in EXTERNAL_TOOL_SEEDS}
 
 
-def test_gmail_gateway_seeds_present_with_capabilities():
-    for name, (cap, risk, approval) in EXPECTED.items():
-        s = BY_NAME[name]
-        assert (s.capability, s.risk_level, s.requires_approval) == (cap, risk, approval)
-        assert s.server == "google-workspace"
+def test_gmail_gateway_seeds_are_derived_agent_legal_names():
+    for a in GMAIL_ACTIONS:
+        name = action_id_to_tool_name(a.action_id)
+        assert name in BY, name
+        s = BY[name]
+        assert (s.capability, s.server) == (a.capability, "google-workspace")
+        assert (s.risk_level, s.requires_approval) == (a.risk, a.requires_approval)
+        assert "." not in s.name
 
 
-def test_native_gmail_seeds_are_retained():
-    assert "search_gmail_messages" in BY_NAME
-    assert "send_gmail_message" in BY_NAME
+def test_no_dotted_gmail_seed_names_remain():
+    assert not any(s.name.startswith("gmail.") for s in EXTERNAL_TOOL_SEEDS)
+
+
+def test_native_gmail_seeds_retained():
+    assert "search_gmail_messages" in BY and "send_gmail_message" in BY

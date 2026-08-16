@@ -16,6 +16,8 @@ from dataclasses import dataclass
 
 from pydantic import BaseModel
 
+from src.integrations.gateway_actions import GMAIL_ACTIONS
+from src.integrations.gateway_naming import action_id_to_tool_name
 from src.tools.schemas import (
     AddToBriefInput,
     ApproveActionInput,
@@ -459,17 +461,6 @@ EXTERNAL_TOOL_SEEDS: list[ExternalToolSeed] = [
     _ext("list_calendars", "calendar.list", "google-workspace", "low", False, True),
     _ext("manage_event", "calendar.create", "google-workspace", "medium", True, True),
     _ext("query_freebusy", "calendar.get", "google-workspace", "low", False, True),
-    # google-workspace via ToolHive+OpenConnector gateway (native OC actionIds).
-    # AUGMENTS the native names above: same server, so the schema-presence gate in
-    # tool_executor serves whichever set the flag-selected backend actually offers.
-    # These seeds are the hand-authored verb->capability+risk policy layer (north-star).
-    _ext("gmail.get_profile", "email.read", "google-workspace", "low", False, True),
-    _ext("gmail.fetch_emails", "email.search", "google-workspace", "low", False, True),
-    _ext("gmail.search_threads", "email.search", "google-workspace", "low", False, True),
-    _ext("gmail.get_message", "email.read", "google-workspace", "low", False, True),
-    _ext("gmail.list_threads", "email.list", "google-workspace", "low", False, True),
-    _ext("gmail.list_labels", "email.list", "google-workspace", "low", False, True),
-    _ext("gmail.send_email", "email.send", "google-workspace", "high", True, True),
     # github (22 tools, verified=False)
     _ext("issue_write", "issue.create", "github", "medium", True, False),
     _ext("issue_read", "issue.get", "github", "low", False, False),
@@ -564,6 +555,22 @@ EXTERNAL_TOOL_SEEDS: list[ExternalToolSeed] = [
     _ext("addWorklogToJiraIssue", "issue.update", "atlassian", "medium", True, False),
     # _composite (1 tool, verified=False)
     _ext("web_search", "search.web", "_composite", "low", False, False),
+]
+
+# google-workspace via ToolHive+OpenConnector gateway — DERIVED from the single
+# source of truth (gateway_actions.GMAIL_ACTIONS) with the agent-legal naming
+# contract (dots are illegal in Anthropic/OpenAI tool names). Names MUST match
+# what the adapter warm-start exposes (action_id_to_tool_name).
+EXTERNAL_TOOL_SEEDS += [
+    _ext(
+        action_id_to_tool_name(a.action_id),
+        a.capability,
+        "google-workspace",
+        a.risk,
+        a.requires_approval,
+        True,
+    )
+    for a in GMAIL_ACTIONS
 ]
 
 
