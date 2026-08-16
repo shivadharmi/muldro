@@ -24,6 +24,11 @@ services:
     environment:
       JARVIS_OPENCONNECTOR_MCP_URL: http://openconnector:3000/mcp
       JARVIS_OPENCONNECTOR_RUNTIME_TOKEN: ${OOMOL_CONNECT_RUNTIME_TOKEN:?set it}
+      # Run the adapter under the no-auth `hackernews` profile so the automated
+      # e2e can drive a real action through the full boundary (Gmail's OAuth
+      # can't be headless). Selects the code-defined profile in
+      # src/adapter/enforcement.py; the allowlist is not env-injected.
+      JARVIS_GATEWAY_PROVIDER: hackernews
       JARVIS_PLATFORM_JWT_PRIVATE_PEM: ${JARVIS_PLATFORM_JWT_PRIVATE_PEM:?set it}
       # The adapter reads connection_map from Jarvis's EXISTING Postgres — this
       # compose does NOT run a database. Point this at the SAME DB the test
