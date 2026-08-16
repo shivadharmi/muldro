@@ -14,3 +14,12 @@ def test_returns_none_when_flag_off():
 def test_unknown_server_returns_none():
     assert gateway_oc_provider("slack", gmail_via_gateway=True) is None
     assert gateway_oc_provider("github", gmail_via_gateway=True) is None
+
+
+def test_integration_status_dataclass_has_oc_provider_field():
+    # Wiring guard: the DTO carries the field the frontend branches on.
+    from dataclasses import fields
+
+    from src.services.integration_status import IntegrationStatus
+
+    assert "oc_provider" in {f.name for f in fields(IntegrationStatus)}
