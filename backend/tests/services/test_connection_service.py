@@ -168,3 +168,47 @@ async def test_confirm_connection_stays_pending_when_not_configured():
     finally:
         await _cleanup(factory, pid, alias)
         await engine.dispose()
+
+
+async def test_begin_connection_does_not_demote_active_connection():
+    """A stray re-begin on an already-active connection must not demote it."""
+    factory, engine = make_test_db()
+    pid = f"usr_{ULID()}"
+    alias = "work"
+    try:
+        await seed_user_workspace(factory, pid, TEST_WORKSPACE_ID)
+        name = mint_connection_name(TEST_WORKSPACE_ID, pid, "gmail", alias)
+        async with factory() as db:
+            db.add(
+                ConnectionMap(
+                    tenant_id=TEST_WORKSPACE_ID,
+                    workspace_id=TEST_WORKSPACE_ID,
+                    principal_id=pid,
+                    provider_id="gmail",
+                    connection_id=name,
+                    connection_status="active",
+                    account_alias=alias,
+                )
+            )
+            await db.commit()
+
+        admin = AsyncMock()
+        admin.start_authorization = AsyncMock(
+            return_value={"service": "gmail", "authorizationUrl": "https://consent", "state": "s"}
+        )
+        svc = ConnectionService(admin_client=admin)
+        async with factory() as db:
+            url = await svc.begin_connection(
+                db, workspace_id=TEST_WORKSPACE_ID, principal_id=pid, provider="gmail", alias=alias
+            )
+            await db.commit()
+
+        assert url == "https://consent"  # re-auth URL still issued
+        async with factory() as db:
+            row = (
+                await db.execute(select(ConnectionMap).where(ConnectionMap.principal_id == pid))
+            ).scalar_one()
+        assert row.connection_status == "active"  # NOT demoted to pending
+    finally:
+        await _cleanup(factory, pid, alias)
+        await engine.dispose()

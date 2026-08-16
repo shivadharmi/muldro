@@ -25,6 +25,12 @@ services:
       JARVIS_OPENCONNECTOR_MCP_URL: http://openconnector:3000/mcp
       JARVIS_OPENCONNECTOR_RUNTIME_TOKEN: ${OOMOL_CONNECT_RUNTIME_TOKEN:?set it}
       JARVIS_PLATFORM_JWT_PRIVATE_PEM: ${JARVIS_PLATFORM_JWT_PRIVATE_PEM:?set it}
+      # The adapter reads connection_map from Jarvis's EXISTING Postgres — this
+      # compose does NOT run a database. Point this at the SAME DB the test
+      # process (and Jarvis) use, addressed from inside the container:
+      # host.docker.internal:5432 on Mac/Windows (a bridge/LAN IP on Linux).
+      # The test process seeds connection_map on localhost; the adapter must see
+      # those rows, so both must resolve to one database.
       JARVIS_DATABASE_URL: ${JARVIS_DATABASE_URL:?set it}
     depends_on:
       - openconnector

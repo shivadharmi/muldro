@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -11,6 +11,19 @@ from src.models.database import get_db
 from src.services.connection_service import ConnectionService
 
 router = APIRouter(prefix="/v1/connections", tags=["connections"])
+
+
+def _connection_service() -> ConnectionService:
+    """Construct the service, mapping an unconfigured gateway to a clean 503.
+
+    ConnectionService() raises RuntimeError when openconnector_admin_url/token
+    are unset — an ops/config fault, not a client error. Surface it as 503
+    instead of a raw 500.
+    """
+    try:
+        return ConnectionService()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail="connection service not configured") from exc
 
 
 class BeginConnectionRequest(BaseModel):
@@ -33,7 +46,7 @@ async def begin(
     user_id: str = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
 ) -> BeginConnectionResponse:
-    svc = ConnectionService()
+    svc = _connection_service()
     url = await svc.begin_connection(
         db,
         workspace_id=workspace_id,
@@ -52,7 +65,7 @@ async def confirm(
     user_id: str = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
 ) -> ConfirmConnectionResponse:
-    svc = ConnectionService()
+    svc = _connection_service()
     active = await svc.confirm_connection(
         db,
         workspace_id=workspace_id,

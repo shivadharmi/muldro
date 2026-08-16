@@ -17,7 +17,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.config.settings import get_settings
 from src.models.connection_map import ConnectionMap
-from src.services.openconnector_admin_client import OpenConnectorAdminClient
+from src.services.openconnector_admin_client import (
+    OpenConnectorAdminClient,
+    OpenConnectorAdminError,
+)
 
 
 def mint_connection_name(tenant_id: str, principal_id: str, provider: str, alias: str) -> str:
@@ -50,6 +53,11 @@ class ConnectionService:
         """Mint the name, start OAuth authorization, upsert pending, return the consent URL."""
         name = mint_connection_name(workspace_id, principal_id, provider, alias)
         result = await self._admin.start_authorization(service=provider, connection_name=name)
+        authorization_url = result.get("authorizationUrl")
+        if not authorization_url:
+            raise OpenConnectorAdminError(
+                f"authorization response missing authorizationUrl: {result}"
+            )
 
         row = (
             await db.execute(
@@ -73,10 +81,14 @@ class ConnectionService:
                     account_alias=alias,
                 )
             )
-        else:
+        elif row.connection_status != "active":
+            # Restart a pending/failed connection. An ALREADY-ACTIVE row is left
+            # untouched: a stray re-begin (double-click, re-auth) must not demote
+            # a live connection to pending and make the resolver start denying it.
+            # (connection_id is deterministic, so it never changes for this key.)
             row.connection_id = name
             row.connection_status = "pending"
-        return result["authorizationUrl"]
+        return authorization_url
 
     async def confirm_connection(
         self,
@@ -94,7 +106,10 @@ class ConnectionService:
         name = mint_connection_name(workspace_id, principal_id, provider, alias)
         connections = await self._admin.list_connections()
         configured = any(
-            c.get("connectionName") == name and c.get("configured") is True for c in connections
+            c.get("connectionName") == name
+            and c.get("configured") is True
+            and c.get("service", provider) == provider
+            for c in connections
         )
         row = (
             await db.execute(
