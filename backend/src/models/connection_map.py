@@ -1,10 +1,10 @@
 """ConnectionMap — maps a workspace principal to a namespaced external connection.
 
 Records which (tenant, principal) owns which provider connection — e.g. a Gmail
-account reached through a namespaced Composio/Pipedream-style `connectionName`
-of the form `{workspace_id}:{user_id}:{provider}:{alias}`. `credential_reference`
-is an opaque pointer into the real secret store (never a raw token) — this table
-is metadata only.
+account reached through a namespaced `connectionName` of the canonical form
+`{tenant_id}:{principal_id}:{provider}:{account_alias}` (spec §6.3/§10).
+`credential_reference` is an opaque pointer into the real secret store (never a
+raw token) — this table is metadata only.
 """
 
 from sqlalchemy import ARRAY, ForeignKey, String, UniqueConstraint
@@ -30,7 +30,7 @@ class ConnectionMap(Base, TimestampMixin):
     principal_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     provider_id: Mapped[str] = mapped_column(String(64), nullable=False)
     provider_account_id: Mapped[str | None] = mapped_column(String(256))
-    # Namespaced connectionName, e.g. "{workspace_id}:{user_id}:{provider}:{alias}".
+    # Namespaced connectionName, e.g. "{tenant_id}:{principal_id}:{provider}:{account_alias}".
     connection_id: Mapped[str] = mapped_column(String(512), nullable=False)
     # Opaque pointer into the real secret store — NEVER a token/credential value.
     credential_reference: Mapped[str | None] = mapped_column(String(512))

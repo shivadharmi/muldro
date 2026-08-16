@@ -8,13 +8,15 @@ needs Jarvis's private key.
 
 Key material: prefers `settings.platform_jwt_private_pem` (a PEM-encoded
 RSA private key) when configured; otherwise generates an ephemeral RSA-2048
-key at import time for local/dev use. The `platform_jwt_private_pem` field
-is owned by a parallel task, so it is read defensively via `getattr` in case
-it has not landed on `Settings` yet.
+key at import time for local/dev use and logs a warning. An ephemeral key is
+single-process only (tokens are unverifiable across processes/restarts), so a
+stable PEM is required before any multi-replica/HA deployment — a hard startup
+guard for that is a GA prerequisite (spec §12).
 """
 
 from __future__ import annotations
 
+import logging
 import time
 import uuid
 from typing import Any
@@ -25,6 +27,8 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 
 from src.config.settings import get_settings
 
+logger = logging.getLogger(__name__)
+
 ISSUER = "jarvis-auth"
 DEFAULT_AUDIENCE = "toolhive-vmcp"
 KEY_ID = "jarvis-platform-1"
@@ -34,12 +38,11 @@ TOKEN_TTL_SECONDS = 300
 def _load_or_generate_private_key() -> rsa.RSAPrivateKey:
     """Load the configured RSA private key, or generate an ephemeral one.
 
-    Reads `settings.platform_jwt_private_pem` defensively via `getattr`
-    since that field is being added by a parallel task and may not exist
-    on `Settings` yet.
+    Reads `settings.platform_jwt_private_pem`; when unset, falls back to an
+    ephemeral key and logs a warning (dev/single-process only).
     """
     settings = get_settings()
-    pem = getattr(settings, "platform_jwt_private_pem", None)
+    pem = settings.platform_jwt_private_pem
     if pem:
         key_bytes = pem.encode("utf-8") if isinstance(pem, str) else pem
         private_key = serialization.load_pem_private_key(key_bytes, password=None)
@@ -48,8 +51,13 @@ def _load_or_generate_private_key() -> rsa.RSAPrivateKey:
         return private_key
 
     # Dev fallback: ephemeral key, regenerated every process start. Tokens
-    # minted by one process cannot be verified by another in this mode —
-    # acceptable only outside production, where the PEM setting is required.
+    # minted by one process cannot be verified by another in this mode. Warn
+    # loudly; a hard startup guard for non-dev is a GA prerequisite (spec §12).
+    logger.warning(
+        "platform_jwt_private_pem is not set — using an ephemeral RSA key. Tokens are "
+        "unverifiable across processes/restarts; set JARVIS_PLATFORM_JWT_PRIVATE_PEM before "
+        "any multi-replica or production deployment."
+    )
     return rsa.generate_private_key(public_exponent=65537, key_size=2048)
 
 

@@ -57,3 +57,28 @@ def test_strip_secrets_removes_nested_secret_keys_but_keeps_benign_fields():
     assert "authorization" not in cleaned["messages"][0]
     assert cleaned["messages"][0]["id"] == "msg_1"
     assert cleaned["messages"][1] == {"id": "msg_2", "subject": "hello"}
+
+
+def test_strip_secrets_catches_camelcase_and_kebab_variants():
+    # OpenConnector speaks camelCase (spike): a snake_case-only matcher would
+    # leak these. Normalized matching must drop them all.
+    obj = {
+        "accessToken": "a",
+        "refreshToken": "b",
+        "idToken": "c",
+        "clientSecret": "d",
+        "apiKey": "e",
+        "access-token": "f",
+        "keep": "ok",
+    }
+    cleaned = strip_secrets(obj)
+    assert cleaned == {"keep": "ok"}
+
+
+def test_force_connection_name_rejects_empty_forced_name():
+    # An empty connectionName makes OpenConnector fall back to its default
+    # connection — a cross-tenant path in the shared-instance model. Fail closed.
+    with pytest.raises(ValueError):
+        force_connection_name({"actionId": "gmail.search"}, "")
+    with pytest.raises(ValueError):
+        force_connection_name({"actionId": "gmail.search"}, "   ")
