@@ -14,14 +14,16 @@ from src.adapter.enforcement import (
 
 
 def test_force_connection_name_overwrites_attacker_supplied_value_and_leaves_input_untouched():
-    input_args = {"connection_name": "attacker_controlled", "query": "is:unread"}
+    # OpenConnector's execute_action reads the camelCase key `connectionName`
+    # (confirmed via the Task 0 spike), so the forced value must land there.
+    input_args = {"connectionName": "attacker_controlled", "query": "is:unread"}
 
     result = force_connection_name(input_args, "gateway_forced_connection")
 
-    assert result["connection_name"] == "gateway_forced_connection"
+    assert result["connectionName"] == "gateway_forced_connection"
     assert result["query"] == "is:unread"
     # Original dict must be untouched (immutability / no mutation of caller's data).
-    assert input_args["connection_name"] == "attacker_controlled"
+    assert input_args["connectionName"] == "attacker_controlled"
 
 
 def test_ensure_action_allowed_permits_allowlisted_actions():

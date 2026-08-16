@@ -45,14 +45,15 @@ def ensure_action_allowed(action_id: str) -> None:
 
 
 def force_connection_name(args: dict, forced_name: str) -> dict:
-    """Return a copy of args with connection_name forced to forced_name.
+    """Return a copy of args with ``connectionName`` forced to forced_name.
 
-    The input dict is never mutated — this prevents a caller-supplied
-    connection_name (e.g. attacker-controlled tool args) from ever reaching
-    the underlying connector call.
+    OpenConnector's ``execute_action`` tool uses the camelCase key
+    ``connectionName`` (confirmed via the Task 0 spike). The input dict is
+    never mutated — this prevents a caller-supplied ``connectionName`` (e.g.
+    attacker-controlled tool args) from ever reaching the connector call.
     """
     copied = copy.deepcopy(args)
-    copied["connection_name"] = forced_name
+    copied["connectionName"] = forced_name
     return copied
 
 
