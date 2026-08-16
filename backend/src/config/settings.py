@@ -227,6 +227,8 @@ class Settings(BaseSettings):
     toolhive_vmcp_url: str | None = None  # JARVIS_TOOLHIVE_VMCP_URL
     openconnector_mcp_url: str | None = None  # JARVIS_OPENCONNECTOR_MCP_URL
     openconnector_runtime_token: str | None = None  # JARVIS_OPENCONNECTOR_RUNTIME_TOKEN
+    openconnector_admin_url: str | None = None  # JARVIS_OPENCONNECTOR_ADMIN_URL
+    openconnector_admin_token: str | None = None  # JARVIS_OPENCONNECTOR_ADMIN_TOKEN
     platform_jwt_private_pem: str | None = None  # JARVIS_PLATFORM_JWT_PRIVATE_PEM
 
     @property

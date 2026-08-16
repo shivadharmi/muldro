@@ -26,3 +26,21 @@ def test_openconnector_runtime_token_defaults_none():
 
 def test_platform_jwt_private_pem_defaults_none():
     assert Settings().platform_jwt_private_pem is None
+
+
+def test_openconnector_admin_settings_default_none():
+    from src.config.settings import Settings
+
+    s = Settings(_env_file=None)
+    assert s.openconnector_admin_url is None
+    assert s.openconnector_admin_token is None
+
+
+def test_openconnector_admin_settings_from_env(monkeypatch):
+    monkeypatch.setenv("JARVIS_OPENCONNECTOR_ADMIN_URL", "http://oc:3000")
+    monkeypatch.setenv("JARVIS_OPENCONNECTOR_ADMIN_TOKEN", "admtok")
+    from src.config.settings import Settings
+
+    s = Settings(_env_file=None)
+    assert s.openconnector_admin_url == "http://oc:3000"
+    assert s.openconnector_admin_token == "admtok"
