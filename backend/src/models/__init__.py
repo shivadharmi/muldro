@@ -7,6 +7,7 @@ from src.models.base import Base
 from src.models.briefing_feedback import BriefingFeedback
 from src.models.briefings import Briefing
 from src.models.browser_sessions import BrowserAction
+from src.models.connection_map import ConnectionMap
 from src.models.conversations import Conversation, Message
 from src.models.dead_letter import DeadLetterEntry
 from src.models.engagement_history import EngagementHistory
@@ -101,6 +102,8 @@ __all__ = [
     "IntegrationAuditEvent",
     "EngagementHistory",
     "InteractionLog",
+    # Gateway adapter
+    "ConnectionMap",
     # Perception
     "PerceptionState",
     # Notifications

@@ -128,6 +128,61 @@ def pytest_pyfunc_call(pyfuncitem):
     return True
 
 
+def make_test_db():
+    """Real-Postgres session factory (NullPool) bound to ``get_settings().database_url``.
+
+    Thin wrapper over the ``create_async_engine(..., poolclass=NullPool)`` +
+    ``async_sessionmaker`` pattern used by the existing real-DB tests (see
+    ``tests/test_run_reconcile.py::_run_env``). Returns ``(factory, engine)`` —
+    callers are responsible for ``await engine.dispose()`` when done.
+    """
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+    from sqlalchemy.pool import NullPool
+
+    from src.config.settings import get_settings
+
+    engine = create_async_engine(get_settings().database_url, poolclass=NullPool)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    return factory, engine
+
+
+async def seed_user_workspace(factory, user_id: str, workspace_id: str) -> None:
+    """Seed the User -> Workspace -> WorkspaceMember FK chain for real-DB tests.
+
+    Idempotent (safe to call with ids that already exist, e.g. the fixed
+    ``TEST_USER_ID`` / ``TEST_WORKSPACE_ID`` constants) — checks for existing
+    rows before inserting so repeated test runs don't trip unique constraints.
+    """
+    from sqlalchemy import select
+
+    from src.models.users import User, Workspace, WorkspaceMember
+
+    async with factory() as db:
+        user = (await db.execute(select(User).where(User.user_id == user_id))).scalar_one_or_none()
+        if user is None:
+            db.add(User(user_id=user_id, email=f"{user_id}@example.com", display_name=user_id))
+
+        workspace = (
+            await db.execute(select(Workspace).where(Workspace.workspace_id == workspace_id))
+        ).scalar_one_or_none()
+        if workspace is None:
+            db.add(Workspace(workspace_id=workspace_id, name=workspace_id, owner_user_id=user_id))
+        await db.flush()
+
+        member = (
+            await db.execute(
+                select(WorkspaceMember).where(
+                    WorkspaceMember.workspace_id == workspace_id,
+                    WorkspaceMember.user_id == user_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if member is None:
+            db.add(WorkspaceMember(workspace_id=workspace_id, user_id=user_id, role="owner"))
+
+        await db.commit()
+
+
 def iter_app_routes(routes, _prefix=""):
     """Yield ``(full_path, route)`` for every leaf route, recursing into
     included routers / mounts.

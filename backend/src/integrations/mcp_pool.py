@@ -13,6 +13,7 @@ import os
 from dataclasses import dataclass, field
 from typing import Any
 
+from src.config.settings import get_settings
 from src.integrations.session_pool import UserMCPSessionPool
 
 logger = logging.getLogger(__name__)
@@ -346,6 +347,22 @@ class WorkspaceMCPPool:
 
 def _installation_to_config(inst: Any) -> dict:
     """Convert a IntegrationInstallation ORM object to a config dict."""
+    settings = get_settings()
+    if (
+        settings.gmail_via_gateway
+        and inst.server_name == "google-workspace"
+        and settings.toolhive_vmcp_url
+    ):
+        # Gmail gateway slice: route the google-workspace installation at the
+        # ToolHive vMCP (fronting an OpenConnector MCP server) instead of the
+        # native local google-workspace-mcp process. auth_provider="platform_jwt"
+        # is resolved in UserMCPSessionPool._resolve_auth (Task 12).
+        return {
+            "transport": "streamable-http",
+            "auth_provider": "platform_jwt",
+            "url": settings.toolhive_vmcp_url,
+        }
+
     config: dict = {
         "transport": inst.transport,
         "auth_provider": inst.auth_provider or "none",
