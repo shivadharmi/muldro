@@ -21,6 +21,26 @@ GMAIL_ACTION_ALLOWLIST = frozenset(
     }
 )
 
+# Each allowlisted action's REQUIRED Jarvis capability. The allowlist proves an
+# action is a known Gmail action; this map proves the *caller* was authorized
+# for it. ``ensure_capability_allowed`` rejects any call whose principal was
+# not granted the mapped capability, so a read-scoped token can never invoke
+# ``gmail.send``. Fail-closed: an action absent from this map is denied.
+#
+# NOTE: this boundary check is only as tight as the minted token. Today
+# ``session_pool._resolve_auth`` mints a blanket ``["email.search","email.send"]``
+# for every gateway JWT, so the send-vs-read distinction does not yet bite in
+# practice — the mint must become step-scoped (carrying only the capabilities
+# the current step needs) for this gate to be load-bearing. Tracked as part of
+# the connect-flow / per-step-JWT work; enforcing here is the correct boundary
+# regardless of how the token is currently scoped.
+ACTION_REQUIRED_CAPABILITY = {
+    "gmail.search": "email.search",
+    "gmail.get_message": "email.read",
+    "gmail.list_messages": "email.list",
+    "gmail.send": "email.send",
+}
+
 # Secret key names in NORMALIZED form: lowercased with every non-alphanumeric
 # character removed. strip_secrets normalizes each response key the same way,
 # so snake_case, camelCase, and kebab-case variants all collapse to one form
@@ -55,10 +75,29 @@ class ActionNotAllowed(Exception):  # noqa: N818 - name fixed by adapter interfa
     """Raised when an action is not in the Gmail gateway's allowlist."""
 
 
+class CapabilityDenied(Exception):  # noqa: N818 - matches ActionNotAllowed/ConnectionDenied
+    """Raised when the principal lacks the capability an action requires."""
+
+
 def ensure_action_allowed(action_id: str) -> None:
     """Raise ActionNotAllowed if action_id is not in the allowlist."""
     if action_id not in GMAIL_ACTION_ALLOWLIST:
         raise ActionNotAllowed(f"Action not allowed: {action_id}")
+
+
+def ensure_capability_allowed(action_id: str, capabilities: tuple[str, ...]) -> None:
+    """Raise CapabilityDenied unless the principal is authorized for action_id.
+
+    ``capabilities`` is the principal's granted capability list (from the
+    verified platform JWT). Fail-closed on two paths: an action with no
+    required-capability mapping is denied, and an action whose mapped
+    capability is not present in ``capabilities`` is denied.
+    """
+    required = ACTION_REQUIRED_CAPABILITY.get(action_id)
+    if required is None or required not in capabilities:
+        raise CapabilityDenied(
+            f"Principal not authorized for action {action_id!r} (requires capability {required!r})"
+        )
 
 
 def force_connection_name(args: dict, forced_name: str) -> dict:
