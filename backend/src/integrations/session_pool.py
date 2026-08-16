@@ -48,6 +48,28 @@ _STDIO_TOKEN_ENV_VARS: dict[str, str] = {
 # unusable and the user must reconnect (vs. "refresh_failed" which is transient).
 _PERMANENT_REAUTH_REASONS: frozenset[str] = frozenset({"no_token", "no_refresh_token", "revoked"})
 
+# Safety window before a bound platform JWT's expiry at which a cached session
+# is proactively rebuilt (Gmail gateway). Larger than any single tool call so a
+# call started just under the wire still completes on a valid bearer.
+_PLATFORM_JWT_REFRESH_MARGIN_SECONDS = 30
+
+
+def _platform_jwt_exp(token: str) -> float | None:
+    """Return a platform JWT's ``exp`` (epoch seconds) without verifying it.
+
+    Signature verification is unnecessary here — the token was just minted by
+    this process; we only need its expiry to decide when to rebuild the cached
+    session. Returns None if the token is unparseable or carries no ``exp``.
+    """
+    import jwt
+
+    try:
+        claims = jwt.decode(token, options={"verify_signature": False})
+    except Exception:
+        return None
+    exp = claims.get("exp")
+    return float(exp) if exp is not None else None
+
 
 @dataclass
 class SessionEntry:
@@ -66,6 +88,11 @@ class SessionEntry:
     # to a live Client" failures that manifest as Atlassian's generic
     # "We are having trouble..." error.
     bound_token: str | None = None
+    # Wall-clock (epoch seconds) expiry of the bound bearer, when it is a
+    # self-describing token (the platform JWT used by the Gmail gateway).
+    # Lets a cached session be rebuilt before its short-lived JWT expires,
+    # rather than reusing a dead bearer mid-turn. None for non-JWT bearers.
+    bound_token_exp: float | None = None
     # Name of the locally-managed MCP process this session uses (if any), so
     # every teardown path releases the process refcount exactly once.
     managed_server: str | None = None
@@ -157,6 +184,26 @@ class UserMCPSessionPool:
                     )
                     await self.refresh_session(server_name, user_id, workspace_id=workspace_id)
 
+        # Gmail gateway slice: a cached platform_jwt session holds a short-lived
+        # (300s) bearer minted at creation. Unlike OAuth, the JWT is not
+        # re-resolved on reuse, so a turn outliving the TTL would send an expired
+        # bearer and the gateway would reject the call. Rebuild the session once
+        # the bound JWT is within the refresh margin — the create path below
+        # mints a fresh token.
+        if auth_provider == "platform_jwt":
+            entry = self._sessions.get(key)
+            if (
+                entry
+                and entry.bound_token_exp is not None
+                and time.time() + _PLATFORM_JWT_REFRESH_MARGIN_SECONDS >= entry.bound_token_exp
+            ):
+                logger.info(
+                    "[mcp:session] platform JWT near expiry for %s/%s — rebuilding session",
+                    server_name,
+                    user_id,
+                )
+                await self.refresh_session(server_name, user_id, workspace_id=workspace_id)
+
         async with self._lock:
             entry = self._sessions.get(key)
             if entry:
@@ -182,12 +229,17 @@ class UserMCPSessionPool:
             # Resolve auth
             auth = await self._resolve_auth(server_name, user_id, config, workspace_id=workspace_id)
             bound_token: str | None = None
+            bound_token_exp: float | None = None
             if auth is not None and isinstance(auth, BearerAuth):
                 bound_token = (
                     auth.token.get_secret_value()
                     if hasattr(auth.token, "get_secret_value")
                     else str(auth.token)
                 )
+                # Only the platform JWT is self-describing; record its expiry so
+                # the reuse path above can rebuild before it dies.
+                if auth_provider == "platform_jwt" and bound_token:
+                    bound_token_exp = _platform_jwt_exp(bound_token)
 
             # Create Client
             transport = config.get("transport", "stdio")
@@ -267,6 +319,7 @@ class UserMCPSessionPool:
                 user_id=user_id,
                 tools=tool_mapping,
                 bound_token=bound_token,
+                bound_token_exp=bound_token_exp,
                 managed_server=managed_server,
             )
             self._sessions[key] = entry
