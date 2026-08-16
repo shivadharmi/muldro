@@ -11,6 +11,7 @@ from src.api.routes_artifacts import router as artifacts_router
 from src.api.routes_auth import router as auth_router
 from src.api.routes_briefings import router as briefings_router
 from src.api.routes_chat import router as chat_router
+from src.api.routes_connections import router as connections_router
 from src.api.routes_conversations import router as conversations_router
 from src.api.routes_events import router as events_router
 from src.api.routes_feedback import router as feedback_router
@@ -487,6 +488,7 @@ def create_app() -> FastAPI:
     # Integration platform
     app.include_router(integrations_router, tags=["integrations"])
     app.include_router(mcp_router, tags=["mcp"])
+    app.include_router(connections_router, tags=["connections"])
 
     # Runtime projections
     app.include_router(runtime_router, tags=["runtime"])

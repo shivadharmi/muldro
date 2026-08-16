@@ -10,6 +10,8 @@ connection identity, and secret-free payloads).
 
 import copy
 import re
+from dataclasses import dataclass
+from types import MappingProxyType
 
 # TODO: finalize against OpenConnector's Gmail catalog before wider rollout.
 GMAIL_ACTION_ALLOWLIST = frozenset(
@@ -40,6 +42,82 @@ ACTION_REQUIRED_CAPABILITY = {
     "gmail.list_messages": "email.list",
     "gmail.send": "email.send",
 }
+
+
+@dataclass(frozen=True)
+class GatewayProfile:
+    """The per-provider policy surface the adapter enforces for one instance.
+
+    An adapter instance serves exactly ONE provider (matching the per-provider
+    vMCP design). The profile bundles the three provider-specific values the
+    boundary needs: which provider connections are resolved, which actions are
+    allowlisted, and each action's required capability. These are CODE-defined
+    and reviewed — the active provider is *selected* by a setting, but the
+    allowlist itself is never env-injected (that would let ops widen the
+    boundary out-of-band).
+    """
+
+    provider_id: str
+    action_allowlist: frozenset[str]
+    action_required_capability: dict[str, str]
+
+    def __post_init__(self) -> None:
+        # Completeness invariant: every allowlisted action MUST have a required
+        # capability, or ``ensure_capability_allowed`` would deny it anyway —
+        # but catching it at construction turns a silent policy hole into an
+        # import-time failure. Then freeze the map (frozen=True only stops
+        # rebinding the attribute, not mutating the dict it points at).
+        missing = set(self.action_allowlist) - set(self.action_required_capability)
+        if missing:
+            raise ValueError(
+                f"gateway profile {self.provider_id!r}: allowlisted actions "
+                f"missing a required-capability mapping: {sorted(missing)}"
+            )
+        object.__setattr__(
+            self,
+            "action_required_capability",
+            MappingProxyType(dict(self.action_required_capability)),
+        )
+
+
+GMAIL_PROFILE = GatewayProfile(
+    provider_id="gmail",
+    action_allowlist=GMAIL_ACTION_ALLOWLIST,
+    action_required_capability=ACTION_REQUIRED_CAPABILITY,
+)
+
+# A no-auth provider used ONLY by the automated integration harness to drive a
+# real action through the full adapter over HTTP (Gmail's OAuth can't be
+# headless). Read-only; the sole allowlisted action is a public HN read.
+HACKERNEWS_ACTION_ALLOWLIST = frozenset(
+    {
+        "hackernews.get_ask_stories",
+        "hackernews.get_top_stories",
+    }
+)
+HACKERNEWS_ACTION_REQUIRED_CAPABILITY = {
+    "hackernews.get_ask_stories": "hackernews.read",
+    "hackernews.get_top_stories": "hackernews.read",
+}
+HACKERNEWS_PROFILE = GatewayProfile(
+    provider_id="hackernews",
+    action_allowlist=HACKERNEWS_ACTION_ALLOWLIST,
+    action_required_capability=HACKERNEWS_ACTION_REQUIRED_CAPABILITY,
+)
+
+PROVIDER_PROFILES: dict[str, GatewayProfile] = {
+    GMAIL_PROFILE.provider_id: GMAIL_PROFILE,
+    HACKERNEWS_PROFILE.provider_id: HACKERNEWS_PROFILE,
+}
+
+
+def get_gateway_profile(provider: str) -> GatewayProfile:
+    """Return the reviewed profile for ``provider``; fail-closed on unknown."""
+    profile = PROVIDER_PROFILES.get(provider)
+    if profile is None:
+        raise ValueError(f"No gateway profile for provider {provider!r}")
+    return profile
+
 
 # Secret key names in NORMALIZED form: lowercased with every non-alphanumeric
 # character removed. strip_secrets normalizes each response key the same way,
@@ -79,13 +157,17 @@ class CapabilityDenied(Exception):  # noqa: N818 - matches ActionNotAllowed/Conn
     """Raised when the principal lacks the capability an action requires."""
 
 
-def ensure_action_allowed(action_id: str) -> None:
-    """Raise ActionNotAllowed if action_id is not in the allowlist."""
-    if action_id not in GMAIL_ACTION_ALLOWLIST:
+def ensure_action_allowed(action_id: str, profile: GatewayProfile = GMAIL_PROFILE) -> None:
+    """Raise ActionNotAllowed if action_id is not in the profile's allowlist."""
+    if action_id not in profile.action_allowlist:
         raise ActionNotAllowed(f"Action not allowed: {action_id}")
 
 
-def ensure_capability_allowed(action_id: str, capabilities: tuple[str, ...]) -> None:
+def ensure_capability_allowed(
+    action_id: str,
+    capabilities: tuple[str, ...],
+    profile: GatewayProfile = GMAIL_PROFILE,
+) -> None:
     """Raise CapabilityDenied unless the principal is authorized for action_id.
 
     ``capabilities`` is the principal's granted capability list (from the
@@ -93,7 +175,7 @@ def ensure_capability_allowed(action_id: str, capabilities: tuple[str, ...]) -> 
     required-capability mapping is denied, and an action whose mapped
     capability is not present in ``capabilities`` is denied.
     """
-    required = ACTION_REQUIRED_CAPABILITY.get(action_id)
+    required = profile.action_required_capability.get(action_id)
     if required is None or required not in capabilities:
         raise CapabilityDenied(
             f"Principal not authorized for action {action_id!r} (requires capability {required!r})"
