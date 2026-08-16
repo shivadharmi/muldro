@@ -1,0 +1,104 @@
+# Gmail-gateway local dev stack.
+#
+# Scope: ONLY the two new services introduced by the ToolHive + OpenConnector
+# Gmail vertical slice (see docs/superpowers/specs/2026-08-16-toolhive-openconnector-gmail-slice-design.md):
+#   - openconnector       : shared OpenConnector instance — owns the Gmail
+#                            OAuth connection + credential storage (spec D2).
+#   - connection-adapter  : Jarvis's Connection Context Adapter
+#                            (backend/run_adapter.py) — the sole tenant-
+#                            isolation boundary in front of OpenConnector
+#                            (spec D3/D4, spec section 6).
+#
+# NOT started by this file (bring these up first, from the repo root):
+#   - Jarvis's own docker-compose.yml (postgres, redis, minio, qdrant, neo4j).
+#     The adapter reads Jarvis's EXISTING Postgres via JARVIS_DATABASE_URL —
+#     it does not run its own database. Make sure `alembic upgrade head` has
+#     already been applied there (the adapter does not run migrations).
+#   - ToolHive itself. ToolHive is a separate control plane/operator with its
+#     own install + lifecycle (see README.md "Manual follow-up") — this file
+#     only stands up the two backend services that ToolHive's
+#     VirtualMCPServer config (toolhive-vmcp-gmail.yaml) points at:
+#     http://connection-adapter:8100/mcp.
+#
+# Image tags are pinned everywhere in this file. Never move any of them to
+# `:latest` — see README.md for the pinned-version policy and rationale.
+#
+# Usage (from infra/gateway/):
+#   export OOMOL_CONNECT_ENCRYPTION_KEY=$(openssl rand -hex 32)
+#   export OOMOL_CONNECT_RUNTIME_TOKEN=$(openssl rand -hex 24)
+#   export JARVIS_PLATFORM_JWT_PRIVATE_PEM="$(cat /path/to/platform-jwt-key.pem)"
+#   export JARVIS_DATABASE_URL=postgresql+asyncpg://jarvis:jarvis@host.docker.internal:5432/jarvis
+#   docker compose up -d
+# See README.md for the full runbook and what each variable is for.
+
+services:
+  # OpenConnector — the shared multi-provider connector runtime. Owns the
+  # Gmail OAuth connection and its encrypted credential store (spike-findings.md
+  # §1-§2; spec §5.4). Single shared instance for this slice (spec D3) — the
+  # adapter, not this container, is the tenant boundary.
+  openconnector:
+    image: ghcr.io/oomol-lab/open-connector:v1.3.5
+    ports:
+      - "3000:3000"
+    environment:
+      # MANDATORY. OpenConnector will not start correctly without a stable
+      # encryption key (spec §10, mirrors settings.py:256-262's hard-fail
+      # pattern for Jarvis's own secrets). Losing/rotating this key without a
+      # migration plan orphans every stored connection — see README.md.
+      # Generate with: openssl rand -hex 32
+      OOMOL_CONNECT_ENCRYPTION_KEY: ${OOMOL_CONNECT_ENCRYPTION_KEY:?Set OOMOL_CONNECT_ENCRYPTION_KEY before starting the stack — see README.md}
+      # Gates POST /mcp — confirmed by spike-findings.md §3 (401 without it).
+      # Generate with: openssl rand -hex 24
+      OOMOL_CONNECT_RUNTIME_TOKEN: ${OOMOL_CONNECT_RUNTIME_TOKEN:?Set OOMOL_CONNECT_RUNTIME_TOKEN before starting the stack — see README.md}
+    volumes:
+      - oc-data:/app/data
+    restart: unless-stopped
+
+  # Connection Context Adapter — the ONLY tenant-isolation boundary in this
+  # slice (spec D3/D4, §6). Verifies the inbound platform JWT, resolves
+  # (tenant_id, principal_id, provider_id, account_alias) against the
+  # Jarvis-owned `connection_map` table, force-rewrites `connectionName`, and
+  # allowlists `actionId` before forwarding to OpenConnector with the static
+  # runtime token. Exposes exactly two MCP tools: execute_action,
+  # list_connections (backend/run_adapter.py) — registered as a backend in
+  # ToolHive's VirtualMCPServer (toolhive-vmcp-gmail.yaml).
+  connection-adapter:
+    build:
+      context: ../../backend
+      dockerfile: Dockerfile
+    # backend/Dockerfile's default ENTRYPOINT (docker-entrypoint.sh) hardcodes
+    # `alembic upgrade head && exec python run.py --worker` and does NOT
+    # forward "$@" — so a bare `command:` override below would silently be
+    # ignored and the container would run the full API+worker instead of the
+    # adapter. Clear the entrypoint so `command` actually takes effect.
+    entrypoint: []
+    command: ["python", "run_adapter.py"]
+    ports:
+      - "8100:8100"
+    environment:
+      # OpenConnector, reached over the compose network by service name —
+      # matches spike-findings.md's confirmed POST /mcp endpoint shape.
+      JARVIS_OPENCONNECTOR_MCP_URL: http://openconnector:3000/mcp
+      JARVIS_OPENCONNECTOR_RUNTIME_TOKEN: ${OOMOL_CONNECT_RUNTIME_TOKEN:?Set OOMOL_CONNECT_RUNTIME_TOKEN before starting the stack — see README.md}
+      # RSA private key (PEM) used to verify inbound platform JWTs — must be
+      # the SAME key Jarvis's API process uses to mint them
+      # (src/orchestrator/platform_jwt.py). Required: without it the adapter
+      # falls back to Jarvis's ephemeral-dev-key behavior, which is only
+      # verifiable within a single process and will NOT match tokens minted
+      # by the separately-running Jarvis API container.
+      JARVIS_PLATFORM_JWT_PRIVATE_PEM: ${JARVIS_PLATFORM_JWT_PRIVATE_PEM:?Set JARVIS_PLATFORM_JWT_PRIVATE_PEM before starting the stack — see README.md}
+      # Jarvis's existing Postgres (NOT started by this file — see header
+      # comment). Use host.docker.internal (Mac/Windows) or the host's LAN/
+      # bridge IP (Linux) if Postgres runs outside this compose network.
+      JARVIS_DATABASE_URL: ${JARVIS_DATABASE_URL:?Set JARVIS_DATABASE_URL before starting the stack — see README.md}
+      # Routes Gmail tool calls through the gateway path instead of the
+      # native google-workspace-mcp process (settings.py, spec §13). Default
+      # is False elsewhere in the app — this stack exists specifically to
+      # exercise the gateway path, so it's pinned on here.
+      JARVIS_GMAIL_VIA_GATEWAY: "true"
+    depends_on:
+      - openconnector
+    restart: unless-stopped
+
+volumes:
+  oc-data:

@@ -1,0 +1,154 @@
+# ============================================================================
+# ⚠ Verify field names against the ToolHive v0.43.0 VirtualMCPServer CRD
+# reference before applying — authored from docs, not validated against a
+# running operator.
+# ============================================================================
+#
+# Additional caveats found while authoring this (read before applying):
+#
+# 1. TWO DIFFERENT CONFIG SURFACES EXIST, WITH DIFFERENT WRAPPING:
+#      - Kubernetes: `kubectl apply` a `VirtualMCPServer` CUSTOM RESOURCE
+#        (apiVersion/kind/metadata/spec, as authored below) — requires a
+#        cluster + the ToolHive operator installed.
+#      - Local/no-cluster: `thv vmcp init/validate/serve --config vmcp.yaml`
+#        — a PLAIN YAML file with NO apiVersion/kind/metadata wrapper (just
+#        the body: name, groupRef, incomingAuth, outgoingAuth, aggregation,
+#        backends), run via the `thv` CLI, no Kubernetes involved.
+#      Nothing in this repo runs Kubernetes (infra/ is Terraform-for-AWS +
+#      docker-compose for local dev — see CLAUDE.md). This file is authored
+#      in the CRD shape because the task that produced it asked for the
+#      "VirtualMCPServer CRD" explicitly; if ToolHive actually runs here via
+#      the local CLI instead of a cluster, strip the apiVersion/kind/metadata
+#      wrapper and keep everything from `spec:` down — the inner field names
+#      (incomingAuth, outgoingAuth, aggregation, backends) are the same
+#      struct either way. See:
+#      https://docs.stacklok.com/toolhive/guides-vmcp/local-cli
+#
+# 2. TOOL ALLOWLIST INCLUDES A TOOL THE ADAPTER DOES NOT EXPOSE:
+#      `search_actions` is listed below because the task spec for this file
+#      named exactly three tools (execute_action, list_connections,
+#      search_actions). The Connection Context Adapter
+#      (backend/run_adapter.py) currently implements only TWO MCP tools —
+#      `execute_action` and `list_connections`. `search_actions` is an
+#      OpenConnector-native tool (see spike-findings.md §4) that the adapter
+#      does not proxy. Filtering it in here has no effect today (there is
+#      nothing behind it to allow) and is harmless, but it does not add real
+#      capability until/unless the adapter grows a `search_actions` passthrough.
+#      Confirm intent before relying on it; drop it if it was a mistake.
+#
+# 3. `issuer` IS DELIBERATELY NOT A URL:
+#      Jarvis's platform-JWT minter (src/orchestrator/platform_jwt.py) sets
+#      `iss: "jarvis-auth"` — a bare string, not the Jarvis API base URL.
+#      A "Jarvis API base" issuer (as one might assume by default) would NOT
+#      match the tokens Jarvis actually mints. Because `issuer` here is not a
+#      fetchable URL, OIDC discovery (`{issuer}/.well-known/openid-configuration`)
+#      cannot work — `jwksUrl` is set explicitly below to bypass discovery
+#      and point straight at Jarvis's real JWKS route
+#      (`src/api/routes_jwks.py`, mounted root-level, NOT under /v1).
+#
+# 4. OUTGOING-AUTH "PASSTHROUGH" FIELD NAME IS A GUESS:
+#      The design (spec §5.3) wants ToolHive to forward the caller's platform
+#      JWT to the adapter as-is (trusted first-party infra, not the
+#      spec-forbidden third-party token passthrough — spec D5/D6). The docs
+#      list backend auth strategy types including unauthenticated,
+#      header_injection, token_exchange, upstream_inject, aws_sts, but did
+#      not show a worked passthrough example. `upstream_inject` is used below
+#      as the best-fit guess — VERIFY this is the type that re-sends the
+#      inbound Authorization header unchanged, not one of the others.
+#
+# 5. `backends[].url` / `aggregation.tools[]` KEY SHAPE IS BEST-EFFORT:
+#      Confirmed from a real committed ToolHive example (not a doc summary):
+#      https://github.com/stacklok/toolhive/blob/main/examples/operator/virtual-mcps/vmcp_optimizer_all_options.yaml
+#      uses `incomingAuth.authzConfig.type: inline` + `inline.policies: [...]`
+#      for Cedar (used below) rather than a separate `MCPAuthzConfig`
+#      resource + `authzConfigRef` (also documented elsewhere, but requires a
+#      second CRD instance — out of scope for a single-file config here).
+#      The per-workload tool-filter key (`aggregation.tools[].filter`, keyed
+#      by `workload` name below) was reconstructed from a generated CRD API
+#      doc, not a worked example — verify the key name (`workload` vs `name`)
+#      against the real schema.
+#
+# ============================================================================
+
+apiVersion: toolhive.stacklok.dev/v1beta1
+kind: VirtualMCPServer
+metadata:
+  name: gmail-gateway-vmcp
+  namespace: default
+spec:
+  # No MCPGroup in this slice — there's exactly one backend (the adapter),
+  # registered directly below via the static `backends` list instead of
+  # discovering it through a Kubernetes MCPGroup/MCPServer.
+  backends:
+    - name: connection-adapter
+      # Reached by compose service name — see docker-compose.yml. If ToolHive
+      # itself is NOT on the same docker-compose network, replace this with a
+      # host-reachable URL (e.g. http://localhost:8100/mcp or
+      # http://host.docker.internal:8100/mcp).
+      url: http://connection-adapter:8100/mcp
+      transport: streamable-http
+
+  config:
+    aggregation:
+      # Single backend — no tool-name collisions possible, so no
+      # conflictResolution prefixing is configured (avoids renaming
+      # execute_action/list_connections/search_actions unnecessarily).
+      tools:
+        - workload: connection-adapter  # VERIFY key name — see caveat 5 above
+          filter:
+            - execute_action
+            - list_connections
+            - search_actions  # not yet implemented by the adapter — see caveat 2 above
+
+    operational:
+      failureHandling:
+        healthCheckInterval: 30s
+
+  # --- Incoming auth: validate the caller (Jarvis) -> vMCP ------------------
+  incomingAuth:
+    type: oidc
+    oidc:
+      # Matches ISSUER in src/orchestrator/platform_jwt.py verbatim — this is
+      # NOT a URL. See caveat 3 above.
+      issuer: jarvis-auth
+      # Matches DEFAULT_AUDIENCE in src/orchestrator/platform_jwt.py and
+      # audience="toolhive-vmcp" in src/adapter/identity.py.
+      audience: toolhive-vmcp
+      # Explicit JWKS URL — required because `issuer` above is not
+      # discoverable. Root-level route (src/api/routes_jwks.py), NOT under
+      # /v1. Replace <jarvis-api-base> with the real deployment base URL
+      # (e.g. https://api.jarvis.example.com or http://host.docker.internal:8000
+      # for local dev against the host-run backend).
+      jwksUrl: "<jarvis-api-base>/.well-known/jwks.json"
+
+    # Cedar default-deny authorization: nothing is permitted unless an
+    # explicit `permit` matches (ToolHive's authz engine denies by default
+    # when no policy matches — no explicit `forbid` statement is required).
+    authzConfig:
+      type: inline
+      inline:
+        policies:
+          - |
+            permit(
+              principal,
+              action == Action::"call_tool",
+              resource
+            )
+            when {
+              resource.name in [
+                "execute_action",
+                "list_connections",
+                "search_actions"
+              ]
+            };
+
+  # --- Outgoing auth: vMCP -> connection-adapter -----------------------------
+  # Identity passthrough: the adapter is trusted first-party infra (spec
+  # D5/D6) — it re-verifies the same platform JWT itself
+  # (src/adapter/identity.py), so ToolHive forwards it unchanged rather than
+  # exchanging it for a different credential.
+  outgoingAuth:
+    source: inline
+    backends:
+      connection-adapter:
+        type: upstream_inject  # VERIFY exact type name — see caveat 4 above
