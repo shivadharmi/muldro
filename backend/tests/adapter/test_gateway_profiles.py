@@ -64,3 +64,19 @@ def test_gateway_profile_is_frozen():
     assert isinstance(GMAIL_PROFILE, GatewayProfile)
     with pytest.raises((AttributeError, TypeError)):
         GMAIL_PROFILE.provider_id = "x"
+
+
+def test_incomplete_profile_is_rejected_at_construction():
+    """An allowlisted action with no capability mapping must fail to construct."""
+    with pytest.raises(ValueError):
+        GatewayProfile(
+            provider_id="broken",
+            action_allowlist=frozenset({"broken.read"}),
+            action_required_capability={},  # missing the mapping
+        )
+
+
+def test_profile_capability_map_is_immutable():
+    """The capability map cannot be mutated after construction (defense-in-depth)."""
+    with pytest.raises(TypeError):
+        GMAIL_PROFILE.action_required_capability["gmail.send"] = "email.read"

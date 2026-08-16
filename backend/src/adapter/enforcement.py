@@ -11,6 +11,7 @@ connection identity, and secret-free payloads).
 import copy
 import re
 from dataclasses import dataclass
+from types import MappingProxyType
 
 # TODO: finalize against OpenConnector's Gmail catalog before wider rollout.
 GMAIL_ACTION_ALLOWLIST = frozenset(
@@ -59,6 +60,24 @@ class GatewayProfile:
     provider_id: str
     action_allowlist: frozenset[str]
     action_required_capability: dict[str, str]
+
+    def __post_init__(self) -> None:
+        # Completeness invariant: every allowlisted action MUST have a required
+        # capability, or ``ensure_capability_allowed`` would deny it anyway —
+        # but catching it at construction turns a silent policy hole into an
+        # import-time failure. Then freeze the map (frozen=True only stops
+        # rebinding the attribute, not mutating the dict it points at).
+        missing = set(self.action_allowlist) - set(self.action_required_capability)
+        if missing:
+            raise ValueError(
+                f"gateway profile {self.provider_id!r}: allowlisted actions "
+                f"missing a required-capability mapping: {sorted(missing)}"
+            )
+        object.__setattr__(
+            self,
+            "action_required_capability",
+            MappingProxyType(dict(self.action_required_capability)),
+        )
 
 
 GMAIL_PROFILE = GatewayProfile(
