@@ -1,5 +1,9 @@
 # Runbook: connecting a real Gmail account through the gateway
 
+OpenConnector runs on host `:3001` (via `PORT=3001` + `-p 3001:3001`) so the
+Next.js frontend keeps `:3000`; register `http://localhost:3001/oauth/callback`
+as the Google OAuth client's authorized redirect URI.
+
 This is a **manual, browser-in-the-loop** runbook. Google's OAuth consent
 screen cannot be driven headlessly, so — unlike the automated integration
 e2e, which proves the adapter's tenant-isolation boundary against
@@ -74,14 +78,14 @@ docker compose -f docker-compose.integration.yml up -d
 docker compose -f docker-compose.integration.yml ps
 ```
 
-Confirm both are healthy — `openconnector` listening on `:3000`,
+Confirm both are healthy — `openconnector` listening on `:3001`,
 `connection-adapter` listening on `:8100/mcp` (per `backend/run_adapter.py`).
 
 On the **Jarvis API process** (not the compose file — same pattern as
 `README.md` §4), set:
 
 ```bash
-export JARVIS_OPENCONNECTOR_ADMIN_URL=http://localhost:3000       # or the container's mapped host:port
+export JARVIS_OPENCONNECTOR_ADMIN_URL=http://localhost:3001       # or the container's mapped host:port
 export JARVIS_OPENCONNECTOR_ADMIN_TOKEN=<the container's OOMOL_CONNECT_ADMIN_TOKEN>
 export JARVIS_GMAIL_VIA_GATEWAY=true
 export JARVIS_TOOLHIVE_VMCP_URL=http://localhost:8100/mcp         # see note below
@@ -122,11 +126,11 @@ below 401s, double-check you used the **admin** token, not the runtime one.
    route — **not** a Jarvis URL (spike §3–§4):
 
    ```
-   http://localhost:3000/oauth/callback
+   http://localhost:3001/oauth/callback
    ```
 
    (If your OpenConnector container is reachable at a different host:port
-   than `localhost:3000`, use that instead — it must exactly match the
+   than `localhost:3001`, use that instead — it must exactly match the
    `expectedRedirectUri` returned in step 4 below.)
 3. Request Gmail's default scopes (spike §3): `gmail.readonly`,
    `gmail.modify`, `gmail.compose`, `gmail.send`, `gmail.labels`,
@@ -140,7 +144,7 @@ below 401s, double-check you used the **admin** token, not the runtime one.
 `PUT /api/oauth/configs/gmail` (admin token, spike §3):
 
 ```bash
-export OC_ADMIN_URL=http://localhost:3000
+export OC_ADMIN_URL=http://localhost:3001
 export OC_ADMIN_TOKEN=<OOMOL_CONNECT_ADMIN_TOKEN>
 
 curl -sS -X PUT "$OC_ADMIN_URL/api/oauth/configs/gmail" \
@@ -159,7 +163,7 @@ Expected `200`:
   "service": "gmail",
   "configured": true,
   "clientId": "<GOOGLE_OAUTH_CLIENT_ID>",
-  "expectedRedirectUri": "http://localhost:3000/oauth/callback",
+  "expectedRedirectUri": "http://localhost:3001/oauth/callback",
   "auth": {
     "type": "...",
     "authorizationUrl": "...",

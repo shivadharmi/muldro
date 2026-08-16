@@ -42,7 +42,7 @@ Do not change any image reference to `:latest` in `docker-compose.yml`. If you n
 | `JARVIS_PLATFORM_JWT_PRIVATE_PEM` | `connection-adapter` | An RSA private key PEM — **must be the same key** the Jarvis API process uses to mint platform JWTs (`backend/src/orchestrator/platform_jwt.py`). Generate one: `openssl genrsa -out platform-jwt.pem 2048`, then set both the API process's and the adapter's `JARVIS_PLATFORM_JWT_PRIVATE_PEM` to `$(cat platform-jwt.pem)`. If unset, `platform_jwt.py` falls back to an ephemeral per-process key — tokens minted by the API container would then be **unverifiable** by the adapter container (they're separate processes). |
 | `JARVIS_DATABASE_URL` | `connection-adapter` | Point at Jarvis's **existing** Postgres (started by the repo-root `docker-compose.yml`, not by this file). From inside this compose network to a host-run Postgres: `postgresql+asyncpg://jarvis:jarvis@host.docker.internal:5432/jarvis` (Mac/Windows) — Linux users may need the bridge gateway IP instead of `host.docker.internal`. |
 | `JARVIS_GMAIL_VIA_GATEWAY` | Jarvis API process (not this compose file — see §4) | Set to `true` on the **Jarvis API/worker** process (`backend/src/config/settings.py`, default `False`) to route Gmail tool calls through this gateway instead of the native `google-workspace-mcp` process. The `connection-adapter` container in `docker-compose.yml` also sets this for consistency, though the adapter binary itself doesn't currently branch on it. |
-| `JARVIS_OPENCONNECTOR_MCP_URL` | `connection-adapter` | Set automatically by `docker-compose.yml` to `http://openconnector:3000/mcp` — no action needed unless you're running the adapter outside this compose network. |
+| `JARVIS_OPENCONNECTOR_MCP_URL` | `connection-adapter` | Set automatically by `docker-compose.yml` to `http://openconnector:3001/mcp` — no action needed unless you're running the adapter outside this compose network. |
 | `JARVIS_TOOLHIVE_VMCP_URL` | Jarvis API process (not this compose file) | Point Jarvis's `settings.toolhive_vmcp_url` at wherever ToolHive ends up listening once you bring it up manually (§5). |
 
 ### The mandatory encryption-key rule
@@ -83,7 +83,9 @@ docker compose ps
 docker compose logs -f connection-adapter
 ```
 
-At this point `openconnector` is listening on `:3000` and `connection-adapter`
+At this point `openconnector` is listening on host `:3001` (via `PORT=3001` +
+`-p 3001:3001` — this keeps host `:3000` free for the Next.js frontend; see
+RUNBOOK-gmail.md) and `connection-adapter`
 (the MCP service ToolHive will front) is listening on `:8100/mcp`. Neither
 Gmail nor ToolHive is connected yet — see §5.
 

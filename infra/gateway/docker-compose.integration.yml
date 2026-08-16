@@ -6,11 +6,16 @@ services:
   openconnector:
     image: ghcr.io/oomol-lab/open-connector:v1.3.5
     ports:
-      - "3000:3000"
+      - "3001:3001"
     environment:
       OOMOL_CONNECT_ENCRYPTION_KEY: ${OOMOL_CONNECT_ENCRYPTION_KEY:?set it}
       OOMOL_CONNECT_RUNTIME_TOKEN: ${OOMOL_CONNECT_RUNTIME_TOKEN:?set it}
       OOMOL_CONNECT_ADMIN_TOKEN: ${OOMOL_CONNECT_ADMIN_TOKEN:?set it}
+      # OpenConnector computes its OAuth redirect_uri from this PORT var (it
+      # also drives the container's own listen port) — see
+      # spike-findings-port.md. Must match the port mapping above and every
+      # inter-container URL that points at this service.
+      PORT: 3001
     restart: unless-stopped
 
   connection-adapter:
@@ -22,7 +27,7 @@ services:
     ports:
       - "8100:8100"
     environment:
-      JARVIS_OPENCONNECTOR_MCP_URL: http://openconnector:3000/mcp
+      JARVIS_OPENCONNECTOR_MCP_URL: http://openconnector:3001/mcp
       JARVIS_OPENCONNECTOR_RUNTIME_TOKEN: ${OOMOL_CONNECT_RUNTIME_TOKEN:?set it}
       # Run the adapter under the no-auth `hackernews` profile so the automated
       # e2e can drive a real action through the full boundary (Gmail's OAuth
