@@ -4,7 +4,7 @@ The platform JWT carries an explicit ``capabilities`` list. The allowlist
 (``ensure_action_allowed``) only proves an action is a known Gmail action —
 it does NOT prove the *caller* was authorized for it. Without a capability
 check, a read-scoped token (``capabilities=["email.search"]``) could invoke
-``gmail.send`` because ``gmail.send`` is in the shared action allowlist.
+``gmail.send_email`` because ``gmail.send_email`` is in the shared action allowlist.
 
 These tests pin the second gate: each action maps to a required Jarvis
 capability, and a call is rejected (fail-closed) unless the principal was
@@ -22,19 +22,19 @@ from src.adapter.enforcement import (
 
 
 def test_send_denied_for_read_only_token():
-    """A token scoped to email.search cannot invoke gmail.send."""
+    """A token scoped to email.search cannot invoke gmail.send_email."""
     with pytest.raises(CapabilityDenied):
-        ensure_capability_allowed("gmail.send", ("email.search",))
+        ensure_capability_allowed("gmail.send_email", ("email.search",))
 
 
 def test_send_allowed_when_send_capability_granted():
-    """A token carrying email.send may invoke gmail.send."""
-    ensure_capability_allowed("gmail.send", ("email.search", "email.send"))
+    """A token carrying email.send may invoke gmail.send_email."""
+    ensure_capability_allowed("gmail.send_email", ("email.search", "email.send"))
 
 
 def test_search_allowed_for_search_capability():
-    """A token carrying email.search may invoke gmail.search."""
-    ensure_capability_allowed("gmail.search", ("email.search",))
+    """A token carrying email.search may invoke gmail.fetch_emails."""
+    ensure_capability_allowed("gmail.fetch_emails", ("email.search",))
 
 
 def test_unmapped_action_denied_fail_closed():
@@ -46,7 +46,7 @@ def test_unmapped_action_denied_fail_closed():
 def test_empty_capabilities_denies_everything():
     """A token with no capabilities cannot invoke any action."""
     with pytest.raises(CapabilityDenied):
-        ensure_capability_allowed("gmail.search", ())
+        ensure_capability_allowed("gmail.fetch_emails", ())
 
 
 def test_every_allowlisted_action_has_a_required_capability():

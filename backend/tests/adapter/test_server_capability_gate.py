@@ -32,6 +32,6 @@ async def test_read_scoped_token_cannot_send():
             await handle_execute_action(
                 None,
                 token=token,
-                args={"actionId": "gmail.send", "input": {"to": "a@b.c"}},
+                args={"actionId": "gmail.send_email", "input": {"to": "a@b.c"}},
             )
     mock_call.assert_not_awaited()

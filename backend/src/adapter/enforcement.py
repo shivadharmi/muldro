@@ -13,13 +13,15 @@ import re
 from dataclasses import dataclass
 from types import MappingProxyType
 
-# TODO: finalize against OpenConnector's Gmail catalog before wider rollout.
 GMAIL_ACTION_ALLOWLIST = frozenset(
     {
-        "gmail.search",
+        "gmail.get_profile",  # zero-input: returns the connected account + counts
+        "gmail.fetch_emails",  # list / search messages
+        "gmail.search_threads",
         "gmail.get_message",
-        "gmail.list_messages",
-        "gmail.send",
+        "gmail.list_threads",
+        "gmail.list_labels",
+        "gmail.send_email",
     }
 )
 
@@ -27,7 +29,7 @@ GMAIL_ACTION_ALLOWLIST = frozenset(
 # action is a known Gmail action; this map proves the *caller* was authorized
 # for it. ``ensure_capability_allowed`` rejects any call whose principal was
 # not granted the mapped capability, so a read-scoped token can never invoke
-# ``gmail.send``. Fail-closed: an action absent from this map is denied.
+# ``gmail.send_email``. Fail-closed: an action absent from this map is denied.
 #
 # NOTE: this boundary check is only as tight as the minted token. Today
 # ``session_pool._resolve_auth`` mints a blanket ``["email.search","email.send"]``
@@ -37,10 +39,13 @@ GMAIL_ACTION_ALLOWLIST = frozenset(
 # the connect-flow / per-step-JWT work; enforcing here is the correct boundary
 # regardless of how the token is currently scoped.
 ACTION_REQUIRED_CAPABILITY = {
-    "gmail.search": "email.search",
+    "gmail.get_profile": "email.read",
+    "gmail.fetch_emails": "email.search",
+    "gmail.search_threads": "email.search",
     "gmail.get_message": "email.read",
-    "gmail.list_messages": "email.list",
-    "gmail.send": "email.send",
+    "gmail.list_threads": "email.list",
+    "gmail.list_labels": "email.list",
+    "gmail.send_email": "email.send",
 }
 
 

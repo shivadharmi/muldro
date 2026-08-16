@@ -22,7 +22,7 @@ from src.adapter.enforcement import (
 
 def test_gmail_profile_is_the_default_provider():
     assert GMAIL_PROFILE.provider_id == "gmail"
-    assert "gmail.search" in GMAIL_PROFILE.action_allowlist
+    assert "gmail.fetch_emails" in GMAIL_PROFILE.action_allowlist
     assert get_gateway_profile("gmail") is GMAIL_PROFILE
 
 
@@ -44,7 +44,7 @@ def test_enforcement_respects_the_selected_profile():
     hn = get_gateway_profile("hackernews")
     # A gmail action is NOT allowed under the hackernews profile.
     with pytest.raises(ActionNotAllowed):
-        ensure_action_allowed("gmail.send", hn)
+        ensure_action_allowed("gmail.send_email", hn)
     # The hackernews action is allowed, and needs the hackernews capability.
     ensure_action_allowed("hackernews.get_ask_stories", hn)
     ensure_capability_allowed("hackernews.get_ask_stories", ("hackernews.read",), hn)
@@ -54,8 +54,8 @@ def test_enforcement_respects_the_selected_profile():
 
 def test_enforcement_defaults_to_gmail_profile_when_unspecified():
     # Backward compatibility: existing call sites pass no profile -> Gmail.
-    ensure_action_allowed("gmail.search")
-    ensure_capability_allowed("gmail.search", ("email.search",))
+    ensure_action_allowed("gmail.fetch_emails")
+    ensure_capability_allowed("gmail.fetch_emails", ("email.search",))
     with pytest.raises(ActionNotAllowed):
         ensure_action_allowed("hackernews.get_ask_stories")
 
@@ -79,4 +79,4 @@ def test_incomplete_profile_is_rejected_at_construction():
 def test_profile_capability_map_is_immutable():
     """The capability map cannot be mutated after construction (defense-in-depth)."""
     with pytest.raises(TypeError):
-        GMAIL_PROFILE.action_required_capability["gmail.send"] = "email.read"
+        GMAIL_PROFILE.action_required_capability["gmail.send_email"] = "email.read"
