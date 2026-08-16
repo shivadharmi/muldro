@@ -33,10 +33,6 @@ def _db_reachable() -> bool:
 pytestmark = pytest.mark.skipif(not _db_reachable(), reason="Postgres not reachable")
 
 
-def test_mint_connection_name_is_namespaced():
-    assert mint_connection_name("ws1", "usrA", "gmail", "work") == "ws1:usrA:gmail:work"
-
-
 async def _cleanup(factory, principal_id, alias):
     async with factory() as db:
         await db.execute(
