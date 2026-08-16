@@ -18,6 +18,7 @@ does NOT exercise the multi-colon namespaced Gmail connectionName round-trip —
 that remains a real-Gmail (runbook) verification.
 """
 
+import asyncio
 import os
 
 import pytest
@@ -25,6 +26,7 @@ from fastmcp import Client
 from fastmcp.client.auth import BearerAuth
 from ulid import ULID
 
+from src.config.settings import get_settings
 from src.models.connection_map import ConnectionMap
 from src.orchestrator.platform_jwt import mint_platform_jwt
 from tests.conftest import TEST_WORKSPACE_ID, make_test_db, seed_user_workspace
@@ -34,10 +36,48 @@ _HN_ACTION = "hackernews.get_ask_stories"
 # the hackernews virtual connection's connectionName (spike-confirmed)
 _HN_CONNECTION_ID = "default"
 
-pytestmark = pytest.mark.skipif(
-    not os.environ.get("JARVIS_PLATFORM_JWT_PRIVATE_PEM"),
-    reason="test process must share the adapter's platform-JWT PEM to mint verifiable tokens",
-)
+
+def _host_db_reachable() -> bool:
+    """Is the test-process DB URL reachable FROM THE HOST?
+
+    Guards a common footgun: setting JARVIS_DATABASE_URL to the adapter
+    container's address (``host.docker.internal``) leaks into this host-side
+    test process, where that name does not resolve — producing a cryptic
+    getaddrinfo error deep in a SQLAlchemy trace. This turns it into a clear
+    skip reason instead.
+    """
+    import asyncpg
+
+    dsn = get_settings().database_url.replace("+asyncpg", "", 1)
+
+    async def _probe() -> None:
+        conn = await asyncpg.connect(dsn=dsn)
+        try:
+            await conn.execute("SELECT 1")
+        finally:
+            await conn.close()
+
+    try:
+        asyncio.run(_probe())
+        return True
+    except Exception:  # pragma: no cover
+        return False
+
+
+pytestmark = [
+    pytest.mark.skipif(
+        not os.environ.get("JARVIS_PLATFORM_JWT_PRIVATE_PEM"),
+        reason="test process must share the adapter's platform-JWT PEM to mint verifiable tokens",
+    ),
+    pytest.mark.skipif(
+        not _host_db_reachable(),
+        reason=(
+            "test-process DB unreachable from the host — set JARVIS_DATABASE_URL to a "
+            "HOST-reachable address (localhost:5432), NOT the adapter container's "
+            "host.docker.internal (which only resolves inside Docker)"
+        ),
+    ),
+]
 
 
 async def _seed_hn(factory, principal_id, connection_id):
