@@ -19,15 +19,21 @@ _GATEWAY_SERVERS: dict[str, str] = {
 }
 
 
-def gateway_oc_provider(server_name: str, *, gmail_via_gateway: bool) -> str | None:
+def gateway_oc_provider(
+    server_name: str, *, gmail_via_gateway: bool, toolhive_vmcp_url: str | None
+) -> str | None:
     """Return the OC provider for ``server_name``, or ``None`` if not gateway-backed.
 
-    Fail-closed: an unknown server, or Gmail while the flag is off, yields
-    ``None`` (native connect flow). Mirrors the redirect condition in
-    ``mcp_pool._installation_to_config`` so the frontend and the tool-routing
-    seam agree on which installations are gateway-backed.
+    Mirrors ALL THREE conditions of the gateway-redirect check in
+    ``mcp_pool._installation_to_config`` (``gmail_via_gateway`` AND
+    ``server_name == "google-workspace"`` AND a configured ``toolhive_vmcp_url``)
+    so the frontend's connect-flow decision can never diverge from the backend's
+    actual tool-routing decision. Fail-closed: unknown server, flag off, or no
+    vMCP url all yield ``None`` (native connect flow). Increment 2 grows
+    ``_GATEWAY_SERVERS``; when it adds another flagged provider, replace the
+    gmail-specific guard with a per-provider flag lookup.
     """
     provider = _GATEWAY_SERVERS.get(server_name)
-    if provider == "gmail" and not gmail_via_gateway:
+    if provider == "gmail" and not (gmail_via_gateway and toolhive_vmcp_url):
         return None
     return provider

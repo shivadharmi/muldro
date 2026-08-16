@@ -229,7 +229,9 @@ async def get_integration_statuses(
                 access_scopes=coarsen_scopes(raw_scopes),
                 needs_reauth=needs_reauth,
                 oc_provider=gateway_oc_provider(
-                    inst.server_name, gmail_via_gateway=settings.gmail_via_gateway
+                    inst.server_name,
+                    gmail_via_gateway=settings.gmail_via_gateway,
+                    toolhive_vmcp_url=settings.toolhive_vmcp_url,
                 ),
             )
         )
