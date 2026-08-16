@@ -230,6 +230,11 @@ class Settings(BaseSettings):
     openconnector_admin_url: str | None = None  # JARVIS_OPENCONNECTOR_ADMIN_URL
     openconnector_admin_token: str | None = None  # JARVIS_OPENCONNECTOR_ADMIN_TOKEN
     platform_jwt_private_pem: str | None = None  # JARVIS_PLATFORM_JWT_PRIVATE_PEM
+    # Which reviewed gateway profile the adapter enforces (allowlist +
+    # capability-map + provider). One adapter instance = one provider. Selects
+    # a CODE-defined profile in src/adapter/enforcement.py; the allowlist is
+    # never env-injected. Default "gmail"; the harness sets "hackernews".
+    gateway_provider: str = "gmail"  # JARVIS_GATEWAY_PROVIDER
 
     @property
     def webhooks_configured(self) -> bool:

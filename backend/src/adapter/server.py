@@ -21,13 +21,13 @@ from src.adapter.enforcement import (
     ensure_action_allowed,
     ensure_capability_allowed,
     force_connection_name,
+    get_gateway_profile,
     strip_secrets,
 )
 from src.adapter.identity import verify_principal
 from src.adapter.openconnector_client import call_openconnector
+from src.config.settings import get_settings
 from src.models.connection_map import ConnectionMap
-
-_PROVIDER = "gmail"
 
 
 def _result_to_dict(result: Any) -> dict:
@@ -60,16 +60,17 @@ def _result_to_dict(result: Any) -> dict:
 
 async def handle_execute_action(db: AsyncSession, *, token: str, args: dict) -> dict:
     """Six-step enforcement for one ``execute_action`` call (the sole tenant boundary)."""
+    profile = get_gateway_profile(get_settings().gateway_provider)  # code-defined policy surface
     principal = verify_principal(token)  # 1. identity (never from args)
     action_id = args.get("actionId", "")
-    ensure_action_allowed(action_id)  # 5a. allowlist actionId (fail fast)
+    ensure_action_allowed(action_id, profile)  # 5a. allowlist actionId (fail fast)
     ensure_capability_allowed(  # 5b. principal authorized for THIS action
-        action_id, principal.capabilities
+        action_id, principal.capabilities, profile
     )
     forced = await resolve_connection(  # 2. resolve OWNED connection
         db,
         principal,
-        provider_id=_PROVIDER,
+        provider_id=profile.provider_id,
         account_alias=args.get("account_alias"),
     )
     outbound = force_connection_name(args, forced)  # 3. force connectionName
