@@ -38,3 +38,13 @@ async def _client_call(tool_name: str, args: dict) -> dict:
 async def call_openconnector(tool_name: str, args: dict) -> dict:
     """Single call point to the shared OpenConnector MCP endpoint."""
     return await _client_call(tool_name, args)
+
+
+async def get_action_guide(action_id: str) -> dict:
+    """Fetch one action's guide (incl. input schema) from OpenConnector.
+
+    Uses the same runtime-token MCP endpoint as ``call_openconnector`` — this
+    is metadata only (no connection, no execution), so the adapter never needs
+    the admin token to warm-start its schemas.
+    """
+    return await _client_call("get_action_guide", {"actionId": action_id})
