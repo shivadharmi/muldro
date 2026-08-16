@@ -488,3 +488,102 @@ If either check shows a truncated or mismatched name, OpenConnector is not
 round-tripping the multi-colon `connectionName` safely — treat this as a
 blocking finding against decision C (Jarvis owns naming) before relying on
 this shape in production, per spike §8.
+
+---
+
+## 11. Frontend connect acceptance (popup-poll)
+
+Everything above drives the gateway connection via `curl` — proving the
+adapter/OpenConnector/Google transport. This section is a **separate,
+browser-driven** acceptance pass proving the actual product surface: a user
+clicking "Connect" on the `/integrations` page, consenting in a popup, and
+the main window picking up the result without a redirect. Like the rest of
+this runbook, it cannot be driven headlessly — a human has to click "Allow"
+at Google.
+
+### 11.1 Bring up the full stack
+
+1. **Infra.** From the worktree's `backend/`:
+
+   ```bash
+   cd backend
+   docker compose up -d          # Postgres, Redis, Qdrant, Neo4j, MinIO
+   ```
+
+2. **OpenConnector.** The gateway `openconnector` container on **:3001**, per
+   §2 above (`docker compose -f docker-compose.integration.yml up -d`).
+
+3. **Adapter.** `run_adapter` on `:8100` with `JARVIS_GATEWAY_PROVIDER=gmail`
+   (also brought up by the same compose file, per §2).
+
+4. **API server.** `python run.py` (from `backend/`, venv active) with the
+   gateway env from §2 set on the process, plus the platform-JWT PEM from §1:
+
+   ```bash
+   export JARVIS_GMAIL_VIA_GATEWAY=true
+   export JARVIS_TOOLHIVE_VMCP_URL=http://localhost:8100/mcp
+   export JARVIS_OPENCONNECTOR_ADMIN_URL=http://localhost:3001
+   export JARVIS_OPENCONNECTOR_ADMIN_TOKEN=<OOMOL_CONNECT_ADMIN_TOKEN>
+   export JARVIS_PLATFORM_JWT_PRIVATE_PEM="$(cat /tmp/platform-jwt.pem)"   # same PEM as step 1
+   export JARVIS_ANTHROPIC_API_KEY=<your key>
+
+   python run.py
+   ```
+
+5. **Frontend.** From `frontend/`:
+
+   ```bash
+   npm run dev            # :3000
+   ```
+
+   `:3000` is the only window the user ever sees — the popup opened in
+   step 11.3 below lands on OpenConnector's own callback page, not a Jarvis
+   route.
+
+### 11.2 Seed the installation
+
+The frontend only offers the gateway popup-poll flow for a provider if the
+unified-integrations API reports it as gateway-backed. Ensure a
+`google-workspace` `IntegrationInstallation` row exists for the test
+workspace, so `GET` on the unified-integrations endpoint returns
+`oc_provider="gmail"` for it (`backend/src/integrations/gateway_providers.py`,
+`backend/src/services/integration_status.py`). Without this row, the
+Google/Gmail card falls back to the native OAuth-redirect flow instead of
+the popup-poll flow this section is verifying.
+
+### 11.3 Drive the flow in the browser
+
+1. Log in as the seeded ULID user and open `/integrations`.
+2. Click **Connect** on the Google/Gmail card.
+3. A popup window opens to Google's consent screen. Consent with a real
+   Google account (same caveat as §5 above — this cannot be scripted).
+4. The main window (still on `:3000`) polls `POST /v1/connections/confirm`
+   in the background (same endpoint as §6). On success it shows a
+   "Connected" toast and the card flips to the Connected state.
+5. The popup itself lands on OpenConnector's own callback page (`:3001`) —
+   that is expected, same as the raw-curl flow in §5; the main app window
+   never navigates away from `:3000`.
+
+### 11.4 Acceptance check
+
+Open chat and ask:
+
+> "Which Gmail account am I connected to?"
+
+Expect the agent to call the `gmail_get_profile` tool (§8's "Named tools"
+table) and name the real account you consented with in 11.3. This confirms
+the **frontend-initiated** connection — not the curl-driven one from §5 —
+produced a working `connection_map` row and a live gateway credential; the
+transport itself (adapter → OpenConnector → Google) was already proven end
+to end in the prior increment (§8–§10 above).
+
+### 11.5 Note — opaque `connectionName` hashing
+
+The `connectionName` OpenConnector stores is now an opaque `blake2b` digest
+minted by `ConnectionService` (`backend/src/services/connection_service.py`),
+not the raw colon-delimited `{tenant_id}:{principal_id}:gmail:{alias}` string
+discussed in §10. The digest is derived from that same tuple but rendered as
+a short (≤64-char), OC-valid hex string, so real ULID-based tenant/principal
+IDs no longer risk tripping OpenConnector's `invalid_connection_name`
+rejection — the earlier hyphen-substitution workaround for that rejection is
+no longer needed for real users going through this frontend flow.
