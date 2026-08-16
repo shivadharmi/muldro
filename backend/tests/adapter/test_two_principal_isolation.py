@@ -111,7 +111,7 @@ async def test_bob_cannot_use_alice_connection_by_alias():
                         db,
                         token=bob_token,
                         args={
-                            "actionId": "gmail.search",
+                            "actionId": "gmail.fetch_emails",
                             "input": {},
                             "account_alias": alias,
                         },
@@ -177,7 +177,7 @@ async def test_alice_can_use_her_own_connection():
                     db,
                     token=alice_token,
                     args={
-                        "actionId": "gmail.search",
+                        "actionId": "gmail.fetch_emails",
                         "input": {"q": "x"},
                         "account_alias": alias,
                     },

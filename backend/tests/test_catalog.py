@@ -187,14 +187,14 @@ def test_special_tool_properties():
 
 
 def test_external_tool_seeds_count():
-    """Verify exactly 106 external tool seeds are registered."""
-    assert len(EXTERNAL_TOOL_SEEDS) == 106
+    """Verify exactly 113 external tool seeds are registered."""
+    assert len(EXTERNAL_TOOL_SEEDS) == 113
 
 
 def test_verified_seeds_count():
-    """Verify exactly 62 seeds are verified."""
+    """Verify exactly 69 seeds are verified."""
     verified = get_verified_seeds()
-    assert len(verified) == 62
+    assert len(verified) == 69
 
 
 def test_no_duplicate_external_names_per_server():
@@ -224,7 +224,7 @@ def test_notion_seeds_api_prefix():
 def test_seeds_for_server_counts():
     """Verify per-server tool counts match expected."""
     expected_counts = {
-        "google-workspace": 18,
+        "google-workspace": 25,
         "github": 22,
         "slack": 8,
         "notion": 22,
@@ -255,7 +255,7 @@ def test_get_seeds_for_server_helper():
 def test_get_verified_seeds_helper():
     """Verify get_verified_seeds only returns verified=True entries."""
     verified = get_verified_seeds()
-    assert len(verified) == 62
+    assert len(verified) == 69
 
     # All returned seeds should be verified
     for seed in verified:

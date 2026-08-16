@@ -104,7 +104,7 @@ async def test_handle_execute_action_forces_connection_and_strips_secrets():
                     db,
                     token=token,
                     args={
-                        "actionId": "gmail.search",
+                        "actionId": "gmail.fetch_emails",
                         "input": {"q": "x"},
                         "connectionName": "attacker",
                         "account_alias": alias,

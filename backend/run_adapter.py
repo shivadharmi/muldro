@@ -1,23 +1,27 @@
 """Entrypoint for the Gmail gateway Connection Context Adapter.
 
-Exposes two MCP tools over streamable-http: ``execute_action`` and
-``list_connections``. The bearer token carrying the caller's platform JWT is
-read from the incoming HTTP ``Authorization`` header (never from tool args —
-see ``src.adapter.identity``); each call opens its own DB session via the
-canonical ``get_session_factory()`` pattern used across the codebase
-(``async with get_session_factory()() as db:``).
+Exposes the generic ``execute_action`` / ``list_connections`` tools plus one
+named tool per allowlisted OpenConnector action, warm-started from OC's
+``get_action_guide`` at startup. The bearer token carrying the caller's
+platform JWT is read from the HTTP Authorization header via the shared
+``bearer_token`` helper (never from tool args).
 
 Run with: ``python run_adapter.py`` (from ``backend/``).
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from fastmcp import FastMCP
-from fastmcp.server.dependencies import get_http_headers
 
+from src.adapter.enforcement import get_gateway_profile
+from src.adapter.http_context import bearer_token
+from src.adapter.openconnector_client import get_action_guide
 from src.adapter.server import handle_execute_action, handle_list_connections
+from src.adapter.warm_start import register_gateway_tools
+from src.config.settings import get_settings
 from src.models.database import get_session_factory
 
 logger = logging.getLogger(__name__)
@@ -28,19 +32,6 @@ _HOST = "0.0.0.0"  # noqa: S104 - intentional: gateway must be reachable off-hos
 _PORT = 8100
 
 
-def _bearer_token() -> str:
-    """Extract the raw bearer token from the inbound Authorization header.
-
-    Never trusts a caller-supplied identity in tool args — this is the only
-    place the adapter reads the platform JWT from.
-    """
-    headers = get_http_headers(include={"authorization"})
-    raw = headers.get("authorization", "")
-    if raw.lower().startswith("bearer "):
-        return raw[len("bearer ") :]
-    return raw
-
-
 @adapter.tool()
 async def execute_action(
     actionId: str,  # noqa: N803 - matches OpenConnector's camelCase tool schema
@@ -48,7 +39,7 @@ async def execute_action(
     account_alias: str | None = None,
 ) -> dict:
     """Execute an allowlisted Gmail action through the caller's owned connection."""
-    token = _bearer_token()
+    token = bearer_token()
     args = {"actionId": actionId, "input": input}
     if account_alias is not None:
         args["account_alias"] = account_alias
@@ -59,10 +50,19 @@ async def execute_action(
 @adapter.tool()
 async def list_connections() -> dict:
     """List only the calling principal's own connections (never global enumeration)."""
-    token = _bearer_token()
+    token = bearer_token()
     async with get_session_factory()() as db:
         return await handle_list_connections(db, token=token)
 
 
+async def warm_start() -> int:
+    """Register the named per-action tools from OpenConnector guides."""
+    profile = get_gateway_profile(get_settings().gateway_provider)
+    count = await register_gateway_tools(adapter, profile, guide_fetcher=get_action_guide)
+    logger.info("warm-start: registered %d named gateway tools", count)
+    return count
+
+
 if __name__ == "__main__":
+    asyncio.run(warm_start())
     adapter.run(transport="http", host=_HOST, port=_PORT)

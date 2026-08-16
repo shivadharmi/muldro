@@ -84,13 +84,27 @@ On the **Jarvis API process** (not the compose file — same pattern as
 export JARVIS_OPENCONNECTOR_ADMIN_URL=http://localhost:3000       # or the container's mapped host:port
 export JARVIS_OPENCONNECTOR_ADMIN_TOKEN=<the container's OOMOL_CONNECT_ADMIN_TOKEN>
 export JARVIS_GMAIL_VIA_GATEWAY=true
+export JARVIS_TOOLHIVE_VMCP_URL=http://localhost:8100/mcp         # see note below
 ```
 
 (`JARVIS_OPENCONNECTOR_ADMIN_URL` / `JARVIS_OPENCONNECTOR_ADMIN_TOKEN` /
-`JARVIS_GMAIL_VIA_GATEWAY` map to `settings.openconnector_admin_url` /
-`settings.openconnector_admin_token` / `settings.gmail_via_gateway` in
+`JARVIS_GMAIL_VIA_GATEWAY` / `JARVIS_TOOLHIVE_VMCP_URL` map to
+`settings.openconnector_admin_url` / `settings.openconnector_admin_token` /
+`settings.gmail_via_gateway` / `settings.toolhive_vmcp_url` in
 `backend/src/config/settings.py`.) Restart the API process after setting
 these.
+
+**`JARVIS_GMAIL_VIA_GATEWAY=true` alone is a no-op** — `_installation_to_config()`
+in `backend/src/integrations/mcp_pool.py` only routes the `google-workspace`
+installation at the gateway when **both** `settings.gmail_via_gateway` is on
+**and** `settings.toolhive_vmcp_url` is set; otherwise it silently falls
+through to the native local `google-workspace-mcp` process, and step 8 below
+would exercise the wrong path without any error. This runbook does not stand
+up ToolHive itself (that lifecycle is environment-specific — see
+[`README.md`](./README.md) §4/§5); pointing `JARVIS_TOOLHIVE_VMCP_URL`
+straight at the adapter's own `:8100/mcp` endpoint is sufficient for this
+verification, since the adapter is the MCP service ToolHive would otherwise
+front.
 
 **Note the two-token split** (spike §1): `OOMOL_CONNECT_ADMIN_TOKEN` gates
 `/api/*` (what this runbook uses to register the OAuth client and poll
@@ -275,44 +289,89 @@ is just cross-checking OpenConnector's own state.
 
 ---
 
-## 8. Drive a chat turn calling `email.search`
+## 8. Drive a chat turn calling `gmail.get_profile`
 
-With `JARVIS_GMAIL_VIA_GATEWAY=true` set on the API process (step 2) and the
-connection `active` (step 7), send a chat message that should trigger a
-Gmail search — e.g. "search my Gmail for unread messages from this week" —
-through the normal chat UI or `POST /v1/chat` for the workspace/user whose
-`connection_map` row you just created, and confirm the call routes through
-the gateway rather than the direct `google-workspace-mcp` process (check
-Jarvis server logs / traces for a call reaching `connection-adapter:8100`,
-not a local `uvx` google-workspace-mcp process).
+`gmail.get_profile` is the right **first** real action to verify: it takes
+no required input (an optional `userId`, omitted to mean "the connected
+mailbox") and returns the connected Google account's profile — so a
+successful call is unambiguous proof the whole chain (agent tool discovery →
+gateway routing → adapter identity/capability checks → OpenConnector →
+Google) worked, without needing to reason about search results or message
+content.
 
-**Read the caveat in step 9 before relying on this step as proof the
-transport works end-to-end.**
+With `JARVIS_GMAIL_VIA_GATEWAY=true` **and** `JARVIS_TOOLHIVE_VMCP_URL` set
+on the API process (step 2) and the connection `active` (step 7), restart
+the API process so it picks up the flag, then drive this **through the
+agent**, not a raw tool call: send a chat message for the workspace/user
+whose `connection_map` row you just created that should make the agent
+reach for `gmail.get_profile` on its own — e.g.:
+
+> "Which Gmail account are we connected to?"
+
+through the normal chat UI or `POST /v1/chat`. Confirm two things:
+
+1. **The agent's response names the real Google account** you consented
+   with in step 5 (not a placeholder, not an error surfaced as prose).
+2. **The call routed through the gateway**, not the direct
+   `google-workspace-mcp` process — check Jarvis server logs / traces for a
+   tool call named `gmail.get_profile` reaching `connection-adapter:8100`
+   (see the "Named tools" subsection below for how the agent sees this tool
+   at all).
+
+If the agent doesn't call `gmail.get_profile` on the first try, rephrase to
+be more explicit ("use the gmail tool to check which account is connected")
+— tool selection is the agent's own agentic discovery, not a scripted
+dispatch (see CLAUDE.md "Agentic vs Scripted Execution"); this runbook
+verifies the transport, not prompt-engineering the agent's tool choice.
+
+### Named tools
+
+Once `JARVIS_GMAIL_VIA_GATEWAY=true` is on, the `google-workspace`
+installation routes at the gateway (per the note in step 2) and the agent
+discovers **7 named per-action Gmail tools** directly from the adapter's MCP
+tool list — no `search_gmail_messages`-style catch-all, and no manual
+`execute_action(actionId=...)` translation step. Each tool name **is** the
+adapter's `actionId`; the adapter enforces the mapped capability on every
+call (`ACTION_REQUIRED_CAPABILITY` in `backend/src/adapter/enforcement.py`,
+seeded into the tool registry via `backend/src/tools/catalog.py`):
+
+| Tool name | Capability | Notes |
+|---|---|---|
+| `gmail.get_profile` | `email.read` | zero-input; returns the connected account's email — use this one for step 8 |
+| `gmail.fetch_emails` | `email.search` | |
+| `gmail.search_threads` | `email.search` | |
+| `gmail.get_message` | `email.read` | |
+| `gmail.list_threads` | `email.list` | |
+| `gmail.list_labels` | `email.list` | |
+| `gmail.send_email` | `email.send` | **write** — requires approval (TrustEngine gate on the autonomous path, `permission_gate` on chat once `deep_single_lead` is on; `capability_scope` enforces the boundary either way, see CLAUDE.md "Trust Infrastructure & Approval") |
 
 ---
 
-## 9. Known prerequisite / caveat — the agent path isn't fully wired yet
+## 9. Known caveat — the whole `google-workspace` server is redirected
 
-Per PR #12 review findings #1 and #2:
+Per PR #12 review finding #2 (finding #1 — the agent-facing tool not being
+translated to `execute_action` — is now resolved by the named-tool discovery
+described above): the `JARVIS_GMAIL_VIA_GATEWAY` flag currently redirects
+the **whole** `google-workspace` MCP server, not just Gmail — so **calendar
+is unavailable** for the duration the flag is on, until the Gmail/calendar
+split lands (naturally provider-separated in OpenConnector already —
+`gmail` vs. `googlecalendar` are separate services, spike §6 — so this is a
+routing-layer gap, not an OpenConnector modeling gap).
 
-1. The seeded agent-facing tool `search_gmail_messages` is **not yet**
-   translated to `execute_action(actionId="gmail.search")` — so a chat turn
-   in step 8 may not actually reach the adapter at all, depending on which
-   tool the agent picks.
-2. The `JARVIS_GMAIL_VIA_GATEWAY` flag currently redirects the **whole**
-   `google-workspace` MCP server, not just Gmail — so **calendar is
-   unavailable** for the duration the flag is on, until the Gmail/calendar
-   split lands (naturally provider-separated in OpenConnector already —
-   `gmail` vs. `googlecalendar` are separate services, spike §6 — so this is
-   a routing-layer gap, not an OpenConnector modeling gap).
+This is tracked as a separate, later increment (the Gmail/calendar split —
+see the project's `project_toolhive_increment_build` notes; north star is a
+compact verb→capability+risk policy table derived from OpenConnector's
+action namespace).
 
-Both are tracked as a separate, later increment (tool→actionId translation +
-Gmail/calendar split — see the project's `project_toolhive_increment_build`
-notes; north star is a compact verb→capability+risk policy table derived
-from OpenConnector's action namespace).
+### Optional lower-level debug fallback
 
-**So: to verify the transport end-to-end right now, bypass the agent path**
-and call the adapter directly with a hand-minted platform JWT.
+Step 8's chat-driven `gmail.get_profile` call **is** the intended
+verification and proves the transport end-to-end through the real agent
+path. If it fails and you need to isolate whether the problem is in the
+agent/gateway wiring versus the adapter/OpenConnector/Google chain itself,
+you can bypass the agent entirely and call the adapter's `execute_action`
+directly with a hand-minted platform JWT — this is strictly a lower-level
+debug tool, not the primary verification step.
 
 From `backend/`, with the venv active and `JARVIS_PLATFORM_JWT_PRIVATE_PEM`
 set to the SAME pem as the adapter container (step 1):
@@ -328,7 +387,7 @@ token = mint_platform_jwt(
     principal_id="<principal_id>",   # must match the connection_map row's principal_id
     tenant_id="<tenant_id>",         # must match the connection_map row's tenant_id
     workspace_id="<workspace_id>",
-    capabilities=["email.search"],   # gmail.search requires email.search (src/adapter/enforcement.py)
+    capabilities=["email.read"],     # gmail.get_profile requires email.read (src/adapter/enforcement.py)
 )
 print(token)
 PY
@@ -337,7 +396,8 @@ PY
 Save that token, then call the adapter's `execute_action` MCP tool directly
 over its streamable-http transport (same JSON-RPC shape OpenConnector's own
 `/mcp` uses — spike §4 of `spike-findings.md`, the sibling request-shape
-spike):
+spike) — mirroring step 8's `gmail.get_profile` call, just at the raw
+`execute_action` layer instead of through agent tool discovery:
 
 ```bash
 export PLATFORM_JWT=<token from above>
@@ -353,26 +413,30 @@ curl -sS -X POST "http://localhost:8100/mcp" \
         "params": {
           "name": "execute_action",
           "arguments": {
-            "actionId": "gmail.search",
-            "input": {"query": "is:unread"},
+            "actionId": "gmail.get_profile",
+            "input": {},
             "account_alias": "work"
           }
         }
       }' | jq
 ```
 
+(Swap `actionId`/`input` for any of the other 6 named tools in the table
+above — e.g. `"actionId": "gmail.fetch_emails", "input": {"query": "is:unread"}`
+— to debug a different action the same way.)
+
 A successful call proves: identity verification (the platform JWT
 round-trips through the shared PEM), allowlist + capability enforcement
-(`gmail.search` + `email.search` both pass, `src/adapter/enforcement.py`),
+(`gmail.get_profile` + `email.read` both pass, `src/adapter/enforcement.py`),
 connection resolution to YOUR `connection_map` row
 (`src/adapter/connection_resolver.py`), the forced, server-side
 `connectionName` reaching OpenConnector (never caller-supplied), and
-secret-stripped Gmail results coming back. If it fails:
+secret-stripped Gmail profile data coming back. If it fails:
 
 - `IdentityError` / JWT decode failure → mismatched PEM between this script's
   process and the adapter container (step 1).
 - `CapabilityDenied` → the `capabilities` list passed to `mint_platform_jwt`
-  doesn't include the capability `gmail.search` requires (`email.search`,
+  doesn't include the capability `gmail.get_profile` requires (`email.read`,
   per `ACTION_REQUIRED_CAPABILITY` in `src/adapter/enforcement.py`).
 - `ConnectionDenied` → no `active` `connection_map` row for that
   `(tenant_id, principal_id, provider_id="gmail", account_alias)` — recheck
@@ -392,12 +456,13 @@ segments, `gmail` appearing twice). Increment 1's P0 isolation test **mocks**
 OpenConnector, so it never proved OC actually stores and resolves a
 multi-colon name correctly end-to-end.
 
-Step 9's successful `execute_action` call above **is** the round-trip proof,
-if it succeeded — `force_connection_name()` in `src/adapter/enforcement.py`
-put the full multi-colon `connectionName` on the outbound OpenConnector
-call, and OpenConnector had to correctly resolve it back to the specific
-Gmail connection you authorized in steps 5–6 (not silently fall back to some
-other/default connection) to return real Gmail data.
+Step 8's successful chat-driven `gmail.get_profile` call (or the optional
+`execute_action` debug fallback in step 9) **is** the round-trip proof, if
+it succeeded — `force_connection_name()` in `src/adapter/enforcement.py` put
+the full multi-colon `connectionName` on the outbound OpenConnector call,
+and OpenConnector had to correctly resolve it back to the specific Gmail
+connection you authorized in steps 5–6 (not silently fall back to some
+other/default connection) to return the real account's profile data.
 
 To double-check independently of the response payload, cross-reference two
 things you already have:
@@ -406,9 +471,10 @@ things you already have:
    exactly `gmail:{tenant_id}:{principal_id}:gmail:work`, not truncated or
    re-delimited at the first/last colon.
 2. OpenConnector's container logs for the `execute_action` request handled
-   in step 9 — confirm the `connectionName` it logged (if logged at
-   info/debug level) matches the same full string, and that no other
-   `gmail:*` connection on the shared instance was touched instead:
+   in step 8 (or step 9's debug fallback) — confirm the `connectionName` it
+   logged (if logged at info/debug level) matches the same full string, and
+   that no other `gmail:*` connection on the shared instance was touched
+   instead:
 
    ```bash
    docker compose -f docker-compose.integration.yml logs openconnector | grep -i "connectionName\|gmail:"

@@ -6,11 +6,39 @@ Pure-function tests: no DB, no I/O, no mocks needed.
 import pytest
 
 from src.adapter.enforcement import (
+    GMAIL_ACTION_ALLOWLIST,
+    GMAIL_PROFILE,
     ActionNotAllowed,
+    CapabilityDenied,
     ensure_action_allowed,
+    ensure_capability_allowed,
     force_connection_name,
     strip_secrets,
 )
+
+CURATED = {
+    "gmail.get_profile": "email.read",
+    "gmail.fetch_emails": "email.search",
+    "gmail.search_threads": "email.search",
+    "gmail.get_message": "email.read",
+    "gmail.list_threads": "email.list",
+    "gmail.list_labels": "email.list",
+    "gmail.send_email": "email.send",
+}
+
+
+def test_allowlist_is_the_curated_seven_real_actions():
+    assert GMAIL_ACTION_ALLOWLIST == frozenset(CURATED)
+
+
+def test_every_allowlisted_action_maps_to_its_capability():
+    for action_id, cap in CURATED.items():
+        assert GMAIL_PROFILE.action_required_capability[action_id] == cap
+
+
+def test_read_scoped_principal_cannot_send_email():
+    with pytest.raises(CapabilityDenied):
+        ensure_capability_allowed("gmail.send_email", ("email.read",), GMAIL_PROFILE)
 
 
 def test_force_connection_name_overwrites_attacker_supplied_value_and_leaves_input_untouched():
@@ -27,8 +55,8 @@ def test_force_connection_name_overwrites_attacker_supplied_value_and_leaves_inp
 
 
 def test_ensure_action_allowed_permits_allowlisted_actions():
-    ensure_action_allowed("gmail.search")
-    ensure_action_allowed("gmail.send")
+    ensure_action_allowed("gmail.fetch_emails")
+    ensure_action_allowed("gmail.send_email")
 
 
 def test_ensure_action_allowed_raises_for_disallowed_action():
@@ -79,6 +107,6 @@ def test_force_connection_name_rejects_empty_forced_name():
     # An empty connectionName makes OpenConnector fall back to its default
     # connection — a cross-tenant path in the shared-instance model. Fail closed.
     with pytest.raises(ValueError):
-        force_connection_name({"actionId": "gmail.search"}, "")
+        force_connection_name({"actionId": "gmail.fetch_emails"}, "")
     with pytest.raises(ValueError):
-        force_connection_name({"actionId": "gmail.search"}, "   ")
+        force_connection_name({"actionId": "gmail.fetch_emails"}, "   ")
