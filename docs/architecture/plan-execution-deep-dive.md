@@ -110,6 +110,7 @@ flowchart TD
 The most common source. The orchestrator receives a message via `process_message()` or `process_message_stream()` in `src/orchestrator/jarvis.py`.
 
 **Fast intent path** (10 intent types, ~200ms):
+
 - `greeting`, `chitchat`, `acknowledgment` → `capability="respond"`, priority=low
 - `simple_question`, `direct_answer` → `capability="reason"`
 - `data_fetch`, `single_read` → `capability="perceive"`
@@ -117,6 +118,7 @@ The most common source. The orchestrator receives a message via `process_message
 - `approval_response` → `capability="respond"`
 
 **Full Planner path** (~2-5s):
+
 - Planner receives the user message + conversation history + capability summary (~200 tokens)
 - Follows a 7-step decomposition: parse intent → identify capabilities → decompose → assign actors → assess risk → evaluate achievability → identify gaps
 - Returns structured JSON parsed by `extract_plan()`
@@ -124,6 +126,7 @@ The most common source. The orchestrator receives a message via `process_message
 ### 2.2 Perception Signals (Proactive)
 
 The `SchedulerLoop` triggers perception cycles every 30 seconds. When the `Perceiver` agent detects relevant events (email, calendar, Slack, GitHub), the `RelevanceAssessor` routes them by tier:
+
 - **act** → Planner creates an execution plan (background TaskRun)
 - **alert** → Notification pushed to user
 - **brief** → Held for daily briefing
@@ -187,14 +190,14 @@ sequenceDiagram
 
 ### Data Transformations
 
-| Stage | Input | Output | Key Logic |
-|-------|-------|--------|-----------|
-| Intent Classification | User message + history | `(intent, confidence, sources)` | Haiku single-turn call, JSON parse |
-| Fast Path | Intent string + message | `PlanOutput` (1 step) | Static mapping: intent → capability |
-| Full Planning | Message + context + capabilities | `PlanOutput` (N steps) | Opus multi-turn with tool_use |
-| Plan Extraction | Raw LLM text | Validated `PlanOutput` | JSON parse → Pydantic validation → fallback |
-| Persistence | `PlanOutput` | `Plan` + `PlanTask[]` rows | Step→Task mapping, dependency resolution |
-| Routing | `step.capability` | `(agent_name, tool_dicts)` | DB lookup: capability → tools → agent |
+| Stage                 | Input                            | Output                          | Key Logic                                   |
+| --------------------- | -------------------------------- | ------------------------------- | ------------------------------------------- |
+| Intent Classification | User message + history           | `(intent, confidence, sources)` | Haiku single-turn call, JSON parse          |
+| Fast Path             | Intent string + message          | `PlanOutput` (1 step)           | Static mapping: intent → capability         |
+| Full Planning         | Message + context + capabilities | `PlanOutput` (N steps)          | Opus multi-turn with tool_use               |
+| Plan Extraction       | Raw LLM text                     | Validated `PlanOutput`          | JSON parse → Pydantic validation → fallback |
+| Persistence           | `PlanOutput`                     | `Plan` + `PlanTask[]` rows      | Step→Task mapping, dependency resolution    |
+| Routing               | `step.capability`                | `(agent_name, tool_dicts)`      | DB lookup: capability → tools → agent       |
 
 ---
 
@@ -349,6 +352,7 @@ flowchart TD
 **Key insight:** The routing is purely data-driven. No hardcoded agent-to-capability mappings exist. If you add a new tool with `capability="notion.create"` and `requires_approval=True`, it automatically routes to the Executor agent (per-step scope via `resolve_for_step`).
 
 **Key files:**
+
 - `src/services/capability_resolver.py` — `CapabilityResolver`, `route_step()`
 - `src/orchestrator/capability_summary.py` — `generate_capability_summary()` (compact XML for Planner)
 
@@ -428,6 +432,7 @@ The GraphExecutor resolves dependencies using this algorithm in `_get_ready_step
 ```
 
 Example DAG execution:
+
 ```
 Plan: "Read my emails, analyze sentiment, send summary to Slack"
 
@@ -575,14 +580,15 @@ stateDiagram-v2
 
 Checkpoints are created at four moments:
 
-| Reason | When | What's Saved |
-|--------|------|-------------|
-| `step_completed` | After each step finishes | run status, completed step IDs + outputs |
-| `approval_gate` | When execution pauses for approval | step awaiting approval, all prior outputs |
-| `error_retry` | When a step fails but retries remain | error details, retry count |
-| `manual_pause` | User pauses execution | current state snapshot |
+| Reason           | When                                 | What's Saved                              |
+| ---------------- | ------------------------------------ | ----------------------------------------- |
+| `step_completed` | After each step finishes             | run status, completed step IDs + outputs  |
+| `approval_gate`  | When execution pauses for approval   | step awaiting approval, all prior outputs |
+| `error_retry`    | When a step fails but retries remain | error details, retry count                |
+| `manual_pause`   | User pauses execution                | current state snapshot                    |
 
 Checkpoints enable exact-point resumption. The `state_snapshot` contains:
+
 ```json
 {
   "status": "awaiting_approval",
@@ -635,11 +641,11 @@ flowchart TD
 
 Trust levels are `first_use`, `learning`, `trusted`, `autonomous`. Risk levels are `none`, `low`, `medium`, `high` (there is no `critical`).
 
-| | **none risk** | **low risk** | **medium risk** | **high risk** |
-|---|---|---|---|---|
-| **first_use** | approval_required | approval_required | approval_required | approval_required |
-| **learning** | approval_required | approval_required | approval_required | approval_required |
-| **trusted** | auto_execute_notify | auto_execute_notify | approval_required | approval_required |
+|                | **none risk**       | **low risk**        | **medium risk**     | **high risk**     |
+| -------------- | ------------------- | ------------------- | ------------------- | ----------------- |
+| **first_use**  | approval_required   | approval_required   | approval_required   | approval_required |
+| **learning**   | approval_required   | approval_required   | approval_required   | approval_required |
+| **trusted**    | auto_execute_notify | auto_execute_notify | approval_required   | approval_required |
 | **autonomous** | auto_execute_silent | auto_execute_silent | auto_execute_notify | approval_required |
 
 ### Approval Lifecycle
@@ -728,17 +734,17 @@ flowchart TD
 
 ### Surface Update Emission Points (in GraphExecutor)
 
-| Point | Phase | Trigger |
-|-------|-------|---------|
-| 1 | `plan_ready` | After run created, before execution |
-| 2 | `executing` | When first step batch starts |
-| 3 | `executing` | When next step batch starts |
-| 4 | `executing` | Progress update during long steps |
-| 5 | `approval_needed` | TrustEngine requires approval |
-| 6 | `executing` | After approval resolved, resuming |
-| 7 | `completed` | All steps done successfully |
-| 8 | `failed` | Run failed |
-| 9 | `partial` | Some steps completed, some failed |
+| Point | Phase             | Trigger                             |
+| ----- | ----------------- | ----------------------------------- |
+| 1     | `plan_ready`      | After run created, before execution |
+| 2     | `executing`       | When first step batch starts        |
+| 3     | `executing`       | When next step batch starts         |
+| 4     | `executing`       | Progress update during long steps   |
+| 5     | `approval_needed` | TrustEngine requires approval       |
+| 6     | `executing`       | After approval resolved, resuming   |
+| 7     | `completed`       | All steps done successfully         |
+| 8     | `failed`          | Run failed                          |
+| 9     | `partial`         | Some steps completed, some failed   |
 
 ### SurfaceUpdate Contract
 
@@ -760,14 +766,14 @@ SurfaceUpdate(
 
 ### Frontend Rendering by Phase
 
-| Phase | Visual | Component |
-|-------|--------|-----------|
-| `planning` | Spinning loader, "Analyzing..." | ExecutionSurface |
-| `plan_ready` | Step list with hollow circles ○ | StepList |
-| `executing` | Active step with spinner ◉, completed with ✓ | StepList |
+| Phase             | Visual                                        | Component          |
+| ----------------- | --------------------------------------------- | ------------------ |
+| `planning`        | Spinning loader, "Analyzing..."               | ExecutionSurface   |
+| `plan_ready`      | Step list with hollow circles ○               | StepList           |
+| `executing`       | Active step with spinner ◉, completed with ✓  | StepList           |
 | `approval_needed` | Warning card with Approve/Edit/Reject buttons | InlineApprovalCard |
-| `completed` | All steps ✓, key findings + artifacts summary | ResultSummary |
-| `failed` | Failed steps with ✗, error details | Error box |
+| `completed`       | All steps ✓, key findings + artifacts summary | ResultSummary      |
+| `failed`          | Failed steps with ✗, error details            | Error box          |
 
 ### Reconnection Recovery
 
@@ -872,12 +878,12 @@ flowchart TD
 
 ### Retry Backoff Schedule
 
-| Attempt | Delay | Cumulative Wait |
-|---------|-------|----------------|
-| 1st retry | 2s | 2s |
-| 2nd retry | 4s | 6s |
-| 3rd retry | 8s | 14s |
-| (cap) | 30s max | — |
+| Attempt   | Delay   | Cumulative Wait |
+| --------- | ------- | --------------- |
+| 1st retry | 2s      | 2s              |
+| 2nd retry | 4s      | 6s              |
+| 3rd retry | 8s      | 14s             |
+| (cap)     | 30s max | —               |
 
 ### Dead Letter Queue Lifecycle
 
@@ -897,11 +903,11 @@ Operation fails → DeadLetterService.enqueue()
 
 `run_startup_recovery()` runs on every application restart:
 
-| Check | Cutoff | Action |
-|-------|--------|--------|
-| Orphaned plans | Created >1 hour ago, status="planned" | Mark "stale_on_recovery" |
-| Stale runs | Updated >15 min ago, status="running" | Mark "failed" with error |
-| Expired approvals | Past `expires_at` | Mark "expired" |
+| Check             | Cutoff                                | Action                   |
+| ----------------- | ------------------------------------- | ------------------------ |
+| Orphaned plans    | Created >1 hour ago, status="planned" | Mark "stale_on_recovery" |
+| Stale runs        | Updated >15 min ago, status="running" | Mark "failed" with error |
+| Expired approvals | Past `expires_at`                     | Mark "expired"           |
 
 ---
 
@@ -980,6 +986,7 @@ After run completion, `_writeback_memories()` extracts facts from step outputs:
 ### 13.4 Goal Tracking
 
 Goals are stored as memories with `memory_type="goal"`:
+
 - Created by `store_goal_memory()` when Planner identifies a user objective
 - Retrieved by `ContextBuilder.build()` for every future Planner invocation
 - Injected into the system prompt so the Planner considers ongoing goals
@@ -1006,38 +1013,38 @@ SchedulerLoop (every 30s)
 
 ## 14. Key File Reference
 
-| Component | File | Purpose |
-|-----------|------|---------|
-| **Orchestrator** | `src/orchestrator/jarvis.py` | Entry points, plan creation, surface push |
-| **Intent Classifier** | `src/orchestrator/intent_classifier.py` | Fast intents, `classify_intent()`, `extract_plan()` |
-| **Planner Prompt** | `src/orchestrator/prompts.py` | `PLANNER_PROMPT_V2`, all agent prompts |
-| **Deep Runtime** | `src/deep_runtime/` (`build_deep_agent`) | Single execution engine (LangGraph agent loop, middleware chain) |
-| **Step Runner** | `src/services/step_runner.py` | `run_step_via_deep_agent()` → `AgentInvoker.run_autonomous_deep_step` |
-| **DAG Runner** | `src/services/dag_runner.py` | Per-step DAG execution GraphExecutor delegates to |
-| **Hooks** | `src/orchestrator/hooks.py` | Pre/post tool hooks, Governor audit |
-| **Recovery** | `src/orchestrator/recovery.py` | Startup reconciliation |
-| **Contracts** | `src/contracts/` | PlanOutput, PlanStep, SurfaceUpdate |
-| **GraphExecutor** | `src/services/graph_executor.py` | DAG execution, checkpoints, approval gates |
-| **Execution State** | `src/services/execution_state.py` | State machine, transition validation |
-| **Capability Resolver** | `src/services/capability_resolver.py` | Capability → agent + tools routing |
-| **Trust Engine** | `src/services/trust_engine.py` | 4×4 matrix, trust graduation/demotion |
-| **Risk Assessor** | `src/services/risk_assessor.py` | Haiku-based risk assessment, Redis cache |
-| **Approval Service** | `src/services/approval_service.py` | Create/query approvals |
-| **Notifier** | `src/services/notifier.py` | Priority scoring, rate limiting, delivery |
-| **Scheduler** | `src/services/scheduler.py` | Background tasks, perception, DLQ |
-| **Dead Letter** | `src/services/dead_letter.py` | DLQ enqueue/retry/stats |
-| **Memory Service** | `src/services/memory_service.py` | Store/retrieve/expire memories |
-| **Surface Builder** | `src/services/surface_builder.py` | Build workspace surfaces from DB |
-| **Plan Model** | `src/models/plans.py` | Plan + PlanTask SQLAlchemy models |
-| **TaskGraph Model** | `src/models/task_graph.py` | TaskRun + TaskStep + TaskCheckpoint |
-| **Approval Model** | `src/models/approvals.py` | Approval SQLAlchemy model |
-| **Approval Routes** | `src/api/routes_approvals.py` | Approve/reject/list endpoints |
-| **WebSocket Routes** | `src/api/routes_ws.py` | WS auth, relay, action dispatch |
-| **UI Routes** | `src/api/routes_ui.py` | GET /v1/workspace/surfaces |
-| **Frontend WS Hook** | `frontend/src/hooks/use-jarvis-ws.ts` | WebSocket connection, message routing |
-| **Surface Store** | `frontend/src/stores/surface-store.ts` | Zustand store for surfaces |
-| **Execution Surface** | `frontend/src/components/a2ui/components/execution-surface.tsx` | Phase-aware rendering |
-| **Inline Approval** | `frontend/src/components/a2ui/components/inline-approval.tsx` | Approval UI with risk context |
+| Component               | File                                                            | Purpose                                                               |
+| ----------------------- | --------------------------------------------------------------- | --------------------------------------------------------------------- |
+| **Orchestrator**        | `src/orchestrator/jarvis.py`                                    | Entry points, plan creation, surface push                             |
+| **Intent Classifier**   | `src/orchestrator/intent_classifier.py`                         | Fast intents, `classify_intent()`, `extract_plan()`                   |
+| **Planner Prompt**      | `src/orchestrator/prompts.py`                                   | `PLANNER_PROMPT_V2`, all agent prompts                                |
+| **Deep Runtime**        | `src/deep_runtime/` (`build_deep_agent`)                        | Single execution engine (LangGraph agent loop, middleware chain)      |
+| **Step Runner**         | `src/services/step_runner.py`                                   | `run_step_via_deep_agent()` → `AgentInvoker.run_autonomous_deep_step` |
+| **DAG Runner**          | `src/services/dag_runner.py`                                    | Per-step DAG execution GraphExecutor delegates to                     |
+| **Hooks**               | `src/orchestrator/hooks.py`                                     | Pre/post tool hooks, Governor audit                                   |
+| **Recovery**            | `src/orchestrator/recovery.py`                                  | Startup reconciliation                                                |
+| **Contracts**           | `src/contracts/`                                                | PlanOutput, PlanStep, SurfaceUpdate                                   |
+| **GraphExecutor**       | `src/services/graph_executor.py`                                | DAG execution, checkpoints, approval gates                            |
+| **Execution State**     | `src/services/execution_state.py`                               | State machine, transition validation                                  |
+| **Capability Resolver** | `src/services/capability_resolver.py`                           | Capability → agent + tools routing                                    |
+| **Trust Engine**        | `src/services/trust_engine.py`                                  | 4×4 matrix, trust graduation/demotion                                 |
+| **Risk Assessor**       | `src/services/risk_assessor.py`                                 | Haiku-based risk assessment, Redis cache                              |
+| **Approval Service**    | `src/services/approval_service.py`                              | Create/query approvals                                                |
+| **Notifier**            | `src/services/notifier.py`                                      | Priority scoring, rate limiting, delivery                             |
+| **Scheduler**           | `src/services/scheduler.py`                                     | Background tasks, perception, DLQ                                     |
+| **Dead Letter**         | `src/services/dead_letter.py`                                   | DLQ enqueue/retry/stats                                               |
+| **Memory Service**      | `src/services/memory_service.py`                                | Store/retrieve/expire memories                                        |
+| **Surface Builder**     | `src/services/surface_builder.py`                               | Build workspace surfaces from DB                                      |
+| **Plan Model**          | `src/models/plans.py`                                           | Plan + PlanTask SQLAlchemy models                                     |
+| **TaskGraph Model**     | `src/models/task_graph.py`                                      | TaskRun + TaskStep + TaskCheckpoint                                   |
+| **Approval Model**      | `src/models/approvals.py`                                       | Approval SQLAlchemy model                                             |
+| **Approval Routes**     | `src/api/routes_approvals.py`                                   | Approve/reject/list endpoints                                         |
+| **WebSocket Routes**    | `src/api/routes_ws.py`                                          | WS auth, relay, action dispatch                                       |
+| **UI Routes**           | `src/api/routes_ui.py`                                          | GET /v1/workspace/surfaces                                            |
+| **Frontend WS Hook**    | `frontend/src/hooks/use-jarvis-ws.ts`                           | WebSocket connection, message routing                                 |
+| **Surface Store**       | `frontend/src/stores/surface-store.ts`                          | Zustand store for surfaces                                            |
+| **Execution Surface**   | `frontend/src/components/a2ui/components/execution-surface.tsx` | Phase-aware rendering                                                 |
+| **Inline Approval**     | `frontend/src/components/a2ui/components/inline-approval.tsx`   | Approval UI with risk context                                         |
 
 ---
 
@@ -1046,8 +1053,8 @@ SchedulerLoop (every 30s)
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │ 1. CREATION          User message / Perception / Schedule                   │
-│                       ↓                                                      │
-│ 2. CLASSIFICATION    classify_intent() — fast or full Planner              │
+│                       ↓                                                     │
+│ 2. CLASSIFICATION    classify_intent() — fast or full Planner               │
 │                       ↓                                                      │
 │ 3. PLANNING          PlanOutput (goal + steps + capabilities + gaps)        │
 │                       ↓                                                      │
