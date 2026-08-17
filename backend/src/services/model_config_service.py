@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.config.model_catalog import MODEL_CATALOG
 from src.config.settings import get_settings
+from src.contracts.model_config import ModelConfigResponse, ProviderStatus, TierBinding
 from src.models.model_binding import ModelBinding
 from src.models.provider_credential import ProviderCredential
 from src.services.model_resolver import _ENV_KEY_ATTR
@@ -65,14 +66,6 @@ class ModelConfigService:
             )
 
     async def get_config_response(self, workspace_id):
-        # Imported lazily to avoid a circular import with the routes module
-        # (routes_model_config imports this service at module load).
-        from src.api.routes_model_config import (
-            ModelConfigResponse,
-            ProviderStatus,
-            TierBinding,
-        )
-
         rows = await self._load_bindings(workspace_id)
 
         # Precedence: workspace row beats the NULL-default row for a (scope_type, scope_key).

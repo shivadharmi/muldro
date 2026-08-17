@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.api.deps import get_current_workspace_id, get_session
 from src.config import secret_crypto
 from src.config.model_catalog import MODEL_CATALOG, get_model_spec
+from src.contracts.model_config import ModelConfigResponse, ProviderStatus, TierBinding
 from src.llm.model_factory import build_langchain_model
 from src.models.provider_credential import ProviderCredential
 from src.services.model_config_service import ModelConfigService
@@ -53,36 +54,10 @@ async def get_model_catalog(workspace_id: str = Depends(get_current_workspace_id
     )
 
 
-class TierBinding(BaseModel):
-    model_config = ConfigDict(extra="ignore", protected_namespaces=())
-    # For an agent override this field carries the AGENT NAME (round-tripped as the
-    # scope_key of a scope_type="agent" ModelBinding); for a tier it is the tier name.
-    tier: str
-    provider: str
-    model_id: str
-    effort: str = "none"
-    max_tokens: int = 4096
-    temperature: float | None = None
-
-
 class ModelConfigBody(BaseModel):
     model_config = ConfigDict(extra="ignore")
     tiers: list[TierBinding]
     agent_overrides: list[TierBinding] = []
-
-
-class ProviderStatus(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-    provider: str
-    configured: bool
-    status: str
-
-
-class ModelConfigResponse(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-    tiers: list[TierBinding]
-    agent_overrides: list[TierBinding]
-    providers: list[ProviderStatus]
 
 
 @router.get("/v1/model-config", response_model=ModelConfigResponse)
