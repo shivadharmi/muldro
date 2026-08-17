@@ -38,6 +38,13 @@ const LOGOS: Record<string, LogoComponent> = {
   filesystem: FolderIcon,
 };
 
+// Friendly names for OpenConnector provider slugs; unmapped slugs show as-is.
+const PROVIDER_LABELS: Record<string, string> = {
+  gmail: "Gmail",
+  googlecalendar: "Calendar",
+  github: "GitHub",
+};
+
 function HealthDot({ status }: { status: string }) {
   const color =
     status === "healthy"
@@ -64,12 +71,22 @@ function IntegrationsContent() {
     if (gatewayConnect.state === "active") {
       queryClient.invalidateQueries({ queryKey: ["unified-integrations"] });
       addToast("Connected successfully", "success");
+    } else if (gatewayConnect.state === "partial") {
+      // Some providers of this installation connected and some did not.
+      queryClient.invalidateQueries({ queryKey: ["unified-integrations"] });
+      const missed = Object.entries(gatewayConnect.results)
+        .filter(([, outcome]) => outcome !== "active")
+        .map(([provider]) => PROVIDER_LABELS[provider] ?? provider);
+      addToast(
+        `Partly connected — ${missed.join(", ")} still pending`,
+        "warning",
+      );
     } else if (gatewayConnect.state === "timeout") {
       addToast("Connection timed out — please try again", "error");
     } else if (gatewayConnect.state === "error") {
       addToast("Failed to start connection", "error");
     }
-  }, [gatewayConnect.state, queryClient, addToast]);
+  }, [gatewayConnect.state, gatewayConnect.results, queryClient, addToast]);
 
   useEffect(() => {
     const status = searchParams.get("status");
@@ -124,9 +141,18 @@ function IntegrationsContent() {
   async function handleConnect(integration: UnifiedIntegration) {
     // Gateway-backed providers (OpenConnector) use the popup-poll flow; OC owns
     // the OAuth callback and never redirects back to us (spike-findings-connect §4).
-    if (integration.oc_provider) {
+    if (integration.oc_providers?.length) {
       setConnecting(integration.server_name);
-      gatewayConnect.start(integration.oc_provider);
+      // One installation can fan out to several OC providers (e.g. Google
+      // Workspace -> gmail + googlecalendar); the hook walks them in order.
+      try {
+        await gatewayConnect.start(integration.oc_providers);
+      } finally {
+        // Clear the pending card even on the gateway path. Without this the
+        // stale server_name lingers and the NEXT gateway integration inherits
+        // this card's pending highlight (increment-1 follow-up (a)).
+        setConnecting(null);
+      }
       return;
     }
     // Native providers keep the full-page OAuth-redirect flow.
@@ -151,9 +177,13 @@ function IntegrationsContent() {
 
   function renderCard(integration: UnifiedIntegration) {
     const Logo = LOGOS[integration.server_name];
+    const isGateway = !!integration.oc_providers?.length;
     const isPending =
       connecting === integration.server_name &&
-      (!integration.oc_provider || gatewayConnect.state === "connecting");
+      (!isGateway || gatewayConnect.state === "connecting");
+    const providerStates = Object.entries(
+      integration.provider_connections ?? {},
+    );
 
     return (
       <Card key={integration.server_name}>
@@ -187,6 +217,24 @@ function IntegrationsContent() {
               </Badge>
             </div>
           </div>
+
+          {providerStates.length > 1 && (
+            <div className="flex flex-wrap gap-1.5 mb-3">
+              {providerStates.map(([provider, isConnected]) => (
+                <span
+                  key={provider}
+                  className={`text-[11px] px-1.5 py-0.5 rounded ${
+                    isConnected
+                      ? "bg-j-success-soft text-j-success"
+                      : "bg-surface-2 text-t-secondary"
+                  }`}
+                >
+                  {isConnected ? "✓" : "○"}{" "}
+                  {PROVIDER_LABELS[provider] ?? provider}
+                </span>
+              ))}
+            </div>
+          )}
 
           {integration.scopes.length > 0 && (
             <div className="flex flex-wrap gap-1 mb-3">
@@ -242,7 +290,10 @@ function IntegrationsContent() {
                   className="text-xs px-2.5 py-1 rounded-[var(--radius-md)] bg-j-primary text-j-primary-fg hover:bg-j-primary-hover disabled:opacity-50"
                 >
                   {isPending
-                    ? "Redirecting..."
+                    ? isGateway
+                      ? // The popup-poll flow never navigates this tab.
+                        "Waiting for approval…"
+                      : "Redirecting..."
                     : !integration.configured
                       ? "Not configured"
                       : "Connect"}
