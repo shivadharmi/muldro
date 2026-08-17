@@ -85,7 +85,12 @@ class ConnectorPoller:
         # still an OAuthManager question.
         gateway_provider = gateway_provider_for_source(source)
         caller = None
-        access_token = ""
+        # Credentials handed to the connector. The gateway branch deliberately
+        # leaves this EMPTY rather than {"access_token": ""}: an empty string is a
+        # silent falsy that a future reader would treat as "no token", while an
+        # absent key fails loudly with KeyError. There is genuinely nothing to
+        # read here — the gateway binds the credential at call time.
+        credentials: dict[str, str] = {}
 
         if gateway_provider is not None:
             if not issubclass(connector_cls, GatewayConnector):
@@ -112,14 +117,23 @@ class ConnectorPoller:
             caller = GatewayToolCaller(user_id=user_id, workspace_id=workspace_id)
         else:
             # Native source: unchanged OAuth path.
+            from src.integrations.provider_map import provider_for_source
             from src.services.oauth_manager import OAuthManager
 
+            # Resolve the OAuth PROVIDER through the canonical map — never pass
+            # the raw source. The upstream drop-gate (perception_tick ->
+            # _provider_for_source -> provider_map) already answers this question
+            # that way, and the two must agree: a provider spanning several
+            # sources would otherwise stay runnable at the gate while this lookup
+            # missed under the source name, yielding no_token -> auth_failed ->
+            # PERMANENT, a circuit that opens after a single attempt.
+            provider = provider_for_source(source)
             oauth_mgr = OAuthManager(
                 self._db_factory,
                 encryption_key=self._settings.oauth_encryption_key,
                 settings=self._settings,
             )
-            token_result = await oauth_mgr.get_valid_token_with_reason(user_id, source)
+            token_result = await oauth_mgr.get_valid_token_with_reason(user_id, provider)
             if token_result.token is None:
                 # Distinguish a genuine token-refresh blip (transient — retry) from a
                 # confirmed "no usable credential" (never connected / no refresh token /
@@ -137,12 +151,16 @@ class ConnectorPoller:
                 return (
                     [],
                     None,
-                    f"No valid credentials for {source} — {err}",
+                    f"No valid credentials for {source} (provider {provider}) — {err}",
                     cursor_type,
                 )
-            access_token = token_result.token
+            credentials = {"access_token": token_result.token}
 
-        if caller is not None:
+        # Branch on the SAME registry answer that selected the credential path
+        # above. Re-deriving it from ``caller is not None`` would let a future
+        # early return inside the gateway branch silently construct a native
+        # connector.
+        if gateway_provider is not None:
             connector = connector_cls(settings=self._settings, caller=caller)
         else:
             connector = connector_cls(settings=self._settings)
@@ -173,7 +191,7 @@ class ConnectorPoller:
             # unchanged cursor), so we never ingest events nor advance the cursor on
             # a failing poll.
             result = await asyncio.wait_for(
-                connector.poll(user_id, cursor, {"access_token": access_token}),
+                connector.poll(user_id, cursor, credentials),
                 timeout=30,
             )
 
