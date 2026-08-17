@@ -803,3 +803,59 @@ the single most useful fact to write down here for the next person who runs
 this runbook — popup-blocking behavior is environment-dependent and this
 runbook cannot assert a universal answer, only a verified one for a specific
 run.
+
+---
+
+## 13. KNOWN GAP — gateway perception data path does not exist yet
+
+**Status: deliberately deferred to its own increment (decided 2026-08-17).**
+
+Tool-calling through the gateway is complete and live-verifiable via §12. **Perception
+(the scheduler polling gmail / calendar / github for new signal) is NOT.** Do not
+report §12 as a full acceptance of Gmail/Calendar/GitHub support.
+
+### Why
+
+The perception connectors are a **separate data path** that the gateway never
+replaced. `backend/src/connectors/gmail.py`, `calendar.py`, and `github_connector.py`
+call the provider REST APIs directly over `httpx` with a raw OAuth access token
+(e.g. `https://gmail.googleapis.com/gmail/v1/users/me/history` with
+`Authorization: Bearer …`). They never touch MCP. Both paths happened to be fed by
+the same OAuth tokens, which is why migrating the *tool* transport silently broke
+the *polling* transport.
+
+Native OAuth for google and github is now retired, so those tokens cannot exist and
+cannot be minted. `connector_poller` therefore fails at credential acquisition and
+classifies it `auth_failed` (permanent, threshold 1 → the circuit opens after one
+attempt).
+
+### What was fixed, and what was not
+
+- **Fixed:** the scheduler's runnability gate no longer marks these sources
+  `needs_reauth`. All three gateway providers declare their `perception_sources` in
+  the registry, so an unconnected source is *skipped* (still due, self-healing)
+  rather than paused unrecoverably. This is what stops the eventual port from
+  needing a data migration to un-poison paused rows.
+- **Not fixed:** the poll itself. A connected source becomes runnable and then fails
+  at credential acquisition.
+
+### The decided direction (not yet built)
+
+Port the connectors to poll **via gateway MCP tools** (`gmail_fetch_emails`,
+`googlecalendar_list_events`, `github_*`) instead of provider REST, so OpenConnector
+remains the single credential store.
+
+**Known cost, accepted:** the curated gateway action set has **no incremental-sync
+action**. Gmail perception currently does cursor-based incremental sync via the
+`history` endpoint (`startHistoryId`, with a 404 → full-resync fallback); calendar
+uses `syncToken` with a 410 fallback. Neither has a gateway equivalent, so the port
+is a semantics change (full-list + dedup), not a transport swap. It likely needs a
+re-spike of OpenConnector's catalog for a history-capable action before the cursor
+model can be redesigned.
+
+### Also orphaned by retirement (same increment)
+
+`_register_webhooks_for_sources` (`backend/src/api/routes_auth_oauth_integration.py`)
+has **zero production callers** — its `resource_map` covers exactly `gmail` and
+`calendar`, so Gmail/Calendar push webhooks are never registered and those sources
+would be poll-only even once polling works.

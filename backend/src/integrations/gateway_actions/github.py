@@ -215,8 +215,14 @@ GITHUB = GatewayProvider(
     server_name="github",
     display_name="GitHub",
     actions=GITHUB_ACTIONS,
-    # Deliberately empty: this increment migrates only the Google Workspace
-    # perception sources onto the gateway's connection-derived runnability. The
-    # "github" perception source still resolves through the OAuth branch.
-    perception_sources=(),
+    # GitHub's native OAuth was retired with Google's, so the "github" perception
+    # source has no token and no route that can mint one. Declaring it here routes
+    # it to the connection-derived branch, where an unconnected source is SKIPPED
+    # (still due, self-healing) rather than permanently marked needs_reauth --
+    # which pauses the row and can only be cleared by an OAuthManager check that
+    # will never return ok. The gateway perception DATA path does not exist yet
+    # (connectors still poll provider REST APIs directly); porting it is its own
+    # increment. This declaration is what keeps that port from needing a data
+    # migration to un-poison rows the scheduler paused in the meantime.
+    perception_sources=("github",),
 )

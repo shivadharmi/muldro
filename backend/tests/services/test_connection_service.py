@@ -316,7 +316,14 @@ async def test_confirm_enables_schedules_for_the_providers_perception_sources():
         await engine.dispose()
 
 
-async def test_confirm_enables_nothing_for_a_provider_with_no_perception_source():
+async def test_confirm_enables_the_github_schedule_from_its_declared_source():
+    """github declares perception_sources=("github",), so confirming it enables that schedule.
+
+    It was previously declared empty, which routed the "github" perception source
+    through the retired-OAuth branch where ``no_token`` is a PERMANENT reauth
+    reason -- pausing the row unrecoverably. This asserts the declaration is wired
+    all the way through, not just present in the registry.
+    """
     from src.services.schedule_seeder import seed_default_schedules
 
     factory, engine = make_test_db()
@@ -334,6 +341,44 @@ async def test_confirm_enables_nothing_for_a_provider_with_no_perception_source(
         async with factory() as db:
             active = await svc.confirm_connection(
                 db, workspace_id=_SCHED_WS, principal_id=pid, provider="github", alias="default"
+            )
+            await db.commit()
+
+        assert active is True
+        enabled = await _schedule_names_enabled(factory, _SCHED_WS)
+        assert enabled.get("observe_github") is True
+        # Confirming github must not enable another provider's source.
+        assert not enabled.get("observe_gmail")
+        assert not enabled.get("observe_calendar")
+    finally:
+        await _cleanup_schedule_ws(factory, _SCHED_WS)
+        await engine.dispose()
+
+
+async def test_confirm_enables_nothing_for_a_provider_the_registry_does_not_know():
+    """Fail-closed: an unregistered provider activates but enables no schedule.
+
+    Every registered provider now declares a perception source, so the
+    "no source" case is only reachable off-registry -- and it must not fall back
+    to enabling something.
+    """
+    from src.services.schedule_seeder import seed_default_schedules
+
+    factory, engine = make_test_db()
+    pid = f"usr_{ULID()}"
+    try:
+        await seed_user_workspace(factory, pid, _SCHED_WS)
+        await _cleanup_schedule_ws(factory, _SCHED_WS)
+        async with factory() as db:
+            await seed_default_schedules(db, pid, _SCHED_WS)
+            await db.commit()
+
+        await _seed_pending_connection(factory, pid, "dropbox", _SCHED_WS)
+        name = mint_connection_name(_SCHED_WS, pid, "dropbox", "default")
+        svc = ConnectionService(admin_client=_configured_admin(name))
+        async with factory() as db:
+            active = await svc.confirm_connection(
+                db, workspace_id=_SCHED_WS, principal_id=pid, provider="dropbox", alias="default"
             )
             await db.commit()
 
