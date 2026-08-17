@@ -1,4 +1,12 @@
-"""Registry invariants: the single source of truth must stay internally consistent."""
+"""Registry invariants: the single source of truth must stay internally consistent.
+
+Scope: this file owns the CROSS-PROVIDER invariants -- action-id uniqueness,
+capability-catalog membership, legal agent tool names, capability disjointness
+across installations, seeded-installation binding, and that each provider is
+registered under the installation it belongs to. Each provider's own curated
+action set, policy table, and schemas are owned by its per-provider test file,
+which does not repeat these.
+"""
 
 from src.integrations.capabilities import CAPABILITY_CATALOG
 from src.integrations.gateway_actions import (
@@ -27,6 +35,17 @@ def test_github_is_its_own_installation():
     provider = PROVIDER_REGISTRY["github"]
     assert provider.server_name == "github"
     assert providers_for_server("github") == ("github",)
+
+
+def test_every_provider_binds_to_a_seeded_installation():
+    """A typo in server_name would silently drop a provider from its installation."""
+    from src.integrations.seed_installations import _DEFAULT_INSTALLATIONS
+
+    seeded = {i["server_name"] for i in _DEFAULT_INSTALLATIONS}
+    for provider in PROVIDER_REGISTRY.values():
+        assert provider.server_name in seeded, (
+            f"{provider.provider_id} binds to unseeded server {provider.server_name!r}"
+        )
 
 
 def test_every_action_capability_exists_in_the_catalog():

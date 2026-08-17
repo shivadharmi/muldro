@@ -10,7 +10,7 @@ flow applies to it unchanged.
 
 from __future__ import annotations
 
-from src.integrations.gateway_actions import GatewayAction, GatewayProvider
+from src.integrations.gateway_actions._types import GatewayAction, GatewayProvider
 
 GITHUB_ACTIONS: tuple[GatewayAction, ...] = (
     GatewayAction(

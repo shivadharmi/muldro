@@ -9,7 +9,199 @@ diverge from what is declared.
 
 from __future__ import annotations
 
-from src.integrations.gateway_actions import GatewayAction, GatewayProvider
+import copy
+
+from src.integrations.gateway_actions._types import GatewayAction, GatewayProvider
+
+# ``create_event`` and ``update_event`` take the SAME nested ``event`` payload
+# upstream -- OpenConnector declares both from one shared shape, and they differ
+# only in the wrapper's description and required list. Declaring the 16 shared
+# property schemas once means a future OC drift correction is a one-place edit
+# instead of two blocks that can silently disagree.
+_EVENT_PROPERTIES: dict = {
+    "summary": {
+        "type": "string",
+        "description": "Event title.",
+    },
+    "description": {
+        "type": "string",
+        "description": "Event description.",
+    },
+    "location": {
+        "type": "string",
+        "description": "Event location.",
+    },
+    "start": {
+        "type": "object",
+        "properties": {
+            "date": {
+                "type": "string",
+                "minLength": 1,
+                "description": "All-day event date in YYYY-MM-DD format.",
+            },
+            "dateTime": {
+                "type": "string",
+                "description": "RFC 3339 timestamp.",
+                "format": "date-time",
+            },
+            "timeZone": {
+                "type": "string",
+                "minLength": 1,
+                "description": "IANA time zone used to interpret the event time.",
+            },
+        },
+        "additionalProperties": False,
+        "description": "Event date or date-time.",
+    },
+    "end": {
+        "type": "object",
+        "properties": {
+            "date": {
+                "type": "string",
+                "minLength": 1,
+                "description": "All-day event date in YYYY-MM-DD format.",
+            },
+            "dateTime": {
+                "type": "string",
+                "description": "RFC 3339 timestamp.",
+                "format": "date-time",
+            },
+            "timeZone": {
+                "type": "string",
+                "minLength": 1,
+                "description": "IANA time zone used to interpret the event time.",
+            },
+        },
+        "additionalProperties": False,
+        "description": "Event date or date-time.",
+    },
+    "attendees": {
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {
+                "email": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Attendee email address.",
+                },
+                "displayName": {
+                    "type": "string",
+                    "description": "Attendee display name.",
+                },
+                "optional": {
+                    "type": "boolean",
+                    "description": "Whether attendance is optional.",
+                },
+                "resource": {
+                    "type": "boolean",
+                    "description": "Whether the attendee represents a resource.",
+                },
+                "responseStatus": {
+                    "type": "string",
+                    "description": "Attendee response status.",
+                },
+                "comment": {
+                    "type": "string",
+                    "description": "Additional attendee comment.",
+                },
+                "additionalGuests": {
+                    "type": "integer",
+                    "description": "Number of additional guests.",
+                },
+            },
+            "additionalProperties": False,
+            "required": [
+                "email",
+            ],
+            "description": "Event attendee.",
+        },
+        "description": "Event attendees.",
+    },
+    "recurrence": {
+        "type": "array",
+        "items": {
+            "type": "string",
+            "minLength": 1,
+        },
+        "description": "Recurrence rules.",
+    },
+    "conferenceData": {
+        "type": "object",
+        "additionalProperties": True,
+        "description": "Google Calendar API object.",
+    },
+    "reminders": {
+        "type": "object",
+        "properties": {
+            "useDefault": {
+                "type": "boolean",
+                "description": "Whether to use default calendar reminders.",
+            },
+            "overrides": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "method": {
+                            "type": "string",
+                            "minLength": 1,
+                            "description": "Reminder delivery method, such as email or popup.",
+                        },
+                        "minutes": {
+                            "type": "integer",
+                            "description": "Minutes before the event.",
+                        },
+                    },
+                    "additionalProperties": False,
+                    "required": [
+                        "method",
+                        "minutes",
+                    ],
+                    "description": "Reminder override.",
+                },
+                "description": "Reminder overrides.",
+            },
+        },
+        "additionalProperties": False,
+        "description": "Event reminders.",
+    },
+    "colorId": {
+        "type": "string",
+        "description": "Google Calendar color ID.",
+    },
+    "visibility": {
+        "type": "string",
+        "description": "Event visibility.",
+    },
+    "transparency": {
+        "type": "string",
+        "description": "Whether the event blocks time.",
+    },
+    "status": {
+        "type": "string",
+        "description": "Event status.",
+    },
+    "extendedProperties": {
+        "type": "object",
+        "additionalProperties": True,
+        "description": "Google Calendar API object.",
+    },
+    "attachments": {
+        "type": "array",
+        "items": {
+            "type": "object",
+            "additionalProperties": True,
+            "description": "Google Calendar API object.",
+        },
+        "description": "Google Calendar API objects.",
+    },
+    "source": {
+        "type": "object",
+        "additionalProperties": True,
+        "description": "Google Calendar API object.",
+    },
+}
 
 GOOGLECALENDAR_ACTIONS: tuple[GatewayAction, ...] = (
     GatewayAction(
@@ -304,194 +496,7 @@ GOOGLECALENDAR_ACTIONS: tuple[GatewayAction, ...] = (
                 },
                 "event": {
                     "type": "object",
-                    "properties": {
-                        "summary": {
-                            "type": "string",
-                            "description": "Event title.",
-                        },
-                        "description": {
-                            "type": "string",
-                            "description": "Event description.",
-                        },
-                        "location": {
-                            "type": "string",
-                            "description": "Event location.",
-                        },
-                        "start": {
-                            "type": "object",
-                            "properties": {
-                                "date": {
-                                    "type": "string",
-                                    "minLength": 1,
-                                    "description": "All-day event date in YYYY-MM-DD format.",
-                                },
-                                "dateTime": {
-                                    "type": "string",
-                                    "description": "RFC 3339 timestamp.",
-                                    "format": "date-time",
-                                },
-                                "timeZone": {
-                                    "type": "string",
-                                    "minLength": 1,
-                                    "description": "IANA time zone used to interpret the event "
-                                    "time.",
-                                },
-                            },
-                            "additionalProperties": False,
-                            "description": "Event date or date-time.",
-                        },
-                        "end": {
-                            "type": "object",
-                            "properties": {
-                                "date": {
-                                    "type": "string",
-                                    "minLength": 1,
-                                    "description": "All-day event date in YYYY-MM-DD format.",
-                                },
-                                "dateTime": {
-                                    "type": "string",
-                                    "description": "RFC 3339 timestamp.",
-                                    "format": "date-time",
-                                },
-                                "timeZone": {
-                                    "type": "string",
-                                    "minLength": 1,
-                                    "description": "IANA time zone used to interpret the event "
-                                    "time.",
-                                },
-                            },
-                            "additionalProperties": False,
-                            "description": "Event date or date-time.",
-                        },
-                        "attendees": {
-                            "type": "array",
-                            "items": {
-                                "type": "object",
-                                "properties": {
-                                    "email": {
-                                        "type": "string",
-                                        "minLength": 1,
-                                        "description": "Attendee email address.",
-                                    },
-                                    "displayName": {
-                                        "type": "string",
-                                        "description": "Attendee display name.",
-                                    },
-                                    "optional": {
-                                        "type": "boolean",
-                                        "description": "Whether attendance is optional.",
-                                    },
-                                    "resource": {
-                                        "type": "boolean",
-                                        "description": "Whether the attendee represents a "
-                                        "resource.",
-                                    },
-                                    "responseStatus": {
-                                        "type": "string",
-                                        "description": "Attendee response status.",
-                                    },
-                                    "comment": {
-                                        "type": "string",
-                                        "description": "Additional attendee comment.",
-                                    },
-                                    "additionalGuests": {
-                                        "type": "integer",
-                                        "description": "Number of additional guests.",
-                                    },
-                                },
-                                "additionalProperties": False,
-                                "required": [
-                                    "email",
-                                ],
-                                "description": "Event attendee.",
-                            },
-                            "description": "Event attendees.",
-                        },
-                        "recurrence": {
-                            "type": "array",
-                            "items": {
-                                "type": "string",
-                                "minLength": 1,
-                            },
-                            "description": "Recurrence rules.",
-                        },
-                        "conferenceData": {
-                            "type": "object",
-                            "additionalProperties": True,
-                            "description": "Google Calendar API object.",
-                        },
-                        "reminders": {
-                            "type": "object",
-                            "properties": {
-                                "useDefault": {
-                                    "type": "boolean",
-                                    "description": "Whether to use default calendar reminders.",
-                                },
-                                "overrides": {
-                                    "type": "array",
-                                    "items": {
-                                        "type": "object",
-                                        "properties": {
-                                            "method": {
-                                                "type": "string",
-                                                "minLength": 1,
-                                                "description": "Reminder delivery method, such as "
-                                                "email or popup.",
-                                            },
-                                            "minutes": {
-                                                "type": "integer",
-                                                "description": "Minutes before the event.",
-                                            },
-                                        },
-                                        "additionalProperties": False,
-                                        "required": [
-                                            "method",
-                                            "minutes",
-                                        ],
-                                        "description": "Reminder override.",
-                                    },
-                                    "description": "Reminder overrides.",
-                                },
-                            },
-                            "additionalProperties": False,
-                            "description": "Event reminders.",
-                        },
-                        "colorId": {
-                            "type": "string",
-                            "description": "Google Calendar color ID.",
-                        },
-                        "visibility": {
-                            "type": "string",
-                            "description": "Event visibility.",
-                        },
-                        "transparency": {
-                            "type": "string",
-                            "description": "Whether the event blocks time.",
-                        },
-                        "status": {
-                            "type": "string",
-                            "description": "Event status.",
-                        },
-                        "extendedProperties": {
-                            "type": "object",
-                            "additionalProperties": True,
-                            "description": "Google Calendar API object.",
-                        },
-                        "attachments": {
-                            "type": "array",
-                            "items": {
-                                "type": "object",
-                                "additionalProperties": True,
-                                "description": "Google Calendar API object.",
-                            },
-                            "description": "Google Calendar API objects.",
-                        },
-                        "source": {
-                            "type": "object",
-                            "additionalProperties": True,
-                            "description": "Google Calendar API object.",
-                        },
-                    },
+                    "properties": copy.deepcopy(_EVENT_PROPERTIES),
                     "additionalProperties": False,
                     "required": [
                         "start",
@@ -529,194 +534,7 @@ GOOGLECALENDAR_ACTIONS: tuple[GatewayAction, ...] = (
                 },
                 "event": {
                     "type": "object",
-                    "properties": {
-                        "summary": {
-                            "type": "string",
-                            "description": "Event title.",
-                        },
-                        "description": {
-                            "type": "string",
-                            "description": "Event description.",
-                        },
-                        "location": {
-                            "type": "string",
-                            "description": "Event location.",
-                        },
-                        "start": {
-                            "type": "object",
-                            "properties": {
-                                "date": {
-                                    "type": "string",
-                                    "minLength": 1,
-                                    "description": "All-day event date in YYYY-MM-DD format.",
-                                },
-                                "dateTime": {
-                                    "type": "string",
-                                    "description": "RFC 3339 timestamp.",
-                                    "format": "date-time",
-                                },
-                                "timeZone": {
-                                    "type": "string",
-                                    "minLength": 1,
-                                    "description": "IANA time zone used to interpret the event "
-                                    "time.",
-                                },
-                            },
-                            "additionalProperties": False,
-                            "description": "Event date or date-time.",
-                        },
-                        "end": {
-                            "type": "object",
-                            "properties": {
-                                "date": {
-                                    "type": "string",
-                                    "minLength": 1,
-                                    "description": "All-day event date in YYYY-MM-DD format.",
-                                },
-                                "dateTime": {
-                                    "type": "string",
-                                    "description": "RFC 3339 timestamp.",
-                                    "format": "date-time",
-                                },
-                                "timeZone": {
-                                    "type": "string",
-                                    "minLength": 1,
-                                    "description": "IANA time zone used to interpret the event "
-                                    "time.",
-                                },
-                            },
-                            "additionalProperties": False,
-                            "description": "Event date or date-time.",
-                        },
-                        "attendees": {
-                            "type": "array",
-                            "items": {
-                                "type": "object",
-                                "properties": {
-                                    "email": {
-                                        "type": "string",
-                                        "minLength": 1,
-                                        "description": "Attendee email address.",
-                                    },
-                                    "displayName": {
-                                        "type": "string",
-                                        "description": "Attendee display name.",
-                                    },
-                                    "optional": {
-                                        "type": "boolean",
-                                        "description": "Whether attendance is optional.",
-                                    },
-                                    "resource": {
-                                        "type": "boolean",
-                                        "description": "Whether the attendee represents a "
-                                        "resource.",
-                                    },
-                                    "responseStatus": {
-                                        "type": "string",
-                                        "description": "Attendee response status.",
-                                    },
-                                    "comment": {
-                                        "type": "string",
-                                        "description": "Additional attendee comment.",
-                                    },
-                                    "additionalGuests": {
-                                        "type": "integer",
-                                        "description": "Number of additional guests.",
-                                    },
-                                },
-                                "additionalProperties": False,
-                                "required": [
-                                    "email",
-                                ],
-                                "description": "Event attendee.",
-                            },
-                            "description": "Event attendees.",
-                        },
-                        "recurrence": {
-                            "type": "array",
-                            "items": {
-                                "type": "string",
-                                "minLength": 1,
-                            },
-                            "description": "Recurrence rules.",
-                        },
-                        "conferenceData": {
-                            "type": "object",
-                            "additionalProperties": True,
-                            "description": "Google Calendar API object.",
-                        },
-                        "reminders": {
-                            "type": "object",
-                            "properties": {
-                                "useDefault": {
-                                    "type": "boolean",
-                                    "description": "Whether to use default calendar reminders.",
-                                },
-                                "overrides": {
-                                    "type": "array",
-                                    "items": {
-                                        "type": "object",
-                                        "properties": {
-                                            "method": {
-                                                "type": "string",
-                                                "minLength": 1,
-                                                "description": "Reminder delivery method, such as "
-                                                "email or popup.",
-                                            },
-                                            "minutes": {
-                                                "type": "integer",
-                                                "description": "Minutes before the event.",
-                                            },
-                                        },
-                                        "additionalProperties": False,
-                                        "required": [
-                                            "method",
-                                            "minutes",
-                                        ],
-                                        "description": "Reminder override.",
-                                    },
-                                    "description": "Reminder overrides.",
-                                },
-                            },
-                            "additionalProperties": False,
-                            "description": "Event reminders.",
-                        },
-                        "colorId": {
-                            "type": "string",
-                            "description": "Google Calendar color ID.",
-                        },
-                        "visibility": {
-                            "type": "string",
-                            "description": "Event visibility.",
-                        },
-                        "transparency": {
-                            "type": "string",
-                            "description": "Whether the event blocks time.",
-                        },
-                        "status": {
-                            "type": "string",
-                            "description": "Event status.",
-                        },
-                        "extendedProperties": {
-                            "type": "object",
-                            "additionalProperties": True,
-                            "description": "Google Calendar API object.",
-                        },
-                        "attachments": {
-                            "type": "array",
-                            "items": {
-                                "type": "object",
-                                "additionalProperties": True,
-                                "description": "Google Calendar API object.",
-                            },
-                            "description": "Google Calendar API objects.",
-                        },
-                        "source": {
-                            "type": "object",
-                            "additionalProperties": True,
-                            "description": "Google Calendar API object.",
-                        },
-                    },
+                    "properties": copy.deepcopy(_EVENT_PROPERTIES),
                     "additionalProperties": False,
                     "description": "Writable Google Calendar event fields.",
                 },

@@ -15,38 +15,24 @@ verb -> capability + risk policy table.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from types import MappingProxyType
 
+from src.integrations.gateway_actions._types import GatewayAction, GatewayProvider
+from src.integrations.gateway_actions.github import GITHUB
+from src.integrations.gateway_actions.gmail import GMAIL
+from src.integrations.gateway_actions.googlecalendar import GOOGLECALENDAR
 
-@dataclass(frozen=True)
-class GatewayAction:
-    action_id: str  # OC-native, dotted (sent to OpenConnector)
-    capability: str  # Jarvis capability (email.send, calendar.list, issue.create)
-    risk: str
-    requires_approval: bool
-    input_schema: dict  # hand-typed; OC's runtime guide exposes no schema
-
-
-@dataclass(frozen=True)
-class GatewayProvider:
-    """One OpenConnector service, and the Jarvis installation that serves it."""
-
-    provider_id: str  # OC service id: "gmail" | "googlecalendar" | "github"
-    server_name: str  # IntegrationInstallation.server_name
-    actions: tuple[GatewayAction, ...]
-
-    def __post_init__(self) -> None:
-        if not self.actions:
-            raise ValueError(f"gateway provider {self.provider_id!r} declares no actions")
-        ids = [a.action_id for a in self.actions]
-        if len(set(ids)) != len(ids):
-            raise ValueError(f"gateway provider {self.provider_id!r} has duplicate action ids")
-
-
-from src.integrations.gateway_actions.github import GITHUB  # noqa: E402
-from src.integrations.gateway_actions.gmail import GMAIL  # noqa: E402
-from src.integrations.gateway_actions.googlecalendar import GOOGLECALENDAR  # noqa: E402
+# GatewayAction/GatewayProvider are defined in _types and re-exported here so
+# consumers import the registry and its types from one place.
+__all__ = [
+    "ACTION_BY_ID",
+    "PROVIDER_REGISTRY",
+    "GatewayAction",
+    "GatewayProvider",
+    "capabilities_for_server",
+    "provider_of_action",
+    "providers_for_server",
+]
 
 # Registry order is load-bearing: providers_for_server() returns it verbatim, so
 # a server's providers are connected (and their tools listed) in this order.
@@ -84,6 +70,13 @@ def capabilities_for_server(server_name: str) -> tuple[str, ...]:
 
     This is what ``session_pool._resolve_auth`` mints into the platform JWT, so a
     GitHub session's token carries no email capability and vice versa.
+
+    Derived from ``providers_for_server`` rather than re-filtering ``_PROVIDERS``,
+    so the server -> provider binding is decided in exactly one place.
     """
-    caps = {a.capability for p in _PROVIDERS if p.server_name == server_name for a in p.actions}
+    caps = {
+        a.capability
+        for provider_id in providers_for_server(server_name)
+        for a in PROVIDER_REGISTRY[provider_id].actions
+    }
     return tuple(sorted(caps))
