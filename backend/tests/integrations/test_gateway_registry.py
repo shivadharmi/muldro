@@ -29,17 +29,9 @@ def test_github_is_its_own_installation():
     assert providers_for_server("github") == ("github",)
 
 
-def test_hackernews_is_bound_to_a_server_no_installation_seeds():
-    """The harness provider must be unreachable from production routing."""
-    assert PROVIDER_REGISTRY["hackernews"].server_name == "_harness"
-    assert providers_for_server("_harness") == ("hackernews",)
-
-
 def test_every_action_capability_exists_in_the_catalog():
     for provider in PROVIDER_REGISTRY.values():
         for action in provider.actions:
-            if provider.provider_id == "hackernews":
-                continue  # harness-only provider, capability is synthetic
             assert action.capability in CAPABILITY_CATALOG, (
                 f"{action.action_id} declares unknown capability {action.capability}"
             )

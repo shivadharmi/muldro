@@ -4,14 +4,16 @@ OpenConnector runs on host `:3001` (via `PORT=3001` + `-p 3001:3001`) so the
 Next.js frontend keeps `:3000`; register `http://localhost:3001/oauth/callback`
 as the Google OAuth client's authorized redirect URI.
 
-This is a **manual, browser-in-the-loop** runbook. Google's OAuth consent
-screen cannot be driven headlessly, so — unlike the automated integration
-e2e, which proves the adapter's tenant-isolation boundary against
-OpenConnector's **no-auth `hackernews` provider** (`GET /api/connections`
-live credential verification means a real, auth-required provider like
-`gmail` can't be seeded with fake creds — see
-[`spike-findings-connect.md`](./spike-findings-connect.md) §7) — this path
-requires a human to click "Allow" in a real browser.
+This is a **manual, browser-in-the-loop** runbook, and it is the gateway's
+**only** end-to-end proof: there is no automated real-HTTP e2e. Google's OAuth
+consent screen cannot be driven headlessly, and OpenConnector verifies
+credentials live on `POST /api/connections`, so a real, auth-required provider
+like `gmail` cannot be seeded with fake creds either (see
+[`spike-findings-connect.md`](./spike-findings-connect.md) §7). Every
+end-to-end claim below — including the adapter's tenant-isolation boundary —
+rests on a human walking this runbook and clicking "Allow" in a real browser.
+Offline unit tests cover the adapter's enforcement logic; they do not cover
+the wire.
 
 Every endpoint, payload shape, and behavior below is taken verbatim from the
 live spike recorded in
@@ -60,7 +62,7 @@ OpenConnector).
 
   Set this same value as `JARVIS_PLATFORM_JWT_PRIVATE_PEM` on:
   1. the Jarvis API process (`python run.py`, or your API container's env), and
-  2. the `connection-adapter` container's env (via `docker-compose.integration.yml`,
+  2. the `connection-adapter` container's env (via `docker-compose.yml`,
      step 2 below).
 
 - **Docker installed** (for OpenConnector + the adapter container).
@@ -69,13 +71,14 @@ OpenConnector).
 
 ## 2. Bring up OpenConnector + the adapter
 
-Use `infra/gateway/docker-compose.integration.yml` (built by a parallel task
-in this increment — brings up `openconnector` + `connection-adapter` wired
-for the automated e2e and reusable here). From `infra/gateway/`:
+Use `infra/gateway/docker-compose.yml` — it brings up `openconnector` +
+`connection-adapter` together. Export the four variables it requires first
+(see [`README.md`](./README.md) §2 and the compose file's header), including
+the `JARVIS_PLATFORM_JWT_PRIVATE_PEM` from §1 above. From `infra/gateway/`:
 
 ```bash
-docker compose -f docker-compose.integration.yml up -d
-docker compose -f docker-compose.integration.yml ps
+docker compose up -d
+docker compose ps
 ```
 
 Confirm both are healthy — `openconnector` listening on `:3001`,
@@ -481,7 +484,7 @@ things you already have:
    instead:
 
    ```bash
-   docker compose -f docker-compose.integration.yml logs openconnector | grep -i "connectionName\|gmail:"
+   docker compose logs openconnector | grep -i "connectionName\|gmail:"
    ```
 
 If either check shows a truncated or mismatched name, OpenConnector is not
@@ -511,10 +514,10 @@ at Google.
    ```
 
 2. **OpenConnector.** The gateway `openconnector` container on **:3001**, per
-   §2 above (`docker compose -f docker-compose.integration.yml up -d`).
+   §2 above (`docker compose up -d` from `infra/gateway/`).
 
 3. **Adapter.** `run_adapter` on `:8100` with `JARVIS_GATEWAY_PROVIDER=gmail`
-   (also brought up by the same compose file, per §2).
+   (its default; also brought up by the same compose file, per §2).
 
 4. **API server.** `python run.py` (from `backend/`, venv active) with the
    gateway env from §2 set on the process, plus the platform-JWT PEM from §1:

@@ -47,11 +47,10 @@ class GatewayProvider:
 from src.integrations.gateway_actions.github import GITHUB  # noqa: E402
 from src.integrations.gateway_actions.gmail import GMAIL  # noqa: E402
 from src.integrations.gateway_actions.googlecalendar import GOOGLECALENDAR  # noqa: E402
-from src.integrations.gateway_actions.hackernews import HACKERNEWS  # noqa: E402
 
 # Registry order is load-bearing: providers_for_server() returns it verbatim, so
 # a server's providers are connected (and their tools listed) in this order.
-_PROVIDERS: tuple[GatewayProvider, ...] = (GMAIL, GOOGLECALENDAR, GITHUB, HACKERNEWS)
+_PROVIDERS: tuple[GatewayProvider, ...] = (GMAIL, GOOGLECALENDAR, GITHUB)
 
 PROVIDER_REGISTRY: MappingProxyType[str, GatewayProvider] = MappingProxyType(
     {p.provider_id: p for p in _PROVIDERS}

@@ -3,8 +3,7 @@ selected by a single code-defined profile, not hardcoded to Gmail.
 
 The allowlist stays CODE-defined (never env-injected): a setting only selects
 WHICH reviewed profile is active. Gmail remains the default so the existing
-adapter behavior is unchanged; a no-auth `hackernews` profile exists so the
-automated integration harness can drive a real provider through the adapter.
+adapter behavior is unchanged.
 """
 
 import pytest
@@ -26,13 +25,10 @@ def test_gmail_profile_is_the_default_provider():
     assert get_gateway_profile("gmail") is GMAIL_PROFILE
 
 
-def test_hackernews_profile_exists_and_is_no_auth_read():
-    hn = get_gateway_profile("hackernews")
-    assert hn.provider_id == "hackernews"
-    assert "hackernews.get_ask_stories" in hn.action_allowlist
-    # Every allowlisted action maps to a required capability (fail-closed guard).
-    for action in hn.action_allowlist:
-        assert action in hn.action_required_capability
+def test_every_allowlisted_action_maps_to_a_required_capability():
+    """Fail-closed guard: an allowlisted action with no capability is a policy hole."""
+    for action in GMAIL_PROFILE.action_allowlist:
+        assert action in GMAIL_PROFILE.action_required_capability
 
 
 def test_unknown_provider_is_denied_fail_closed():
@@ -40,16 +36,21 @@ def test_unknown_provider_is_denied_fail_closed():
         get_gateway_profile("dropbox")
 
 
-def test_enforcement_respects_the_selected_profile():
-    hn = get_gateway_profile("hackernews")
-    # A gmail action is NOT allowed under the hackernews profile.
+def test_enforcement_respects_the_passed_profile_not_the_gmail_default():
+    """Enforcement reads the profile it is handed, not a hardcoded Gmail policy."""
+    other = GatewayProfile(
+        provider_id="other",
+        action_allowlist=frozenset({"other.read_thing"}),
+        action_required_capability={"other.read_thing": "other.read"},
+    )
+    # A gmail action is NOT allowed under a different provider's profile.
     with pytest.raises(ActionNotAllowed):
-        ensure_action_allowed("gmail.send_email", hn)
-    # The hackernews action is allowed, and needs the hackernews capability.
-    ensure_action_allowed("hackernews.get_ask_stories", hn)
-    ensure_capability_allowed("hackernews.get_ask_stories", ("hackernews.read",), hn)
+        ensure_action_allowed("gmail.send_email", other)
+    # That profile's own action is allowed, and needs that profile's capability.
+    ensure_action_allowed("other.read_thing", other)
+    ensure_capability_allowed("other.read_thing", ("other.read",), other)
     with pytest.raises(CapabilityDenied):
-        ensure_capability_allowed("hackernews.get_ask_stories", ("email.search",), hn)
+        ensure_capability_allowed("other.read_thing", ("email.search",), other)
 
 
 def test_enforcement_defaults_to_gmail_profile_when_unspecified():
@@ -57,7 +58,7 @@ def test_enforcement_defaults_to_gmail_profile_when_unspecified():
     ensure_action_allowed("gmail.fetch_emails")
     ensure_capability_allowed("gmail.fetch_emails", ("email.search",))
     with pytest.raises(ActionNotAllowed):
-        ensure_action_allowed("hackernews.get_ask_stories")
+        ensure_action_allowed("dropbox.upload_file")
 
 
 def test_gateway_profile_is_frozen():

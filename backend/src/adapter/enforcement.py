@@ -71,28 +71,8 @@ GMAIL_PROFILE = GatewayProfile(
     action_required_capability=ACTION_REQUIRED_CAPABILITY,
 )
 
-# A no-auth provider used ONLY by the automated integration harness to drive a
-# real action through the full adapter over HTTP (Gmail's OAuth can't be
-# headless). Read-only; the sole allowlisted action is a public HN read.
-HACKERNEWS_ACTION_ALLOWLIST = frozenset(
-    {
-        "hackernews.get_ask_stories",
-        "hackernews.get_top_stories",
-    }
-)
-HACKERNEWS_ACTION_REQUIRED_CAPABILITY = {
-    "hackernews.get_ask_stories": "hackernews.read",
-    "hackernews.get_top_stories": "hackernews.read",
-}
-HACKERNEWS_PROFILE = GatewayProfile(
-    provider_id="hackernews",
-    action_allowlist=HACKERNEWS_ACTION_ALLOWLIST,
-    action_required_capability=HACKERNEWS_ACTION_REQUIRED_CAPABILITY,
-)
-
 PROVIDER_PROFILES: dict[str, GatewayProfile] = {
     GMAIL_PROFILE.provider_id: GMAIL_PROFILE,
-    HACKERNEWS_PROFILE.provider_id: HACKERNEWS_PROFILE,
 }
 
 

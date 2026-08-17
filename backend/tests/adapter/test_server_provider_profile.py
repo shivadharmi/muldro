@@ -1,9 +1,10 @@
 """handle_execute_action selects its enforcement profile from settings.
 
-The adapter is no longer hard-locked to Gmail: it reads ``gateway_provider``
-and enforces that provider's allowlist/capability-map and resolves that
-provider's connection. Default is gmail (covered by the existing tests); here
-we prove the hackernews profile path and that the wrong provider is rejected.
+The adapter is not hard-coded to one profile at the call site: it reads
+``gateway_provider``, enforces that provider's allowlist/capability-map, and
+resolves that provider's connection. Gmail is the only reviewed profile today,
+so these tests prove the selection path itself -- the configured provider is
+what gets enforced and resolved, and an unknown provider fails closed.
 """
 
 from types import SimpleNamespace
@@ -25,17 +26,17 @@ def _token(capabilities):
     )
 
 
-async def test_hackernews_provider_allows_hackernews_action():
-    token = _token(["hackernews.read"])
+async def test_configured_provider_profile_is_enforced_and_resolved():
+    token = _token(["email.search"])
     with (
         patch(
             "src.adapter.server.get_settings",
-            return_value=SimpleNamespace(gateway_provider="hackernews"),
+            return_value=SimpleNamespace(gateway_provider="gmail"),
         ),
         patch(
             "src.adapter.server.resolve_connection",
             new_callable=AsyncMock,
-            return_value="default",
+            return_value="gmail:usr_x",
         ) as mock_resolve,
         patch(
             "src.adapter.server.call_openconnector",
@@ -46,17 +47,18 @@ async def test_hackernews_provider_allows_hackernews_action():
         result = await handle_execute_action(
             None,
             token=token,
-            args={"actionId": "hackernews.get_ask_stories", "input": {}},
+            args={"actionId": "gmail.fetch_emails", "input": {}},
         )
 
     assert result["content"] == [{"type": "text", "text": "ok"}]
-    # Resolved the HACKERNEWS provider connection, not gmail.
-    assert mock_resolve.await_args.kwargs["provider_id"] == "hackernews"
+    # Resolved the CONFIGURED provider's connection.
+    assert mock_resolve.await_args.kwargs["provider_id"] == "gmail"
     mock_call.assert_awaited_once()
 
 
-async def test_gmail_default_still_rejects_hackernews_action():
-    token = _token(["hackernews.read"])
+async def test_action_outside_the_configured_profile_is_rejected():
+    """An action from another provider is not reachable under the gmail profile."""
+    token = _token(["repo.read"])
     with (
         patch(
             "src.adapter.server.get_settings",
@@ -68,6 +70,25 @@ async def test_gmail_default_still_rejects_hackernews_action():
             await handle_execute_action(
                 None,
                 token=token,
-                args={"actionId": "hackernews.get_ask_stories", "input": {}},
+                args={"actionId": "github.list_issues", "input": {}},
+            )
+    mock_call.assert_not_awaited()
+
+
+async def test_unknown_configured_provider_fails_closed():
+    """A provider with no reviewed profile must abort before any OpenConnector call."""
+    token = _token(["email.search"])
+    with (
+        patch(
+            "src.adapter.server.get_settings",
+            return_value=SimpleNamespace(gateway_provider="dropbox"),
+        ),
+        patch("src.adapter.server.call_openconnector", new_callable=AsyncMock) as mock_call,
+    ):
+        with pytest.raises(ValueError):
+            await handle_execute_action(
+                None,
+                token=token,
+                args={"actionId": "gmail.fetch_emails", "input": {}},
             )
     mock_call.assert_not_awaited()
