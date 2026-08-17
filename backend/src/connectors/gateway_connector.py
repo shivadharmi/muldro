@@ -12,6 +12,7 @@ health probe.
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Protocol
@@ -52,6 +53,15 @@ class GatewayConnector(BaseConnector):
 
     def __init__(self, settings: Any = None, caller: ToolCaller | None = None):
         super().__init__(settings=settings)
+        # Fail at wiring time, not at probe time. ``test()`` promises a
+        # ConnectorHealth return; with an empty READ_ACTION it would instead
+        # raise out of action_id_to_tool_name deep inside the transport.
+        if not self.READ_ACTION:
+            raise ValueError(
+                f"{type(self).__name__} must set READ_ACTION — test() probes the provider "
+                "with it, and an empty action id raises inside the transport instead of "
+                "returning ConnectorHealth(status='down')"
+            )
         self._caller = caller
 
     # ---- transport -------------------------------------------------------
@@ -61,9 +71,38 @@ class GatewayConnector(BaseConnector):
     ) -> tuple[bool, dict, PollErrorClass | None]:
         """Invoke one action. Returns ``(ok, result, error_class)``.
 
-        On failure ``error_class`` is set and ``result`` is empty, so a caller
-        cannot mistake a failure for an empty success and advance a cursor past
-        data it never received.
+        On failure ``error_class`` is set and ``result`` is empty. ``{}`` is
+        never a substitute for "I could not read this": every unparseable,
+        non-dict or ``ok: false`` response is returned as a FAILURE, so a
+        subclass cannot mistake it for an empty window and advance its cursor
+        past data it never received.
+
+        **The envelope chain this unwraps.** The shape is not discoverable from
+        any single file, so the four hops are recorded here:
+
+        1. **OpenConnector** answers ``{"ok": bool, "data": {<provider payload>}}``
+           — ``infra/gateway/spike-findings-guide.md`` records
+           ``result.structuredContent.ok -> bool`` and
+           ``result.structuredContent.data.* -> object``. The per-action
+           ``outputSchema`` in ``tests/fixtures/openconnector_curated_schemas.json``
+           describes the ``data`` level (``messages``/``items`` sit at its top).
+        2. **The adapter passes it through** — ``src/adapter/server.py``
+           ``handle_execute_action`` returns ``strip_secrets(_result_to_dict(result))``,
+           and ``_result_to_dict`` prefers ``structured_content`` /
+           ``structuredContent`` / ``data`` when they are dicts.
+        3. **FastMCP serializes** that ``-> dict`` tool return (registered in
+           ``run_adapter.py`` and ``src/adapter/warm_start.py``) into a **text**
+           content block.
+        4. **The session pool stringifies** — ``src/integrations/session_pool.py``
+           ``call_tool`` joins the text blocks and returns
+           ``{"status": "ok", "result": <str>}``; ``call_mcp_tool``
+           (``src/connectors/mcp_bridge.py``) passes that dict through unchanged.
+
+        So ``envelope["result"]`` arrives as a **JSON string** and the provider
+        payload sits one level down under ``data``. The dict branch and the
+        no-``data`` fallback below are deliberate: ``_result_to_dict`` also has
+        ``{"content": [...]}`` and ``{"result": str(...)}`` branches, so a
+        payload that is not the ``{ok, data}`` shape can legitimately arrive.
         """
         if self._caller is None:
             logger.warning(
@@ -72,19 +111,67 @@ class GatewayConnector(BaseConnector):
             return False, {}, "transient"
 
         envelope = await self._caller.call(action_id, payload)
-        if envelope.get("status") == "ok" and not envelope.get("error"):
-            result = envelope.get("result")
-            return True, result if isinstance(result, dict) else {}, None
+        if envelope.get("status") != "ok" or envelope.get("error"):
+            error_class = mcp_code_to_poll_class(envelope.get("error_code"))
+            # make_error_response (src/integrations/mcp_errors.py) and the
+            # circuit-open envelope (session_pool.py) both report under
+            # "message"; the auth_required and bridge envelopes use "error".
+            # Read both, or the most common failures log "failed: None".
+            detail = envelope.get("error") or envelope.get("message")
+            logger.warning(
+                "gateway action %s failed: %s (error_code=%s -> %s)",
+                action_id,
+                str(detail)[:200],
+                envelope.get("error_code"),
+                error_class,
+            )
+            return False, {}, error_class
 
-        error_class = mcp_code_to_poll_class(envelope.get("error_code"))
-        logger.warning(
-            "gateway action %s failed: %s (error_code=%s -> %s)",
-            action_id,
-            str(envelope.get("error"))[:200],
-            envelope.get("error_code"),
-            error_class,
-        )
-        return False, {}, error_class
+        raw = envelope.get("result")
+        if isinstance(raw, str):
+            try:
+                parsed: Any = json.loads(raw)
+            except json.JSONDecodeError as exc:
+                logger.warning(
+                    "gateway action %s returned unparseable JSON (%s); first 200 chars: %r",
+                    action_id,
+                    exc,
+                    raw[:200],
+                )
+                return False, {}, "transient"
+        elif isinstance(raw, dict):
+            parsed = raw
+        else:
+            logger.warning(
+                "gateway action %s returned a %s result, not a JSON string or dict",
+                action_id,
+                type(raw).__name__,
+            )
+            return False, {}, "transient"
+
+        if not isinstance(parsed, dict):
+            logger.warning(
+                "gateway action %s payload parsed to %s, not an object",
+                action_id,
+                type(parsed).__name__,
+            )
+            return False, {}, "transient"
+
+        # OpenConnector reports action-level failure INSIDE a transport-level
+        # success, so this is the only place it can be caught.
+        if "ok" in parsed and not parsed["ok"]:
+            error_class = mcp_code_to_poll_class(parsed.get("error_code"))
+            logger.warning(
+                "gateway action %s reported ok=false: %s (error_code=%s -> %s)",
+                action_id,
+                str(parsed.get("error") or parsed.get("message"))[:200],
+                parsed.get("error_code"),
+                error_class,
+            )
+            return False, {}, error_class
+
+        data = parsed.get("data")
+        return True, data if isinstance(data, dict) else parsed, None
 
     async def _walk_pages(
         self,
@@ -95,41 +182,56 @@ class GatewayConnector(BaseConnector):
         max_pages: int,
         page_token_key: str = "pageToken",
         next_token_key: str = "nextPageToken",
-    ) -> tuple[list[list[dict]], PollErrorClass | None]:
-        """Follow pagination, returning one list of rows per page.
+    ) -> tuple[list[list[dict]], PollErrorClass | None, bool]:
+        """Follow pagination, returning ``(pages, error_class, truncated)``.
 
-        Any page failure aborts and returns ``([], error_class)`` — never
+        ``items_key``/``next_token_key`` address the **unwrapped provider
+        payload** — what ``_call`` returns after stripping OpenConnector's
+        ``{ok, data}`` envelope. See the recorded ``outputSchema`` in
+        ``tests/fixtures/openconnector_curated_schemas.json`` for the real key
+        names (gmail: ``messages``; calendar: ``items``).
+
+        Any page failure aborts and returns ``([], error_class, False)`` — never
         partial pages, because a partial walk plus an advanced cursor loses the
         rest of the window permanently.
+
+        ``truncated`` is True when the walk stopped at ``max_pages`` while the
+        provider was still offering a next-page token. It is a return value
+        rather than only a log line because the two outcomes are otherwise
+        indistinguishable to a caller.
+
+        **Consuming policy for subclasses: on ``truncated`` do NOT advance the
+        cursor.** The window was not drained; advancing would skip the
+        remainder permanently. Re-polling the same window is cheap (duplicates
+        are absorbed by EventProcessor's idempotency key); losing the tail is
+        not recoverable.
         """
         pages: list[list[dict]] = []
         page_token: str | None = None
 
-        for page_index in range(max_pages):
+        for _page_index in range(max_pages):
             page_payload = dict(payload)
             if page_token:
                 page_payload[page_token_key] = page_token
 
             ok, result, error_class = await self._call(action_id, page_payload)
             if not ok:
-                return [], error_class
+                return [], error_class, False
 
             rows = result.get(items_key) or []
             pages.append([r for r in rows if isinstance(r, dict)])
 
             page_token = result.get(next_token_key)
             if not page_token:
-                return pages, None
+                return pages, None, False
 
-            if page_index + 1 >= max_pages:
-                logger.warning(
-                    "gateway action %s truncated at %d pages; the remaining window was "
-                    "not drained this poll — the next poll resumes from the advanced cursor",
-                    action_id,
-                    max_pages,
-                )
-
-        return pages, None
+        logger.warning(
+            "gateway action %s truncated at %d pages; the remaining window was not "
+            "drained this poll — the caller must not advance its cursor",
+            action_id,
+            max_pages,
+        )
+        return pages, None, True
 
     # ---- cursor plausibility --------------------------------------------
 

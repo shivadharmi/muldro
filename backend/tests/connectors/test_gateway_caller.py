@@ -1,5 +1,6 @@
 """GatewayToolCaller is the only seam between a connector and MCP transport."""
 
+from dataclasses import FrozenInstanceError
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -45,7 +46,12 @@ async def test_illegal_action_id_raises_rather_than_calling():
 
 
 def test_caller_is_frozen():
-    """Identity must not be mutable after construction."""
+    """Identity must not be mutable after construction.
+
+    Asserted on FrozenInstanceError specifically: a bare ``Exception`` would
+    also be satisfied by an unrelated AttributeError, so it would keep passing
+    if ``frozen=True`` were dropped and the attribute renamed.
+    """
     caller = GatewayToolCaller(user_id="usr_1", workspace_id="ws_1")
-    with pytest.raises(Exception):
+    with pytest.raises(FrozenInstanceError):
         caller.user_id = "usr_2"  # type: ignore[misc]
