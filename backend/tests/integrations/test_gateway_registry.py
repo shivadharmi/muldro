@@ -4,6 +4,7 @@ from src.integrations.capabilities import CAPABILITY_CATALOG
 from src.integrations.gateway_actions import (
     ACTION_BY_ID,
     PROVIDER_REGISTRY,
+    capabilities_for_server,
     provider_of_action,
     providers_for_server,
 )
@@ -14,6 +15,24 @@ def test_gmail_provider_is_registered_under_google_workspace():
     provider = PROVIDER_REGISTRY["gmail"]
     assert provider.server_name == "google-workspace"
     assert len(provider.actions) == 7
+
+
+def test_googlecalendar_is_registered_under_google_workspace():
+    provider = PROVIDER_REGISTRY["googlecalendar"]
+    assert provider.server_name == "google-workspace"
+    assert provider.actions
+
+
+def test_github_is_its_own_installation():
+    provider = PROVIDER_REGISTRY["github"]
+    assert provider.server_name == "github"
+    assert providers_for_server("github") == ("github",)
+
+
+def test_hackernews_is_bound_to_a_server_no_installation_seeds():
+    """The harness provider must be unreachable from production routing."""
+    assert PROVIDER_REGISTRY["hackernews"].server_name == "_harness"
+    assert providers_for_server("_harness") == ("hackernews",)
 
 
 def test_every_action_capability_exists_in_the_catalog():
@@ -43,5 +62,34 @@ def test_provider_of_action_resolves_by_membership_not_prefix():
 
 
 def test_providers_for_server_groups_by_installation():
-    assert providers_for_server("google-workspace") == ("gmail",)
+    # One installation, two OpenConnector services -- the cardinality mismatch
+    # this increment exists to resolve. Order follows the registry.
+    assert providers_for_server("google-workspace") == ("gmail", "googlecalendar")
     assert providers_for_server("nonexistent") == ()
+
+
+def test_capabilities_for_server_is_the_union_across_its_providers():
+    caps = set(capabilities_for_server("google-workspace"))
+    assert {"email.send", "calendar.list"} <= caps
+    assert caps == {
+        c
+        for p in PROVIDER_REGISTRY.values()
+        if p.server_name == "google-workspace"
+        for c in (a.capability for a in p.actions)
+    }
+
+
+def test_a_gateway_token_never_spans_installations():
+    """github and google-workspace capability sets must not intersect.
+
+    session_pool mints the union for ONE installation, so an overlap would hand a
+    GitHub session a capability that unlocks a Google action at the adapter gate.
+    """
+    github = set(capabilities_for_server("github"))
+    google = set(capabilities_for_server("google-workspace"))
+    assert github and google
+    assert not (github & google)
+
+
+def test_unknown_server_mints_no_capabilities():
+    assert capabilities_for_server("nonexistent") == ()
