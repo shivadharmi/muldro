@@ -2,13 +2,12 @@
 
 ## Signal-Driven Perception
 
-Perception is signal-driven via `PerceptionPolicyService` (`src/services/perception_policy.py`). The scheduler calls the policy service to determine which sources are due, applying adaptive intervals with backoff, circuit breaking, and starvation prevention. `PerceptionCoordinator` (`src/orchestrator/perception.py`) is a thin wrapper that connects the policy service to the orchestrator.
+Perception is signal-driven via `PerceptionPolicyService` (`src/services/perception_policy.py`). The scheduler's perception tick (`src/services/scheduler/perception_tick.py`) calls the policy service to determine which sources are due across all users, applying adaptive intervals with backoff, circuit breaking, and starvation prevention. It then claims those sources, runs each cycle through the orchestrator, and records the outcome. Cycles are grouped by user so each user's gateway MCP sessions live inside one `TurnScope` and are torn down when that user's sources finish.
 
 ```mermaid
 sequenceDiagram
     participant SCH as Scheduler (30s tick)
     participant PPS as PerceptionPolicyService
-    participant PC as PerceptionCoordinator
     participant BT as BudgetTracker
     participant POL as Connector Poller
     participant RA as RelevanceAssessor

@@ -6,7 +6,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.models.perception_state import PerceptionState
-from src.orchestrator.perception import PerceptionCoordinator
 from src.services.perception_policy import (
     CIRCUIT_COOLDOWN_S,
     CIRCUIT_FAILURE_THRESHOLD,
@@ -73,49 +72,6 @@ def _make_tick_svc(states, db):
     by_id = {s.state_id: s for s in states}
     svc.get_by_state_id = AsyncMock(side_effect=lambda sid: by_id.get(sid))
     return svc
-
-
-# ---------------------------------------------------------------------------
-# Coordinator: workspace passthrough
-# ---------------------------------------------------------------------------
-
-
-class TestWorkspacePassthrough:
-    @pytest.mark.asyncio
-    async def test_run_due_cycles_passes_workspace_id(self):
-        """run_due_cycles should pass workspace_id to run_perception_cycle."""
-        orch = MagicMock()
-        orch.run_perception_cycle = AsyncMock(
-            return_value={"status": "completed", "source": "gmail", "events": 2}
-        )
-        orch._publish_event = AsyncMock()
-
-        state = _make_state(
-            next_run_at=datetime.now(timezone.utc) - timedelta(seconds=10),
-        )
-
-        mock_db = _mock_db()
-        mock_svc = AsyncMock(spec=PerceptionPolicyService)
-        mock_svc.get_due_sources = AsyncMock(return_value=[state])
-        mock_svc.record_success = AsyncMock(return_value=state)
-
-        mock_cm = AsyncMock()
-        mock_cm.__aenter__ = AsyncMock(return_value=mock_db)
-        mock_cm.__aexit__ = AsyncMock(return_value=False)
-        mock_factory_fn = MagicMock(return_value=mock_cm)
-
-        with (
-            patch("src.models.database.get_session_factory", return_value=mock_factory_fn),
-            patch(
-                "src.services.perception_policy.PerceptionPolicyService",
-                return_value=mock_svc,
-            ),
-        ):
-            coord = PerceptionCoordinator(orch, user_id="usr_test", workspace_id="ws_test")
-            await coord.run_due_cycles()
-
-        for call in orch.run_perception_cycle.call_args_list:
-            assert call.kwargs.get("workspace_id") == "ws_test"
 
 
 # ---------------------------------------------------------------------------
@@ -325,59 +281,6 @@ class TestSchedulerPerceptionTick:
             patch.object(scheduler, "_resolve_workspace", new=AsyncMock(return_value="ws_test")),
         ):
             await scheduler._tick_perception(mock_factory.return_value)
-
-        assert recorded, "record_failure should have been called for the escaped exception"
-        assert classify_error(recorded[0]) == "transient"
-
-
-# ---------------------------------------------------------------------------
-# Coordinator: generic cycle exception fail-safe
-# ---------------------------------------------------------------------------
-
-
-class TestCoordinatorGenericException:
-    @pytest.mark.asyncio
-    async def test_generic_cycle_exception_is_transient(self):
-        """A bare exception escaping run_perception_cycle in run_due_cycles fails safe.
-
-        The PerceptionCoordinator outer handler must route an uncategorized error
-        through the transient sentinel (threshold 6), not unknown (threshold 3).
-        """
-        from src.services.perception_policy import classify_error
-
-        orch = MagicMock()
-        orch.run_perception_cycle = AsyncMock(side_effect=RuntimeError("boom"))
-        orch._publish_event = AsyncMock()
-
-        state = _make_state(
-            next_run_at=datetime.now(timezone.utc) - timedelta(seconds=10),
-        )
-
-        recorded: list[str] = []
-
-        async def _capture_failure(_state, error):
-            recorded.append(error)
-            return _state
-
-        mock_db = _mock_db()
-        mock_svc = AsyncMock(spec=PerceptionPolicyService)
-        mock_svc.get_due_sources = AsyncMock(return_value=[state])
-        mock_svc.record_failure = AsyncMock(side_effect=_capture_failure)
-
-        mock_cm = AsyncMock()
-        mock_cm.__aenter__ = AsyncMock(return_value=mock_db)
-        mock_cm.__aexit__ = AsyncMock(return_value=False)
-        mock_factory_fn = MagicMock(return_value=mock_cm)
-
-        with (
-            patch("src.models.database.get_session_factory", return_value=mock_factory_fn),
-            patch(
-                "src.services.perception_policy.PerceptionPolicyService",
-                return_value=mock_svc,
-            ),
-        ):
-            coord = PerceptionCoordinator(orch, user_id="usr_test", workspace_id="ws_test")
-            await coord.run_due_cycles()
 
         assert recorded, "record_failure should have been called for the escaped exception"
         assert classify_error(recorded[0]) == "transient"
