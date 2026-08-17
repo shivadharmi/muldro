@@ -104,3 +104,9 @@ def test_a_gateway_token_never_spans_installations():
 
 def test_unknown_server_mints_no_capabilities():
     assert capabilities_for_server("nonexistent") == ()
+
+
+def test_every_provider_declares_a_display_name():
+    """The registry owns the label the LLM reads; no downstream label table restates it."""
+    for provider_id, provider in PROVIDER_REGISTRY.items():
+        assert provider.display_name.strip(), f"{provider_id} has no display_name"

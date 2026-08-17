@@ -1,11 +1,12 @@
 """Provider profiles — the adapter's allowlist/capability-map/provider are
 selected by a single code-defined profile, not hardcoded to Gmail.
 
-The allowlist stays CODE-defined (never env-injected): a setting only selects
-WHICH reviewed profile is active. Every action resolves its OWN profile from
-its OWN action_id (fail-closed on an unknown action), so one adapter can
-serve several providers at once.
+The allowlist stays CODE-defined (never env-injected). Every action resolves
+its OWN profile from its OWN action_id (fail-closed on an unknown action), so
+one adapter can serve several providers at once.
 """
+
+from types import MappingProxyType
 
 import pytest
 
@@ -22,7 +23,7 @@ from src.integrations.gateway_actions import GatewayAction
 GMAIL_PROFILE = get_gateway_profile("gmail")
 
 
-def test_gmail_profile_is_the_default_provider():
+def test_gmail_profile_is_registered():
     assert GMAIL_PROFILE.provider_id == "gmail"
     assert "gmail.fetch_emails" in GMAIL_PROFILE.action_allowlist
     assert get_gateway_profile("gmail") is GMAIL_PROFILE
@@ -39,10 +40,11 @@ def test_unknown_provider_is_denied_fail_closed():
         get_gateway_profile("dropbox")
 
 
-def test_enforcement_respects_the_passed_profile_not_the_gmail_default():
+def test_enforcement_reads_the_profile_it_is_handed():
     """Enforcement reads the profile it is handed, not a hardcoded Gmail policy."""
     other = GatewayProfile(
         provider_id="other",
+        display_name="Other",
         actions=(
             GatewayAction(
                 "other.read_thing",
@@ -70,6 +72,28 @@ def test_gateway_profile_is_frozen():
 
 
 def test_profile_capability_map_is_immutable():
-    """The capability map cannot be mutated after construction (defense-in-depth)."""
+    """What actually makes the profile's policy state unmutatable after construction.
+
+    ``action_required_capability`` is now a ``cached_property``, so a caller holds
+    the SAME object the profile does — mutating the returned proxy would be a real
+    mutation, not a throwaway one. Immutability therefore rests on two things,
+    both asserted here: the mapping is handed out as a read-only
+    ``MappingProxyType``, and the state it is derived from (``profile.actions``)
+    is a tuple of frozen ``GatewayAction`` dataclasses.
+    """
+    capability_map = GMAIL_PROFILE.action_required_capability
+    assert isinstance(capability_map, MappingProxyType)
     with pytest.raises(TypeError):
-        GMAIL_PROFILE.action_required_capability["gmail.send_email"] = "email.read"
+        capability_map["gmail.send_email"] = "email.read"
+
+    assert isinstance(GMAIL_PROFILE.actions, tuple)
+    for action in GMAIL_PROFILE.actions:
+        assert isinstance(action, GatewayAction)
+        with pytest.raises((AttributeError, TypeError)):
+            action.capability = "email.read"
+
+
+def test_derived_views_are_cached_not_rebuilt_per_access():
+    """They sit on the per-request enforcement path; a plain @property reallocated."""
+    assert GMAIL_PROFILE.action_allowlist is GMAIL_PROFILE.action_allowlist
+    assert GMAIL_PROFILE.action_required_capability is GMAIL_PROFILE.action_required_capability

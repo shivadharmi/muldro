@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from unittest.mock import AsyncMock, patch
 
@@ -122,6 +123,51 @@ async def test_register_still_registers_when_guide_fetch_fails():
     count = await register_gateway_tools(adapter, profile, guide_fetcher=fetcher)
 
     assert count == len(profile.action_allowlist)
+
+
+async def test_every_guide_fetch_failing_still_registers_every_real_schema():
+    """OpenConnector being unreachable must not thin the served tool surface.
+
+    The drift check is advisory only: with the fetcher raising for EVERY action,
+    all tools still register and each still ships its own hand-typed schema.
+    """
+    adapter = FastMCP("test")
+    profile = get_gateway_profile("gmail")
+    fetcher = AsyncMock(side_effect=RuntimeError("OC unreachable"))
+
+    count = await register_gateway_tools(adapter, profile, guide_fetcher=fetcher)
+
+    assert count == len(profile.actions)
+    by_name = {t.name: t for t in await adapter.list_tools()}
+    assert fetcher.await_count == len(profile.actions)
+    for action in profile.actions:
+        tool = by_name[action_id_to_tool_name(action.action_id)]
+        assert tool.parameters == action.input_schema
+
+
+async def test_drift_checks_run_concurrently_not_one_per_registration():
+    """Guide fetches are gathered, not awaited inside the loop.
+
+    Each fetch is a fresh Client + handshake, so serial fetches would pay one
+    connect/initialize/teardown per action -- and with OpenConnector down, one
+    connection timeout per action before adapter.run() is reached (a hang).
+    """
+    in_flight = 0
+    peak = 0
+
+    async def _tracking_guide(action_id: str) -> dict:
+        nonlocal in_flight, peak
+        in_flight += 1
+        peak = max(peak, in_flight)
+        await asyncio.sleep(0)  # yield: lets every gathered fetch start
+        in_flight -= 1
+        return {}
+
+    adapter = FastMCP("test")
+    profile = get_gateway_profile("gmail")
+    await register_gateway_tools(adapter, profile, guide_fetcher=_tracking_guide)
+
+    assert peak == len(profile.actions)
 
 
 async def test_register_warns_on_param_drift(caplog):

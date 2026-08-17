@@ -213,5 +213,6 @@ GITHUB_ACTIONS: tuple[GatewayAction, ...] = (
 GITHUB = GatewayProvider(
     provider_id="github",
     server_name="github",
+    display_name="GitHub",
     actions=GITHUB_ACTIONS,
 )

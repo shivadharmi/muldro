@@ -553,5 +553,6 @@ GOOGLECALENDAR_ACTIONS: tuple[GatewayAction, ...] = (
 GOOGLECALENDAR = GatewayProvider(
     provider_id="googlecalendar",
     server_name="google-workspace",
+    display_name="Google Calendar",
     actions=GOOGLECALENDAR_ACTIONS,
 )

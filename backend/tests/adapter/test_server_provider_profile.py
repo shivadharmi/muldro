@@ -11,8 +11,13 @@ enforced (allowlist + capability map) and what gets passed to
 This is the fix for the wrong-connection bug: before this change the
 handler looked up a single ``settings.gateway_provider``-configured profile
 for every action, so a ``googlecalendar.*`` action in a multi-provider
-process would have resolved (and enforced) the wrong tenant's connection --
-whatever provider the process happened to be configured for, e.g. gmail.
+process would have resolved (and enforced) the same principal's WRONG-PROVIDER
+connection -- whatever provider the process happened to be configured for, e.g.
+gmail. Never another tenant's: ``connection_resolver.resolve_connection``
+always filters on tenant_id AND principal_id. And it was latent, not live:
+only the gmail profile was registered before this wave, so no second provider
+existed to mis-resolve.
+
 These tests prove the profile now follows the action across all three
 registered providers (gmail, googlecalendar, github), that an unregistered
 action fails closed before any DB/network work, and that a process-level
@@ -185,7 +190,7 @@ async def test_dispatch_ignores_the_process_level_gateway_provider_setting():
 
 
 async def test_cross_provider_capability_is_denied():
-    """An email-scoped token dispatching a github action is denied -- tenant isolation."""
+    """An email-scoped token dispatching a github action is denied -- capability scoping."""
     action = _first_action("github")
     token = _token(["email.search"])
     with patch(

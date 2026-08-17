@@ -16,10 +16,16 @@ compare OpenConnector's *current* parameter names to our hand-typed schema,
 logging a warning when they diverge — a maintenance signal to update the schema.
 The live call NEVER changes the served schema, so a guide-fetch failure or an
 unparseable guide only skips the check; the tool still ships its hand-typed schema.
+Because the check is advisory, the guide fetches run CONCURRENTLY and outside the
+registration loop — ``openconnector_client`` builds a fresh Client + handshake per
+call, so serial fetches would pay one connect/initialize/teardown per action (and,
+with OpenConnector unreachable, one connection timeout per action) before
+``adapter.run()`` is ever reached: a hang rather than a loud failure.
 """
 
 from __future__ import annotations
 
+import asyncio
 import copy
 import logging
 import re
@@ -39,18 +45,16 @@ logger = logging.getLogger(__name__)
 
 GuideFetcher = Callable[[str], Awaitable[dict]]
 
-_PROVIDER_LABELS = {
-    "gmail": "Gmail",
-    "googlecalendar": "Google Calendar",
-    "github": "GitHub",
-}
 
+def _describe(display_name: str, action_id: str) -> str:
+    """Human-readable tool description for the agent's tool list.
 
-def _describe(provider_id: str, action_id: str) -> str:
-    """Human-readable tool description for the agent's tool list."""
-    label = _PROVIDER_LABELS.get(provider_id, provider_id)
+    ``display_name`` comes from the provider registry (``GatewayProvider``), never
+    from a label table maintained here — a new provider must not silently degrade
+    to its raw provider_id in the text the LLM reads to pick a tool.
+    """
     verb = action_id.split(".", 1)[-1].replace("_", " ")
-    return f"{label}: {verb} (via the OpenConnector gateway)."
+    return f"{display_name}: {verb} (via the OpenConnector gateway)."
 
 
 def _guide_markdown(guide: object) -> str:
@@ -131,13 +135,20 @@ async def register_gateway_tools(
     Every action in a ``GatewayProfile`` carries its own hand-typed
     ``input_schema`` by construction, so no fallback is needed. Runs a
     best-effort live drift check via ``guide_fetcher`` that never affects the
-    served schema.
+    served schema; the fetches are gathered CONCURRENTLY before the loop, and a
+    failed fetch only skips that action's check — registration still happens for
+    every action.
     """
+    actions = sorted(profile.actions, key=lambda a: a.action_id)
+    guides = await asyncio.gather(
+        *(guide_fetcher(a.action_id) for a in actions), return_exceptions=True
+    )
     count = 0
-    for action in sorted(profile.actions, key=lambda a: a.action_id):
+    for action, guide in zip(actions, guides, strict=True):
         schema = copy.deepcopy(action.input_schema)
         try:
-            guide = await guide_fetcher(action.action_id)
+            if isinstance(guide, BaseException):
+                raise guide
             live = _param_names_from_guide(guide)
             declared = set(schema.get("properties", {}))
             if live and live != declared:
@@ -158,7 +169,7 @@ async def register_gateway_tools(
                 # DOTTED actionId, so the LLM calls e.g. gmail_get_profile and
                 # the adapter forwards gmail.get_profile to OpenConnector.
                 name=action_id_to_tool_name(action.action_id),
-                description=_describe(profile.provider_id, action.action_id),
+                description=_describe(profile.display_name, action.action_id),
                 parameters=schema,
                 fn=_make_handler(action.action_id),
             )

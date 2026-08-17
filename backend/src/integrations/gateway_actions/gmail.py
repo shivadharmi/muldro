@@ -188,5 +188,6 @@ GMAIL_ACTIONS: tuple[GatewayAction, ...] = (
 GMAIL = GatewayProvider(
     provider_id="gmail",
     server_name="google-workspace",
+    display_name="Gmail",
     actions=GMAIL_ACTIONS,
 )

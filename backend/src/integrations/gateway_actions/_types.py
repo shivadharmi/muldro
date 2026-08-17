@@ -27,9 +27,15 @@ class GatewayProvider:
 
     provider_id: str  # OC service id: "gmail" | "googlecalendar" | "github"
     server_name: str  # IntegrationInstallation.server_name
+    # Human-readable label for tool descriptions (the text the LLM reads to pick
+    # a tool). Lives HERE, on the registry, so a new provider cannot degrade to
+    # its raw provider_id via a hand-maintained label table somewhere downstream.
+    display_name: str
     actions: tuple[GatewayAction, ...]
 
     def __post_init__(self) -> None:
+        if not self.display_name.strip():
+            raise ValueError(f"gateway provider {self.provider_id!r} declares no display_name")
         if not self.actions:
             raise ValueError(f"gateway provider {self.provider_id!r} declares no actions")
         ids = [a.action_id for a in self.actions]

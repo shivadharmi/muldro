@@ -63,13 +63,17 @@ async def handle_execute_action(db: AsyncSession, *, token: str, args: dict) -> 
     """Six-step enforcement for one ``execute_action`` call (the sole tenant boundary)."""
     principal = verify_principal(token)  # 1. identity (never from args)
     action_id = args.get("actionId", "")
-    # 5a. Resolve the policy surface FROM THE ACTION, not from a process-level
+    # 5. Resolve the policy surface FROM THE ACTION, not from a process-level
     # setting: one adapter serves several providers, so the profile -- and the
     # provider whose connection is resolved below -- must follow the action.
     # Fail-closed: an unregistered actionId raises ActionNotAllowed here, before
     # any DB or network work.
     profile = profile_for_action(action_id)
-    ensure_action_allowed(action_id, profile)  # 5a. allowlist actionId (fail fast)
+    # 5a. allowlist actionId. Redundant with profile_for_action by construction
+    # (the resolved profile's actions always contain action_id), so this can
+    # never raise on this path -- retained so a future direct caller that gets a
+    # profile some other way cannot skip the allowlist check.
+    ensure_action_allowed(action_id, profile)
     ensure_capability_allowed(  # 5b. principal authorized for THIS action
         action_id, principal.capabilities, profile
     )

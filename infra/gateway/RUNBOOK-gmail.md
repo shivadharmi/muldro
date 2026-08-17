@@ -335,12 +335,16 @@ verifies the transport, not prompt-engineering the agent's tool choice.
 
 Once `JARVIS_GMAIL_VIA_GATEWAY=true` is on, the `google-workspace`
 installation routes at the gateway (per the note in step 2) and the agent
-discovers **7 named per-action Gmail tools** directly from the adapter's MCP
+discovers the **named per-action Gmail tools** directly from the adapter's MCP
 tool list — no `search_gmail_messages`-style catch-all, and no manual
-`execute_action(actionId=...)` translation step. Each tool name **is** the
+`execute_action(actionId=...)` translation step. (The adapter process now
+serves the named tools of every provider in the registry — Gmail, Google
+Calendar, and GitHub — not Gmail's alone.) Each tool name **is** the
 adapter's `actionId`; the adapter enforces the mapped capability on every
-call (`ACTION_REQUIRED_CAPABILITY` in `backend/src/adapter/enforcement.py`,
-seeded into the tool registry via `backend/src/tools/catalog.py`):
+call (`GatewayProfile.action_required_capability` in
+`backend/src/adapter/enforcement.py`, derived from
+`backend/src/integrations/gateway_actions/` and seeded into the tool registry
+via `backend/src/tools/catalog.py`):
 
 | Tool name | Capability | Notes |
 |---|---|---|
@@ -444,7 +448,8 @@ secret-stripped Gmail profile data coming back. If it fails:
   process and the adapter container (step 1).
 - `CapabilityDenied` → the `capabilities` list passed to `mint_platform_jwt`
   doesn't include the capability `gmail.get_profile` requires (`email.read`,
-  per `ACTION_REQUIRED_CAPABILITY` in `src/adapter/enforcement.py`).
+  per `GatewayProfile.action_required_capability` in
+  `src/adapter/enforcement.py`).
 - `ConnectionDenied` → no `active` `connection_map` row for that
   `(tenant_id, principal_id, provider_id="gmail", account_alias)` — recheck
   step 7.

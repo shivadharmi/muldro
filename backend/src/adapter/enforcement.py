@@ -19,6 +19,7 @@ import copy
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
+from functools import cached_property
 from types import MappingProxyType
 
 from src.integrations.gateway_actions import (
@@ -45,16 +46,26 @@ class GatewayProfile:
     profile from its own action_id (see profile_for_action), fail-closed on an
     unknown action. Allowlist and capability map are DERIVED from ``actions`` so
     they can never drift from the registry.
+
+    Both derived views are ``cached_property``: they sit on the per-request
+    enforcement path, and a plain ``@property`` rebuilt the frozenset/mapping on
+    every access. This works on a frozen dataclass because ``cached_property``
+    writes straight into ``instance.__dict__`` rather than going through
+    ``__setattr__`` (the frozen guard) — which holds only while this class has no
+    ``__slots__``. Immutability is unaffected: ``actions`` is a tuple of frozen
+    ``GatewayAction``s, and ``action_required_capability`` is still handed out as
+    a read-only ``MappingProxyType``.
     """
 
     provider_id: str
+    display_name: str
     actions: tuple[GatewayAction, ...]
 
-    @property
+    @cached_property
     def action_allowlist(self) -> frozenset[str]:
         return frozenset(a.action_id for a in self.actions)
 
-    @property
+    @cached_property
     def action_required_capability(self) -> Mapping[str, str]:
         return MappingProxyType({a.action_id: a.capability for a in self.actions})
 
@@ -72,7 +83,11 @@ class GatewayProfile:
 # per-step-JWT work; enforcing here is the correct boundary regardless of how
 # the token is currently scoped.
 _PROFILES: dict[str, GatewayProfile] = {
-    provider_id: GatewayProfile(provider_id=provider_id, actions=provider.actions)
+    provider_id: GatewayProfile(
+        provider_id=provider_id,
+        display_name=provider.display_name,
+        actions=provider.actions,
+    )
     for provider_id, provider in PROVIDER_REGISTRY.items()
 }
 
