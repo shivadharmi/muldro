@@ -58,14 +58,16 @@ interface BindingRowProps {
   catalog: ModelCatalog | null;
   configuredProviders: string[];
   onChange: (next: TierBinding) => void;
+  onRemove?: () => void;
 }
 
 /**
  * A single editable binding row (used for both tiers and per-agent overrides).
  * The provider list is restricted to configured providers; effort and
  * temperature controls only render when the selected model supports them.
+ * `onRemove`, when provided, renders a remove control (used for overrides).
  */
-function BindingRow({ binding, catalog, configuredProviders, onChange }: BindingRowProps) {
+function BindingRow({ binding, catalog, configuredProviders, onChange, onRemove }: BindingRowProps) {
   const providerModels = catalog?.providers[binding.provider] ?? [];
   const selectedModel = findModel(catalog, binding.provider, binding.model_id);
   const showEffort = !!selectedModel && selectedModel.thinking_style !== "none";
@@ -153,6 +155,17 @@ function BindingRow({ binding, catalog, configuredProviders, onChange }: Binding
           className={`${INPUT_CLASS} w-20`}
         />
       )}
+
+      {onRemove && (
+        <button
+          type="button"
+          aria-label={`remove ${binding.tier} override`}
+          onClick={onRemove}
+          className="ml-auto px-2 py-1 rounded-[var(--radius-md)] text-t-muted hover:text-j-danger hover:bg-surface-2 transition-colors cursor-pointer"
+        >
+          ✕
+        </button>
+      )}
     </div>
   );
 }
@@ -210,7 +223,8 @@ function ProviderRow({ provider, status, busy, onSaveKey, onTest }: ProviderRowP
             />
             <button
               type="button"
-              disabled={busy || !apiKey}
+              // ollama authenticates with a base URL alone — no key required.
+              disabled={busy || (provider !== "ollama" && !apiKey)}
               onClick={() => onSaveKey?.(provider, apiKey, baseUrl || undefined)}
               className={PRIMARY_BTN_CLASS}
             >
@@ -247,6 +261,7 @@ export function ModelTab({
     config?.agent_overrides ?? [],
   );
   const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [addAgent, setAddAgent] = useState("");
 
   // Re-seed editable local state whenever a fresh config prop arrives. This is
   // React's "adjust state during render" pattern (keyed on the config
@@ -299,6 +314,39 @@ export function ModelTab({
     setAgentOverrides((prev) =>
       prev.map((t) => (keyOf(t) === keyOf(next) ? next : t)),
     );
+  };
+
+  // Agents that don't yet have an override — the candidates for the add selector.
+  const overriddenAgents = useMemo(
+    () => new Set(agentOverrides.map((o) => o.tier)),
+    [agentOverrides],
+  );
+  const availableAgents = useMemo(
+    () => (catalog?.agents ?? []).filter((a) => !overriddenAgents.has(a.name)),
+    [catalog, overriddenAgents],
+  );
+
+  const addOverride = (agentName: string) => {
+    const agent = catalog?.agents.find((a) => a.name === agentName);
+    if (!agent) return;
+    // Seed the override from the agent's default tier binding so it starts valid.
+    const tierBinding = tiers.find((t) => t.tier === agent.tier);
+    const seed: TierBinding = tierBinding
+      ? { ...tierBinding, tier: agentName }
+      : {
+          tier: agentName,
+          provider: configuredProviders[0] ?? "",
+          model_id: "",
+          effort: "none",
+          max_tokens: 4096,
+          temperature: null,
+        };
+    setAgentOverrides((prev) => [...prev, seed]);
+    setAddAgent("");
+  };
+
+  const removeOverride = (agentName: string) => {
+    setAgentOverrides((prev) => prev.filter((o) => o.tier !== agentName));
   };
 
   const handleSave = () => {
@@ -400,7 +448,35 @@ export function ModelTab({
           Advanced — Per-Agent Overrides
         </button>
         {advancedOpen && (
-          <div className="mt-2.5">
+          <div className="mt-2.5 space-y-2">
+            {/* Add-override control: pick an agent without an override and seed it
+                from that agent's default tier binding. */}
+            {availableAgents.length > 0 && (
+              <div className="flex items-center gap-2">
+                <select
+                  aria-label="agent to override"
+                  value={addAgent}
+                  onChange={(e) => setAddAgent(e.target.value)}
+                  className={INPUT_CLASS}
+                >
+                  <option value="">Select agent…</option>
+                  {availableAgents.map((a) => (
+                    <option key={a.name} value={a.name}>
+                      {a.display_name}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  disabled={!addAgent}
+                  onClick={() => addOverride(addAgent)}
+                  className={GHOST_BTN_CLASS}
+                >
+                  + Add override
+                </button>
+              </div>
+            )}
+
             {agentOverrides.length === 0 ? (
               <Card>
                 <CardBody>
@@ -420,12 +496,26 @@ export function ModelTab({
                         catalog={catalog}
                         configuredProviders={configuredProviders}
                         onChange={updateOverride}
+                        onRemove={() => removeOverride(ov.tier)}
                       />
                     ))}
                   </div>
                 </CardBody>
               </Card>
             )}
+
+            {/* Persists tiers + the full override set. The server replaces overrides
+                wholesale, so a removed row is deleted on save. */}
+            <div className="flex justify-end">
+              <button
+                type="button"
+                disabled={savingConfig}
+                onClick={handleSave}
+                className={PRIMARY_BTN_CLASS}
+              >
+                {savingConfig ? "Saving…" : "Save overrides"}
+              </button>
+            </div>
           </div>
         )}
       </div>

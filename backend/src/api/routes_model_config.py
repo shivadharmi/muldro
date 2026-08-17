@@ -5,7 +5,7 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy import or_, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.deps import get_current_workspace_id, get_session
@@ -14,8 +14,9 @@ from src.config.model_catalog import MODEL_CATALOG, get_model_spec
 from src.contracts.model_config import ModelConfigResponse, ProviderStatus, TierBinding
 from src.llm.model_factory import build_langchain_model
 from src.models.provider_credential import ProviderCredential
+from src.orchestrator.agents import AGENT_MODEL_TIERS
 from src.services.model_config_service import ModelConfigService
-from src.services.model_resolver import ResolvedModel
+from src.services.model_resolver import KEYLESS_PROVIDERS, ModelResolver, ResolvedModel
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -30,9 +31,17 @@ class CatalogModel(BaseModel):
     suggested_tier: str
 
 
+class AgentInfo(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    name: str
+    display_name: str
+    tier: str  # the agent's default reasoning tier (fallback when no override exists)
+
+
 class CatalogResponse(BaseModel):
     model_config = ConfigDict(extra="ignore")
     providers: dict[str, list[CatalogModel]]
+    agents: list[AgentInfo]
 
 
 @router.get("/v1/model-catalog", response_model=CatalogResponse)
@@ -50,7 +59,13 @@ async def get_model_catalog(workspace_id: str = Depends(get_current_workspace_id
                 for s in specs
             ]
             for p, specs in MODEL_CATALOG.items()
-        }
+        },
+        # The agent roster + default tiers are code facts (like the model catalog),
+        # so the Settings UI can offer per-agent override creation seeded from the tier.
+        agents=[
+            AgentInfo(name=name, display_name=name.title(), tier=tier)
+            for name, tier in AGENT_MODEL_TIERS.items()
+        ],
     )
 
 
@@ -84,7 +99,8 @@ async def put_model_config(
 
 class CredentialBody(BaseModel):
     model_config = ConfigDict(extra="ignore")
-    api_key: str
+    # Optional: local providers like ollama authenticate with a base_url alone (no key).
+    api_key: str | None = None
     base_url: str | None = None
     extra_config: dict | None = None
 
@@ -117,7 +133,10 @@ async def put_provider_credential(
     db: AsyncSession = Depends(get_session),
 ):
     _require_known_provider(provider)
-    encrypted = secret_crypto.encrypt_secret(body.api_key)
+    if not body.api_key and provider not in KEYLESS_PROVIDERS:
+        raise HTTPException(status_code=400, detail=f"api_key is required for provider {provider}")
+    # Keyless providers (ollama) store no ciphertext — only the base_url configures them.
+    encrypted = secret_crypto.encrypt_secret(body.api_key) if body.api_key else None
 
     stmt = select(ProviderCredential).where(
         ProviderCredential.workspace_id == workspace_id,
@@ -173,29 +192,20 @@ async def test_provider_credential(
 ):
     _require_known_provider(provider)
 
-    # Prefer the workspace credential, else the deployment-default (NULL) row.
-    stmt = (
-        select(ProviderCredential)
-        .where(
-            ProviderCredential.provider == provider,
-            or_(
-                ProviderCredential.workspace_id == workspace_id,
-                ProviderCredential.workspace_id.is_(None),
-            ),
-        )
-        .order_by(ProviderCredential.workspace_id.is_(None))
-    )
-    row = (await db.execute(stmt)).scalars().first()
-    if row is None or not row.api_key_encrypted:
+    # Resolve the credential exactly as ModelResolver does — workspace row, else the
+    # NULL-default row, else the per-provider env fallback key — so /test agrees with
+    # what GET /model-config reports as configured (F4). Keyless providers (ollama)
+    # authenticate via base_url and legitimately have no api_key.
+    api_key, base_url = await ModelResolver(db).resolve_credential(provider, workspace_id)
+    if api_key is None and provider not in KEYLESS_PROVIDERS:
         return TestResult(status="invalid", detail="not configured")
 
     try:
-        api_key = secret_crypto.decrypt_secret(row.api_key_encrypted)
         resolved = ResolvedModel(
             provider=provider,
             model_id=_cheap_model_id(provider),
             api_key=api_key,
-            base_url=row.base_url,
+            base_url=base_url,
             kwargs={"max_tokens": 1},
         )
         model = build_langchain_model(resolved)
@@ -205,10 +215,22 @@ async def test_provider_credential(
         logger.warning("Provider credential test failed for %s", provider, exc_info=True)
         new_status, detail = "invalid", "credential invalid"
 
-    # row may be a NULL-default row; only persist status when it is our workspace row.
-    if row.workspace_id == workspace_id:
-        row.status = new_status
+    # Persist status only to the workspace's own credential row. Env-backed or
+    # deployment-default providers have no workspace row to update — the result is
+    # returned to the caller without being cached.
+    ws_row = (
+        (
+            await db.execute(
+                select(ProviderCredential).where(
+                    ProviderCredential.workspace_id == workspace_id,
+                    ProviderCredential.provider == provider,
+                )
+            )
+        )
+        .scalars()
+        .first()
+    )
+    if ws_row is not None:
+        ws_row.status = new_status
         await db.commit()
-    else:
-        await db.rollback()
     return TestResult(status=new_status, detail=detail)

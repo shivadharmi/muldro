@@ -38,6 +38,7 @@ vi.mock("@/lib/api", () => ({
         },
       ],
     },
+    agents: [{ name: "planner", display_name: "Planner", tier: "reasoning" }],
   }),
   fetchModelConfig: vi.fn().mockResolvedValue({
     tiers: [

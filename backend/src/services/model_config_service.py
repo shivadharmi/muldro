@@ -10,7 +10,7 @@ The handler owns the transaction: put_config() stages changes but never commits.
 
 from __future__ import annotations
 
-from sqlalchemy import or_, select
+from sqlalchemy import delete, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.config.model_catalog import MODEL_CATALOG
@@ -28,13 +28,34 @@ class ModelConfigService:
         self._db = db
 
     async def put_config(self, workspace_id, tiers, agent_overrides) -> None:
-        """UPSERT workspace tier + agent bindings. Does NOT commit (handler owns it)."""
+        """UPSERT workspace tier bindings; REPLACE workspace agent overrides.
+
+        Tiers merge (an omitted tier falls through to the deployment default). Agent
+        overrides use replace semantics: the submitted list is the complete set, so a
+        workspace override omitted from it is deleted and the agent reverts to its tier
+        default. Does NOT commit (handler owns it).
+        """
         for b in tiers:
             await self._upsert_binding(workspace_id, "tier", b.tier, b)
         for b in agent_overrides:
             # For an agent override the reused TierBinding carries the agent name
             # in the ``tier`` field; it is written as scope_key of a scope_type="agent" row.
             await self._upsert_binding(workspace_id, "agent", b.tier, b)
+        await self._prune_agent_overrides(workspace_id, keep={b.tier for b in agent_overrides})
+
+    async def _prune_agent_overrides(self, workspace_id, keep: set[str]) -> None:
+        """Delete this workspace's agent-override rows whose agent is not in ``keep``.
+
+        Scoped to the workspace's own rows (never the NULL-default rows), so an
+        omitted override reverts the agent to its tier binding via the resolver.
+        """
+        conditions = [
+            ModelBinding.workspace_id == workspace_id,
+            ModelBinding.scope_type == "agent",
+        ]
+        if keep:  # empty keep => delete every workspace agent override
+            conditions.append(ModelBinding.scope_key.notin_(keep))
+        await self._db.execute(delete(ModelBinding).where(*conditions))
 
     async def _upsert_binding(self, workspace_id, scope_type, scope_key, binding) -> None:
         stmt = select(ModelBinding).where(

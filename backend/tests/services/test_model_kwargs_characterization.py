@@ -10,7 +10,7 @@ Claude-only -> multi-provider cutover collapsed per-agent thinking budgets into
 3 tier effort levels.
 
 The anthropic credential resolves via the ``JARVIS_ANTHROPIC_API_KEY`` env
-fallback (see ``ModelResolver._resolve_credential``), so no credential row is
+fallback (see ``ModelResolver.resolve_credential``), so no credential row is
 needed — and NULL-workspace credential rows are cleared to avoid a stale-master-key
 decrypt from an app-lifespan seed.
 """

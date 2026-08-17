@@ -505,8 +505,15 @@ export interface CatalogModel {
   suggested_tier: string;
 }
 
+export interface AgentInfo {
+  name: string;
+  display_name: string;
+  tier: string;
+}
+
 export interface ModelCatalog {
   providers: Record<string, CatalogModel[]>;
+  agents: AgentInfo[];
 }
 
 export interface TierBinding {

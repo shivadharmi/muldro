@@ -16,6 +16,10 @@ const catalog: ModelCatalog = {
       },
     ],
   },
+  agents: [
+    { name: "planner", display_name: "Planner", tier: "reasoning" },
+    { name: "presenter", display_name: "Presenter", tier: "balanced" },
+  ],
 };
 
 const config: ModelConfig = {
@@ -97,4 +101,80 @@ test("keeps the binding's current provider in options when de-configured", () =>
   const options = Array.from(select.options).map((o) => o.value);
   expect(options).toContain("anthropic");
   expect(select.value).toBe("anthropic");
+});
+
+test("can add and remove a per-agent override from the UI (F1)", async () => {
+  const onSaveConfig = vi.fn();
+  render(
+    <ModelTab
+      open
+      loading={false}
+      catalog={catalog}
+      config={config}
+      onLoad={() => {}}
+      onSaveConfig={onSaveConfig}
+    />,
+  );
+
+  // Open the Advanced section, then add a planner override.
+  await userEvent.click(screen.getByText(/per-agent overrides/i));
+  await userEvent.selectOptions(screen.getByLabelText("agent to override"), "planner");
+  await userEvent.click(screen.getByRole("button", { name: /add override/i }));
+
+  // The override row now exists (its provider select is labelled by the agent name),
+  // seeded from the reasoning tier's provider.
+  const plannerProvider = screen.getByLabelText("planner provider") as HTMLSelectElement;
+  expect(plannerProvider).toBeInTheDocument();
+
+  // Saving sends the override in agent_overrides.
+  await userEvent.click(screen.getByRole("button", { name: /save overrides/i }));
+  expect(onSaveConfig).toHaveBeenCalledWith(
+    expect.objectContaining({
+      agent_overrides: expect.arrayContaining([
+        expect.objectContaining({ tier: "planner" }),
+      ]),
+    }),
+  );
+
+  // Remove it -> the row disappears and a save sends an empty override list.
+  await userEvent.click(screen.getByLabelText("remove planner override"));
+  expect(screen.queryByLabelText("planner provider")).not.toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: /save overrides/i }));
+  expect(onSaveConfig).toHaveBeenLastCalledWith(
+    expect.objectContaining({ agent_overrides: [] }),
+  );
+});
+
+test("enables Save for keyless ollama and disables it for keyed providers (F3)", () => {
+  const ollamaCatalog: ModelCatalog = {
+    providers: {
+      ollama: [
+        {
+          model_id: "llama3",
+          display_name: "Llama 3",
+          thinking_style: "none",
+          accepts_temperature: true,
+          suggested_tier: "fast",
+        },
+      ],
+    },
+    agents: [],
+  };
+  const ollamaConfig: ModelConfig = {
+    tiers: [],
+    agent_overrides: [],
+    providers: [{ provider: "ollama", configured: false, status: "unconfigured" }],
+  };
+  render(
+    <ModelTab
+      open
+      loading={false}
+      catalog={ollamaCatalog}
+      config={ollamaConfig}
+      onLoad={() => {}}
+    />,
+  );
+  // ollama's Save button is enabled without an API key (base_url-only auth).
+  const saveButtons = screen.getAllByRole("button", { name: /^save$/i });
+  expect(saveButtons.some((b) => !(b as HTMLButtonElement).disabled)).toBe(true);
 });

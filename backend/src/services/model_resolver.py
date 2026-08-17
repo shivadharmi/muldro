@@ -28,6 +28,10 @@ _ENV_KEY_ATTR = {
     "google_genai": "google_api_key",
 }
 
+# Providers that authenticate without an API key (local endpoints keyed by base_url).
+# Single source of truth shared by the resolver and the credential API.
+KEYLESS_PROVIDERS = frozenset({"ollama"})
+
 
 class ModelConfigError(RuntimeError):
     """Raised when a model cannot be resolved (unknown model / missing credential)."""
@@ -87,8 +91,8 @@ class ModelResolver:
         if spec is None:
             raise ModelConfigError(f"unknown model {binding.provider}/{binding.model_id}")
 
-        api_key, base_url = await self._resolve_credential(binding.provider, workspace_id)
-        if api_key is None and binding.provider != "ollama":  # ollama needs no key
+        api_key, base_url = await self.resolve_credential(binding.provider, workspace_id)
+        if api_key is None and binding.provider not in KEYLESS_PROVIDERS:
             raise ModelConfigError(f"provider {binding.provider} is not configured")
 
         kwargs = build_model_kwargs(
@@ -170,7 +174,11 @@ class ModelResolver:
         )
         return (await self._db.execute(stmt)).scalars().first()
 
-    async def _resolve_credential(self, provider, workspace_id) -> tuple[str | None, str | None]:
+    async def resolve_credential(self, provider, workspace_id) -> tuple[str | None, str | None]:
+        """Resolve a provider's (api_key, base_url) exactly as ``resolve`` does: the
+        workspace credential row, else the deployment-default (NULL) row, else the
+        per-provider env fallback key. Public so the /test endpoint can probe the
+        same credential source GET /model-config reports as configured."""
         stmt = (
             select(ProviderCredential)
             .where(
