@@ -69,3 +69,23 @@ async def test_unknown_gateway_server_mints_no_capabilities():
     claims = _claims_from_auth(auth)
 
     assert claims["capabilities"] == []
+
+
+async def test_unknown_gateway_server_is_logged_as_an_error(caplog):
+    """The two gateway-ness signals disagreeing must not be silent.
+
+    An installation that declares platform_jwt (so it ROUTES to the vMCP) but
+    whose server_name the registry does not know mints an empty capability set,
+    so every call it makes is denied at the adapter — a useless installation.
+    Minting still succeeds (no raise); the error log is the only signal.
+    """
+    pool = UserMCPSessionPool()
+
+    with caplog.at_level("ERROR", logger="src.integrations.session_pool"):
+        auth = await pool._resolve_auth(
+            "totally-unregistered-server", _USER, dict(_GATEWAY_CONFIG), workspace_id=_WS
+        )
+
+    assert auth is not None
+    errors = [r.getMessage() for r in caplog.records if r.levelname == "ERROR"]
+    assert any("totally-unregistered-server" in m and "platform_jwt" in m for m in errors), errors

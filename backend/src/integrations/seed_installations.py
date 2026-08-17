@@ -251,12 +251,20 @@ async def seed_installations(db: AsyncSession, workspace_id: str, user_id: str) 
                 inst.config = new_cfg
                 needs_update = True
 
-        # Sync managed_local flag into JSONB config for managed servers.
-        if inst_data.get("managed_local"):
-            current_cfg = inst.config if isinstance(inst.config, dict) else {}
-            if not current_cfg.get("managed_local"):
-                inst.config = {**current_cfg, "managed_local": True}
-                needs_update = True
+        # Sync managed_local into JSONB config — SYMMETRICALLY. Setting it but
+        # never clearing it is a one-way door: an installation seeded as
+        # managed_local before it moved to another transport would keep
+        # {"managed_local": True} forever, contradicting its own seed.
+        current_cfg = inst.config if isinstance(inst.config, dict) else {}
+        wants_managed_local = bool(inst_data.get("managed_local"))
+        if wants_managed_local != bool(current_cfg.get("managed_local")):
+            new_cfg = {**current_cfg}
+            if wants_managed_local:
+                new_cfg["managed_local"] = True
+            else:
+                new_cfg.pop("managed_local", None)
+            inst.config = new_cfg
+            needs_update = True
 
         if needs_update:
             changed += 1

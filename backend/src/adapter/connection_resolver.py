@@ -15,9 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.adapter.identity import AdapterPrincipal
-from src.models.connection_map import ConnectionMap
-
-_DEFAULT_ALIAS = "default"
+from src.models.connection_map import DEFAULT_ACCOUNT_ALIAS, ConnectionMap
 
 
 class ConnectionDenied(Exception):  # noqa: N818 - "denied", not "error": a policy refusal
@@ -31,7 +29,7 @@ async def resolve_connection(
     provider_id: str,
     account_alias: str | None,
 ) -> str:
-    alias = account_alias or _DEFAULT_ALIAS
+    alias = account_alias or DEFAULT_ACCOUNT_ALIAS
     row = (
         await db.execute(
             select(ConnectionMap).where(

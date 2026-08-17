@@ -24,10 +24,10 @@ from dataclasses import dataclass, field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.integrations.gateway_actions import providers_for_server
+from src.integrations.gateway_actions import capabilities_for_server, providers_for_server
 from src.integrations.gateway_providers import gateway_oc_provider
 from src.integrations.provider_map import provider_for_server
-from src.models.connection_map import ConnectionMap
+from src.models.connection_map import DEFAULT_ACCOUNT_ALIAS, ConnectionMap
 
 logger = logging.getLogger(__name__)
 
@@ -165,9 +165,26 @@ class IntegrationStatus:
 async def _active_connection_providers(
     db: AsyncSession,
     workspace_id: str,
+    user_id: str,
     providers: tuple[str, ...],
 ) -> set[str]:
-    """Return which of ``providers`` have an active connection in this workspace.
+    """Return which of ``providers`` this principal can actually resolve.
+
+    Scope enforced: ``workspace_id`` + ``principal_id`` + ``provider_id`` +
+    the default ``account_alias``, and ``connection_status == "active"``.
+
+    That scope MIRRORS ``src.adapter.connection_resolver.resolve_connection`` on
+    purpose: "connected" must mean "the resolver will resolve this". A narrower
+    query (workspace + provider only) reported connected for rows the gateway
+    then denied — another workspace member's connection, or a genuinely active
+    connection stored under a non-default alias (``alias`` is a client-supplied
+    body field on the connect route, so it is reachable through the public API).
+
+    The resolver matches ``tenant_id`` where this matches ``workspace_id``; the
+    platform JWT is minted with ``tenant_id = workspace_id`` (see
+    ``session_pool._resolve_auth``), so the two coincide today. The alias
+    constant is shared with the resolver rather than restated, so they cannot
+    drift apart.
 
     One query per installation (not per provider): the whole provider set is
     matched with a single ``IN``. Only ``connection_status == "active"`` counts —
@@ -176,7 +193,9 @@ async def _active_connection_providers(
     rows = await db.execute(
         select(ConnectionMap.provider_id).where(
             ConnectionMap.workspace_id == workspace_id,
+            ConnectionMap.principal_id == user_id,
             ConnectionMap.provider_id.in_(providers),
+            ConnectionMap.account_alias == DEFAULT_ACCOUNT_ALIAS,
             ConnectionMap.connection_status == "active",
         )
     )
@@ -231,6 +250,9 @@ async def get_integration_statuses(
         needs_reauth = False
         oc_providers: list[str] = []
         provider_connections: dict[str, bool] = {}
+        # Display-only scopes: the installation's hand-maintained
+        # `scopes_granted` list, unless the gateway branch below derives them.
+        raw_scopes = inst.scopes_granted or []
 
         # An empty tuple means "not gateway-backed" and falls through to the
         # OAuth path below, so the `all({}) is True` vacuous-truth case can never
@@ -245,10 +267,15 @@ async def get_integration_statuses(
             # (Gmail linked, Calendar declined) stays visible rather than
             # collapsing to "disconnected". `configured` stays True: the gateway
             # owns the OAuth client, not a Jarvis-side client_id setting.
-            active = await _active_connection_providers(db, workspace_id, providers)
+            active = await _active_connection_providers(db, workspace_id, user_id, providers)
             provider_connections = {p: (p in active) for p in providers}
             connected = all(provider_connections.values())
             oc_providers = list(providers)
+            # A gateway installation carries no `scopes_granted` (the list was
+            # hand-maintained in Jarvis vocabulary); the registry already knows
+            # exactly which capabilities its providers expose, so the badges
+            # come from there instead of rendering empty.
+            raw_scopes = list(capabilities_for_server(inst.server_name))
         elif category == "oauth":
             oauth_name = provider_for_server(auth_provider)
             client_id_attr = _PROVIDER_CLIENT_ID_ATTR.get(oauth_name, "")
@@ -267,7 +294,12 @@ async def get_integration_statuses(
         if auth_provider and auth_provider not in ("token", "none"):
             provider_name = provider_for_server(auth_provider)
 
-        raw_scopes = inst.scopes_granted or []
+        # Every gateway installation declares the same auth_provider
+        # ("platform_jwt"), so deriving the brand slug from it collapses them
+        # all into "platform" — a collision between google-workspace and
+        # github. Derive from the server_name for those, which stays distinct.
+        slug = derive_slug(None if providers else provider_name, inst.server_name)
+
         results.append(
             IntegrationStatus(
                 server_name=inst.server_name,
@@ -280,7 +312,7 @@ async def get_integration_statuses(
                 enabled=inst.enabled,
                 install_id=inst.install_id,
                 scopes=raw_scopes,
-                slug=derive_slug(provider_name, inst.server_name),
+                slug=slug,
                 access_scopes=coarsen_scopes(raw_scopes),
                 needs_reauth=needs_reauth,
                 oc_provider=gateway_oc_provider(

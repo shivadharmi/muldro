@@ -240,15 +240,45 @@ async def _clear_connection_artifacts(
     """Revoke credentials + close live sessions for an integration.
 
     Shared by /disconnect (keeps row) and DELETE (drops row).
-    Deletes the OAuth token, closes cached MCP sessions, and unregisters the
-    server config so stale tool schemas are not reused on reconnect.
+    Revokes the credential — the OAuth token for a native installation, the
+    `connection_map` rows for a gateway-backed one — then closes cached MCP
+    sessions and unregisters the server config so stale tool schemas are not
+    reused on reconnect.
     """
+    from sqlalchemy import update
+
     from src.config.settings import get_settings
+    from src.integrations.gateway_actions import providers_for_server
     from src.integrations.mcp_pool import get_workspace_pool
+    from src.models.connection_map import ConnectionMap
     from src.models.database import get_session_factory
     from src.services.oauth_manager import OAuthManager
 
     settings = get_settings()
+
+    # Gateway-backed installations hold no OAuthManager token: their credential
+    # lives in OpenConnector and `integration_status` reads connectivity from
+    # `connection_map`. They also all declare auth_provider="platform_jwt",
+    # which misses the OAuth provider map below — so without this branch
+    # Disconnect would clear sessions, then the next status refetch would read
+    # the still-"active" rows and report connected again.
+    gateway_providers = providers_for_server(inst.server_name)
+    if gateway_providers:
+        # Scoped exactly like the rest of this endpoint: this workspace, this
+        # principal. Every alias of the installation's providers is revoked —
+        # "Disconnect" means all of this user's accounts for this integration.
+        # TODO: revoking on the OpenConnector side (deleting the stored
+        # credential via the OC admin API) is still outstanding — a later wave.
+        # Flipping the local rows only stops Jarvis resolving/reporting them.
+        await db.execute(
+            update(ConnectionMap)
+            .where(
+                ConnectionMap.workspace_id == workspace_id,
+                ConnectionMap.principal_id == user_id,
+                ConnectionMap.provider_id.in_(gateway_providers),
+            )
+            .values(connection_status="revoked")
+        )
 
     # Map server auth_provider → OAuth provider name (same table used by
     # /unified). Only oauth-backed installations have tokens to delete.

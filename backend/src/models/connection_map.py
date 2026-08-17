@@ -13,6 +13,13 @@ from sqlalchemy.orm import Mapped, mapped_column
 from src.models.base import Base, TimestampMixin
 from src.models.ids import generate_id
 
+# The alias a connection gets when the caller names none. Lives with the model
+# because more than one layer keys on it: the adapter's resolver defaults an
+# absent `account_alias` to it, and the status service must query the SAME alias
+# the resolver will look for — a drifting literal would make "connected" and
+# "resolvable" disagree again.
+DEFAULT_ACCOUNT_ALIAS = "default"
+
 
 class ConnectionMap(Base, TimestampMixin):
     __tablename__ = "connection_map"

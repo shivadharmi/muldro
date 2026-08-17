@@ -15,6 +15,7 @@ from typing import Any
 from fastmcp import Client
 from fastmcp.client.auth import BearerAuth
 
+from src.integrations.gateway_actions import capabilities_for_server
 from src.integrations.local_process_manager import get_local_process_manager
 from src.integrations.mcp_errors import McpAuthRequiredError
 from src.integrations.provider_map import provider_for_server
@@ -863,7 +864,6 @@ class UserMCPSessionPool:
             # workspace_id) so the downstream adapter can resolve the caller's
             # connection. Falls back to user_id only when workspace_id is absent
             # (the one-user-one-workspace invariant).
-            from src.integrations.gateway_actions import capabilities_for_server
             from src.orchestrator.platform_jwt import mint_platform_jwt
 
             tenant = workspace_id or user_id
@@ -885,6 +885,20 @@ class UserMCPSessionPool:
             # not exist today. WITHIN one installation, the deep runtime's
             # capability_scope middleware is the first-line guard.
             capabilities = list(capabilities_for_server(server_name))
+            if not capabilities:
+                # The two gateway-ness signals have diverged: this installation
+                # DECLARES auth_provider="platform_jwt" (so it routes to the
+                # vMCP) but the registry knows no providers for its
+                # server_name. The token mints empty, so every gateway call it
+                # makes will be denied at the adapter's capability gate — a
+                # useless installation. Registry invariant tests pin the seeded
+                # set; this catches a DB row that drifted from it.
+                logger.error(
+                    "Installation %r declares auth_provider='platform_jwt' but the gateway "
+                    "registry knows no providers for it — minting an EMPTY capability set, "
+                    "so every gateway call for this server will be denied.",
+                    server_name,
+                )
             token = mint_platform_jwt(
                 principal_id=user_id,
                 tenant_id=tenant,

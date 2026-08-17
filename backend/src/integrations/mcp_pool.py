@@ -19,6 +19,17 @@ from src.integrations.session_pool import UserMCPSessionPool
 logger = logging.getLogger(__name__)
 
 
+class GatewayNotConfigured(RuntimeError):  # noqa: N818 - a config state, not an error class
+    """A gateway-declared installation cannot be routed: no vMCP URL is set.
+
+    Narrow on purpose. ``initialize_from_db`` skips exactly this and keeps
+    registering the remaining installations; catching bare ``RuntimeError``
+    there would mis-report any unrelated failure as "vMCP not configured".
+    Subclasses ``RuntimeError`` so callers that treat it as a generic runtime
+    misconfiguration still work.
+    """
+
+
 @dataclass
 class ServerEntry:
     """A registered MCP server for a workspace."""
@@ -293,9 +304,11 @@ class WorkspaceMCPPool:
                 for inst in installations:
                     try:
                         config = _installation_to_config(inst)
-                    except RuntimeError as exc:
+                    except GatewayNotConfigured as exc:
                         # A gateway-backed installation with no vMCP URL configured is
-                        # a config error for THAT installation alone. Skip it loudly and
+                        # a config error for THAT installation alone (and only that
+                        # case — the exception type is narrow so an unrelated
+                        # RuntimeError is never mislabelled). Skip it loudly and
                         # keep going: the enclosing try/except spans the whole loop and
                         # logs at DEBUG, so letting this propagate would silently drop
                         # every remaining installation -- taking unmigrated servers
@@ -370,7 +383,7 @@ def _installation_to_config(inst: Any) -> dict:
         # platform JWT is minted in UserMCPSessionPool._resolve_auth, with
         # capabilities derived from gateway_actions.capabilities_for_server.
         if not settings.toolhive_vmcp_url:
-            raise RuntimeError(
+            raise GatewayNotConfigured(
                 f"Installation '{inst.server_name}' declares auth_provider="
                 "'platform_jwt' but settings.toolhive_vmcp_url is not set (env "
                 "JARVIS_TOOLHIVE_VMCP_URL). There is no native fallback for "

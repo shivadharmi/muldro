@@ -16,11 +16,10 @@ import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from ulid import ULID
 
 from src.config.settings import get_settings
-from src.models.connection_map import ConnectionMap
-from src.services.integration_status import IntegrationStatus, get_integration_statuses
+from src.models.connection_map import DEFAULT_ACCOUNT_ALIAS, ConnectionMap
+from src.services.integration_status import get_integration_statuses
 from src.services.oauth_manager import TokenResult
 from tests.conftest import make_test_db, seed_user_workspace
 
@@ -70,17 +69,29 @@ async def _clear_connections(factory) -> None:
         await db.commit()
 
 
-async def _add_connection(factory, provider_id: str, status: str = "active") -> None:
+async def _add_connection(
+    factory,
+    provider_id: str,
+    status: str = "active",
+    *,
+    principal_id: str = _USER,
+    alias: str = DEFAULT_ACCOUNT_ALIAS,
+) -> None:
+    """Insert a connection_map row. Defaults mirror what the resolver resolves.
+
+    ``principal_id``/``alias`` are overridable so the divergence cases (another
+    member's row, a non-default alias) can be seeded explicitly.
+    """
     async with factory() as db:
         db.add(
             ConnectionMap(
                 tenant_id=_WS,
                 workspace_id=_WS,
-                principal_id=_USER,
+                principal_id=principal_id,
                 provider_id=provider_id,
-                connection_id=f"{_WS}:{_USER}:{provider_id}:primary",
+                connection_id=f"{_WS}:{principal_id}:{provider_id}:{alias}",
                 connection_status=status,
-                account_alias=f"primary-{ULID()}",
+                account_alias=alias,
             )
         )
         await db.commit()
@@ -111,23 +122,6 @@ async def _statuses(factory, installations, *, oauth_key: str = "key", token_rea
     ):
         async with factory() as db:
             return await get_integration_statuses(db, _USER, _WS)
-
-
-def test_dataclass_gateway_fields_default_empty():
-    s = IntegrationStatus(
-        server_name="google-workspace",
-        display_name="Google Workspace",
-        provider="google",
-        category="oauth",
-        configured=True,
-        connected=True,
-        health_status="healthy",
-        enabled=True,
-        install_id="inst_1",
-        scopes=[],
-    )
-    assert s.oc_providers == []
-    assert s.provider_connections == {}
 
 
 async def test_gateway_all_providers_active_is_connected():
@@ -222,4 +216,90 @@ async def test_non_gateway_installation_still_uses_oauth_token_path():
         assert revoked[0].needs_reauth is True
         assert revoked[0].oc_providers == []
     finally:
+        await engine.dispose()
+
+
+async def test_another_members_connection_does_not_make_this_user_connected():
+    """A workspace-only query reported Bob connected on Alice's row.
+
+    ``resolve_connection`` keys on (tenant, principal, provider, alias), so a
+    row owned by another member of the same workspace resolves for its owner
+    only. "Connected" must mean "the resolver will resolve this FOR ME".
+    """
+    other = "usr_01JTESTINTSTATUSOTHERMEMBER"
+    factory, engine = make_test_db()
+    try:
+        await seed_user_workspace(factory, _USER, _WS)
+        await _clear_connections(factory)
+        await _add_connection(factory, "github", principal_id=other)
+
+        statuses = await _statuses(factory, [_make_inst("github", "platform_jwt")])
+        s = statuses[0]
+        assert s.provider_connections == {"github": False}
+        assert s.connected is False
+    finally:
+        await _clear_connections(factory)
+        await engine.dispose()
+
+
+async def test_non_default_alias_row_does_not_count_as_connected():
+    """An active row under a non-default alias is not what the resolver reads.
+
+    The adapter defaults an absent ``account_alias`` to ``DEFAULT_ACCOUNT_ALIAS``
+    and every gateway call arrives without one, so a connection stored under
+    e.g. "work" is denied at call time — it must not report connected. The alias
+    is a client-supplied body field on the connect route, so this is reachable
+    through the public API, not a hypothetical.
+    """
+    factory, engine = make_test_db()
+    try:
+        await seed_user_workspace(factory, _USER, _WS)
+        await _clear_connections(factory)
+        await _add_connection(factory, "github", alias="work")
+
+        statuses = await _statuses(factory, [_make_inst("github", "platform_jwt")])
+        assert statuses[0].connected is False
+
+        # ... and the same row under the default alias DOES count, proving the
+        # alias is what made the difference.
+        await _add_connection(factory, "github")
+        statuses = await _statuses(factory, [_make_inst("github", "platform_jwt")])
+        assert statuses[0].connected is True
+    finally:
+        await _clear_connections(factory)
+        await engine.dispose()
+
+
+async def test_gateway_installations_get_distinct_slugs_and_registry_scopes():
+    """platform_jwt must not collapse both brands into one slug.
+
+    Both migrated installations declare auth_provider="platform_jwt", so a slug
+    derived from the auth provider yields "platform" for BOTH. Scopes likewise
+    come from the registry, not from the (now None) hand-maintained
+    ``scopes_granted``, so the UI badges are not empty.
+    """
+    factory, engine = make_test_db()
+    try:
+        await seed_user_workspace(factory, _USER, _WS)
+        await _clear_connections(factory)
+
+        statuses = await _statuses(
+            factory,
+            [
+                _make_inst("google-workspace", "platform_jwt"),
+                _make_inst("github", "platform_jwt"),
+            ],
+            oauth_key="",
+        )
+        by_server = {s.server_name: s for s in statuses}
+        assert by_server["google-workspace"].slug == "google"
+        assert by_server["github"].slug == "github"
+        assert len({s.slug for s in statuses}) == 2
+
+        gw = by_server["google-workspace"]
+        assert "email.send" in gw.scopes
+        assert set(gw.access_scopes) == {"read", "write"}
+        assert by_server["github"].scopes
+    finally:
+        await _clear_connections(factory)
         await engine.dispose()

@@ -12,7 +12,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.integrations.mcp_pool import _installation_to_config
+from src.integrations.mcp_pool import GatewayNotConfigured, _installation_to_config
 
 
 def _make_installation(**overrides) -> SimpleNamespace:
@@ -72,13 +72,18 @@ def test_google_workspace_also_routes_to_the_vmcp():
 def test_gateway_routing_fails_loudly_when_the_vmcp_url_is_unset():
     """No native fallback for a gateway-declared installation: an unset vMCP
     URL is a misconfiguration that must raise, not silently produce a
-    broken (no command, no url) config."""
+    broken (no command, no url) config.
+
+    The type is NARROW (`GatewayNotConfigured`, a RuntimeError subclass) so
+    `initialize_from_db` can skip exactly this case without mislabelling an
+    unrelated RuntimeError as "vMCP not configured"."""
     inst = _make_installation()
     settings = _make_settings(toolhive_vmcp_url=None)
 
     with patch("src.integrations.mcp_pool.get_settings", return_value=settings):
-        with pytest.raises(RuntimeError, match="toolhive_vmcp_url"):
+        with pytest.raises(GatewayNotConfigured, match="toolhive_vmcp_url"):
             _installation_to_config(inst)
+    assert issubclass(GatewayNotConfigured, RuntimeError)
 
 
 def test_gateway_routing_ignores_the_gmail_via_gateway_flag():
@@ -95,6 +100,27 @@ def test_gateway_routing_ignores_the_gmail_via_gateway_flag():
 
     assert config["auth_provider"] == "platform_jwt"
     assert config["url"] == "http://localhost:8100/mcp"
+
+
+def test_non_platform_jwt_installation_uses_native_config_regardless_of_flag():
+    """A google-workspace installation NOT declared platform_jwt (e.g. still on
+    auth_provider="oauth") keeps its native config even with the (now inert)
+    gmail_via_gateway flag ON and a vMCP url set — the flag never routes."""
+    inst = _make_installation(
+        server_name="google-workspace",
+        transport="stdio",
+        auth_provider="oauth",
+        command="uvx",
+        args=["google-workspace-mcp"],
+    )
+    settings = _make_settings(gmail_via_gateway=True, toolhive_vmcp_url="https://vmcp.example.com")
+
+    with patch("src.integrations.mcp_pool.get_settings", return_value=settings):
+        config = _installation_to_config(inst)
+
+    assert config["transport"] == "stdio"
+    assert config["command"] == "uvx"
+    assert config.get("url") != settings.toolhive_vmcp_url
 
 
 def test_native_installations_are_unaffected():

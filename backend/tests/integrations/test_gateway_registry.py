@@ -48,6 +48,27 @@ def test_every_provider_binds_to_a_seeded_installation():
         )
 
 
+def test_every_platform_jwt_installation_is_known_to_the_registry():
+    """The converse invariant: no platform_jwt seed without registry providers.
+
+    The two gateway-ness signals must stay pinned together. An installation that
+    declares `auth_provider="platform_jwt"` routes to the vMCP and mints its JWT
+    capabilities from `capabilities_for_server` — so if the registry knows no
+    providers for its server_name it mints an EMPTY capability set and every
+    call is denied at the adapter, while integration_status reports it
+    unconfigured. A useless installation, silent but for one logger.error.
+    """
+    from src.integrations.seed_installations import _DEFAULT_INSTALLATIONS
+
+    for entry in _DEFAULT_INSTALLATIONS:
+        if entry.get("auth_provider") != "platform_jwt":
+            continue
+        assert providers_for_server(entry["server_name"]), (
+            f"{entry['server_name']!r} declares platform_jwt but the registry "
+            "knows no OC providers for it"
+        )
+
+
 def test_every_action_capability_exists_in_the_catalog():
     for provider in PROVIDER_REGISTRY.values():
         for action in provider.actions:
@@ -91,15 +112,21 @@ def test_capabilities_for_server_is_the_union_across_its_providers():
 
 
 def test_a_gateway_token_never_spans_installations():
-    """github and google-workspace capability sets must not intersect.
+    """No two installations' capability sets may intersect.
 
     session_pool mints the union for ONE installation, so an overlap would hand a
     GitHub session a capability that unlocks a Google action at the adapter gate.
+    Enumerated over ALL pairs rather than a hardcoded github x google-workspace,
+    so adding a third installation is covered the moment it is registered.
     """
-    github = set(capabilities_for_server("github"))
-    google = set(capabilities_for_server("google-workspace"))
-    assert github and google
-    assert not (github & google)
+    servers = sorted({p.server_name for p in PROVIDER_REGISTRY.values()})
+    assert len(servers) >= 2, "disjointness is vacuous with fewer than two installations"
+    caps = {s: set(capabilities_for_server(s)) for s in servers}
+    for server, server_caps in caps.items():
+        assert server_caps, f"{server} mints no capabilities"
+    for i, a in enumerate(servers):
+        for b in servers[i + 1 :]:
+            assert not (caps[a] & caps[b]), f"{a} and {b} share capabilities {caps[a] & caps[b]}"
 
 
 def test_unknown_server_mints_no_capabilities():
