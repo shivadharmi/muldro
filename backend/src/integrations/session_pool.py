@@ -857,26 +857,39 @@ class UserMCPSessionPool:
         auth_provider = config.get("auth_provider", "none")
 
         if auth_provider == "platform_jwt":
-            # Gmail gateway slice: mint a fresh short-lived platform JWT for the
+            # Gateway slice: mint a fresh short-lived platform JWT for the
             # ToolHive vMCP instead of resolving a stored OAuth/static token. The
             # JWT's tenant_id MUST match how connection_map rows are keyed (the
             # workspace_id) so the downstream adapter can resolve the caller's
             # connection. Falls back to user_id only when workspace_id is absent
             # (the one-user-one-workspace invariant).
+            from src.integrations.gateway_actions import capabilities_for_server
             from src.orchestrator.platform_jwt import mint_platform_jwt
 
             tenant = workspace_id or user_id
-            # Blanket read+write email caps (stopgap; the proper fix is step-scoped
-            # minting — carry only the current step's capability). Read caps
-            # (email.read/list) are REQUIRED alongside the writes: without them the
-            # adapter's capability gate denies read-only gmail actions
-            # (get_profile/get_message/list_*), and omitting them also violates the
-            # read-before-write principle (never grant a write cap without its read).
+            # Capabilities are DERIVED from the gateway_actions registry as the
+            # union across the providers this installation serves (see
+            # capabilities_for_server), so a GitHub session's token carries no
+            # email capability and vice versa — which is what makes the
+            # adapter's per-action capability gate load-bearing ACROSS
+            # installations, not just within one. An unregistered server_name
+            # mints an empty capability list (fail-closed): it must not
+            # inherit another installation's capabilities.
+            #
+            # Known remaining limitation (separate scheduled increment, not
+            # fixed here): the token is minted once per SESSION creation,
+            # cached by SessionKey across steps, and rebuilt only near
+            # bound_token_exp — so it is not step-scoped. Narrowing to the
+            # current step's capability would need either a capability-keyed
+            # session key or a per-call re-mint, plus a ContextVar that does
+            # not exist today. WITHIN one installation, the deep runtime's
+            # capability_scope middleware is the first-line guard.
+            capabilities = list(capabilities_for_server(server_name))
             token = mint_platform_jwt(
                 principal_id=user_id,
                 tenant_id=tenant,
                 workspace_id=tenant,
-                capabilities=["email.read", "email.search", "email.list", "email.send"],
+                capabilities=capabilities,
             )
             return BearerAuth(token=token)
 
