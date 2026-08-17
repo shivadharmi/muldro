@@ -258,23 +258,6 @@ class ToolExecutor:
 
         return tools
 
-    def apply_cache_control_to_tools(
-        self, tools: list[dict], supports_cache: bool = True
-    ) -> list[dict]:
-        """Mark the last tool definition with cache_control for tool caching.
-
-        ``cache_control`` ephemeral markers are Anthropic-specific — they error or
-        no-op on non-caching providers (OpenAI/Gemini/Ollama). Pass
-        ``supports_cache=ModelSpec.supports_prompt_cache`` so the marker is only
-        stamped when the backing model supports prompt caching. Default ``True``
-        keeps the Anthropic path behavior-preserving.
-        """
-        if not tools or not supports_cache:
-            return tools
-        tools = [dict(t) for t in tools]
-        tools[-1] = {**tools[-1], "cache_control": {"type": "ephemeral"}}
-        return tools
-
     async def call_composite_tool(
         self, tool_name: str, tool_input: dict, user_id: str = "", workspace_id: str = ""
     ) -> dict:

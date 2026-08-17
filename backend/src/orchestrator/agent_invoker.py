@@ -270,12 +270,11 @@ class AgentInvoker:
     async def _resolve_tools(
         self, agent: SubAgent, workspace_id: str, tools_override: list[dict] | None
     ) -> list[dict]:
-        """Apply cache-control to either the override or the agent-scoped tool list."""
+        """Return the override or the agent-scoped tool list (tool-level cache markers were
+        dead — dropped by tool_bridge — so no cache_control is applied here)."""
         if tools_override is not None:
-            return self._tool_executor.apply_cache_control_to_tools(tools_override)
-        return self._tool_executor.apply_cache_control_to_tools(
-            await self._tool_executor.get_tools_for_agent(agent, workspace_id=workspace_id)
-        )
+            return tools_override
+        return await self._tool_executor.get_tools_for_agent(agent, workspace_id=workspace_id)
 
     async def _maybe_capability_summary(
         self, agent_name: str, capability_summary: str, workspace_id: str

@@ -826,10 +826,6 @@ class JarvisOrchestrator:
             agent, context, capability_summary=capability_summary
         )
 
-    def _apply_cache_control_to_tools(self, tools: list[dict]) -> list[dict]:
-        """Delegate to ToolExecutor (facade kept for internal callers)."""
-        return self._tool_executor.apply_cache_control_to_tools(tools)
-
     async def _handle_system_capability(
         self,
         step: PlanStep,

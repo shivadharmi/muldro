@@ -77,6 +77,25 @@ class ModelResolver:
             kwargs.update(binding.params)
         return ResolvedModel(binding.provider, binding.model_id, api_key, base_url, kwargs)
 
+    async def supports_prompt_cache(
+        self, *, tier=None, agent=None, agent_tier=None, workspace_id=None
+    ) -> bool:
+        """Whether the model backing this (agent/tier) supports prompt caching.
+
+        Binding + catalog only — NO credential decryption. Returns True when the
+        binding or spec cannot be determined (Anthropic-safe default).
+        """
+        try:
+            binding = await self._pick_binding(
+                tier=tier, agent=agent, agent_tier=agent_tier, workspace_id=workspace_id
+            )
+            if binding is None:
+                return True
+            spec = get_model_spec(binding.provider, binding.model_id)
+            return spec.supports_prompt_cache if spec else True
+        except Exception:
+            return True
+
     async def _pick_binding(self, *, tier, agent, agent_tier, workspace_id) -> ModelBinding | None:
         # Precedence: agent-override row -> tier row. Each lookup prefers the
         # workspace row, else the deployment-default (NULL) row.
