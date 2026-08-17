@@ -845,13 +845,47 @@ Port the connectors to poll **via gateway MCP tools** (`gmail_fetch_emails`,
 `googlecalendar_list_events`, `github_*`) instead of provider REST, so OpenConnector
 remains the single credential store.
 
-**Known cost, accepted:** the curated gateway action set has **no incremental-sync
-action**. Gmail perception currently does cursor-based incremental sync via the
-`history` endpoint (`startHistoryId`, with a 404 → full-resync fallback); calendar
-uses `syncToken` with a 410 fallback. Neither has a gateway equivalent, so the port
-is a semantics change (full-list + dedup), not a transport swap. It likely needs a
-re-spike of OpenConnector's catalog for a history-capable action before the cursor
-model can be redesigned.
+**Cursor semantics — RESOLVED by the Wave 0 spike** (`spike-findings-perception.md`).
+An earlier draft of this section said the curated set had "no incremental-sync
+action" and that a re-spike was needed before the cursor model could be redesigned.
+Both statements were wrong, and the spike settled it:
+
+- **Gmail → timestamp cursor** (max observed message timestamp, epoch seconds) with
+  an overlapping `query="after:{cursor-300} is:inbox"`. `gmail.list_history` *does*
+  exist, and was still rejected: the native connector already narrowed history to
+  `historyTypes=messageAdded`, so history's extra fidelity (label changes, deletes,
+  read-state) was **already discarded at the filter**. A timestamp cursor also
+  cannot expire, which deletes the 404-resync recursion and `MAX_HISTORY_PAGES`
+  outright rather than porting them.
+- **Calendar → `updatedMin`.** `googlecalendar.list_events` carries **both**
+  `syncToken` and `updatedMin`, so a 1:1 `syncToken` port was available and was
+  deliberately not taken: expiry is detected by reading a Google `410` off the wire,
+  and an HTTP status does not survive adapter → OpenConnector → Google. The failure
+  modes would have been *stall forever* or *full-resync every tick*. Deletions are
+  still delivered — Google documents `updatedMin` as always including entries
+  deleted since that time, regardless of `showDeleted`.
+
+So the port is a transport swap for Calendar and a deliberate semantics change for
+Gmail — not the "full-list + dedup everywhere" the earlier note assumed.
+
+### GitHub perception is deferred (increment 3)
+
+OpenConnector's `github` service exposes **no notifications action** — verified
+against the full 145-action catalog, searching both action ids and descriptions
+(`spike-findings-perception.md` Q2). The same search across the whole 13,533-action
+catalog *does* find `*notification*` actions in eight other services, so the method
+finds them when they exist; github simply has none.
+
+The native connector polls `/notifications`, which has no gateway equivalent, and
+re-sourcing it onto `search_issues_and_pull_requests` was rejected as a product
+change wearing a port's clothes: it swaps "what GitHub decided to notify me about"
+(cross-repo, read-state aware, comment-level granularity) for "issue/PR objects
+matching a query I authored".
+
+So the `github` perception source stays registered but has **no gateway data path**.
+The poller classifies it as a **non-permanent skip** — never `auth_failed`, which is
+permanent at threshold 1 and would open the circuit after a single attempt. GitHub
+*tool* calls (the agent path) are unaffected; they were never broken.
 
 ### Also orphaned by retirement (same increment)
 
