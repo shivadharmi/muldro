@@ -861,12 +861,20 @@ class UserMCPSessionPool:
         restarts. A collision is also warned about: increment 2 hit exactly this
         shape when two gateway installations shared one MCP endpoint and every
         Gmail tool silently resolved to the ``github`` server.
+
+        Candidates are deduplicated by server name before the ambiguity check.
+        An unscoped lookup (``workspace_id=""``) walks every workspace, so one
+        server installed in two workspaces yields the same name twice — that is
+        not a collision, and warning about it would put noise on the exact
+        channel this warning exists to keep clean.
         """
-        candidates = [
-            key[1]
-            for key, tools in self._server_tools.items()
-            if (not workspace_id or key[0] == workspace_id) and tool_name in tools
-        ]
+        candidates = sorted(
+            {
+                key[1]
+                for key, tools in self._server_tools.items()
+                if (not workspace_id or key[0] == workspace_id) and tool_name in tools
+            }
+        )
         if not candidates:
             return None
         if len(candidates) > 1:
@@ -875,10 +883,10 @@ class UserMCPSessionPool:
                 "tool identity is (workspace, server, name), so a bare name is ambiguous",
                 tool_name,
                 len(candidates),
-                ", ".join(sorted(candidates)),
-                min(candidates),
+                ", ".join(candidates),
+                candidates[0],
             )
-        return min(candidates)
+        return candidates[0]
 
     def get_all_tools(self, workspace_id: str = "") -> dict[str, str]:
         """Return all tools across all servers: {canonical_name: server_name}."""
@@ -901,16 +909,26 @@ class UserMCPSessionPool:
         Stripping the key from ``required`` and ``properties`` removes that
         pressure while still letting the user pass it explicitly if they
         ever want to override (call_tool preserves caller-supplied keys).
+
+        The key ``(workspace_id, server_name, tool_name)`` is the authoritative
+        identity, so both the workspace filter and the ``_server_configs``
+        lookup read it rather than the duplicated ``_workspace_id`` payload
+        value. Reading the key is what makes an unscoped call (``workspace_id=""``,
+        meaning "no filtering") still find each row's own installation config —
+        otherwise ``tool_defaults`` were never stripped and the agent saw
+        injected params as required. An empty key workspace still passes any
+        filter, preserving the "global rows are always visible" behaviour.
         """
         result: list[dict[str, Any]] = []
         for key, meta in self._tool_metadata.items():
-            if workspace_id and meta.get("_workspace_id") and meta["_workspace_id"] != workspace_id:
+            row_workspace = key[0]
+            if workspace_id and row_workspace and row_workspace != workspace_id:
                 continue
             item = dict(meta)
             item["name"] = key[2]
 
-            server_name = meta.get("server")
-            server_cfg = self._server_configs.get((workspace_id, server_name)) or {}
+            server_name = key[1]
+            server_cfg = self._server_configs.get((row_workspace, server_name)) or {}
             tool_defaults = server_cfg.get("tool_defaults") or {}
             if tool_defaults:
                 item["input_schema"] = _strip_injected_params(

@@ -174,10 +174,19 @@ class ToolExecutor:
                     internal_names.add(t["name"])
 
             # Build schema lookup from session pool (enriches DB records
-            # that lack input_schema — e.g., external seeds before discovery)
-            mcp_schemas: dict[str, dict] = {}
+            # that lack input_schema — e.g., external seeds before discovery).
+            # Keyed by (server, name): a tool's identity is that pair, and
+            # list_mcp_tools legitimately returns two rows with one name when
+            # two servers each serve it. Keying by the bare name would keep
+            # whichever discovery wrote last, while call dispatch resolves via
+            # get_server_for_tool's lexicographically-first server — handing
+            # the agent server Z's schema for a call that routes to server A.
+            # The DB's tool_def.server and the pool's server_name are the same
+            # namespace (mcp_bridge._resolve_server_from_registry feeds the
+            # former straight in as the latter), so the pair matches up.
+            mcp_schemas: dict[tuple[str, str], dict] = {}
             for mcp_tool in list_mcp_tools(workspace_id=workspace_id):
-                mcp_schemas[mcp_tool["name"]] = {
+                mcp_schemas[(mcp_tool.get("server", ""), mcp_tool["name"])] = {
                     "description": mcp_tool.get("description", ""),
                     "input_schema": mcp_tool.get("input_schema", {}),
                 }
@@ -199,7 +208,7 @@ class ToolExecutor:
                 and td.capability
                 and td.capability in scope
                 and not td.input_schema
-                and td.name not in mcp_schemas
+                and (td.server or "", td.name) not in mcp_schemas
             ]
             if in_scope_missing:
                 from src.integrations.lazy_discovery import discover_missing_schemas
@@ -212,7 +221,7 @@ class ToolExecutor:
                         enabled_only=True, workspace_scoped=True
                     )
                     for mcp_tool in list_mcp_tools(workspace_id=workspace_id):
-                        mcp_schemas[mcp_tool["name"]] = {
+                        mcp_schemas[(mcp_tool.get("server", ""), mcp_tool["name"])] = {
                             "description": mcp_tool.get("description", ""),
                             "input_schema": mcp_tool.get("input_schema", {}),
                         }
@@ -232,9 +241,10 @@ class ToolExecutor:
                 schema = None
                 description = tool_def.description or tool_def.name
 
-                if tool_def.name in mcp_schemas:
-                    schema = mcp_schemas[tool_def.name].get("input_schema")
-                    live_desc = mcp_schemas[tool_def.name].get("description")
+                live = mcp_schemas.get((tool_def.server or "", tool_def.name))
+                if live:
+                    schema = live.get("input_schema")
+                    live_desc = live.get("description")
                     if live_desc:
                         description = live_desc
 

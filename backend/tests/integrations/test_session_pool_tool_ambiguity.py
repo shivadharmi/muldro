@@ -56,6 +56,45 @@ def test_unambiguous_tool_is_silent():
     assert not [r for r in records if r.levelno >= _logging.WARNING]
 
 
+def _warnings_during(fn):
+    """Run ``fn``, returning its result plus WARNING+ records from the pool logger."""
+    records: list[logging.LogRecord] = []
+
+    class _Capture(logging.Handler):
+        def emit(self, record):
+            records.append(record)
+
+    logger = logging.getLogger("src.integrations.session_pool")
+    handler = _Capture()
+    logger.addHandler(handler)
+    try:
+        result = fn()
+    finally:
+        logger.removeHandler(handler)
+    return result, [r for r in records if r.levelno >= logging.WARNING]
+
+
+def test_same_server_in_two_workspaces_is_not_a_collision():
+    """An unscoped lookup walks every workspace — one server twice is not ambiguity.
+
+    Regression: candidates were collected without dedup, so a server installed
+    in two workspaces yielded ["slack", "slack"], tripped the ambiguity branch,
+    and named the same server twice. notifier.py resolves with workspace_id=""
+    whenever the notification payload omits the key, so a two-workspace
+    deployment logged a phantom collision on every delivery — noise on the
+    exact channel the warning exists to keep clean.
+    """
+    pool = UserMCPSessionPool()
+    pool._server_tools[("ws_1", "slack")] = {"slack_send_message": "slack_send_message"}
+    pool._server_tools[("ws_2", "slack")] = {"slack_send_message": "slack_send_message"}
+
+    resolved, warnings = _warnings_during(
+        lambda: pool.get_server_for_tool("slack_send_message", workspace_id="")
+    )
+    assert resolved == "slack"
+    assert not warnings, f"non-collision warned: {[r.getMessage() for r in warnings]}"
+
+
 def test_missing_tool_still_returns_none():
     pool = _pool_with_collision()
     assert pool.get_server_for_tool("absent_tool", workspace_id="ws_1") is None
@@ -99,3 +138,39 @@ def test_two_servers_same_tool_name_coexist_in_metadata():
         }
     got = pool.get_all_tool_metadata(workspace_id="ws_1")
     assert sorted(m["server"] for m in got) == ["alpha", "beta"]
+    # The re-key must still hand consumers a plain string name. tool_executor
+    # keys its schema dict by this value; if it leaked the tuple key, every
+    # external tool schema would silently become unfindable.
+    assert all(m["name"] == "shared_tool" for m in got)
+
+
+def test_unscoped_metadata_still_strips_injected_params():
+    """An unscoped read must strip tool_defaults using the row's OWN workspace.
+
+    Regression: the _server_configs lookup used the caller's workspace_id, so
+    workspace_id="" missed ("", server) entirely and cloudId survived in the
+    schema as required — the exact "agent asks the user for a value the server
+    already knows" failure the stripping exists to prevent.
+    """
+    pool = UserMCPSessionPool()
+    pool.register_server_config(
+        "atlassian",
+        {"tool_defaults": {"cloudId": "cloud-1"}},
+        workspace_id="ws_1",
+    )
+    pool._tool_metadata[("ws_1", "atlassian", "jira_search")] = {
+        "name": "jira_search",
+        "server": "atlassian",
+        "description": "",
+        "input_schema": {
+            "type": "object",
+            "properties": {"cloudId": {"type": "string"}, "jql": {"type": "string"}},
+            "required": ["cloudId", "jql"],
+        },
+        "_workspace_id": "ws_1",
+    }
+
+    (item,) = pool.get_all_tool_metadata(workspace_id="")
+    schema = item["input_schema"]
+    assert "cloudId" not in schema["properties"], "injected param leaked into the agent schema"
+    assert schema["required"] == ["jql"]

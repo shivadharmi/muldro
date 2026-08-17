@@ -34,12 +34,19 @@ _PORT = 8100
 
 
 def configure_logging() -> None:
-    """Attach a root handler so warm-start + drift warnings are actually emitted.
+    """Attach a formatted root handler so adapter logs are usable in a container.
 
-    Without this the module logger has no handler and every record — including
-    ``warm_start``'s parameter-drift warnings, the only signal that a hand-typed
-    schema has diverged from OpenConnector's — is silently discarded. Idempotent
-    so a re-entrant call cannot double-log.
+    Without a root handler Python falls back to ``logging.lastResort``, a
+    WARNING-level stderr handler: ``warm_start``'s parameter-drift warnings —
+    the only signal that a hand-typed schema has diverged from OpenConnector's
+    — did reach stderr, but bare, as the message text alone. What this adds is
+
+    1. INFO-level records, which ``lastResort`` drops entirely (the warm-start
+       "registered N tools across M providers" summary produced no output), and
+    2. formatting — timestamp, level name, logger name — which is what makes a
+       drift warning attributable and triageable in a container log.
+
+    Idempotent so a re-entrant call cannot double-log.
     """
     if logging.getLogger().handlers:
         return
