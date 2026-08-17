@@ -2,14 +2,14 @@
 selected by a single code-defined profile, not hardcoded to Gmail.
 
 The allowlist stays CODE-defined (never env-injected): a setting only selects
-WHICH reviewed profile is active. Gmail remains the default so the existing
-adapter behavior is unchanged.
+WHICH reviewed profile is active. Every action resolves its OWN profile from
+its OWN action_id (fail-closed on an unknown action), so one adapter can
+serve several providers at once.
 """
 
 import pytest
 
 from src.adapter.enforcement import (
-    GMAIL_PROFILE,
     ActionNotAllowed,
     CapabilityDenied,
     GatewayProfile,
@@ -17,6 +17,9 @@ from src.adapter.enforcement import (
     ensure_capability_allowed,
     get_gateway_profile,
 )
+from src.integrations.gateway_actions import GatewayAction
+
+GMAIL_PROFILE = get_gateway_profile("gmail")
 
 
 def test_gmail_profile_is_the_default_provider():
@@ -40,8 +43,15 @@ def test_enforcement_respects_the_passed_profile_not_the_gmail_default():
     """Enforcement reads the profile it is handed, not a hardcoded Gmail policy."""
     other = GatewayProfile(
         provider_id="other",
-        action_allowlist=frozenset({"other.read_thing"}),
-        action_required_capability={"other.read_thing": "other.read"},
+        actions=(
+            GatewayAction(
+                "other.read_thing",
+                "other.read",
+                "low",
+                False,
+                {"type": "object"},
+            ),
+        ),
     )
     # A gmail action is NOT allowed under a different provider's profile.
     with pytest.raises(ActionNotAllowed):
@@ -53,28 +63,10 @@ def test_enforcement_respects_the_passed_profile_not_the_gmail_default():
         ensure_capability_allowed("other.read_thing", ("email.search",), other)
 
 
-def test_enforcement_defaults_to_gmail_profile_when_unspecified():
-    # Backward compatibility: existing call sites pass no profile -> Gmail.
-    ensure_action_allowed("gmail.fetch_emails")
-    ensure_capability_allowed("gmail.fetch_emails", ("email.search",))
-    with pytest.raises(ActionNotAllowed):
-        ensure_action_allowed("dropbox.upload_file")
-
-
 def test_gateway_profile_is_frozen():
     assert isinstance(GMAIL_PROFILE, GatewayProfile)
     with pytest.raises((AttributeError, TypeError)):
         GMAIL_PROFILE.provider_id = "x"
-
-
-def test_incomplete_profile_is_rejected_at_construction():
-    """An allowlisted action with no capability mapping must fail to construct."""
-    with pytest.raises(ValueError):
-        GatewayProfile(
-            provider_id="broken",
-            action_allowlist=frozenset({"broken.read"}),
-            action_required_capability={},  # missing the mapping
-        )
 
 
 def test_profile_capability_map_is_immutable():

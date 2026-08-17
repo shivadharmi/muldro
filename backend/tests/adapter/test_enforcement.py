@@ -6,16 +6,19 @@ Pure-function tests: no DB, no I/O, no mocks needed.
 import pytest
 
 from src.adapter.enforcement import (
-    GMAIL_ACTION_ALLOWLIST,
-    GMAIL_PROFILE,
     ActionNotAllowed,
     CapabilityDenied,
     ensure_action_allowed,
     ensure_capability_allowed,
     force_connection_name,
+    get_gateway_profile,
+    profile_for_action,
     strip_secrets,
 )
 from src.integrations.gateway_actions.gmail import GMAIL_ACTIONS
+
+GMAIL_PROFILE = get_gateway_profile("gmail")
+GMAIL_ACTION_ALLOWLIST = GMAIL_PROFILE.action_allowlist
 
 
 def test_gmail_profile_is_derived_from_the_table():
@@ -63,13 +66,13 @@ def test_force_connection_name_overwrites_attacker_supplied_value_and_leaves_inp
 
 
 def test_ensure_action_allowed_permits_allowlisted_actions():
-    ensure_action_allowed("gmail.fetch_emails")
-    ensure_action_allowed("gmail.send_email")
+    ensure_action_allowed("gmail.fetch_emails", GMAIL_PROFILE)
+    ensure_action_allowed("gmail.send_email", GMAIL_PROFILE)
 
 
 def test_ensure_action_allowed_raises_for_disallowed_action():
     with pytest.raises(ActionNotAllowed):
-        ensure_action_allowed("gmail.delete_forever")
+        ensure_action_allowed("gmail.delete_forever", GMAIL_PROFILE)
 
 
 def test_strip_secrets_removes_nested_secret_keys_but_keeps_benign_fields():
@@ -118,3 +121,38 @@ def test_force_connection_name_rejects_empty_forced_name():
         force_connection_name({"actionId": "gmail.fetch_emails"}, "")
     with pytest.raises(ValueError):
         force_connection_name({"actionId": "gmail.fetch_emails"}, "   ")
+
+
+def test_profile_is_derived_from_the_registry():
+    profile = get_gateway_profile("github")
+    assert profile.provider_id == "github"
+    assert profile.actions
+    # allowlist and capability map are DERIVED, never separately declared
+    assert profile.action_allowlist == frozenset(a.action_id for a in profile.actions)
+    assert profile.action_required_capability == {
+        a.action_id: a.capability for a in profile.actions
+    }
+
+
+def test_profile_for_action_resolves_per_call():
+    assert profile_for_action("gmail.get_profile").provider_id == "gmail"
+
+
+def test_profile_for_action_fails_closed_on_unknown_action():
+    with pytest.raises(ActionNotAllowed):
+        profile_for_action("gmail.attacker_action")
+
+
+def test_cross_provider_token_is_denied():
+    """An email-scoped principal cannot invoke a github action."""
+    github = get_gateway_profile("github")
+    action = github.actions[0].action_id
+    with pytest.raises(CapabilityDenied):
+        ensure_capability_allowed(action, ("email.read", "email.send"), github)
+
+
+def test_ensure_action_allowed_requires_an_explicit_profile():
+    import inspect
+
+    sig = inspect.signature(ensure_action_allowed)
+    assert sig.parameters["profile"].default is inspect.Parameter.empty
