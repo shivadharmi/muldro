@@ -14,15 +14,22 @@ from __future__ import annotations
 
 from fastmcp import Client
 from fastmcp.client.auth import BearerAuth
+from fastmcp.client.client import CallToolResult
 
 from src.config.settings import get_settings
 
 
-async def _client_call(tool_name: str, args: dict) -> dict:
+async def _client_call(tool_name: str, args: dict) -> CallToolResult:
     """Open a session against the shared OpenConnector MCP endpoint and call one tool.
 
     Kept as a separate seam (rather than inlined into ``call_openconnector``)
     so tests can patch out the real MCP round trip.
+
+    Returns fastmcp's ``CallToolResult`` object, **not** a dict — the previous
+    ``-> dict`` annotation was wrong, and it was the single reason the envelope
+    chain could not be settled by reading the code (it made
+    ``src/adapter/server.py::_result_to_dict``'s ``isinstance(result, dict)``
+    branch look reachable when it never fires).
     """
     s = get_settings()
     token = s.openconnector_runtime_token
@@ -35,12 +42,12 @@ async def _client_call(tool_name: str, args: dict) -> dict:
     return result
 
 
-async def call_openconnector(tool_name: str, args: dict) -> dict:
+async def call_openconnector(tool_name: str, args: dict) -> CallToolResult:
     """Single call point to the shared OpenConnector MCP endpoint."""
     return await _client_call(tool_name, args)
 
 
-async def get_action_guide(action_id: str) -> dict:
+async def get_action_guide(action_id: str) -> CallToolResult:
     """Fetch one action's guide (incl. input schema) from OpenConnector.
 
     Uses the same runtime-token MCP endpoint as ``call_openconnector`` — this

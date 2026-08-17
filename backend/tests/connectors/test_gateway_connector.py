@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from src.connectors.gateway_connector import CURSOR_FLOOR_DAYS, GatewayConnector
+from src.connectors.gateway_connector import CURSOR_FLOOR_DAYS, GatewayConnector, PageWalk
 from src.connectors.poll_result import PollResult
 
 
@@ -27,16 +27,22 @@ def _envelope(payload: dict) -> dict:
     """Build the envelope the REAL transport delivers for ``payload``.
 
     Derived from the four hops, not invented:
-      1. OpenConnector answers ``{"ok": true, "data": <payload>}``
-         (infra/gateway/spike-findings-guide.md).
+      1. OpenConnector answers ``{"ok": true, "data": <payload>}``. Root ``ok``
+         is captured (infra/gateway/spike-findings.md, a real failure body);
+         the ``data`` nesting on SUCCESS is INFERRED — the only evidence is
+         spike-findings-guide.md, which is about ``get_action_guide``, not
+         ``execute_action``. No successful execute_action body is captured
+         anywhere in this repo; live acceptance is what would confirm it.
       2. src/adapter/server.py returns that dict through ``_result_to_dict``.
-      3. FastMCP serializes the ``-> dict`` tool return into a text block.
+      3. FastMCP serializes the tool return into a text block.
       4. session_pool.call_tool joins text blocks -> ``{"status":"ok","result": <str>}``.
 
     So ``result`` is a JSON **string** wrapping the payload under ``data``. A
     fake that hands back a bare dict asserts a shape that does not exist — this
     project has already shipped one bug (seven nonexistent Gmail action ids)
     whose only cause was tests agreeing with the code instead of with reality.
+    Because hop 1 is inferred, the shape-mismatch tests below are the ones that
+    hold if the inference is wrong: they all demand a FAILURE, never rows=0.
     """
     return {"status": "ok", "result": json.dumps({"ok": True, "data": payload})}
 
@@ -145,7 +151,12 @@ async def test_call_treats_openconnector_ok_false_as_failure():
     assert err == "transient"
 
 
-async def test_call_classifies_an_ok_false_error_code():
+async def test_call_classifies_a_flat_ok_false_error_code():
+    """The flat shape, kept because nothing forbids it — but see the nested test.
+
+    This shape matches no capture in the repo; it is a tolerated alternative,
+    not the observed one.
+    """
     conn, _ = _probe(
         [
             _raw(
@@ -162,6 +173,71 @@ async def test_call_classifies_an_ok_false_error_code():
     assert err == "rate_limited"
 
 
+# The ONLY real OpenConnector failure body captured in this repo, copied
+# verbatim from infra/gateway/spike-findings.md (the auth-required github
+# execute_action probe). There is no top-level "error_code": the code is
+# nested at error.code. A reader of parsed["error_code"] classifies EVERY
+# action-level failure as "transient" (threshold 6) — including rate limits
+# and validation errors, which have their own policies.
+_CAPTURED_OC_FAILURE = (
+    '{"ok":false,"error":{"code":"authorization_failed",'
+    '"message":"Configure github credentials first.","details":{"status":401}}}'
+)
+
+
+async def test_call_reads_the_verbatim_captured_openconnector_failure_body(caplog):
+    conn, _ = _probe([_raw({"status": "ok", "result": _CAPTURED_OC_FAILURE})])
+    with caplog.at_level(logging.WARNING):
+        ok, data, err = await conn._call("github.get_current_user", {})
+    assert (ok, data) == (False, {})
+    assert err == "transient", "authorization_failed is unmapped -> the fail-safe bucket"
+    messages = [r.getMessage() for r in caplog.records]
+    assert any("Configure github credentials first." in m for m in messages)
+    assert all("'details'" not in m for m in messages), (
+        "the human message must be read from error.message, not by str()-ing the error dict"
+    )
+    assert any("authorization_failed" in m for m in messages), "the real code must be logged"
+
+
+async def test_call_classifies_from_the_nested_error_code():
+    """The captured shape nests the code, so a flat read collapses every class.
+
+    rate_limit has its own policy (rate_limited); reading only a top-level
+    "error_code" would file it as transient and keep hammering the provider.
+    """
+    conn, _ = _probe(
+        [
+            _raw(
+                {
+                    "status": "ok",
+                    "result": json.dumps(
+                        {"ok": False, "error": {"code": "rate_limit", "message": "slow down"}}
+                    ),
+                }
+            )
+        ]
+    )
+    _, _, err = await conn._call("gmail.fetch_emails", {})
+    assert err == "rate_limited"
+
+
+async def test_call_classifies_a_nested_validation_error_as_permanent():
+    conn, _ = _probe(
+        [
+            _raw(
+                {
+                    "status": "ok",
+                    "result": json.dumps(
+                        {"ok": False, "error": {"code": "validation_error", "message": "bad arg"}}
+                    ),
+                }
+            )
+        ]
+    )
+    _, _, err = await conn._call("gmail.fetch_emails", {})
+    assert err == "permanent"
+
+
 async def test_call_logs_the_reason_for_an_ok_false_response(caplog):
     conn, _ = _probe(
         [_raw({"status": "ok", "result": json.dumps({"ok": False, "error": "no credential"})})]
@@ -172,11 +248,43 @@ async def test_call_logs_the_reason_for_an_ok_false_response(caplog):
 
 
 async def test_call_falls_back_to_the_parsed_dict_when_there_is_no_data_key():
-    """_result_to_dict has {"content": ...} and {"result": ...} branches too."""
+    """A bare provider payload at the root is a real, supported shape.
+
+    _call cannot tell "provider payload at root" from "adapter artifact at
+    root" — it has no idea what a payload looks like. So the fallback stays
+    permissive HERE and is backstopped in _walk_pages, which does know
+    (``items_key``). See test_walk_pages_rejects_a_content_block_envelope.
+    """
     conn, _ = _probe([_raw({"status": "ok", "result": json.dumps({"content": [{"text": "hi"}]})})])
     ok, data, err = await conn._call("gmail.fetch_emails", {})
     assert (ok, err) == (True, None)
     assert data == {"content": [{"text": "hi"}]}
+
+
+async def test_call_treats_a_non_dict_data_value_as_failure():
+    """`data` present but wrong-typed is a shape mismatch, not an alternative shape.
+
+    Falling back to the parsed envelope here would hand ``{"ok": true,
+    "data": [...]}`` back as a successful payload, and the provider rows —
+    which sit INSIDE that list — would be silently dropped.
+    """
+    conn, _ = _probe(
+        [_raw({"status": "ok", "result": json.dumps({"ok": True, "data": [{"id": "m1"}]})})]
+    )
+    ok, data, err = await conn._call("gmail.fetch_emails", {})
+    assert ok is False, "a wrong-typed data value must not look like an empty window"
+    assert data == {}
+    assert err == "transient"
+
+
+async def test_call_treats_a_string_ok_false_as_failure():
+    """The string "false" is truthy in Python, so `not parsed["ok"]` would pass it."""
+    conn, _ = _probe(
+        [_raw({"status": "ok", "result": json.dumps({"ok": "false", "data": {"messages": []}})})]
+    )
+    ok, data, err = await conn._call("gmail.fetch_emails", {})
+    assert ok is False
+    assert (data, err) == ({}, "transient")
 
 
 async def test_call_treats_a_truthy_error_beside_an_ok_status_as_failure():
@@ -246,12 +354,12 @@ async def test_walk_pages_follows_page_token_and_stops():
             {"messages": [{"id": "b"}]},
         ]
     )
-    pages, err, truncated = await conn._walk_pages(
+    walk = await conn._walk_pages(
         "gmail.fetch_emails", {"query": "x"}, items_key="messages", max_pages=5
     )
-    assert err is None
-    assert truncated is False
-    assert [p["id"] for page in pages for p in page] == ["a", "b"]
+    assert walk.error_class is None
+    assert walk.truncated is False
+    assert [p["id"] for page in walk.pages for p in page] == ["a", "b"]
     assert caller.calls[0][1].get("pageToken") is None
     assert caller.calls[1][1]["pageToken"] == "p2"
 
@@ -264,11 +372,11 @@ async def test_walk_pages_yields_rows_through_the_real_envelope():
     its cursor past a full mailbox.
     """
     conn, _ = _probe([{"messages": [{"id": "m1"}, {"id": "m2"}]}])
-    pages, err, truncated = await conn._walk_pages(
+    walk = await conn._walk_pages(
         "gmail.fetch_emails", {"query": "x"}, items_key="messages", max_pages=5
     )
-    assert (err, truncated) == (None, False)
-    assert pages == [[{"id": "m1"}, {"id": "m2"}]]
+    assert (walk.error_class, walk.truncated) == (None, False)
+    assert walk.pages == [[{"id": "m1"}, {"id": "m2"}]]
 
 
 async def test_walk_pages_reports_truncation_structurally(caplog):
@@ -279,12 +387,12 @@ async def test_walk_pages_reports_truncation_structurally(caplog):
         ]
     )
     with caplog.at_level(logging.WARNING):
-        pages, err, truncated = await conn._walk_pages(
+        walk = await conn._walk_pages(
             "gmail.fetch_emails", {"query": "x"}, items_key="messages", max_pages=2
         )
-    assert err is None
-    assert truncated is True, "a truncated walk must not look like a complete one"
-    assert len(pages) == 2
+    assert walk.error_class is None
+    assert walk.truncated is True, "a truncated walk must not look like a complete one"
+    assert len(walk.pages) == 2
     warnings = [r for r in caplog.records if "truncat" in r.getMessage().lower()]
     assert len(warnings) == 1, "exactly one truncation warning, not one per page"
 
@@ -296,12 +404,132 @@ async def test_walk_pages_propagates_a_failure_without_partial_success():
             _raw({"status": "error", "error": "down", "error_code": "server_error"}),
         ]
     )
-    pages, err, truncated = await conn._walk_pages(
+    walk = await conn._walk_pages(
         "gmail.fetch_emails", {"query": "x"}, items_key="messages", max_pages=5
     )
-    assert err == "transient"
-    assert pages == [], "a failed walk must not hand back partial pages"
-    assert truncated is False
+    assert walk.error_class == "transient"
+    assert walk.pages == [], "a failed walk must not hand back partial pages"
+    assert walk.truncated is False
+
+
+async def test_a_page_walk_cannot_be_destructured_as_a_bare_tuple():
+    """`pages, err, _ = await self._walk_pages(...)` compiled and dropped truncation.
+
+    That is exactly how the cursor-advance bug gets silently reinstated, so
+    the return type is a frozen dataclass: a caller must NAME what it reads.
+    """
+    conn, _ = _probe([{"messages": []}])
+    walk = await conn._walk_pages("gmail.fetch_emails", {}, items_key="messages", max_pages=1)
+    with pytest.raises(TypeError):
+        _pages, _err, _truncated = walk  # type: ignore[misc]
+
+
+# ---- _walk_pages: an absent items_key is a shape mismatch, never an empty page ----
+#
+# Every row below is a real ``_result_to_dict`` / envelope shape that ``_call``
+# hands back as a SUCCESS via its root-payload fallback. Before this guard each
+# one produced rows=0 with error_class=None — a clean empty page — which makes a
+# connector advance its cursor past data it never read, permanently, with no log,
+# no DLQ and no circuit.
+
+
+def _payload_envelope(parsed: dict) -> _Raw:
+    """A transport-level success carrying ``parsed`` verbatim as the payload."""
+    return _raw({"status": "ok", "result": json.dumps(parsed)})
+
+
+async def test_walk_pages_rejects_a_content_block_envelope():
+    """Row 1: _result_to_dict's {"content": [...]} branch. The messages are INSIDE."""
+    conn, _ = _probe(
+        [_payload_envelope({"content": [{"text": json.dumps({"messages": [{"id": "m1"}]})}]})]
+    )
+    walk = await conn._walk_pages("gmail.fetch_emails", {}, items_key="messages", max_pages=5)
+    assert walk.error_class == "transient", "an adapter artifact is not an empty mailbox"
+    assert walk.pages == []
+    assert walk.truncated is False
+
+
+async def test_walk_pages_rejects_a_stringified_result_envelope():
+    """Row 2: _result_to_dict's {"result": str(...)} branch."""
+    conn, _ = _probe([_payload_envelope({"result": json.dumps({"messages": [{"id": "m1"}]})})])
+    walk = await conn._walk_pages("gmail.fetch_emails", {}, items_key="messages", max_pages=5)
+    assert (walk.error_class, walk.pages, walk.truncated) == ("transient", [], False)
+
+
+async def test_walk_pages_rejects_a_non_dict_data_value():
+    """Row 3: {"ok": true, "data": [...]} — rejected one level up, in _call."""
+    conn, _ = _probe([_payload_envelope({"ok": True, "data": [{"id": "m1"}]})])
+    walk = await conn._walk_pages("gmail.fetch_emails", {}, items_key="messages", max_pages=5)
+    assert (walk.error_class, walk.pages, walk.truncated) == ("transient", [], False)
+
+
+async def test_walk_pages_rejects_an_envelope_with_no_data_key_at_all():
+    """Row 4: {"ok": true} — nothing was returned, and that is not "no mail"."""
+    conn, _ = _probe([_payload_envelope({"ok": True})])
+    walk = await conn._walk_pages("gmail.fetch_emails", {}, items_key="messages", max_pages=5)
+    assert (walk.error_class, walk.pages, walk.truncated) == ("transient", [], False)
+
+
+async def test_walk_pages_names_the_action_key_and_present_keys_without_a_blob(caplog):
+    conn, _ = _probe([_payload_envelope({"ok": True, "resultSizeEstimate": 0, "junk": "z" * 5000})])
+    with caplog.at_level(logging.WARNING):
+        await conn._walk_pages("gmail.fetch_emails", {}, items_key="messages", max_pages=5)
+    messages = [r.getMessage() for r in caplog.records]
+    assert any("gmail.fetch_emails" in m and "messages" in m for m in messages)
+    assert any("resultSizeEstimate" in m for m in messages), "name the keys that WERE present"
+    assert all(len(m) < 1000 for m in messages), "must not log an unbounded blob"
+
+
+async def test_walk_pages_accepts_a_present_but_empty_items_list():
+    """The one legitimately-empty case: the key is there, the list is empty."""
+    conn, _ = _probe([{"messages": []}])
+    walk = await conn._walk_pages("gmail.fetch_emails", {}, items_key="messages", max_pages=5)
+    assert (walk.error_class, walk.truncated) == (None, False)
+    assert walk.pages == [[]], "an empty page is a real outcome, not a failure"
+
+
+async def test_walk_pages_rejects_a_wrong_typed_items_value():
+    """The recorded outputSchema declares ``messages`` as ``type: array``."""
+    conn, _ = _probe([{"messages": "none"}])
+    walk = await conn._walk_pages("gmail.fetch_emails", {}, items_key="messages", max_pages=5)
+    assert (walk.error_class, walk.pages) == ("transient", [])
+
+
+async def test_walk_pages_drops_non_dict_rows_and_says_so(caplog):
+    """A scalar among the rows cannot become a RawEvent — but it must not vanish."""
+    conn, _ = _probe([{"messages": [{"id": "a"}, "junk", None, {"id": "b"}]}])
+    with caplog.at_level(logging.WARNING):
+        walk = await conn._walk_pages("gmail.fetch_emails", {}, items_key="messages", max_pages=5)
+    assert walk.error_class is None
+    assert walk.pages == [[{"id": "a"}, {"id": "b"}]]
+    assert any("2" in r.getMessage() and "row" in r.getMessage() for r in caplog.records), (
+        "dropping rows silently is the same defect class as an empty success"
+    )
+
+
+# ---- _resolve_cursor: the truncation policy, owned in one place -----------
+
+
+def test_resolve_cursor_holds_the_incoming_cursor_on_truncation():
+    conn, _ = _probe([])
+    walk = PageWalk(pages=[[{"id": "a"}]], error_class=None, truncated=True)
+    assert conn._resolve_cursor(walk, incoming="100", observed="500") == "100"
+
+
+def test_resolve_cursor_holds_the_incoming_cursor_when_nothing_was_observed():
+    """Nothing observed means nothing to advance TO.
+
+    Jumping to now() would skip anything delivered since the last row.
+    """
+    conn, _ = _probe([])
+    walk = PageWalk(pages=[[]], error_class=None, truncated=False)
+    assert conn._resolve_cursor(walk, incoming="100", observed=None) == "100"
+
+
+def test_resolve_cursor_advances_on_a_complete_walk_with_a_watermark():
+    conn, _ = _probe([])
+    walk = PageWalk(pages=[[{"id": "a"}]], error_class=None, truncated=False)
+    assert conn._resolve_cursor(walk, incoming="100", observed="500") == "500"
 
 
 # ---- epoch cursor plausibility ------------------------------------------
