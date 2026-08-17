@@ -78,7 +78,12 @@ class ModelResolver:
         return ResolvedModel(binding.provider, binding.model_id, api_key, base_url, kwargs)
 
     async def supports_prompt_cache(
-        self, *, tier=None, agent=None, agent_tier=None, workspace_id=None
+        self,
+        *,
+        tier: str | None = None,
+        agent: str | None = None,
+        agent_tier: str | None = None,
+        workspace_id: str | None = None,
     ) -> bool:
         """Whether the model backing this (agent/tier) supports prompt caching.
 

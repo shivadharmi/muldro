@@ -49,7 +49,9 @@ def build_system_message(system_blocks: Any) -> SystemMessage:
     return SystemMessage(content=blocks)
 
 
-def strip_cache_control(system_prompt):
+def strip_cache_control(
+    system_prompt: str | SystemMessage | None,
+) -> str | SystemMessage | None:
     """Return *system_prompt* with any Anthropic ``cache_control`` markers removed from
     its SystemMessage content blocks. Anthropic-only; strip it for providers that do
     not support prompt caching so the block is provider-neutral. A plain string / None
