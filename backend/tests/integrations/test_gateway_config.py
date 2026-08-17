@@ -1,10 +1,13 @@
-"""Tests for the Gmail gateway routing branch in `_installation_to_config`.
+"""Tests for the declaration-based gateway routing in `_installation_to_config`.
 
-When `settings.gmail_via_gateway` is on (and `settings.toolhive_vmcp_url` is
-set), the google-workspace installation's outbound MCP config should point
-at the ToolHive vMCP instead of the native local google-workspace-mcp path.
-Any other installation, or the flag being off, must fall through to the
-existing native config logic untouched.
+Routing is driven purely by the installation's own `auth_provider ==
+"platform_jwt"` declaration -- not by a `gmail_via_gateway` flag and not by
+a `server_name` allowlist (see `tests/integrations/test_mcp_pool.py` for the
+full routing-decision test suite, including the multi-provider and
+fail-loudly cases). This file keeps the google-workspace-specific
+regression coverage: a non-declared (`auth_provider="oauth"`) installation
+must keep falling through to its native config, with the flag having no
+effect either way.
 """
 
 from types import SimpleNamespace
@@ -36,10 +39,12 @@ def _make_settings(*, gmail_via_gateway: bool, toolhive_vmcp_url: str | None):
     )
 
 
-def test_gateway_flag_off_uses_native_config():
-    """Flag OFF: the google-workspace installation keeps its native config."""
+def test_non_platform_jwt_installation_uses_native_config_regardless_of_flag():
+    """A google-workspace installation NOT declared platform_jwt (e.g. still
+    on auth_provider="oauth") keeps its native config even with the (now
+    inert) gmail_via_gateway flag ON and a vMCP url set."""
     inst = _make_installation()
-    settings = _make_settings(gmail_via_gateway=False, toolhive_vmcp_url="https://vmcp.example.com")
+    settings = _make_settings(gmail_via_gateway=True, toolhive_vmcp_url="https://vmcp.example.com")
 
     with patch("src.integrations.mcp_pool.get_settings", return_value=settings):
         config = _installation_to_config(inst)
@@ -50,11 +55,13 @@ def test_gateway_flag_off_uses_native_config():
     assert config.get("url") != settings.toolhive_vmcp_url
 
 
-def test_gateway_flag_on_routes_google_workspace_to_toolhive():
-    """Flag ON + toolhive_vmcp_url set: google-workspace routes at the gateway."""
-    inst = _make_installation()
+def test_platform_jwt_declared_google_workspace_routes_to_toolhive():
+    """A google-workspace installation declared auth_provider="platform_jwt"
+    (the post-migration seed shape) routes to the gateway -- the flag plays
+    no role in the decision."""
+    inst = _make_installation(auth_provider="platform_jwt", command=None, args=None)
     settings = _make_settings(
-        gmail_via_gateway=True, toolhive_vmcp_url="https://vmcp.example.com/gmail"
+        gmail_via_gateway=False, toolhive_vmcp_url="https://vmcp.example.com/gmail"
     )
 
     with patch("src.integrations.mcp_pool.get_settings", return_value=settings):

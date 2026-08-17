@@ -291,7 +291,22 @@ class WorkspaceMCPPool:
 
                 count = 0
                 for inst in installations:
-                    config = _installation_to_config(inst)
+                    try:
+                        config = _installation_to_config(inst)
+                    except RuntimeError as exc:
+                        # A gateway-backed installation with no vMCP URL configured is
+                        # a config error for THAT installation alone. Skip it loudly and
+                        # keep going: the enclosing try/except spans the whole loop and
+                        # logs at DEBUG, so letting this propagate would silently drop
+                        # every remaining installation -- taking unmigrated servers
+                        # (slack, notion, atlassian) down with the misconfigured one.
+                        logger.error(
+                            "Skipping MCP server %r for workspace %s: %s",
+                            inst.server_name,
+                            inst.workspace_id,
+                            exc,
+                        )
+                        continue
                     await self.add_server(inst.workspace_id, inst.server_name, config)
                     count += 1
 
@@ -348,15 +363,20 @@ class WorkspaceMCPPool:
 def _installation_to_config(inst: Any) -> dict:
     """Convert a IntegrationInstallation ORM object to a config dict."""
     settings = get_settings()
-    if (
-        settings.gmail_via_gateway
-        and inst.server_name == "google-workspace"
-        and settings.toolhive_vmcp_url
-    ):
-        # Gmail gateway slice: route the google-workspace installation at the
-        # ToolHive vMCP (fronting an OpenConnector MCP server) instead of the
-        # native local google-workspace-mcp process. auth_provider="platform_jwt"
-        # is resolved in UserMCPSessionPool._resolve_auth (Task 12).
+    if inst.auth_provider == "platform_jwt":
+        # Gateway-backed: the installation DECLARES that its tools are served by
+        # the OpenConnector adapter. No server-name special-casing -- adding a
+        # provider is a registry change, not a routing change. A short-lived
+        # platform JWT is minted in UserMCPSessionPool._resolve_auth, with
+        # capabilities derived from gateway_actions.capabilities_for_server.
+        if not settings.toolhive_vmcp_url:
+            raise RuntimeError(
+                f"Installation '{inst.server_name}' declares auth_provider="
+                "'platform_jwt' but settings.toolhive_vmcp_url is not set (env "
+                "JARVIS_TOOLHIVE_VMCP_URL). There is no native fallback for "
+                "gateway-routed installations -- set the vMCP URL or disable "
+                "the installation."
+            )
         return {
             "transport": "streamable-http",
             "auth_provider": "platform_jwt",
