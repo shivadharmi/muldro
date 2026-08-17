@@ -1,12 +1,17 @@
 """MCP Bridge — delegates actions to external MCP servers via session pool.
 
 Instead of a process-global singleton Client, uses UserMCPSessionPool for
-per-user authenticated connections with circuit breaking, tool name
-normalization, and workspace-aware routing.
+per-user authenticated connections with circuit breaking and workspace-aware
+routing. Tool names are passed through verbatim — there is no normalization
+layer; the real MCP name is the name everywhere.
 
-Polling for event ingestion still uses the lightweight per-provider connectors
-(gmail.py, calendar.py, etc.) since MCP servers don't emit our RawEvent format.
-But all *write actions* (send_email, create_draft, create_issue, etc.) go through MCP.
+Polling for event ingestion goes through this bridge too for gateway-backed
+sources: gmail and calendar subclass GatewayConnector and reach provider data
+via call_mcp_tool, translating the result into RawEvents themselves. Native
+sources (slack, notion) still poll provider REST directly with an OAuth token,
+and github is gateway-backed but not yet ported — OpenConnector exposes no
+notifications action, so its perception is deferred and the poller skips it
+non-permanently. All *write actions* go through MCP regardless.
 """
 
 import asyncio

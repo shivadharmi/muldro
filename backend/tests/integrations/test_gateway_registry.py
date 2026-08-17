@@ -199,3 +199,24 @@ def test_every_provider_declares_a_display_name():
     """The registry owns the label the LLM reads; no downstream label table restates it."""
     for provider_id, provider in PROVIDER_REGISTRY.items():
         assert provider.display_name.strip(), f"{provider_id} has no display_name"
+
+
+def test_pagination_keys_are_pinned_to_recorded_output_schemas():
+    """The items_key/next_token_key constants Wave C passes must match reality.
+
+    Wave B had no output ground truth at all, which is why an envelope bug that
+    emptied every successful read was invisible to the whole suite. These keys
+    address the UNWRAPPED provider payload (what GatewayConnector._call returns
+    after stripping OpenConnector's {ok, data} envelope), so a change in either
+    key name here breaks the walk silently rather than loudly.
+    """
+    from tests.gateway_ground_truth import CURATED_ACTIONS
+
+    expected = {
+        "gmail.fetch_emails": ("messages", "nextPageToken"),
+        "googlecalendar.list_events": ("items", "nextPageToken"),
+    }
+    for action_id, (items_key, next_token_key) in expected.items():
+        properties = CURATED_ACTIONS[action_id]["outputSchema"]["properties"]
+        assert items_key in properties, f"{action_id} no longer returns {items_key!r}"
+        assert next_token_key in properties, f"{action_id} no longer returns {next_token_key!r}"

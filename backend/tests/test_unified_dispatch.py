@@ -474,8 +474,8 @@ class TestSessionPoolDeNormalization:
 
         # Tool stored under real name
         assert "API-post-page" in session.tools
-        assert pool._tool_metadata.get("API-post-page") is not None
-        assert pool._tool_metadata["API-post-page"]["name"] == "API-post-page"
+        assert pool._tool_metadata.get(("", "notion", "API-post-page")) is not None
+        assert pool._tool_metadata[("", "notion", "API-post-page")]["name"] == "API-post-page"
 
     @pytest.mark.asyncio
     async def test_unified_call_tool_skips_translation(self):

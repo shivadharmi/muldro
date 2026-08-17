@@ -11,6 +11,7 @@ cycle is awaited), that the lease prevents re-pick, that a crash mid-cycle leave
 the source due-again-after-lease, and that outcome recording still works.
 """
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -507,3 +508,226 @@ async def test_invalid_token_source_is_dropped_and_not_run():
 
     assert cycles == ["usr_ok"]  # only the valid-token source was polled
     reauth.apply_needs_reauth.assert_awaited_once()  # the revoked source surfaced re-auth
+
+
+# ---------------------------------------------------------------------------
+# Task 12: one turn_scope per USER in the live scheduler tick — not one per
+# source (which would build+tear a google-workspace session per source, since
+# gmail and calendar share one SessionKey) and not one per tick (which would
+# hold every user's session open until the slowest user finished).
+# ---------------------------------------------------------------------------
+
+
+def _scope_recorder():
+    """Return (factory, scopes) where factory mints a fresh async-CM per call."""
+    scopes: list[MagicMock] = []
+
+    def _factory(*args, **kwargs):
+        cm = MagicMock()
+        cm.__aenter__ = AsyncMock(return_value=MagicMock())
+        cm.__aexit__ = AsyncMock(return_value=False)
+        scopes.append(cm)
+        return cm
+
+    return _factory, scopes
+
+
+async def test_perception_tick_opens_exactly_one_turn_scope_per_user():
+    """MCP sessions opened during a poll must be torn down when the poll ends.
+
+    TurnScope's docstring warns that detached background work — the scheduler is
+    exactly that — must not open turn-scoped sessions without a scope, or they
+    survive until the idle reaper. Gmail and Calendar share the
+    google-workspace SessionKey, so ONE refcounted scope per user serves both of
+    that user's sources; a second user must get its OWN scope so its session is
+    not held open by an unrelated user's slow cycle.
+
+    Two users x two sources => exactly 2 turn_scope calls, 4 cycles, 2 exits.
+    """
+    from src.services.scheduler import SchedulerLoop
+
+    states = [
+        _make_state(state_id="pst_a1", user_id="usr_a", source="slack"),
+        _make_state(state_id="pst_a2", user_id="usr_a", source="notion"),
+        _make_state(state_id="pst_b1", user_id="usr_b", source="slack"),
+        _make_state(state_id="pst_b2", user_id="usr_b", source="notion"),
+    ]
+    harness = _TickHarness(states)
+
+    cycles: list[tuple[str, str]] = []
+
+    async def _cycle(source, *, user_id, workspace_id):
+        # The resolved workspace must reach the cycle (was covered on the
+        # now-deleted PerceptionCoordinator; asserted on the live path here).
+        assert workspace_id == "ws_test"
+        cycles.append((user_id, source))
+        return {"status": "completed", "events": 0}
+
+    orchestrator = MagicMock()
+    orchestrator._budget = _mock_budget()
+    orchestrator.run_perception_cycle = AsyncMock(side_effect=_cycle)
+
+    scope_factory, scopes = _scope_recorder()
+
+    scheduler = SchedulerLoop(_mock_settings(), orchestrator=orchestrator)
+    with (
+        patch("src.services.perception_policy.PerceptionPolicyService", return_value=harness.svc),
+        patch.object(scheduler, "_resolve_workspace", new=AsyncMock(return_value="ws_test")),
+        patch(
+            "src.services.scheduler.perception_tick.turn_scope", side_effect=scope_factory
+        ) as mock_scope,
+    ):
+        await scheduler._tick_perception(harness.factory)
+
+    assert sorted(cycles) == [
+        ("usr_a", "notion"),
+        ("usr_a", "slack"),
+        ("usr_b", "notion"),
+        ("usr_b", "slack"),
+    ], f"all four cycles must run, got {sorted(cycles)}"
+    assert mock_scope.call_count == 2, (
+        f"expected ONE turn_scope per user (2 users => 2), got {mock_scope.call_count}"
+    )
+    assert len(scopes) == 2
+    for cm in scopes:
+        cm.__aexit__.assert_awaited_once()
+
+
+async def test_perception_tick_releases_the_scope_when_a_cycle_raises():
+    """A raising cycle must still tear the user's scope down (try/yield/finally).
+
+    A clean empty success is the dangerous value in this codebase; a leaked MCP
+    session behind a failing cycle is the same shape of silent debt.
+    """
+    from src.services.scheduler import SchedulerLoop
+
+    states = [
+        _make_state(state_id="pst_a1", user_id="usr_a", source="slack"),
+        _make_state(state_id="pst_b1", user_id="usr_b", source="slack"),
+    ]
+    harness = _TickHarness(states)
+
+    survived: list[str] = []
+
+    async def _cycle(source, *, user_id, workspace_id):
+        if user_id == "usr_a":
+            raise RuntimeError("boom")
+        survived.append(user_id)
+        return {"status": "completed", "events": 0}
+
+    orchestrator = MagicMock()
+    orchestrator._budget = _mock_budget()
+    orchestrator.run_perception_cycle = AsyncMock(side_effect=_cycle)
+
+    scope_factory, scopes = _scope_recorder()
+
+    scheduler = SchedulerLoop(_mock_settings(), orchestrator=orchestrator)
+    with (
+        patch("src.services.perception_policy.PerceptionPolicyService", return_value=harness.svc),
+        patch.object(scheduler, "_resolve_workspace", new=AsyncMock(return_value="ws_test")),
+        patch("src.services.scheduler.perception_tick.turn_scope", side_effect=scope_factory),
+    ):
+        await scheduler._tick_perception(harness.factory)
+
+    assert len(scopes) == 2
+    for cm in scopes:
+        cm.__aexit__.assert_awaited_once()
+    # Containment: one user's raising cycle must not take down another's. Each
+    # _run_one owns its try/except and gather(return_exceptions=True) isolates
+    # the groups, so a blown cycle is a per-source failure, never a tick-wide one.
+    assert survived == ["usr_b"]
+
+
+async def test_per_user_scopes_do_not_change_total_concurrency():
+    """Grouping by user must not raise (or lower) the tick's concurrency ceiling.
+
+    The semaphore stays INSIDE _run_one and is shared across every group, so the
+    peak number of in-flight cycles is still perception_concurrency regardless of
+    how many user groups run at once.
+    """
+    from src.services.scheduler import SchedulerLoop
+
+    states = [
+        _make_state(state_id=f"pst_{u}{i}", user_id=f"usr_{u}", source=s)
+        for u in ("a", "b", "c")
+        for i, s in enumerate(("slack", "notion"))
+    ]
+    harness = _TickHarness(states)
+
+    settings = _mock_settings()
+    settings.perception_concurrency = 2
+    settings.max_perception_per_tick = 10
+
+    inflight = 0
+    peak = 0
+
+    async def _cycle(source, *, user_id, workspace_id):
+        nonlocal inflight, peak
+        inflight += 1
+        peak = max(peak, inflight)
+        await asyncio.sleep(0)  # yield so overlap is observable
+        inflight -= 1
+        return {"status": "completed", "events": 0}
+
+    orchestrator = MagicMock()
+    orchestrator._budget = _mock_budget()
+    orchestrator.run_perception_cycle = AsyncMock(side_effect=_cycle)
+
+    scope_factory, scopes = _scope_recorder()
+
+    scheduler = SchedulerLoop(settings, orchestrator=orchestrator)
+    with (
+        patch("src.services.perception_policy.PerceptionPolicyService", return_value=harness.svc),
+        patch.object(scheduler, "_resolve_workspace", new=AsyncMock(return_value="ws_test")),
+        patch("src.services.scheduler.perception_tick.turn_scope", side_effect=scope_factory),
+    ):
+        await scheduler._tick_perception(harness.factory)
+
+    assert len(scopes) == 3, "one scope per user"
+    assert peak == 2, f"concurrency ceiling must stay at perception_concurrency=2, peaked at {peak}"
+
+
+async def test_perception_tick_uses_the_real_turn_scope_and_closes_sessions():
+    """Wire-level check against the REAL turn_scope: keys registered inside a
+    user's cycles are handed to ``close_turn_sessions`` when that user's group
+    finishes, and each user's keys are closed independently."""
+    from src.integrations.turn_scope import current_turn_scope
+    from src.services.scheduler import SchedulerLoop
+
+    states = [
+        _make_state(state_id="pst_a1", user_id="usr_a", source="slack"),
+        _make_state(state_id="pst_a2", user_id="usr_a", source="notion"),
+        _make_state(state_id="pst_b1", user_id="usr_b", source="slack"),
+    ]
+    harness = _TickHarness(states)
+
+    closed: list[list[tuple[str, str, str]]] = []
+
+    async def _close(keys):
+        closed.append(sorted(keys))
+
+    async def _cycle(source, *, user_id, workspace_id):
+        scope = current_turn_scope()
+        assert scope is not None, "the live tick must run cycles inside a TurnScope"
+        # Both of a user's sources share ONE google-workspace SessionKey.
+        scope.register(("ws_test", "google-workspace", user_id))
+        return {"status": "completed", "events": 0}
+
+    orchestrator = MagicMock()
+    orchestrator._budget = _mock_budget()
+    orchestrator.run_perception_cycle = AsyncMock(side_effect=_cycle)
+
+    scheduler = SchedulerLoop(_mock_settings(), orchestrator=orchestrator)
+    with (
+        patch("src.services.perception_policy.PerceptionPolicyService", return_value=harness.svc),
+        patch.object(scheduler, "_resolve_workspace", new=AsyncMock(return_value="ws_test")),
+        patch("src.services.scheduler.perception_tick.close_turn_sessions", new=_close),
+    ):
+        await scheduler._tick_perception(harness.factory)
+
+    # One on_close per user, each carrying only that user's key — usr_a's two
+    # sources refcount onto a single shared key, so it appears once.
+    assert sorted(closed) == [
+        [("ws_test", "google-workspace", "usr_a")],
+        [("ws_test", "google-workspace", "usr_b")],
+    ], f"expected one close per user with that user's key only, got {closed}"

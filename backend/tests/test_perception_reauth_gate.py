@@ -283,7 +283,11 @@ def _factory_for(db):
 @pytest.mark.asyncio
 async def test_reauth_recovery_clears_when_token_valid_again(scheduler):
     # One source paused-for-reauth (mode=paused, last_error=needs_reauth).
-    paused = _make_state(state_id="pst_p", source="gmail", user_id="usr_p", mode="paused")
+    # The reaper must clear by PROVIDER, not by source name, so this uses a
+    # synthetic native fan-out provider rather than a real source: no shipped
+    # OAuth provider backs more than one source today (gmail/calendar moved
+    # behind the gateway), and hard-coding one would only re-encode that.
+    paused = _make_state(state_id="pst_p", source="acme_inbox", user_id="usr_p", mode="paused")
     paused.last_error = "needs_reauth"
 
     rows = MagicMock()
@@ -297,13 +301,19 @@ async def test_reauth_recovery_clears_when_token_valid_again(scheduler):
     reauth = MagicMock()
     reauth.clear_reauth = AsyncMock()
 
-    with patch.object(scheduler, "_validity_gate_collaborators", return_value=(oauth, reauth)):
+    with (
+        patch.object(scheduler, "_validity_gate_collaborators", return_value=(oauth, reauth)),
+        patch(
+            "src.integrations.provider_map._PROVIDER_SOURCES",
+            {"acme": ["acme_inbox", "acme_tasks"]},
+        ),
+    ):
         await scheduler._tick_reauth_recovery(_factory_for(db))
 
     reauth.clear_reauth.assert_awaited_once()
     args, kwargs = reauth.clear_reauth.await_args
     assert args[0] == "usr_p"
-    assert args[1] == "google"
+    assert args[1] == "acme"
 
 
 @pytest.mark.asyncio
@@ -400,12 +410,15 @@ async def test_reauth_recovery_taskrun_branch_noop_when_invalid(scheduler):
 
 @pytest.mark.asyncio
 async def test_reauth_recovery_dedupes_validity_check_across_branches(scheduler):
-    # A google provider appears in BOTH a paused perception_state AND a deferred
+    # One provider appears in BOTH a paused perception_state AND a deferred
     # TaskRun. The validity check must run ONCE per (user, provider) and clear
-    # ONCE — not twice.
-    paused = _make_state(state_id="pst_p", source="gmail", user_id="usr_p", mode="paused")
+    # ONCE — not twice. The two branches key off different things (a SOURCE vs a
+    # checkpointed PROVIDER), so the dedup only collapses them if the source is
+    # resolved through provider_map first; a synthetic fan-out provider keeps
+    # that nuance testable now that no shipped provider backs two sources.
+    paused = _make_state(state_id="pst_p", source="acme_inbox", user_id="usr_p", mode="paused")
     paused.last_error = "needs_reauth"
-    run = _make_awaiting_run("usr_p", "google")
+    run = _make_awaiting_run("usr_p", "acme")
 
     pstate_rows = MagicMock()
     pstate_rows.scalars.return_value.all.return_value = [paused]
@@ -421,8 +434,14 @@ async def test_reauth_recovery_dedupes_validity_check_across_branches(scheduler)
     reauth = MagicMock()
     reauth.clear_reauth = AsyncMock()
 
-    with patch.object(scheduler, "_validity_gate_collaborators", return_value=(oauth, reauth)):
+    with (
+        patch.object(scheduler, "_validity_gate_collaborators", return_value=(oauth, reauth)),
+        patch(
+            "src.integrations.provider_map._PROVIDER_SOURCES",
+            {"acme": ["acme_inbox", "acme_tasks"]},
+        ),
+    ):
         await scheduler._tick_reauth_recovery(_factory_for(db))
 
-    oauth.get_valid_token_with_reason.assert_awaited_once_with("usr_p", "google")
+    oauth.get_valid_token_with_reason.assert_awaited_once_with("usr_p", "acme")
     reauth.clear_reauth.assert_awaited_once()

@@ -44,13 +44,30 @@ class CapabilityHealthReport:
     last_updated_at: datetime
 
 
-# Map capability families to their typical providers
+# Map capability families to their typical providers.
+#
+# KNOWN DEFECT (pre-existing, needs its own change — do not "fix" one half).
+# This one list is consumed by two queries in DIFFERENT namespaces:
+#   _check_installation  -> IntegrationInstallation.server_name  (server names:
+#                           google-workspace, github, slack, playwright,
+#                           notion, atlassian)
+#   _get_last_activity   -> NormalizedEvent.source               (source names:
+#                           gmail, calendar, github, slack, notion)
+# For github/slack/notion/atlassian those two strings are identical, which is
+# why the conflation is invisible there. Google is the only installation
+# serving two differently-named sources, so "email" and "calendar" match no
+# server_name and report status="unconfigured" forever — telling the user
+# "Configure gmail to enable" for something they cannot configure under that
+# name. Substituting "google-workspace" only moves the failure to the activity
+# query. Fixing it properly means splitting this into installation names and
+# source names; until then the two entries below are knowingly wrong.
+# ("search": ["perplexity"] has no installation at all, same shape.)
 FAMILY_PROVIDERS: dict[str, list[str]] = {
     "email": ["gmail"],
     "calendar": ["calendar"],
     "repo": ["github"],
     "issue": ["github", "atlassian"],
-    "doc": ["notion", "drive", "atlassian"],
+    "doc": ["notion", "atlassian"],
     "workflow": ["atlassian"],
     "messaging": ["slack"],
     "browser": ["playwright"],

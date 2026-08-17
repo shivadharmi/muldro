@@ -33,6 +33,29 @@ _HOST = "0.0.0.0"  # noqa: S104 - intentional: gateway must be reachable off-hos
 _PORT = 8100
 
 
+def configure_logging() -> None:
+    """Attach a formatted root handler so adapter logs are usable in a container.
+
+    Without a root handler Python falls back to ``logging.lastResort``, a
+    WARNING-level stderr handler: ``warm_start``'s parameter-drift warnings —
+    the only signal that a hand-typed schema has diverged from OpenConnector's
+    — did reach stderr, but bare, as the message text alone. What this adds is
+
+    1. INFO-level records, which ``lastResort`` drops entirely (the warm-start
+       "registered N tools across M providers" summary produced no output), and
+    2. formatting — timestamp, level name, logger name — which is what makes a
+       drift warning attributable and triageable in a container log.
+
+    Idempotent so a re-entrant call cannot double-log.
+    """
+    if logging.getLogger().handlers:
+        return
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    )
+
+
 @adapter.tool()
 async def execute_action(
     actionId: str,  # noqa: N803 - matches OpenConnector's camelCase tool schema
@@ -71,5 +94,6 @@ async def warm_start() -> int:
 
 
 if __name__ == "__main__":
+    configure_logging()
     asyncio.run(warm_start())
     adapter.run(transport="http", host=_HOST, port=_PORT)

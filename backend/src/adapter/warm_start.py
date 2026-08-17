@@ -30,6 +30,7 @@ import copy
 import logging
 import re
 from collections.abc import Awaitable, Callable
+from typing import Any
 
 from fastmcp import FastMCP
 from fastmcp.tools import FunctionTool
@@ -43,7 +44,10 @@ from src.models.database import get_session_factory
 
 logger = logging.getLogger(__name__)
 
-GuideFetcher = Callable[[str], Awaitable[dict]]
+# Deliberately ``Any``, not ``dict``: the real fetcher (``get_action_guide``)
+# returns fastmcp's ``CallToolResult`` object, while test doubles hand back a
+# plain dict. ``_guide_markdown`` already reads both shapes.
+GuideFetcher = Callable[[str], Awaitable[Any]]
 
 
 def _describe(display_name: str, action_id: str) -> str:

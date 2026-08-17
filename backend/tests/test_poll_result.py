@@ -64,128 +64,14 @@ class TestPollResultType:
 # ---------------------------------------------------------------------------
 
 
-class TestGmailConnectorFailurePropagation:
-    """Gmail connector poll() must return typed PollResult on failure."""
-
-    @pytest.mark.asyncio
-    async def test_exception_returns_transient_poll_result(self):
-        """Network exception → PollResult with error_class='transient'."""
-        from src.connectors.gmail import GmailConnector
-        from src.connectors.poll_result import PollResult
-
-        connector = GmailConnector(make_mock_settings())
-        with patch("httpx.AsyncClient") as mock_cls:
-            mock_client = AsyncMock()
-            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-            mock_client.__aexit__ = AsyncMock(return_value=False)
-            mock_client.get = AsyncMock(side_effect=httpx.ConnectTimeout("timeout"))
-            mock_cls.return_value = mock_client
-
-            result = await connector.poll(TEST_USER_ID, "cursor_abc", {"access_token": "tok"})
-
-        assert isinstance(result, PollResult)
-        assert result.failed is True
-        assert result.error_class == "transient"
-        # Cursor must NOT advance on failure
-        assert result.cursor == "cursor_abc"
-
-    @pytest.mark.asyncio
-    async def test_non_200_history_response_returns_failure(self):
-        """HTTP 503 on history API → PollResult with error_class='transient'."""
-        from src.connectors.gmail import GmailConnector
-        from src.connectors.poll_result import PollResult
-
-        connector = GmailConnector(make_mock_settings())
-        mock_resp = MagicMock()
-        mock_resp.status_code = 503
-
-        with patch("httpx.AsyncClient") as mock_cls:
-            mock_client = AsyncMock()
-            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-            mock_client.__aexit__ = AsyncMock(return_value=False)
-            mock_client.get = AsyncMock(return_value=mock_resp)
-            mock_cls.return_value = mock_client
-
-            result = await connector.poll(TEST_USER_ID, "cursor_abc", {"access_token": "tok"})
-
-        assert isinstance(result, PollResult)
-        assert result.failed is True
-        assert result.error_class == "transient"
-        assert result.cursor == "cursor_abc"
-
-    @pytest.mark.asyncio
-    async def test_401_returns_auth_failed(self):
-        """HTTP 401 on history API → PollResult with error_class='auth_failed'."""
-        from src.connectors.gmail import GmailConnector
-        from src.connectors.poll_result import PollResult
-
-        connector = GmailConnector(make_mock_settings())
-        mock_resp = MagicMock()
-        mock_resp.status_code = 401
-
-        with patch("httpx.AsyncClient") as mock_cls:
-            mock_client = AsyncMock()
-            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-            mock_client.__aexit__ = AsyncMock(return_value=False)
-            mock_client.get = AsyncMock(return_value=mock_resp)
-            mock_cls.return_value = mock_client
-
-            result = await connector.poll(TEST_USER_ID, "cursor_abc", {"access_token": "tok"})
-
-        assert isinstance(result, PollResult)
-        assert result.failed is True
-        assert result.error_class == "auth_failed"
-        assert result.cursor == "cursor_abc"
-
-    @pytest.mark.asyncio
-    async def test_429_returns_rate_limited(self):
-        """HTTP 429 on history API → PollResult with error_class='rate_limited'."""
-        from src.connectors.gmail import GmailConnector
-        from src.connectors.poll_result import PollResult
-
-        connector = GmailConnector(make_mock_settings())
-        mock_resp = MagicMock()
-        mock_resp.status_code = 429
-
-        with patch("httpx.AsyncClient") as mock_cls:
-            mock_client = AsyncMock()
-            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-            mock_client.__aexit__ = AsyncMock(return_value=False)
-            mock_client.get = AsyncMock(return_value=mock_resp)
-            mock_cls.return_value = mock_client
-
-            result = await connector.poll(TEST_USER_ID, "cursor_abc", {"access_token": "tok"})
-
-        assert isinstance(result, PollResult)
-        assert result.failed is True
-        assert result.error_class == "rate_limited"
-        assert result.cursor == "cursor_abc"
-
-    @pytest.mark.asyncio
-    async def test_empty_ok_poll_returns_ok_poll_result(self):
-        """200 with no messages → PollResult ok with events=[] and advanced cursor."""
-        from src.connectors.gmail import GmailConnector
-        from src.connectors.poll_result import PollResult
-
-        connector = GmailConnector(make_mock_settings())
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.json.return_value = {"historyId": "new_cursor_999", "history": []}
-
-        with patch("httpx.AsyncClient") as mock_cls:
-            mock_client = AsyncMock()
-            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-            mock_client.__aexit__ = AsyncMock(return_value=False)
-            mock_client.get = AsyncMock(return_value=mock_resp)
-            mock_cls.return_value = mock_client
-
-            result = await connector.poll(TEST_USER_ID, "old_cursor", {"access_token": "tok"})
-
-        assert isinstance(result, PollResult)
-        assert result.ok is True
-        assert result.events == []
-        # Cursor advances on success
-        assert result.cursor == "new_cursor_999"
+# The Gmail failure-propagation tests that lived here drove provider REST via a
+# patched httpx.AsyncClient. That transport is gone: GmailConnector is now a
+# GatewayConnector and reads through the OpenConnector action gmail.fetch_emails,
+# so those tests exercised nothing (two of them still "passed", vacuously, because
+# an un-injected gateway caller also returns transient). Every behaviour they
+# covered — failure classified + incoming cursor held, empty window holds the
+# cursor, a missing transport is a failure and not an empty mailbox — is asserted
+# against the real envelope in tests/test_gmail_connector.py.
 
 
 class TestSlackConnectorFailurePropagation:
@@ -373,51 +259,12 @@ class TestSlackConnectorFailurePropagation:
         assert result.cursor == "ts_abc"
 
 
-class TestCalendarConnectorFailurePropagation:
-    """Calendar connector poll() must return typed PollResult on failure."""
-
-    @pytest.mark.asyncio
-    async def test_exception_returns_transient_poll_result(self):
-        from src.connectors.calendar import CalendarConnector
-        from src.connectors.poll_result import PollResult
-
-        connector = CalendarConnector(make_mock_settings())
-        with patch("httpx.AsyncClient") as mock_cls:
-            mock_client = AsyncMock()
-            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-            mock_client.__aexit__ = AsyncMock(return_value=False)
-            mock_client.get = AsyncMock(side_effect=httpx.ReadTimeout("timed out"))
-            mock_cls.return_value = mock_client
-
-            result = await connector.poll(TEST_USER_ID, "sync_tok", {"access_token": "tok"})
-
-        assert isinstance(result, PollResult)
-        assert result.failed is True
-        assert result.error_class == "transient"
-        assert result.cursor == "sync_tok"
-
-    @pytest.mark.asyncio
-    async def test_401_returns_auth_failed(self):
-        from src.connectors.calendar import CalendarConnector
-        from src.connectors.poll_result import PollResult
-
-        connector = CalendarConnector(make_mock_settings())
-        mock_resp = MagicMock()
-        mock_resp.status_code = 401
-
-        with patch("httpx.AsyncClient") as mock_cls:
-            mock_client = AsyncMock()
-            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-            mock_client.__aexit__ = AsyncMock(return_value=False)
-            mock_client.get = AsyncMock(return_value=mock_resp)
-            mock_cls.return_value = mock_client
-
-            result = await connector.poll(TEST_USER_ID, "sync_tok", {"access_token": "tok"})
-
-        assert isinstance(result, PollResult)
-        assert result.failed is True
-        assert result.error_class == "auth_failed"
-        assert result.cursor == "sync_tok"
+# TestCalendarConnectorFailurePropagation was deleted with the Calendar
+# connector's httpx transport: both of its tests patched httpx.AsyncClient and
+# asserted on an HTTP status the gateway path never produces, so neither could
+# fail for the reason it claimed. The gateway equivalents — a failed poll keeps
+# the incoming cursor, and MCP error codes map to PollErrorClass — live in
+# tests/test_calendar_connector.py.
 
 
 class TestGitHubConnectorFailurePropagation:
@@ -556,8 +403,12 @@ class TestPerceptionCycleRouting:
 
         with patch("src.connectors.base.CONNECTOR_REGISTRY") as mock_registry:
             mock_connector_cls = MagicMock()
+            # cursor_type is read off the CLASS (poll()'s credential discriminator
+            # can return before any instance exists), so stub it on the class. An
+            # instance-level assignment is dead: the class would hand poll() an
+            # auto-generated MagicMock in place of the declared str.
+            mock_connector_cls.cursor_type = "opaque"
             mock_connector = AsyncMock()
-            mock_connector.cursor_type = "opaque"
             mock_connector_cls.return_value = mock_connector
             mock_registry.get.return_value = mock_connector_cls
 
@@ -590,7 +441,7 @@ class TestPerceptionCycleRouting:
                     new_cursor,
                     poll_error,
                     cursor_type,
-                ) = await ConnectorPoller.poll(poller, "gmail", TEST_USER_ID, "ws_test")
+                ) = await ConnectorPoller.poll(poller, "slack", TEST_USER_ID, "ws_test")
 
             assert events == []
             assert poll_error is not None
@@ -605,8 +456,12 @@ class TestPerceptionCycleRouting:
 
         with patch("src.connectors.base.CONNECTOR_REGISTRY") as mock_registry:
             mock_connector_cls = MagicMock()
+            # cursor_type is read off the CLASS (poll()'s credential discriminator
+            # can return before any instance exists), so stub it on the class. An
+            # instance-level assignment is dead: the class would hand poll() an
+            # auto-generated MagicMock in place of the declared str.
+            mock_connector_cls.cursor_type = "opaque"
             mock_connector = AsyncMock()
-            mock_connector.cursor_type = "opaque"
             mock_connector_cls.return_value = mock_connector
             mock_registry.get.return_value = mock_connector_cls
 
@@ -637,7 +492,7 @@ class TestPerceptionCycleRouting:
                     new_cursor,
                     poll_error,
                     cursor_type,
-                ) = await ConnectorPoller.poll(poller, "gmail", TEST_USER_ID, "ws_test")
+                ) = await ConnectorPoller.poll(poller, "slack", TEST_USER_ID, "ws_test")
 
             assert events == []
             assert poll_error is None
@@ -709,7 +564,7 @@ class TestErrorClassPropagation:
 # ---------------------------------------------------------------------------
 
 
-async def _run_poll_with_token(token, *, source="gmail", reason=None):
+async def _run_poll_with_token(token, *, source="slack", reason=None):
     """Drive ConnectorPoller.poll with a stubbed connector + given OAuth token.
 
     The connector itself returns an ok-empty PollResult; the test controls
@@ -723,8 +578,9 @@ async def _run_poll_with_token(token, *, source="gmail", reason=None):
 
     with patch("src.connectors.base.CONNECTOR_REGISTRY") as mock_registry:
         mock_connector_cls = MagicMock()
+        # cursor_type is read off the CLASS (see note in the poll tests above).
+        mock_connector_cls.cursor_type = "opaque"
         mock_connector = AsyncMock()
-        mock_connector.cursor_type = "opaque"
         mock_connector_cls.return_value = mock_connector
         mock_registry.get.return_value = mock_connector_cls
         mock_connector.poll = AsyncMock(
@@ -817,8 +673,12 @@ class TestPreflightErrorClassification:
 
         with patch("src.connectors.base.CONNECTOR_REGISTRY") as mock_registry:
             mock_connector_cls = MagicMock()
+            # cursor_type is read off the CLASS (poll()'s credential discriminator
+            # can return before any instance exists), so stub it on the class. An
+            # instance-level assignment is dead: the class would hand poll() an
+            # auto-generated MagicMock in place of the declared str.
+            mock_connector_cls.cursor_type = "opaque"
             mock_connector = AsyncMock()
-            mock_connector.cursor_type = "opaque"
             mock_connector_cls.return_value = mock_connector
             mock_registry.get.return_value = mock_connector_cls
             mock_connector.poll = AsyncMock(side_effect=RuntimeError("kaboom"))
@@ -840,10 +700,55 @@ class TestPreflightErrorClassification:
                 mock_oauth_cls.return_value = mock_oauth
 
                 events, _, poll_error, _ = await ConnectorPoller.poll(
-                    poller, "gmail", TEST_USER_ID, "ws_test"
+                    poller, "slack", TEST_USER_ID, "ws_test"
                 )
 
         assert events == []
         assert poll_error is not None
         # A generic exception must not silently bucket as unknown/threshold-3.
         assert classify_error(poll_error) != "unknown"
+
+
+def test_mcp_code_map_covers_every_defined_error_code():
+    """Every MCPErrorCode must have an explicit PollErrorClass.
+
+    AUTH_REQUIRED and SESSION_LOST were both returned by session_pool but absent
+    from the map, surviving only on the unmapped default. An explicit mapping is
+    what stops the next reader from "correcting" AUTH_REQUIRED to permanent.
+    """
+    from src.connectors.poll_result import MCP_CODE_TO_POLL_CLASS
+    from src.integrations.mcp_errors import MCPErrorCode
+
+    defined = {
+        v for k, v in vars(MCPErrorCode).items() if not k.startswith("_") and isinstance(v, str)
+    }
+    missing = defined - set(MCP_CODE_TO_POLL_CLASS)
+    assert not missing, f"MCPErrorCode values with no PollErrorClass: {sorted(missing)}"
+
+
+def test_auth_required_is_transient_not_permanent():
+    """Permanent means threshold 1 — the circuit opens after ONE attempt.
+
+    That is exactly the no_token -> permanent -> needs_reauth failure Wave 5.3
+    removed. A gateway source that is merely unconnected must never open a
+    permanent circuit.
+    """
+    from src.connectors.poll_result import MCP_CODE_TO_POLL_CLASS
+    from src.integrations.mcp_errors import MCPErrorCode
+
+    assert MCP_CODE_TO_POLL_CLASS[MCPErrorCode.AUTH_REQUIRED] == "transient"
+
+
+def test_session_lost_is_transient():
+    from src.connectors.poll_result import MCP_CODE_TO_POLL_CLASS
+    from src.integrations.mcp_errors import MCPErrorCode
+
+    assert MCP_CODE_TO_POLL_CLASS[MCPErrorCode.SESSION_LOST] == "transient"
+
+
+def test_every_mapped_value_is_a_valid_poll_error_class():
+    from src.connectors.poll_result import MCP_CODE_TO_POLL_CLASS
+
+    valid = {"transient", "permanent", "rate_limited", "auth_failed"}
+    bad = {k: v for k, v in MCP_CODE_TO_POLL_CLASS.items() if v not in valid}
+    assert not bad, f"invalid PollErrorClass values: {bad}"

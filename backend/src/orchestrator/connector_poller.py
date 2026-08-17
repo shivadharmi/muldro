@@ -24,22 +24,6 @@ from src.orchestrator.services import ServiceContainer
 
 logger = logging.getLogger(__name__)
 
-# Map mcp_errors.MCPErrorCode string values to a PollErrorClass so generic poll()
-# exceptions route through error_class_to_policy_error() and carry a classification
-# keyword. Unmapped/unknown codes fall back to "transient" (fail-safe threshold 6) at
-# the call site. Auth-related exceptions are permanent: a confirmed auth failure thrown
-# from the connector won't self-heal on retry.
-_MCP_CODE_TO_POLL_CLASS: dict[str, str] = {
-    "auth_error": "permanent",
-    "timeout": "transient",
-    "rate_limit": "rate_limited",
-    "server_error": "transient",
-    "validation_error": "permanent",
-    "circuit_open": "transient",
-    "not_found": "permanent",
-    "unknown_error": "transient",
-}
-
 
 class ConnectorPoller:
     """Polls connectors, ingests raw events, and advances observation cursors."""
@@ -74,8 +58,9 @@ class ConnectorPoller:
     ) -> tuple[list, str | None, str | None, str]:
         """Poll a connector for new events. Returns (events, new_cursor, error, cursor_type)."""
         from src.connectors.base import CONNECTOR_REGISTRY
+        from src.connectors.gateway_connector import GatewayConnector
         from src.connectors.poll_result import error_class_to_policy_error
-        from src.services.oauth_manager import OAuthManager
+        from src.integrations.gateway_actions import gateway_provider_for_source
 
         connector_cls = CONNECTOR_REGISTRY.get(source)
         if not connector_cls:
@@ -90,42 +75,95 @@ class ConnectorPoller:
                 "opaque",
             )
 
-        connector = connector_cls(settings=self._settings)
-        cursor_type = connector.cursor_type
+        # Read the cursor type off the class: the credential discriminator below
+        # can return before a connector instance exists.
+        cursor_type: str = getattr(connector_cls, "cursor_type", "opaque")
 
-        # Get OAuth credentials
-        oauth_mgr = OAuthManager(
-            self._db_factory,
-            encryption_key=self._settings.oauth_encryption_key,
-            settings=self._settings,
-        )
-        # Map source to OAuth provider (gmail/calendar share "google" provider)
-        oauth_provider = "google" if source in ("gmail", "calendar") else source
-        token_result = await oauth_mgr.get_valid_token_with_reason(user_id, oauth_provider)
-        if token_result.token is None:
-            # Distinguish a genuine token-refresh blip (transient — retry) from a
-            # confirmed "no usable credential" (never connected / no refresh token /
-            # revoked). The latter cannot self-heal by retrying, so classify it
-            # auth_failed (-> permanent, threshold 1): the circuit opens fast and
-            # re-authorization can be surfaced, instead of looping forever on a
-            # source the user never connected. A live provider 401/403 still
-            # surfaces as PollResult.auth_failed on the connector return path.
-            from src.connectors.poll_result import (
-                CREDENTIAL_ACQUISITION_ERROR,
-                error_class_to_policy_error,
-            )
+        # Where this source's credential lives is a REGISTRY question, not a
+        # hardcoded map. ``gateway_provider_for_source`` returns None for a
+        # source that is not gateway-backed — that source's runnability is
+        # still an OAuthManager question.
+        gateway_provider = gateway_provider_for_source(source)
+        caller = None
+        # Credentials handed to the connector. The gateway branch deliberately
+        # leaves this EMPTY rather than {"access_token": ""}: an empty string is a
+        # silent falsy that a future reader would treat as "no token", while an
+        # absent key fails loudly with KeyError. There is genuinely nothing to
+        # read here — the gateway binds the credential at call time.
+        credentials: dict[str, str] = {}
 
-            if token_result.reason == "refresh_failed":
-                err = CREDENTIAL_ACQUISITION_ERROR
-            else:  # no_token | no_refresh_token | revoked
-                err = error_class_to_policy_error("auth_failed")
-            return (
-                [],
-                None,
-                f"No valid credentials for {source} — {err}",
-                cursor_type,
+        if gateway_provider is not None:
+            if not issubclass(connector_cls, GatewayConnector):
+                # Gateway-backed but its connector is not ported yet (the github
+                # deferral: OpenConnector exposes no notifications action).
+                # Classify NON-permanently — "permanent" is threshold 1, so the
+                # circuit would open after a single attempt for a source whose
+                # data path we deliberately have not built.
+                logger.info(
+                    "perception_source_not_ported",
+                    extra={"source": source, "gateway_provider": gateway_provider},
+                )
+                return (
+                    [],
+                    None,
+                    f"Poll skipped for {source}: {error_class_to_policy_error('transient')}",
+                    cursor_type,
+                )
+
+            from src.connectors.gateway_caller import GatewayToolCaller
+
+            # The credential lives in OpenConnector and is bound by the gateway
+            # at call time — no OAuthManager token is fetched or needed here.
+            caller = GatewayToolCaller(user_id=user_id, workspace_id=workspace_id)
+        else:
+            # Native source: unchanged OAuth path.
+            from src.integrations.provider_map import provider_for_source
+            from src.services.oauth_manager import OAuthManager
+
+            # Resolve the OAuth PROVIDER through the canonical map — never pass
+            # the raw source. The upstream drop-gate (perception_tick ->
+            # _provider_for_source -> provider_map) already answers this question
+            # that way, and the two must agree: a provider spanning several
+            # sources would otherwise stay runnable at the gate while this lookup
+            # missed under the source name, yielding no_token -> auth_failed ->
+            # PERMANENT, a circuit that opens after a single attempt.
+            provider = provider_for_source(source)
+            oauth_mgr = OAuthManager(
+                self._db_factory,
+                encryption_key=self._settings.oauth_encryption_key,
+                settings=self._settings,
             )
-        access_token = token_result.token
+            token_result = await oauth_mgr.get_valid_token_with_reason(user_id, provider)
+            if token_result.token is None:
+                # Distinguish a genuine token-refresh blip (transient — retry) from a
+                # confirmed "no usable credential" (never connected / no refresh token /
+                # revoked). The latter cannot self-heal by retrying, so classify it
+                # auth_failed (-> permanent, threshold 1): the circuit opens fast and
+                # re-authorization can be surfaced, instead of looping forever on a
+                # source the user never connected. A live provider 401/403 still
+                # surfaces as PollResult.auth_failed on the connector return path.
+                from src.connectors.poll_result import CREDENTIAL_ACQUISITION_ERROR
+
+                if token_result.reason == "refresh_failed":
+                    err = CREDENTIAL_ACQUISITION_ERROR
+                else:  # no_token | no_refresh_token | revoked
+                    err = error_class_to_policy_error("auth_failed")
+                return (
+                    [],
+                    None,
+                    f"No valid credentials for {source} (provider {provider}) — {err}",
+                    cursor_type,
+                )
+            credentials = {"access_token": token_result.token}
+
+        # Branch on the SAME registry answer that selected the credential path
+        # above. Re-deriving it from ``caller is not None`` would let a future
+        # early return inside the gateway branch silently construct a native
+        # connector.
+        if gateway_provider is not None:
+            connector = connector_cls(settings=self._settings, caller=caller)
+        else:
+            connector = connector_cls(settings=self._settings)
 
         # Get current cursor
         cursor = None
@@ -153,7 +191,7 @@ class ConnectorPoller:
             # unchanged cursor), so we never ingest events nor advance the cursor on
             # a failing poll.
             result = await asyncio.wait_for(
-                connector.poll(user_id, cursor, {"access_token": access_token}),
+                connector.poll(user_id, cursor, credentials),
                 timeout=30,
             )
 
@@ -182,6 +220,7 @@ class ConnectorPoller:
             )
             return [], cursor, "Poll timed out after 30s", cursor_type
         except Exception as e:
+            from src.connectors.poll_result import mcp_code_to_poll_class
             from src.integrations.mcp_errors import classify_error
 
             error_code = classify_error(e)
@@ -192,7 +231,7 @@ class ConnectorPoller:
             # so the failure carries a classification keyword. A truly unknown
             # exception is treated as transient (threshold 6) — fail safe, never
             # open the circuit fast on an under-classified blip.
-            poll_class = _MCP_CODE_TO_POLL_CLASS.get(error_code, "transient")
+            poll_class = mcp_code_to_poll_class(error_code)
             policy_err = error_class_to_policy_error(poll_class)
             logger.warning(
                 "connector_poll_error",

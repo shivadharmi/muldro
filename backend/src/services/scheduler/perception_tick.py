@@ -4,7 +4,9 @@ import asyncio
 import logging
 from datetime import datetime, timezone
 
+from src.connectors.mcp_bridge import close_turn_sessions
 from src.integrations.gateway_actions import gateway_provider_for_source
+from src.integrations.turn_scope import turn_scope
 
 logger = logging.getLogger(__name__)
 
@@ -170,16 +172,59 @@ class PerceptionTickMixin:
                         )
                         return claim.source, 0
 
-            results = await asyncio.gather(
-                *(_run_one(c) for c in claimed),
+            # ONE MCP session scope per USER — deliberately not per source and
+            # not per tick. Gateway-backed connectors open MCP sessions during
+            # their poll, and a user's gmail + calendar share the
+            # google-workspace SessionKey, so refcounting inside one per-user
+            # scope gives them a single session torn down deterministically when
+            # that user's sources finish. A per-source scope would build and tear
+            # one session per source; a tick-wide scope would hold every user's
+            # session open until the slowest user finished. Without any scope
+            # (the scheduler is exactly the detached background work TurnScope's
+            # docstring warns about) every session survives to the idle reaper.
+            #
+            # ``_run_one`` resolves the workspace itself, but ``_resolve_workspace``
+            # is deterministic per user, so grouping by user_id alone is enough to
+            # keep each group's SessionKeys disjoint.
+            by_user: dict[str, list] = {}
+            for c in claimed:
+                by_user.setdefault(c.user_id, []).append(c)
+            groups = list(by_user.values())
+
+            async def _run_user_group(user_claims):
+                # Contextvars are copied into gather-created tasks at creation,
+                # so every cycle in this group sees THIS scope. The shared
+                # semaphore still lives in _run_one, so total concurrency across
+                # all groups is unchanged.
+                async with turn_scope(on_close=close_turn_sessions):
+                    return await asyncio.gather(
+                        *(_run_one(c) for c in user_claims), return_exceptions=True
+                    )
+
+            group_results = await asyncio.gather(
+                *(_run_user_group(g) for g in groups),
                 return_exceptions=True,
             )
+
+            # Flatten back to one entry per claim. ``ordered_claims`` is a
+            # permutation of ``claimed`` that stays positionally aligned with
+            # ``results`` for the reporting and synthesis phases below. A
+            # group-level exception (the scope itself failing) fans out to one
+            # entry per claim in that group so alignment can never be lost.
+            ordered_claims: list = []
+            results: list = []
+            for group, gr in zip(groups, group_results):
+                ordered_claims.extend(group)
+                if isinstance(gr, BaseException):
+                    results.extend([gr] * len(group))
+                else:
+                    results.extend(gr)
 
             for i, r in enumerate(results):
                 if isinstance(r, BaseException):
                     logger.warning(
                         "Perception gather exception for %s: %s",
-                        claimed[i].source if i < len(claimed) else "unknown",
+                        ordered_claims[i].source if i < len(ordered_claims) else "unknown",
                         r,
                     )
 
@@ -190,10 +235,10 @@ class PerceptionTickMixin:
             # tenant. Group results by (user_id, workspace_id) so synthesis
             # never crosses tenant boundaries. Tenant identity comes from the
             # claimed snapshot; source name and event count come from the
-            # result tuple. results is positionally aligned with claimed.
+            # result tuple. results is positionally aligned with ordered_claims.
             # ----------------------------------------------------------------
             tenant_event_counts: dict[tuple[str, str], dict[str, int]] = {}
-            for claim, r in zip(claimed, results):
+            for claim, r in zip(ordered_claims, results):
                 if isinstance(r, BaseException):
                     continue
                 src_name, evt_count = r
@@ -240,10 +285,17 @@ class PerceptionTickMixin:
 
     @staticmethod
     def _provider_for_source(source: str) -> str:
-        """Map a perception source to its OAuth provider (gmail/calendar share
-        the ``google`` provider).
+        """Map a perception source to its OAuth provider.
 
         Delegates to :mod:`src.integrations.provider_map` (the canonical map).
+        Every remaining source maps to a provider of its own name: the one
+        fan-out entry (``google -> [gmail, calendar]``) was retired when those
+        two sources moved behind the gateway. Both call sites here only ever
+        see a natively-authenticated source — the validity gate short-circuits
+        on ``gateway_provider_for_source`` first, and the reauth-clear branch
+        selects only rows with ``last_error == "needs_reauth"``, a state a
+        gateway-backed source cannot reach (nothing raises
+        ``McpAuthRequiredError`` for it).
         """
         from src.integrations.provider_map import provider_for_source
 
