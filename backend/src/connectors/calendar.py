@@ -21,6 +21,26 @@ initial-sync semantics).
 sync answers "what is on my calendar" (``timeMin`` = now); an incremental sync
 answers "what changed" (``updatedMin``). That is the same split the pre-gateway
 connector had as ``timeMin`` vs ``syncToken``.
+
+**How initial mode is exited.** Google used to hand back a ``nextSyncToken``
+even on an empty final page, so the connector always left initial mode. There is
+no such token here, so every undrained-free initial sync — whether or not it
+observes any events — seeds its cursor at **poll-start minus
+``OVERLAP_SECONDS``**, unconditionally. Poll-start is captured before the
+request, never after — see :meth:`CalendarConnector.poll`.
+
+``max(updated)`` over the returned rows is NOT used as the seed, even when it
+exists. ``timeMin=now`` asks "what is on my calendar from now on", and a
+long-established recurring event can answer with an ``updated`` stamp years
+old — older than ``CURSOR_FLOOR_DAYS`` — which the next poll's plausibility
+check would then reject, bouncing the connector straight back to
+``timeMin=now`` forever. What is actually known after an initial sync is "the
+calendar as observed as of poll-start", not "as of whenever some future
+event was last edited" — so poll-start, not ``max(updated)``, is the only
+correct cursor for this branch. The sole exception is a truncated walk: it
+did not drain its window and must hold the incoming cursor, exactly as
+:meth:`GatewayConnector._resolve_cursor` already enforces for every other
+branch.
 """
 
 import logging
@@ -67,6 +87,11 @@ class CalendarConnector(GatewayConnector):
         """
         watermark = self._sane_rfc3339_cursor(cursor)
 
+        # Captured BEFORE the request, not after it returns: a post-walk now()
+        # would sit past anything modified while the walk was in flight, and
+        # seeding there would skip it permanently. See the seed below.
+        poll_started = datetime.now(timezone.utc)
+
         payload: dict = {
             "calendarId": "primary",
             "singleEvents": True,
@@ -74,7 +99,7 @@ class CalendarConnector(GatewayConnector):
         }
         if watermark is None:
             # Initial sync: what is on my calendar from now on.
-            payload["timeMin"] = _rfc3339(datetime.now(timezone.utc))
+            payload["timeMin"] = _rfc3339(poll_started)
         else:
             # Incremental: what changed, re-reading OVERLAP_SECONDS of the
             # previous window as insurance against clock skew and
@@ -116,6 +141,50 @@ class CalendarConnector(GatewayConnector):
         # Never advance past an undrained window: a truncated walk, or a walk
         # with no watermark to advance TO, holds the incoming cursor.
         new_cursor = self._resolve_cursor(walk, incoming=cursor, observed=observed)
+
+        # LEAVING INITIAL-SYNC MODE. Before the gateway port Google handed back
+        # a nextSyncToken even on an empty final page, so the connector always
+        # advanced out of initial mode. There is no such token here: without an
+        # explicit seed, an initial sync that observes nothing holds its
+        # (absent or rejected) cursor and asks timeMin=now again next poll —
+        # for ever. While stuck there a newly-created PAST-dated event is
+        # invisible, because timeMin=now excludes it and updatedMin never runs.
+        #
+        # Seeding at poll-start does NOT violate "advance to max-observed, never
+        # wall-clock now()". That invariant guards a CHANGE FEED, where anything
+        # modified between the last returned row and now() would be skipped. An
+        # initial sync is not a change feed — it asks "what is on my calendar"
+        # (timeMin), not "what changed" — and the next poll's updatedMin covers
+        # everything modified since poll-start. The overlap subtraction is the
+        # same clock-skew insurance the incremental branch applies.
+        #
+        # Unconditional on `observed`, deliberately: `observed` is the max
+        # `updated` among rows timeMin=now returned, and for a long-established
+        # recurring series that can be years old — older than
+        # CURSOR_FLOOR_DAYS. Taking it as the cursor would write a value the
+        # very next poll's _sane_rfc3339_cursor rejects as implausible, which
+        # falls back to watermark=None -> timeMin=now again -> the same rows ->
+        # the same stale cursor, forever: an initial sync that never leaves
+        # initial mode even though it is observing events every poll. Poll-start
+        # is always <= "now" and so is always plausible; it is also the only
+        # instant this branch can honestly claim to have covered ("the calendar
+        # as of poll-start"), not "as of whenever some future event happened to
+        # be last edited". So it is used regardless of what was observed.
+        #
+        # Still narrow on the other two axes: INITIAL branch only (an
+        # incremental poll that observes nothing must still hold — that path is
+        # unchanged above), and never on truncation (that would seed past an
+        # undrained window — _resolve_cursor already holds `incoming` for that
+        # case, so this check only needs to avoid overwriting it).
+        if watermark is None and not walk.truncated:
+            new_cursor = _rfc3339(poll_started - timedelta(seconds=OVERLAP_SECONDS))
+            logger.info(
+                "Calendar initial sync seeding the cursor at poll-start minus the "
+                "overlap (%s) so the next poll runs updatedMin instead of timeMin "
+                "(observed=%r)",
+                new_cursor,
+                observed,
+            )
 
         logger.info("Calendar poll: %d events", len(events))
         return PollResult(events=events, cursor=new_cursor)

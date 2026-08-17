@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 from src.connectors.calendar import MAX_PAGES, PAGE_SIZE, CalendarConnector
-from src.connectors.gateway_connector import OVERLAP_SECONDS
+from src.connectors.gateway_connector import CURSOR_FLOOR_DAYS, OVERLAP_SECONDS
 from tests.conftest import TEST_USER_ID, make_mock_settings
 
 LIST_ACTION = "googlecalendar.list_events"
@@ -252,6 +252,14 @@ async def test_an_all_day_event_yields_a_utc_aware_occurred_at():
 
 
 async def test_the_cursor_advances_to_the_max_observed_updated():
+    """On the INCREMENTAL branch (a real cursor in), the cursor advances to max(updated).
+
+    The initial branch (cursor=None) does NOT use max(updated) as its seed — see
+    test_an_initial_sync_seeds_poll_start_even_when_events_are_observed below for
+    why (a future timeMin=now window can return rows with an ancient `updated`,
+    which would pin the connector in initial mode forever).
+    """
+    incoming = _rfc3339(datetime.now(timezone.utc) - timedelta(hours=2))
     connector, _ = _connector(
         [
             {
@@ -264,7 +272,7 @@ async def test_the_cursor_advances_to_the_max_observed_updated():
         ]
     )
 
-    result = await connector.poll(TEST_USER_ID, None, {})
+    result = await connector.poll(TEST_USER_ID, incoming, {})
 
     assert result.cursor == "2026-06-21T12:30:00.000Z"
 
@@ -334,6 +342,124 @@ async def test_an_empty_window_holds_the_incoming_cursor():
     assert result.ok is True
     assert result.events == []
     assert result.cursor == incoming
+
+
+# ---- leaving initial-sync mode -------------------------------------------
+#
+# Before the gateway port, Google returned a nextSyncToken even on an empty
+# final page, so the connector always advanced out of initial mode. Through the
+# gateway there is no such token, so an empty initial sync observed nothing,
+# held its (absent) cursor, and asked timeMin=now again on the next poll —
+# forever. While stuck there a newly-created PAST-dated event is invisible:
+# timeMin=now excludes it and updatedMin never runs.
+
+
+async def test_an_empty_initial_sync_seeds_a_cursor_at_poll_start_minus_the_overlap():
+    """An initial sync is not a change feed, so poll-start is a safe seed.
+
+    The "never advance to now(), only to max-observed" invariant guards a change
+    feed, where anything modified between the last row and now() would be
+    skipped. Here the walk asked "what is on my calendar" (timeMin) — the next
+    poll's updatedMin covers everything modified since poll-start, so nothing is
+    skipped. Poll-start is captured BEFORE the request; post-walk now() would
+    skip whatever was modified during the walk.
+    """
+    connector, _ = _connector([{"items": []}])
+
+    before = datetime.now(timezone.utc)
+    result = await connector.poll(TEST_USER_ID, None, {})
+    after = datetime.now(timezone.utc)
+
+    assert result.ok is True
+    assert result.cursor is not None, "an empty initial sync must not stay in initial mode"
+    seeded = _parse(result.cursor)
+    assert before - timedelta(seconds=OVERLAP_SECONDS) <= seeded
+    assert seeded <= after - timedelta(seconds=OVERLAP_SECONDS)
+
+
+async def test_the_poll_after_an_empty_initial_sync_asks_updatedmin_not_timemin():
+    """The seed must be a cursor the NEXT poll accepts — the whole point."""
+    connector, caller = _connector([{"items": []}, {"items": []}])
+
+    first = await connector.poll(TEST_USER_ID, None, {})
+    await connector.poll(TEST_USER_ID, first.cursor, {})
+
+    _, second_payload = caller.calls[1]
+    assert "updatedMin" in second_payload, "the seeded cursor must survive the read clamp"
+    assert "timeMin" not in second_payload
+
+
+async def test_an_initial_sync_seeds_poll_start_even_when_events_are_observed():
+    """The pin: ``timeMin=now`` can return rows whose ``updated`` is ancient.
+
+    A long-established recurring series may not have been touched in years, so
+    ``max(updated)`` over an initial sync's rows can sit well outside
+    ``CURSOR_FLOOR_DAYS``. Seeding that value would write a cursor the very next
+    poll's plausibility check rejects, bouncing back to ``timeMin=now`` with the
+    same rows returned again -> the same stale cursor written again, forever: an
+    initial sync that never leaves initial mode even though it observes events on
+    every poll. Two consecutive polls are run so the pin (or its absence) is what
+    is actually measured, not just one field.
+    """
+    stale_updated = _rfc3339(datetime.now(timezone.utc) - timedelta(days=CURSOR_FLOOR_DAYS + 30))
+    connector, caller = _connector(
+        [
+            {"items": [_event("evt_recurring", updated=stale_updated)]},
+            {"items": [_event("evt_recurring", updated=stale_updated)]},
+        ]
+    )
+
+    before = datetime.now(timezone.utc)
+    first = await connector.poll(TEST_USER_ID, None, {})
+    after = datetime.now(timezone.utc)
+
+    first_action, first_payload = caller.calls[0]
+    assert first_action == LIST_ACTION
+    assert "timeMin" in first_payload, "poll 1: initial window"
+    assert first.ok is True
+    assert first.cursor is not None
+    assert first.cursor != stale_updated, "max(updated) must not become the seed"
+    seeded = _parse(first.cursor)
+    assert before - timedelta(seconds=OVERLAP_SECONDS) <= seeded
+    assert seeded <= after - timedelta(seconds=OVERLAP_SECONDS)
+
+    second = await connector.poll(TEST_USER_ID, first.cursor, {})
+
+    _, second_payload = caller.calls[1]
+    assert "updatedMin" in second_payload, (
+        "poll 2: a plausible seed must survive the read clamp — a stale seed "
+        "would be rejected and bounce back to timeMin=now"
+    )
+    assert "timeMin" not in second_payload
+    assert second.ok is True
+
+
+async def test_an_empty_incremental_poll_does_not_seed_and_holds_its_cursor():
+    """Seeding is the INITIAL branch only; a change feed must still hold."""
+    incoming = _rfc3339(datetime.now(timezone.utc) - timedelta(hours=2))
+    connector, _ = _connector([{"items": []}])
+
+    result = await connector.poll(TEST_USER_ID, incoming, {})
+
+    assert result.cursor == incoming
+
+
+async def test_a_truncated_initial_walk_does_not_seed():
+    """Seeding past an undrained window is the bug _resolve_cursor exists to stop."""
+    pages = [
+        {
+            "items": [_event(f"evt_{i}", updated="2026-06-21T23:59:00.000Z")],
+            "nextPageToken": f"p{i}",
+        }
+        for i in range(MAX_PAGES)
+    ]
+    connector, caller = _connector(pages)
+
+    result = await connector.poll(TEST_USER_ID, None, {})
+
+    assert len(caller.calls) == MAX_PAGES
+    assert result.ok is True
+    assert result.cursor is None, "a truncated initial walk holds the (absent) incoming cursor"
 
 
 async def test_a_failed_poll_keeps_the_incoming_cursor_and_classifies_transient():
