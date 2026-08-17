@@ -1,8 +1,16 @@
-"""Gmail actions served through the OpenConnector gateway."""
+"""Gmail actions served through the OpenConnector gateway.
+
+Action ids, parameter names, and input schemas are transcribed verbatim from a
+live OpenConnector v1.3.5 catalog -- see infra/gateway/spike-findings-multiprovider.md.
+OC's runtime ``get_action_guide`` exposes no machine-readable schema, so these
+are declared here; ``tests/gateway_ground_truth.py`` asserts they still equal
+what the catalog serves, and warm_start's live drift check warns when OC's
+parameter names diverge from what is declared.
+"""
 
 from __future__ import annotations
 
-from src.integrations.gateway_actions import GatewayAction, GatewayProvider
+from src.integrations.gateway_actions._types import GatewayAction, GatewayProvider
 
 GMAIL_ACTIONS: tuple[GatewayAction, ...] = (
     GatewayAction(
@@ -16,8 +24,10 @@ GMAIL_ACTIONS: tuple[GatewayAction, ...] = (
                 "userId": {
                     "type": "string",
                     "description": "Gmail user ID. Omit to use the connected mailbox.",
-                },
+                }
             },
+            "additionalProperties": False,
+            "description": "The input payload for this action.",
         },
     ),
     GatewayAction(
@@ -31,7 +41,7 @@ GMAIL_ACTIONS: tuple[GatewayAction, ...] = (
                 "query": {"type": "string", "description": "Gmail search query."},
                 "labelIds": {
                     "type": "array",
-                    "items": {"type": "string"},
+                    "items": {"type": "string", "minLength": 1},
                     "description": "Gmail label IDs.",
                 },
                 "includeSpamTrash": {
@@ -42,9 +52,12 @@ GMAIL_ACTIONS: tuple[GatewayAction, ...] = (
                     "type": "string",
                     "enum": ["ids", "summary", "full"],
                     "description": "Message detail level.",
+                    "default": "summary",
                 },
                 "maxResults": {
                     "type": "integer",
+                    "minimum": 1,
+                    "maximum": 500,
                     "description": "Maximum number of results to return.",
                 },
                 "pageToken": {
@@ -52,6 +65,8 @@ GMAIL_ACTIONS: tuple[GatewayAction, ...] = (
                     "description": "Opaque pagination token returned by Gmail.",
                 },
             },
+            "additionalProperties": False,
+            "description": "The input payload for this action.",
         },
     ),
     GatewayAction(
@@ -65,10 +80,14 @@ GMAIL_ACTIONS: tuple[GatewayAction, ...] = (
                 "query": {"type": "string", "description": "Gmail search query."},
                 "maxResults": {
                     "type": "integer",
+                    "minimum": 1,
+                    "maximum": 500,
                     "description": "Maximum number of results to return.",
                 },
             },
+            "additionalProperties": False,
             "required": ["query"],
+            "description": "The input payload for this action.",
         },
     ),
     GatewayAction(
@@ -79,9 +98,11 @@ GMAIL_ACTIONS: tuple[GatewayAction, ...] = (
         {
             "type": "object",
             "properties": {
-                "messageId": {"type": "string", "description": "Gmail message ID."},
+                "messageId": {"type": "string", "minLength": 1, "description": "Gmail message ID."}
             },
+            "additionalProperties": False,
             "required": ["messageId"],
+            "description": "The input payload for this action.",
         },
     ),
     GatewayAction(
@@ -96,6 +117,8 @@ GMAIL_ACTIONS: tuple[GatewayAction, ...] = (
                 "verbose": {"type": "boolean", "description": "Hydrate each thread."},
                 "maxResults": {
                     "type": "integer",
+                    "minimum": 1,
+                    "maximum": 500,
                     "description": "Maximum number of results to return.",
                 },
                 "pageToken": {
@@ -103,6 +126,8 @@ GMAIL_ACTIONS: tuple[GatewayAction, ...] = (
                     "description": "Opaque pagination token returned by Gmail.",
                 },
             },
+            "additionalProperties": False,
+            "description": "The input payload for this action.",
         },
     ),
     GatewayAction(
@@ -116,8 +141,10 @@ GMAIL_ACTIONS: tuple[GatewayAction, ...] = (
                 "userId": {
                     "type": "string",
                     "description": "Gmail user ID. Omit to use the connected mailbox.",
-                },
+                }
             },
+            "additionalProperties": False,
+            "description": "The input payload for this action.",
         },
     ),
     GatewayAction(
@@ -139,17 +166,11 @@ GMAIL_ACTIONS: tuple[GatewayAction, ...] = (
                     "description": "Additional To recipients.",
                 },
                 "cc": {
-                    "anyOf": [
-                        {"type": "string"},
-                        {"type": "array", "items": {"type": "string"}},
-                    ],
+                    "anyOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}],
                     "description": "Cc recipients.",
                 },
                 "bcc": {
-                    "anyOf": [
-                        {"type": "string"},
-                        {"type": "array", "items": {"type": "string"}},
-                    ],
+                    "anyOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}],
                     "description": "Bcc recipients.",
                 },
                 "subject": {"type": "string", "description": "Email subject line."},
@@ -158,6 +179,8 @@ GMAIL_ACTIONS: tuple[GatewayAction, ...] = (
                 "isHtml": {"type": "boolean", "description": "Whether the body is HTML."},
                 "fromEmail": {"type": "string", "description": "Verified Gmail send-as alias."},
             },
+            "additionalProperties": False,
+            "description": "The input payload for this action.",
         },
     ),
 )
