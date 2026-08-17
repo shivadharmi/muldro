@@ -24,6 +24,7 @@ from src.api.routes_mcp import router as mcp_router
 from src.api.routes_meetings import router as meetings_router
 from src.api.routes_memories import router as memories_router
 from src.api.routes_metrics import router as metrics_router
+from src.api.routes_model_config import router as model_config_router
 from src.api.routes_notifications import router as notifications_router
 from src.api.routes_observation import router as observation_router
 from src.api.routes_plans import router as plans_router
@@ -455,6 +456,9 @@ def create_app() -> FastAPI:
 
     # Trust management
     app.include_router(trust_router, tags=["trust"])
+
+    # Model + provider configuration
+    app.include_router(model_config_router, tags=["model-config"])
 
     # Prometheus metrics
     app.include_router(metrics_router, tags=["metrics"])
