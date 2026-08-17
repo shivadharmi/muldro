@@ -1,19 +1,10 @@
 """GitHub gateway actions, checked against the OpenConnector ground truth."""
 
-import json
-from pathlib import Path
-
-import pytest
-
 from src.integrations.capabilities import CAPABILITY_CATALOG
 from src.integrations.gateway_actions import GatewayAction, GatewayProvider
 from src.integrations.gateway_actions.github import GITHUB, GITHUB_ACTIONS
 from src.integrations.gateway_naming import action_id_to_tool_name
-
-_GROUND_TRUTH = Path(
-    "/private/tmp/claude-501/-Users-sivasankarreddybogala-work-jarvis/"
-    "bc22864c-2a5d-49fe-866f-14b01750659e/scratchpad/spike/curated-schemas.json"
-)
+from tests.gateway_ground_truth import input_schema_for
 
 EXPECTED = {
     "github.list_repository_issues": ("issue.list", "low", False),
@@ -68,11 +59,9 @@ def test_writes_require_approval_and_reads_do_not():
         assert a.requires_approval is (a.capability in writes)
 
 
-@pytest.mark.skipif(not _GROUND_TRUTH.exists(), reason="spike capture not present")
 def test_schemas_are_verbatim_openconnector_ground_truth():
-    truth = json.loads(_GROUND_TRUTH.read_text())
     for a in GITHUB_ACTIONS:
-        assert a.input_schema == truth[a.action_id]["inputSchema"], (
+        assert a.input_schema == input_schema_for(a.action_id), (
             f"{a.action_id} schema diverges from the OpenConnector catalog"
         )
 

@@ -1,5 +1,6 @@
 from src.integrations.gateway_actions import GatewayAction
 from src.integrations.gateway_actions.gmail import GMAIL_ACTIONS
+from tests.gateway_ground_truth import input_schema_for
 
 BY_ID = {a.action_id: a for a in GMAIL_ACTIONS}
 
@@ -37,3 +38,10 @@ def test_send_email_cc_is_string_or_array():
 
 def test_search_threads_requires_query():
     assert BY_ID["gmail.search_threads"].input_schema.get("required") == ["query"]
+
+
+def test_schemas_are_verbatim_openconnector_ground_truth():
+    for a in GMAIL_ACTIONS:
+        assert a.input_schema == input_schema_for(a.action_id), (
+            f"{a.action_id} schema diverges from the OpenConnector catalog"
+        )
