@@ -170,8 +170,9 @@ class TestUnknownModelWarning:
                 input_tokens=1000,
                 output_tokens=500,
             )
-        # Opus pricing: 1000/1M*15 + 500/1M*75 = 0.015 + 0.0375
-        assert abs(cost - 0.0525) < 1e-6
+        # Opus pricing (catalog, per-1k 0.005/0.025 -> per-M 5.0/25.0):
+        # 1000/1M*5 + 500/1M*25 = 0.005 + 0.0125
+        assert abs(cost - 0.0175) < 1e-6
         sonnet = self.tracker.calculate_cost(
             model="claude-sonnet-4-6",
             input_tokens=1000,
