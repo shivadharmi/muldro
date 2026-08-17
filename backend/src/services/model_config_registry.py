@@ -6,6 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models.model_binding import ModelBinding
+from src.models.provider_credential import ProviderCredential
 
 # reasoning/balanced/fast -> today's exact Claude ids + effort matching current thinking budgets
 _DEFAULT_TIER_BINDINGS = [
@@ -13,6 +14,15 @@ _DEFAULT_TIER_BINDINGS = [
     ("balanced", "anthropic", "claude-sonnet-4-6", "medium", 4096),
     ("fast", "anthropic", "claude-haiku-4-5-20251001", "low", 4096),
 ]
+
+
+async def has_encrypted_provider_credential(db: AsyncSession) -> bool:
+    """True iff any provider_credentials row has a non-null api_key_encrypted (i.e. a
+    ciphertext that requires the master key to decrypt)."""
+    stmt = (
+        select(ProviderCredential).where(ProviderCredential.api_key_encrypted.isnot(None)).limit(1)
+    )
+    return (await db.execute(stmt)).scalars().first() is not None
 
 
 class ModelConfigRegistry:

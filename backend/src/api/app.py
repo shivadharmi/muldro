@@ -136,6 +136,29 @@ def create_app() -> FastAPI:
                 exc_info=True,
             )
 
+        # §4.3 master-key guard: fail loud at startup if encrypted provider credentials
+        # exist but JARVIS_CONFIG_ENCRYPTION_KEY is unset — otherwise the failure only
+        # surfaces at turn time inside secret_crypto. A genuinely unreachable DB can't be
+        # checked here; the turn-time guard remains the backstop for that case.
+        try:
+            from src.models.database import get_session_factory
+            from src.services.model_config_registry import has_encrypted_provider_credential
+
+            async with get_session_factory()() as db:
+                _has_encrypted_creds = await has_encrypted_provider_credential(db)
+        except Exception:
+            _has_encrypted_creds = False
+            logger.warning(
+                "Could not verify provider-credential encryption key at startup",
+                exc_info=True,
+            )
+        if _has_encrypted_creds and not get_settings().config_encryption_key:
+            raise RuntimeError(
+                "JARVIS_CONFIG_ENCRYPTION_KEY is unset but encrypted provider credentials "
+                "exist in the database. Set the master key so credentials can be decrypted "
+                "at model-build time, or remove the affected provider_credentials rows."
+            )
+
         # Re-seed integration installations for all workspaces.
         # Installation configs (transport, auth_provider, remote_url) change with
         # code updates but the DB records persist from initial provisioning.
