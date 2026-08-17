@@ -15,7 +15,12 @@ from typing import Any
 from fastmcp import Client
 from fastmcp.client.auth import BearerAuth
 
-from src.integrations.gateway_actions import capabilities_for_server
+from src.integrations.gateway_actions import (
+    PROVIDER_REGISTRY,
+    capabilities_for_server,
+    providers_for_server,
+)
+from src.integrations.gateway_naming import action_id_to_tool_name
 from src.integrations.local_process_manager import get_local_process_manager
 from src.integrations.mcp_errors import McpAuthRequiredError
 from src.integrations.provider_map import provider_for_server
@@ -70,6 +75,59 @@ def _platform_jwt_exp(token: str) -> float | None:
         return None
     exp = claims.get("exp")
     return float(exp) if exp is not None else None
+
+
+def _gateway_owned_tool_names(server_name: str) -> frozenset[str] | None:
+    """Registry-owned tool names for a gateway-backed server, or None if not one.
+
+    ``None`` (not an empty set) means the server is NOT gateway-backed and its
+    discovery response must be taken verbatim — auto-registering unknown MCP
+    tools is deliberate behaviour for ordinary MCP servers.
+
+    A server is gateway-backed exactly when ``providers_for_server`` is
+    non-empty, the same signal ``services/integration_status.py`` uses.
+    """
+    provider_ids = providers_for_server(server_name)
+    if not provider_ids:
+        return None
+    return frozenset(
+        action_id_to_tool_name(a.action_id)
+        for provider_id in provider_ids
+        for a in PROVIDER_REGISTRY[provider_id].actions
+    )
+
+
+def _narrow_discovered_tools(raw_tools: list, server_name: str) -> list:
+    """Narrow a gateway server's discovery response to the tools it actually owns.
+
+    WHY: ONE OpenConnector gateway adapter endpoint serves SEVERAL Jarvis
+    installations (google-workspace and github both resolve to the same
+    ``/mcp`` URL). ``list_tools()`` therefore returns the union of every
+    provider's named tools plus the generic ``execute_action`` /
+    ``list_connections`` escape hatches — a discovery response is NOT
+    per-installation. Taken verbatim, whichever gateway installation is
+    discovered FIRST claims every name, so ``get_server_for_tool`` resolves
+    e.g. ``gmail_get_profile`` to ``github``, a github session is opened, and
+    its platform JWT is minted from github's capabilities only — the adapter's
+    capability gate then refuses the call.
+
+    Narrowing by the registry restores the per-installation view. Non-gateway
+    servers are returned unchanged.
+    """
+    owned = _gateway_owned_tool_names(server_name)
+    if owned is None:
+        return raw_tools
+    narrowed = [t for t in raw_tools if t.name in owned]
+    if raw_tools and not narrowed:
+        logger.warning(
+            "[mcp:session] gateway server %s discovered %d tool(s), none of which "
+            "the gateway registry recognises (registry owns %d name(s)) — "
+            "registering an empty tool map",
+            server_name,
+            len(raw_tools),
+            len(owned),
+        )
+    return narrowed
 
 
 @dataclass
@@ -291,6 +349,13 @@ class UserMCPSessionPool:
             # Connect and discover tools
             client = await client_ctx.__aenter__()
             raw_tools = await client.list_tools()
+
+            # A gateway endpoint is shared by several installations, so narrow
+            # its response to the tools the registry says THIS server owns
+            # before anything is derived from it. Applied here so the single
+            # narrowed list feeds _server_tools, _tool_metadata AND
+            # _register_discovered_tools alike. See _narrow_discovered_tools.
+            raw_tools = _narrow_discovered_tools(raw_tools, server_name)
 
             # Skip normalization — store real MCP names end-to-end
             tool_mapping = {}
