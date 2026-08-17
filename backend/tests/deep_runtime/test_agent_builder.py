@@ -11,12 +11,28 @@ from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
+import pytest
+from langchain.chat_models import init_chat_model
 from langchain_core.messages import ToolMessage
 from langchain_core.tools import tool
 from langgraph.graph.state import CompiledStateGraph
 
 from src.deep_runtime.agent_builder import build_deep_agent
 from src.orchestrator.agents import SubAgent, ThinkingConfig
+
+
+@pytest.fixture(autouse=True)
+def _stub_build_chat_model():
+    """``build_chat_model`` became ``async`` and resolver/DB-backed; these offline
+    tests never want a real resolve, so patch it to an async, kwarg-tolerant stub
+    returning a construction-only chat model (never invoked — graphs are only built)."""
+    model = init_chat_model("claude-sonnet-4-6", model_provider="anthropic", api_key="test-key")
+
+    async def _build(agent, **kwargs):  # noqa: ARG001
+        return model
+
+    with patch("src.deep_runtime.agent_builder.build_chat_model", new=_build):
+        yield
 
 
 @tool
