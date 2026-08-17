@@ -164,7 +164,7 @@ async def test_build_chat_lead_produces_lead_agent():
     assert lead.capability_scope == {"email.send", "email.search"}
 
 
-async def test_build_chat_lead_cheap_mode_halves_thinking_keeps_balanced():
+async def test_build_chat_lead_cheap_mode_keeps_balanced_and_thinking():
     resolver_instance = _resolver({"email.send": {"email.send"}})
 
     def _db_factory():
@@ -185,5 +185,5 @@ async def test_build_chat_lead_cheap_mode_halves_thinking_keeps_balanced():
     assert lead.name == "lead"
     assert lead.prompt is LEAD_PROMPT
     assert lead.model_tier == "balanced"  # already balanced — cheap mode leaves it
-    assert lead.thinking.budget_tokens == 2048  # 4096 // 2, above the 1024 floor
+    assert lead.thinking.budget_tokens == 4096  # thinking passed through (halving dropped)
     assert lead.capability_scope == {"email.send"}
