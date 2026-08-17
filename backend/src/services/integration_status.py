@@ -9,16 +9,25 @@ installed MCP servers for a workspace) with `OAuthManager` token status (whether
 a usable OAuth token exists for the user). OAuth-backed integrations are only
 "connected" when both the provider is configured AND a valid token is present;
 local/token integrations are treated as connected when installed.
+
+Gateway-backed installations are the exception: their credential lives inside
+OpenConnector, not in `OAuthManager`, so consulting the token store would report
+them permanently disconnected. For those, connectivity is read from the
+`connection_map` table instead — per OC provider, so a partially connected
+installation stays visible.
 """
 
 import logging
 import re
 from dataclasses import dataclass, field
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.integrations.gateway_actions import providers_for_server
 from src.integrations.gateway_providers import gateway_oc_provider
 from src.integrations.provider_map import provider_for_server
+from src.models.connection_map import ConnectionMap
 
 logger = logging.getLogger(__name__)
 
@@ -145,6 +154,33 @@ class IntegrationStatus:
     # Distinct from a transient "refresh_failed" blip, which leaves this False.
     needs_reauth: bool = False
     oc_provider: str | None = None  # OpenConnector provider if gateway-backed, else None
+    # Every OC provider this installation serves, in registry order (empty for
+    # non-gateway installations), plus each provider's own connection state so a
+    # partially connected installation is reported per provider rather than
+    # collapsed into one "disconnected".
+    oc_providers: list[str] = field(default_factory=list)
+    provider_connections: dict[str, bool] = field(default_factory=dict)
+
+
+async def _active_connection_providers(
+    db: AsyncSession,
+    workspace_id: str,
+    providers: tuple[str, ...],
+) -> set[str]:
+    """Return which of ``providers`` have an active connection in this workspace.
+
+    One query per installation (not per provider): the whole provider set is
+    matched with a single ``IN``. Only ``connection_status == "active"`` counts —
+    a "pending"/"revoked"/"error" row is not a usable connection.
+    """
+    rows = await db.execute(
+        select(ConnectionMap.provider_id).where(
+            ConnectionMap.workspace_id == workspace_id,
+            ConnectionMap.provider_id.in_(providers),
+            ConnectionMap.connection_status == "active",
+        )
+    )
+    return set(rows.scalars().all())
 
 
 async def get_integration_statuses(
@@ -193,8 +229,27 @@ async def get_integration_statuses(
         configured = True
         connected = True
         needs_reauth = False
+        oc_providers: list[str] = []
+        provider_connections: dict[str, bool] = {}
 
-        if category == "oauth":
+        # An empty tuple means "not gateway-backed" and falls through to the
+        # OAuth path below, so the `all({}) is True` vacuous-truth case can never
+        # be reached: `connected = all(...)` only runs when `providers` is
+        # non-empty, and then `provider_connections` has one entry per provider.
+        providers = providers_for_server(inst.server_name)
+
+        if providers:
+            # Gateway-backed: the credential lives in OpenConnector, not
+            # OAuthManager, so connectivity is the per-provider connection_map
+            # state. Reported per provider so a partially connected installation
+            # (Gmail linked, Calendar declined) stays visible rather than
+            # collapsing to "disconnected". `configured` stays True: the gateway
+            # owns the OAuth client, not a Jarvis-side client_id setting.
+            active = await _active_connection_providers(db, workspace_id, providers)
+            provider_connections = {p: (p in active) for p in providers}
+            connected = all(provider_connections.values())
+            oc_providers = list(providers)
+        elif category == "oauth":
             oauth_name = provider_for_server(auth_provider)
             client_id_attr = _PROVIDER_CLIENT_ID_ATTR.get(oauth_name, "")
             configured = bool(getattr(settings, client_id_attr, "")) if client_id_attr else False
@@ -233,6 +288,8 @@ async def get_integration_statuses(
                     gmail_via_gateway=settings.gmail_via_gateway,
                     toolhive_vmcp_url=settings.toolhive_vmcp_url,
                 ),
+                oc_providers=oc_providers,
+                provider_connections=provider_connections,
             )
         )
 
