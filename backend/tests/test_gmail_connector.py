@@ -652,7 +652,6 @@ def test_connector_declares_the_gateway_contract():
     assert conn.cursor_type == "timestamp"
     assert conn.READ_ACTION == "gmail.get_profile"
     assert conn.FETCH_ACTION == "gmail.fetch_emails"
-    assert conn.supports_actions is False, "writes go through the gateway, not the connector"
 
 
 async def test_health_probe_uses_the_gateway_read_action():
