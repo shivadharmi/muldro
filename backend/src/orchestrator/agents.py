@@ -14,12 +14,12 @@ CHEAP_MODE_THINKING_FLOOR = 1024
 
 # Model tier assignments per agent
 AGENT_MODEL_TIERS = {
-    "perceiver": "sonnet",
-    "librarian": "sonnet",
-    "planner": "opus",
-    "executor": "sonnet",
-    "presenter": "sonnet",
-    "persona": "haiku",
+    "perceiver": "balanced",
+    "librarian": "balanced",
+    "planner": "reasoning",
+    "executor": "balanced",
+    "presenter": "balanced",
+    "persona": "fast",
 }
 
 # Capability-based scopes per agent — abstracts over tool names.
@@ -221,7 +221,7 @@ def create_sub_agents() -> dict[str, SubAgent]:
         agents[name] = SubAgent(
             name=name,
             prompt=prompt,
-            model_tier=AGENT_MODEL_TIERS.get(name, "sonnet"),
+            model_tier=AGENT_MODEL_TIERS.get(name, "balanced"),
             capability_scope=set(AGENT_CAPABILITY_SCOPES.get(name, set())),
             max_tokens=8192 if name == "planner" else 4096,
             temperature=0.3,
@@ -241,7 +241,7 @@ def apply_cheap_mode(agent: SubAgent) -> SubAgent:
 
     Returns a new SubAgent; the input is never mutated.
     """
-    downgraded_tier = "sonnet" if agent.model_tier == "opus" else agent.model_tier
+    downgraded_tier = "balanced" if agent.model_tier == "reasoning" else agent.model_tier
     reduced_thinking = ThinkingConfig(
         enabled=agent.thinking.enabled,
         budget_tokens=max(CHEAP_MODE_THINKING_FLOOR, agent.thinking.budget_tokens // 2),
