@@ -30,7 +30,7 @@ def _perceiver() -> SubAgent:
     return SubAgent(
         name="perceiver",
         prompt="p",
-        model_tier="sonnet",
+        model_tier="balanced",
         capability_scope=set(_PERCEIVER_SCOPE),
     )
 
@@ -157,14 +157,14 @@ async def test_build_chat_lead_produces_lead_agent():
     mock_resolver_cls.assert_called_once()  # constructed a CapabilityResolver
     assert lead.name == "lead"
     assert lead.prompt is LEAD_PROMPT
-    assert lead.model_tier == "sonnet"
+    assert lead.model_tier == "balanced"
     assert lead.max_tokens == 4096
     assert lead.temperature == 0.3
     assert lead.thinking == ThinkingConfig(enabled=True, budget_tokens=4096)
     assert lead.capability_scope == {"email.send", "email.search"}
 
 
-async def test_build_chat_lead_cheap_mode_halves_thinking_keeps_sonnet():
+async def test_build_chat_lead_cheap_mode_halves_thinking_keeps_balanced():
     resolver_instance = _resolver({"email.send": {"email.send"}})
 
     def _db_factory():
@@ -184,6 +184,6 @@ async def test_build_chat_lead_cheap_mode_halves_thinking_keeps_sonnet():
 
     assert lead.name == "lead"
     assert lead.prompt is LEAD_PROMPT
-    assert lead.model_tier == "sonnet"  # already sonnet — cheap mode leaves it
+    assert lead.model_tier == "balanced"  # already balanced — cheap mode leaves it
     assert lead.thinking.budget_tokens == 2048  # 4096 // 2, above the 1024 floor
     assert lead.capability_scope == {"email.send"}
