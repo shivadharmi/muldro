@@ -17,14 +17,17 @@ from src.models.token_usage import TokenUsage
 
 logger = logging.getLogger(__name__)
 
-# Pricing per million tokens (as of 2026-06)
+# Pricing per million tokens. LEGACY FALLBACK ONLY: calculate_cost() prices from the
+# model catalog (model_catalog.py) first and falls back here only for ids absent from
+# the catalog (the dated legacy ids below). The current-gen entries are catalog-shadowed
+# and kept in sync with the catalog purely as a defensive fallback.
 # cache_write = 1.25x input, cache_read = 0.1x input, thinking = same as output
 MODEL_PRICING = {
-    # Latest
-    "claude-opus-4-8": {"input": 15.0, "output": 75.0},
+    # Current-gen (catalog-shadowed; kept consistent with model_catalog.py)
+    "claude-opus-4-8": {"input": 5.0, "output": 25.0},
     "claude-sonnet-4-6": {"input": 3.0, "output": 15.0},
-    "claude-haiku-4-5-20251001": {"input": 0.80, "output": 4.0},
-    # Legacy direct API
+    "claude-haiku-4-5-20251001": {"input": 1.0, "output": 5.0},
+    # Legacy dated direct-API ids (NOT in the catalog — this is their live pricing source)
     "claude-opus-4-20250514": {"input": 15.0, "output": 75.0},
     "claude-sonnet-4-20250514": {"input": 3.0, "output": 15.0},
     "claude-haiku-4-20250514": {"input": 0.80, "output": 4.0},
