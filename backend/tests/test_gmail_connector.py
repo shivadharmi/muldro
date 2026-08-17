@@ -1,586 +1,545 @@
-"""Tests for Gmail connector — header capture."""
+"""Gmail connector on the OpenConnector gateway.
 
-import asyncio
+The load-bearing fact in this file is the **message DTO shape**. OpenConnector
+does NOT hand back Gmail's native object: it reshapes each message into its own
+DTO. Every field name asserted below is transcribed from the recorded
+``outputSchema`` for ``gmail.fetch_emails`` in
+``tests/fixtures/openconnector_curated_schemas.json`` (readable via
+``tests/gateway_ground_truth.py``), whose message object declares:
+
+    required: messageId, threadId, labelIds, subject, sender, to, messageTimestamp
+    optional: preview (object), payload (object|null, opaque Gmail passthrough),
+              messageText (string), attachmentList (array), raw (string)
+    additionalProperties: true      <- native Gmail keys MAY appear, but are
+                                       NOT guaranteed
+    top level: messages (required, array), nextPageToken (string|null),
+               resultSizeEstimate (integer)
+
+Note what is NOT there: ``id``, ``internalDate``, ``snippet``. A connector that
+reads ``msg["id"]`` skips every real message and emits zero events — while a
+fixture that invents ``id`` keeps all its tests green. This project has already
+shipped seven nonexistent Gmail action ids by exactly that route, so
+``_oc_message`` below builds OC's DTO and native passthrough is strictly opt-in.
+"""
+
+from __future__ import annotations
+
+import json
 import logging
-from unittest.mock import AsyncMock, MagicMock, patch
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 
-import pytest
-
-from src.connectors.gmail import MAX_BACKFILL_PAGES, MAX_HISTORY_PAGES, GmailConnector
+from src.connectors.gateway_connector import OVERLAP_SECONDS
+from src.connectors.gmail import (
+    INITIAL_QUERY,
+    MAX_BACKFILL_PAGES,
+    MAX_INCREMENTAL_PAGES,
+    PAGE_SIZE,
+    GmailConnector,
+)
+from src.services.event_processor import RawEvent
 from tests.conftest import TEST_USER_ID, make_mock_settings
 
+# ---- the real transport envelope ----------------------------------------
+#
+# Copied from tests/connectors/test_gateway_connector.py rather than imported,
+# so this file states the shape it depends on. The four hops:
+#   1. OpenConnector answers {"ok": true, "data": <payload>}
+#   2. src/adapter/server.py passes it through _result_to_dict
+#   3. FastMCP serializes the tool return into a text block
+#   4. session_pool.call_tool joins the blocks -> {"status":"ok","result": <str>}
+# So ``result`` is a JSON **string**. A fake that hands back a bare dict tests a
+# transport that does not exist.
 
-def _make_gmail_message(
-    msg_id: str = "msg_001",
+
+@dataclass(frozen=True)
+class _Raw:
+    """A pre-built envelope, handed back verbatim (errors, malformed payloads)."""
+
+    envelope: dict
+
+
+def _envelope(payload: dict) -> dict:
+    return {"status": "ok", "result": json.dumps({"ok": True, "data": payload})}
+
+
+class _FakeCaller:
+    """Substitutes GatewayToolCaller; records calls, replays queued payloads."""
+
+    def __init__(self, results: list):
+        self._results = list(results)
+        self.calls: list[tuple[str, dict]] = []
+
+    async def call(self, action_id: str, payload: dict) -> dict:
+        self.calls.append((action_id, dict(payload)))
+        item = self._results.pop(0) if self._results else {}
+        if isinstance(item, _Raw):
+            return item.envelope
+        return _envelope(item)
+
+
+def _gmail(results: list) -> tuple[GmailConnector, _FakeCaller]:
+    caller = _FakeCaller(results)
+    return GmailConnector(settings=make_mock_settings(), caller=caller), caller
+
+
+# ---- the OpenConnector message DTO --------------------------------------
+
+_FIXED_TS = datetime(2026, 3, 30, 10, 0, 0, tzinfo=timezone.utc)
+
+_DEFAULT_HEADERS = {
+    "From": "alice@example.com",
+    "To": "bob@example.com",
+    "Cc": "carol@example.com",
+    "Subject": "Follow-up",
+    "Date": "Mon, 30 Mar 2026 10:00:00 -0000",
+    "Message-ID": "<msg_001@mail.gmail.com>",
+    "In-Reply-To": "<original@mail.gmail.com>",
+    "References": "<original@mail.gmail.com> <reply1@mail.gmail.com>",
+}
+
+
+def _epoch_ms(when: datetime) -> str:
+    return str(int(when.timestamp() * 1000))
+
+
+def _oc_message(
+    *,
+    message_id: str = "msg_001",
     thread_id: str = "thr_001",
-    snippet: str = "Hey, following up on our call.",
+    sender: str = "alice@example.com",
+    to: str = "bob@example.com",
+    subject: str = "Follow-up",
+    when: datetime = _FIXED_TS,
+    message_timestamp: str | None = None,
     labels: list[str] | None = None,
     headers: dict[str, str] | None = None,
+    with_payload: bool = True,
+    with_preview: bool = True,
+    message_text: str = "Hey, following up on our call.",
+    native: bool = False,
 ) -> dict:
-    """Build a mock Gmail API message response with configurable headers."""
-    if labels is None:
-        labels = ["INBOX", "UNREAD"]
-    default_headers = {
-        "From": "alice@example.com",
-        "To": "bob@example.com",
-        "Cc": "carol@example.com",
-        "Subject": "Follow-up",
-        "Date": "Mon, 30 Mar 2026 10:00:00 -0000",
-        "Message-ID": "<msg_001@mail.gmail.com>",
-        "In-Reply-To": "<original@mail.gmail.com>",
-        "References": "<original@mail.gmail.com> <reply1@mail.gmail.com>",
-    }
+    """Build one message in OpenConnector's DTO — NOT Gmail's native object.
+
+    ``native=True`` additionally sets the native passthrough keys (``id``,
+    ``internalDate``, ``snippet``). They are opt-in because the schema only says
+    ``additionalProperties: true`` — it does not promise them.
+    """
+    header_map = dict(_DEFAULT_HEADERS)
     if headers is not None:
-        default_headers.update(headers)
+        header_map.update(headers)
 
-    header_list = [{"name": k, "value": v} for k, v in default_headers.items()]
-
-    return {
-        "id": msg_id,
+    msg: dict = {
+        # The seven keys OpenConnector's outputSchema marks required.
+        "messageId": message_id,
         "threadId": thread_id,
-        "snippet": snippet,
-        "labelIds": labels,
-        "payload": {"headers": header_list},
+        "labelIds": ["INBOX", "UNREAD"] if labels is None else labels,
+        "subject": subject,
+        "sender": sender,
+        "to": to,
+        # The schema types this "string" and does not specify a format.
+        "messageTimestamp": (
+            message_timestamp if message_timestamp is not None else _epoch_ms(when)
+        ),
+        "messageText": message_text,
     }
+    if with_preview:
+        msg["preview"] = {"text": "preview text"}
+    if with_payload:
+        # Opaque Gmail passthrough (additionalProperties: true, nullable).
+        msg["payload"] = {"headers": [{"name": k, "value": v} for k, v in header_map.items()]}
+    if native:
+        msg["id"] = message_id
+        msg["internalDate"] = _epoch_ms(when)
+        msg["snippet"] = "native snippet"
+    return msg
 
 
-@pytest.mark.asyncio
-async def test_fetch_message_captures_reply_headers():
-    """_fetch_message_as_event should capture all email threading headers."""
-    connector = GmailConnector(make_mock_settings())
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = _make_gmail_message()
+async def _poll_one(msg: dict, cursor: str | None = None) -> RawEvent:
+    """Poll a single-message window and return the one emitted event."""
+    conn, _ = _gmail([{"messages": [msg]}])
+    result = await conn.poll(TEST_USER_ID, cursor, {})
+    assert result.ok is True, result.error_class
+    assert len(result.events) == 1
+    return result.events[0]
 
-    mock_client = AsyncMock()
-    mock_client.get = AsyncMock(return_value=mock_response)
 
-    event = await connector._fetch_message_as_event(
-        mock_client, "fake-token", "usr_test", "msg_001"
+def _recent_cursor(seconds_ago: int = 3600) -> str:
+    """A plausible epoch-seconds cursor (inside GatewayConnector's sanity window)."""
+    return str(int((datetime.now(timezone.utc) - timedelta(seconds=seconds_ago)).timestamp()))
+
+
+# ---- THE DTO TEST: OpenConnector's names, and nothing else ---------------
+
+
+async def test_openconnector_field_names_alone_produce_an_event():
+    """The whole point of this task.
+
+    A message carrying ONLY what the recorded outputSchema guarantees — no
+    ``id``, no ``internalDate``, no ``snippet``, no ``payload`` — must still
+    become a fully-populated RawEvent. Against a connector that reads
+    ``msg["id"]`` this yields zero events with a green suite and a clean,
+    empty, cursor-advancing poll: silent perception death.
+    """
+    msg = _oc_message(with_payload=False, with_preview=False, native=False)
+    assert "id" not in msg and "internalDate" not in msg and "snippet" not in msg
+    assert "payload" not in msg
+
+    event = await _poll_one(msg)
+
+    assert event.raw_payload["message_id"] == "msg_001"
+    assert event.entity_id == "thr_001"
+    assert event.title == "Follow-up"
+    assert event.actor["email"] == "alice@example.com"
+    assert event.raw_payload["to"] == "bob@example.com"
+    assert event.raw_payload["labels"] == ["INBOX", "UNREAD"]
+    assert event.occurred_at == _FIXED_TS
+    # payload is an opaque passthrough — its absence must degrade, never raise.
+    assert event.raw_payload["headers"] == {}
+
+
+async def test_absent_payload_headers_degrade_to_an_empty_map():
+    """``payload`` is nullable in the schema; a null must not raise."""
+    msg = _oc_message(with_payload=False)
+    msg["payload"] = None
+    event = await _poll_one(msg)
+    assert event.raw_payload["headers"] == {}
+    assert event.raw_payload["rfc_message_id"] == ""
+
+
+async def test_native_gmail_fields_are_honoured_when_they_do_pass_through():
+    """additionalProperties: true — native keys MAY appear, and must be read."""
+    when = datetime(2026, 2, 1, 8, 30, tzinfo=timezone.utc)
+    msg = _oc_message(when=when, native=True, message_timestamp="not-a-timestamp")
+    event = await _poll_one(msg)
+    # internalDate (epoch millis) is preferred over the free-form messageTimestamp.
+    assert event.occurred_at == when
+    assert event.summary == "native snippet"
+
+
+async def test_message_id_falls_back_to_the_native_id():
+    msg = _oc_message(native=True)
+    del msg["messageId"]
+    event = await _poll_one(msg)
+    assert event.raw_payload["message_id"] == "msg_001"
+
+
+async def test_sender_and_subject_fall_back_to_the_headers():
+    msg = _oc_message()
+    msg["sender"] = ""
+    msg["subject"] = ""
+    event = await _poll_one(msg)
+    assert event.actor["email"] == "alice@example.com"
+    assert event.title == "Follow-up"
+
+
+async def test_a_message_with_no_identifier_is_skipped_and_logged(caplog):
+    msg = _oc_message()
+    del msg["messageId"]
+    conn, _ = _gmail([{"messages": [msg]}])
+    with caplog.at_level(logging.WARNING, logger="src.connectors.gmail"):
+        result = await conn.poll(TEST_USER_ID, None, {})
+    assert result.events == []
+    assert any("id" in r.getMessage() for r in caplog.records)
+
+
+# ---- timestamp parsing ---------------------------------------------------
+
+
+async def test_message_timestamp_parses_epoch_millis():
+    when = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+    event = await _poll_one(_oc_message(message_timestamp=_epoch_ms(when), with_payload=False))
+    assert event.occurred_at == when
+
+
+async def test_message_timestamp_parses_epoch_seconds():
+    when = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+    stamp = str(int(when.timestamp()))
+    event = await _poll_one(_oc_message(message_timestamp=stamp, with_payload=False))
+    assert event.occurred_at == when
+
+
+async def test_message_timestamp_parses_iso_8601():
+    when = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+    stamp = when.isoformat().replace("+00:00", "Z")
+    event = await _poll_one(_oc_message(message_timestamp=stamp, with_payload=False))
+    assert event.occurred_at == when
+
+
+async def test_message_timestamp_parses_an_rfc_2822_date():
+    """The schema does not specify a format, and Gmail's own Date header is RFC 2822.
+
+    Without this branch such a payload yields occurred_at=None for every
+    message, so nothing is ever observed and the cursor never advances — the
+    same silent stall this connector is being rebuilt to remove.
+    """
+    event = await _poll_one(
+        _oc_message(message_timestamp="Mon, 30 Mar 2026 10:00:00 +0000", with_payload=False)
     )
+    assert event.occurred_at == _FIXED_TS
 
-    assert event is not None
+
+async def test_an_unparseable_timestamp_is_not_fabricated():
+    """No timestamp is better than a wrong one — a fake now() poisons the watermark."""
+    conn, _ = _gmail(
+        [{"messages": [_oc_message(message_timestamp="whenever", with_payload=False)]}]
+    )
+    result = await conn.poll(TEST_USER_ID, None, {})
+    assert len(result.events) == 1
+    assert result.events[0].occurred_at is None
+    # Nothing observable -> nothing to advance to.
+    assert result.cursor is None
+
+
+# ---- snippet chain -------------------------------------------------------
+
+
+async def test_snippet_falls_back_to_preview_then_message_text():
+    from_preview = await _poll_one(_oc_message(with_payload=False))
+    assert from_preview.summary == "preview text"
+
+    from_text = await _poll_one(
+        _oc_message(with_payload=False, with_preview=False, message_text="body text")
+    )
+    assert from_text.summary == "body text"
+
+
+async def test_summary_is_truncated():
+    event = await _poll_one(
+        _oc_message(with_payload=False, with_preview=False, message_text="x" * 900)
+    )
+    assert len(event.summary) == 500
+
+
+# ---- the RawEvent contract, preserved field for field --------------------
+
+
+async def test_raw_event_shape_matches_the_pre_gateway_connector():
+    event = await _poll_one(_oc_message())
+    assert event.source == "gmail"
+    assert event.source_account_id == "gmail_primary"
+    assert event.event_type == "email_received"
+    assert event.entity_type == "email_thread"
+    assert event.actor == {
+        "type": "person",
+        "email": "alice@example.com",
+        "name": "alice@example.com",
+    }
     rp = event.raw_payload
-    assert rp is not None
-
-    # Gmail API message ID (NOT the RFC header)
-    assert rp["message_id"] == "msg_001"
-    assert rp["labels"] == ["INBOX", "UNREAD"]
-
-    # RFC threading headers
+    assert set(rp) == {
+        "message_id",
+        "labels",
+        "to",
+        "cc",
+        "rfc_message_id",
+        "in_reply_to",
+        "references",
+        "headers",
+    }
+    assert rp["cc"] == "carol@example.com"
     assert rp["rfc_message_id"] == "<msg_001@mail.gmail.com>"
     assert rp["in_reply_to"] == "<original@mail.gmail.com>"
     assert rp["references"] == "<original@mail.gmail.com> <reply1@mail.gmail.com>"
 
-    # Recipient headers
-    assert rp["to"] == "bob@example.com"
-    assert rp["cc"] == "carol@example.com"
+
+async def test_entity_id_is_the_thread_id():
+    """Dedup keys off (source, entity_id, message_id) — entity_id must stay the thread."""
+    event = await _poll_one(_oc_message(message_id="m9", thread_id="t9"))
+    assert event.entity_id == "t9"
+    assert event.raw_payload["message_id"] == "m9"
 
 
-@pytest.mark.asyncio
-async def test_fetch_message_detail_includes_thread_headers():
-    """_fetch_message_detail should include threading headers in returned dict."""
-    connector = GmailConnector(make_mock_settings())
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = _make_gmail_message()
-
-    mock_client = AsyncMock()
-    mock_client.get = AsyncMock(return_value=mock_response)
-
-    detail = await connector._fetch_message_detail(mock_client, "fake-token", "msg_001")
-
-    assert detail is not None
-    assert detail["message_id"] == "msg_001"
-    assert detail["from"] == "alice@example.com"
-    assert detail["to"] == "bob@example.com"
-    assert detail["subject"] == "Follow-up"
-
-    # New threading headers
-    assert detail["cc"] == "carol@example.com"
-    assert detail["rfc_message_id"] == "<msg_001@mail.gmail.com>"
-    assert detail["in_reply_to"] == "<original@mail.gmail.com>"
-    assert detail["references"] == "<original@mail.gmail.com> <reply1@mail.gmail.com>"
-
-
-@pytest.mark.asyncio
-async def test_fetch_message_as_event_missing_optional_headers():
-    """Missing optional headers should default to empty strings."""
-    connector = GmailConnector(make_mock_settings())
-    msg = _make_gmail_message(
-        headers={
-            "From": "alice@example.com",
-            "Subject": "No threading",
-            "Date": "Mon, 30 Mar 2026 10:00:00 -0000",
-        },
-    )
-    # Remove optional headers that were set by default
-    msg["payload"]["headers"] = [
-        h for h in msg["payload"]["headers"] if h["name"] in ("From", "Subject", "Date")
-    ]
-
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = msg
-
-    mock_client = AsyncMock()
-    mock_client.get = AsyncMock(return_value=mock_response)
-
-    event = await connector._fetch_message_as_event(
-        mock_client, "fake-token", "usr_test", "msg_001"
-    )
-
-    assert event is not None
-    rp = event.raw_payload
-    assert rp["message_id"] == "msg_001"
-    assert rp["to"] == ""
-    assert rp["cc"] == ""
-    assert rp["rfc_message_id"] == ""
-    assert rp["in_reply_to"] == ""
-    assert rp["references"] == ""
-
-
-@pytest.mark.asyncio
-async def test_fetch_message_detail_missing_optional_headers():
-    """_fetch_message_detail should return empty strings for absent optional headers."""
-    connector = GmailConnector(make_mock_settings())
-
-    # Build a message with only the basic required headers (no Cc, Message-ID,
-    # In-Reply-To, or References).
-    msg = {
-        "id": "msg_002",
-        "threadId": "thr_002",
-        "snippet": "Just the basics.",
-        "labelIds": ["INBOX"],
-        "payload": {
-            "headers": [
-                {"name": "From", "value": "alice@example.com"},
-                {"name": "To", "value": "bob@example.com"},
-                {"name": "Subject", "value": "Plain message"},
-                {"name": "Date", "value": "Mon, 30 Mar 2026 12:00:00 -0000"},
-            ],
-        },
-    }
-
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = msg
-
-    mock_client = AsyncMock()
-    mock_client.get = AsyncMock(return_value=mock_response)
-
-    detail = await connector._fetch_message_detail(mock_client, "fake-token", "msg_002")
-
-    assert detail is not None
-
-    # Basic headers should be present
-    assert detail["from"] == "alice@example.com"
-    assert detail["to"] == "bob@example.com"
-    assert detail["subject"] == "Plain message"
-    assert detail["date"] == "Mon, 30 Mar 2026 12:00:00 -0000"
-
-    # Optional headers should default to empty strings
-    assert detail["cc"] == ""
-    assert detail["rfc_message_id"] == ""
-    assert detail["in_reply_to"] == ""
-    assert detail["references"] == ""
-
-
-@pytest.mark.asyncio
-async def test_fetch_message_as_event_captures_bulk_mail_headers():
-    """RawEvent.raw_payload["headers"] must capture List-Unsubscribe/List-Id/Precedence
-    so triage.classify_by_rules can skip bulk mail for free (no LLM call)."""
-    connector = GmailConnector(make_mock_settings())
-    msg = _make_gmail_message(
+async def test_bulk_mail_headers_are_still_captured():
+    """triage.classify_by_rules skips newsletters with no LLM call — from these three."""
+    msg = _oc_message(
         headers={
             "List-Unsubscribe": "<mailto:unsub@shop.com>",
             "List-Id": "newsletter.shop.com",
             "Precedence": "bulk",
-        },
+        }
     )
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = msg
-
-    mock_client = AsyncMock()
-    mock_client.get = AsyncMock(return_value=mock_response)
-
-    event = await connector._fetch_message_as_event(
-        mock_client, "fake-token", "usr_test", "msg_001"
-    )
-
-    assert event is not None
-    rp = event.raw_payload
-    # Existing keys preserved.
-    assert rp["message_id"] == "msg_001"
-    assert rp["labels"] == ["INBOX", "UNREAD"]
-
-    # New bulk-mail headers captured for triage's deterministic pre-pass.
-    assert rp["headers"]["List-Unsubscribe"] == "<mailto:unsub@shop.com>"
-    assert rp["headers"]["List-Id"] == "newsletter.shop.com"
-    assert rp["headers"]["Precedence"] == "bulk"
-
-    # format=metadata only returns headers listed in metadataHeaders, so the
-    # connector must actually request these from the Gmail API.
-    _, kwargs = mock_client.get.call_args
-    requested_headers = set(kwargs["params"]["metadataHeaders"])
-    assert {"List-Unsubscribe", "List-Id", "Precedence"} <= requested_headers
+    event = await _poll_one(msg)
+    assert event.raw_payload["headers"] == {
+        "List-Unsubscribe": "<mailto:unsub@shop.com>",
+        "List-Id": "newsletter.shop.com",
+        "Precedence": "bulk",
+    }
 
 
-@pytest.mark.asyncio
-async def test_fetch_message_as_event_headers_empty_when_absent():
-    """No bulk-mail headers present -> empty (not missing) headers dict."""
-    connector = GmailConnector(make_mock_settings())
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = _make_gmail_message()
-
-    mock_client = AsyncMock()
-    mock_client.get = AsyncMock(return_value=mock_response)
-
-    event = await connector._fetch_message_as_event(
-        mock_client, "fake-token", "usr_test", "msg_001"
-    )
-
-    assert event is not None
+async def test_only_bulk_mail_headers_are_captured():
+    event = await _poll_one(_oc_message())
     assert event.raw_payload["headers"] == {}
 
 
-@pytest.mark.asyncio
-async def test_poll_expired_history_recovers_via_full_sync():
-    """A 404 on history.list (expired historyId cursor) must recover via full sync.
-
-    Gmail returns HTTP 404 from history.list when the stored historyId is older
-    than ~a week. The connector must re-enter the initial full-sync path
-    (cursor=None) — listing recent messages and fetching a FRESH historyId from
-    the profile endpoint — NOT silently re-save the dead cursor and return [].
-
-    Regression: before the fix, the 404 branch did a dead `cursor = None` store
-    and fell through to return events=[] with the OLD expired cursor, so every
-    subsequent poll 404'd forever and Gmail perception died silently.
-    """
-    connector = GmailConnector(make_mock_settings())
-
-    expired_cursor = "expired_history_id_111"
-    fresh_history_id = "fresh_history_id_999"
-
-    # Response sequence over the recursive recovery path:
-    #   1. history.list (incremental, original cursor) -> 404 (expired)
-    #   2. recurse with cursor=None -> messages.list -> 200, one message
-    #   3. _fetch_message_as_event -> message detail GET -> 200
-    #   4. profile GET -> 200 with the FRESH historyId
-    history_404 = MagicMock()
-    history_404.status_code = 404
-
-    messages_list_resp = MagicMock()
-    messages_list_resp.status_code = 200
-    messages_list_resp.json.return_value = {"messages": [{"id": "msg_001"}]}
-
-    message_detail_resp = MagicMock()
-    message_detail_resp.status_code = 200
-    message_detail_resp.json.return_value = _make_gmail_message(msg_id="msg_001")
-
-    profile_resp = MagicMock()
-    profile_resp.status_code = 200
-    profile_resp.json.return_value = {"historyId": fresh_history_id}
-
-    with patch("httpx.AsyncClient") as mock_cls:
-        mock_client = AsyncMock()
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
-        mock_client.get = AsyncMock(
-            side_effect=[
-                history_404,
-                messages_list_resp,
-                message_detail_resp,
-                profile_resp,
-            ]
-        )
-        mock_cls.return_value = mock_client
-
-        result = await connector.poll(TEST_USER_ID, expired_cursor, {"access_token": "tok"})
-
-    # Recovered: the backfilled message is returned as an event ...
-    assert result.ok is True
+async def test_duplicate_messages_across_pages_are_emitted_once():
+    conn, _ = _gmail(
+        [
+            {"messages": [_oc_message(message_id="dup")], "nextPageToken": "p2"},
+            {"messages": [_oc_message(message_id="dup")]},
+        ]
+    )
+    result = await conn.poll(TEST_USER_ID, None, {})
     assert len(result.events) == 1
-    assert result.events[0].raw_payload["message_id"] == "msg_001"
-
-    # ... and the cursor advances to the FRESH historyId, never the expired one.
-    assert result.cursor == fresh_history_id
-    assert result.cursor != expired_cursor
 
 
-@pytest.mark.asyncio
-async def test_history_list_paginates():
-    """history.list must follow nextPageToken and ingest messagesAdded on every page.
+# ---- the request the connector actually makes ----------------------------
 
-    Regression: before the fix the connector read only page 1, then advanced the
-    cursor to the page-1 historyId — silently dropping page-2+ messagesAdded
-    forever (the cursor jumped past data that was never fetched).
+
+async def test_initial_poll_uses_the_three_day_inbox_window():
+    conn, caller = _gmail([{"messages": []}])
+    await conn.poll(TEST_USER_ID, None, {})
+    action_id, payload = caller.calls[0]
+    assert action_id == "gmail.fetch_emails"
+    assert payload["query"] == INITIAL_QUERY == "is:inbox newer_than:3d"
+    assert payload["detail"] == "full"
+    assert payload["maxResults"] == PAGE_SIZE
+
+
+async def test_incremental_poll_windows_back_by_the_overlap():
+    cursor = _recent_cursor()
+    conn, caller = _gmail([{"messages": []}])
+    await conn.poll(TEST_USER_ID, cursor, {})
+    _, payload = caller.calls[0]
+    assert payload["query"] == f"after:{int(cursor) - OVERLAP_SECONDS} is:inbox"
+    assert payload["detail"] == "full"
+
+
+async def test_detail_is_full_because_get_message_cannot_carry_headers():
+    """Settled: gmail.get_message's DTO has additionalProperties=false, seven flat
+    strings, no headers and no labelIds. Falling back to it would destroy the
+    List-Unsubscribe / List-Id / Precedence capture triage depends on."""
+    conn, caller = _gmail([{"messages": [_oc_message()]}])
+    await conn.poll(TEST_USER_ID, None, {})
+    assert all(payload["detail"] == "full" for _, payload in caller.calls)
+    assert all(action == "gmail.fetch_emails" for action, _ in caller.calls)
+
+
+async def test_a_stale_history_id_cursor_falls_back_to_the_initial_window():
+    """A Gmail historyId is a VALID 1970 epoch.
+
+    ``after:1234567`` would sweep the entire mailbox, so the cursor must be
+    rejected on plausibility and the poll must use the bounded initial window.
     """
-    connector = GmailConnector(make_mock_settings())
+    conn, caller = _gmail([{"messages": []}])
+    await conn.poll(TEST_USER_ID, "1234567", {})
+    _, payload = caller.calls[0]
+    assert payload["query"] == INITIAL_QUERY
+    assert "after:" not in payload["query"]
 
-    start_cursor = "history_start_100"
-    final_history_id = "history_final_200"
 
-    # history.list page 1: one message + nextPageToken
-    history_page1 = MagicMock()
-    history_page1.status_code = 200
-    history_page1.json.return_value = {
-        "historyId": "history_intermediate_150",
-        "history": [{"messagesAdded": [{"message": {"id": "msg_p1"}}]}],
-        "nextPageToken": "page2tok",
-    }
-    # history.list page 2 (final): another message, no nextPageToken
-    history_page2 = MagicMock()
-    history_page2.status_code = 200
-    history_page2.json.return_value = {
-        "historyId": final_history_id,
-        "history": [{"messagesAdded": [{"message": {"id": "msg_p2"}}]}],
-    }
+# ---- cursor policy -------------------------------------------------------
 
-    detail_p1 = MagicMock()
-    detail_p1.status_code = 200
-    detail_p1.json.return_value = _make_gmail_message(msg_id="msg_p1")
 
-    detail_p2 = MagicMock()
-    detail_p2.status_code = 200
-    detail_p2.json.return_value = _make_gmail_message(msg_id="msg_p2")
-
-    # Order: page1 list -> msg_p1 detail -> page2 list -> msg_p2 detail
-    with patch("httpx.AsyncClient") as mock_cls:
-        mock_client = AsyncMock()
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
-        mock_client.get = AsyncMock(
-            side_effect=[history_page1, detail_p1, history_page2, detail_p2]
-        )
-        mock_cls.return_value = mock_client
-
-        result = await connector.poll(TEST_USER_ID, start_cursor, {"access_token": "tok"})
-
+async def test_cursor_advances_to_the_max_observed_timestamp_in_seconds():
+    older = datetime.now(timezone.utc) - timedelta(hours=5)
+    newer = datetime.now(timezone.utc) - timedelta(hours=1)
+    conn, _ = _gmail(
+        [
+            {
+                "messages": [
+                    _oc_message(message_id="a", when=older, with_payload=False),
+                    _oc_message(message_id="b", when=newer, with_payload=False),
+                ]
+            }
+        ]
+    )
+    result = await conn.poll(TEST_USER_ID, _recent_cursor(seconds_ago=7200), {})
     assert result.ok is True
-    ingested = {e.raw_payload["message_id"] for e in result.events}
-    assert ingested == {"msg_p1", "msg_p2"}
-
-    # Cursor only advances AFTER both pages were consumed — to the final historyId.
-    assert result.cursor == final_history_id
+    assert result.cursor == str(int(newer.timestamp()))
 
 
-@pytest.mark.asyncio
-async def test_initial_sync_paginates_bounded():
-    """Initial full-sync messages.list follows nextPageToken up to MAX_BACKFILL_PAGES.
+async def test_an_empty_window_keeps_the_incoming_cursor():
+    """Nothing observed means nothing to advance TO; now() would skip the gap."""
+    cursor = _recent_cursor()
+    conn, _ = _gmail([{"messages": []}])
+    result = await conn.poll(TEST_USER_ID, cursor, {})
+    assert result.ok is True
+    assert result.events == []
+    assert result.cursor == cursor
 
-    Fetches more than one page, but stops at the bound even when the provider keeps
-    returning nextPageToken (silent-truncation guard).
+
+async def test_a_truncated_walk_keeps_the_incoming_cursor():
+    """THE invariant most likely to be lost in a refactor.
+
+    Hitting the page cap with a nextPageToken still outstanding means the rest
+    of the window was never read. Advancing to the newest message we happened
+    to see would skip that remainder permanently and invisibly. Re-reading is
+    free (EventProcessor dedups); losing the tail is not recoverable.
     """
-    connector = GmailConnector(make_mock_settings())
-
-    fresh_history_id = "history_fresh_777"
-
-    def _list_page(msg_id: str) -> MagicMock:
-        resp = MagicMock()
-        resp.status_code = 200
-        # Always include a nextPageToken so the loop would run forever w/o the bound.
-        resp.json.return_value = {
-            "messages": [{"id": msg_id}],
-            "nextPageToken": f"next_after_{msg_id}",
+    cursor = _recent_cursor(seconds_ago=86400)
+    recent = datetime.now(timezone.utc) - timedelta(minutes=5)
+    pages = [
+        {
+            "messages": [_oc_message(message_id=f"m{i}", when=recent, with_payload=False)],
+            "nextPageToken": f"p{i + 1}",
         }
-        return resp
+        for i in range(MAX_INCREMENTAL_PAGES)
+    ]
+    conn, caller = _gmail(pages)
+    result = await conn.poll(TEST_USER_ID, cursor, {})
 
-    def _detail(msg_id: str) -> MagicMock:
-        resp = MagicMock()
-        resp.status_code = 200
-        resp.json.return_value = _make_gmail_message(msg_id=msg_id)
-        return resp
-
-    profile_resp = MagicMock()
-    profile_resp.status_code = 200
-    profile_resp.json.return_value = {"historyId": fresh_history_id}
-
-    # The connector fetches exactly MAX_BACKFILL_PAGES list pages (each followed by
-    # one detail GET), THEN the profile. Every list page returns a nextPageToken, so
-    # if the bound were not enforced the connector would keep consuming list pages
-    # and the profile_resp would never be reached — the cursor would come back None.
-    side_effects = []
-    for i in range(MAX_BACKFILL_PAGES):
-        side_effects.append(_list_page(f"msg_{i}"))
-        side_effects.append(_detail(f"msg_{i}"))
-    side_effects.append(profile_resp)
-
-    with patch("httpx.AsyncClient") as mock_cls:
-        mock_client = AsyncMock()
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
-        mock_client.get = AsyncMock(side_effect=side_effects)
-        mock_cls.return_value = mock_client
-
-        result = await connector.poll(TEST_USER_ID, None, {"access_token": "tok"})
-
+    assert len(caller.calls) == MAX_INCREMENTAL_PAGES, "the page cap must bound the walk"
+    assert len(result.events) == MAX_INCREMENTAL_PAGES, "what WAS read is still delivered"
     assert result.ok is True
-    # More than one page fetched ...
-    assert len(result.events) > 1
-    # ... but capped at MAX_BACKFILL_PAGES (one event per page here).
-    assert len(result.events) == MAX_BACKFILL_PAGES
-    assert result.cursor == fresh_history_id
-
-
-@pytest.mark.asyncio
-async def test_profile_failure_after_list_returns_transient():
-    """A getProfile failure after a successful messages.list is transient.
-
-    The connector must NOT return success with a null cursor (which would persist
-    None and re-trigger a full sync every poll). It returns the incoming cursor
-    unchanged with error_class='transient'.
-    """
-    connector = GmailConnector(make_mock_settings())
-
-    messages_list_resp = MagicMock()
-    messages_list_resp.status_code = 200
-    messages_list_resp.json.return_value = {"messages": [{"id": "msg_001"}]}
-
-    detail_resp = MagicMock()
-    detail_resp.status_code = 200
-    detail_resp.json.return_value = _make_gmail_message(msg_id="msg_001")
-
-    profile_fail = MagicMock()
-    profile_fail.status_code = 503
-
-    with patch("httpx.AsyncClient") as mock_cls:
-        mock_client = AsyncMock()
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
-        mock_client.get = AsyncMock(side_effect=[messages_list_resp, detail_resp, profile_fail])
-        mock_cls.return_value = mock_client
-
-        # Incoming cursor is None (initial sync); cursor must stay None, NOT advance,
-        # and the poll must be classified transient (a failure, not a success).
-        result = await connector.poll(TEST_USER_ID, None, {"access_token": "tok"})
-
-    assert result.error_class == "transient"
-    assert result.ok is False
-    assert result.cursor is None
-
-
-@pytest.mark.asyncio
-async def test_history_pagination_capped(caplog):
-    """Incremental history.list pagination is bounded by MAX_HISTORY_PAGES.
-
-    Defensive guard: a buggy/abusive provider that ALWAYS returns a nextPageToken
-    would otherwise loop forever (with a per-message detail GET each iteration).
-    The loop must stop at MAX_HISTORY_PAGES, log a truncation warning, and still
-    advance the cursor to the last fetched historyId so the next poll resumes.
-    """
-    connector = GmailConnector(make_mock_settings())
-
-    start_cursor = "history_start_100"
-    last_history_id = f"history_id_{MAX_HISTORY_PAGES - 1}"
-
-    def _history_page(idx: int) -> MagicMock:
-        resp = MagicMock()
-        resp.status_code = 200
-        # ALWAYS return a nextPageToken — the loop would never terminate on its own.
-        resp.json.return_value = {
-            "historyId": f"history_id_{idx}",
-            "history": [{"messagesAdded": [{"message": {"id": f"msg_{idx}"}}]}],
-            "nextPageToken": f"page_after_{idx}",
-        }
-        return resp
-
-    def _detail(idx: int) -> MagicMock:
-        resp = MagicMock()
-        resp.status_code = 200
-        resp.json.return_value = _make_gmail_message(msg_id=f"msg_{idx}")
-        return resp
-
-    # The connector should consume exactly MAX_HISTORY_PAGES history pages (each
-    # followed by one detail GET) and then break on the cap. If the cap were not
-    # enforced, AsyncMock would exhaust this finite side_effect list and raise
-    # StopAsyncIteration instead of returning a bounded result.
-    side_effects = []
-    for i in range(MAX_HISTORY_PAGES):
-        side_effects.append(_history_page(i))
-        side_effects.append(_detail(i))
-
-    with patch("httpx.AsyncClient") as mock_cls:
-        mock_client = AsyncMock()
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
-        mock_client.get = AsyncMock(side_effect=side_effects)
-        mock_cls.return_value = mock_client
-
-        with caplog.at_level(logging.WARNING, logger="src.connectors.gmail"):
-            result = await connector.poll(TEST_USER_ID, start_cursor, {"access_token": "tok"})
-
-        # Loop stopped at the cap: exactly MAX_HISTORY_PAGES list + detail GETs,
-        # i.e. 2 * MAX_HISTORY_PAGES calls — never an unbounded number.
-        assert mock_client.get.call_count == 2 * MAX_HISTORY_PAGES
-
-    assert result.ok is True
-    # One event per consumed page, bounded by the cap.
-    assert len(result.events) == MAX_HISTORY_PAGES
-    # Cursor still advances to the last fetched historyId (next poll resumes here).
-    assert result.cursor == last_history_id
-    # Truncation is visible in the logs.
-    assert any(
-        "truncated" in rec.message and rec.levelno == logging.WARNING for rec in caplog.records
+    assert result.cursor == cursor, (
+        "a truncated walk must NOT advance the cursor — the undrained remainder "
+        "would be skipped forever"
     )
 
 
-@pytest.mark.asyncio
-async def test_initial_sync_fetches_message_details_concurrently():
-    """Per-message detail GETs run concurrently, not serially.
+async def test_the_initial_backfill_is_capped_separately():
+    pages = [
+        {"messages": [_oc_message(message_id=f"m{i}", with_payload=False)], "nextPageToken": "next"}
+        for i in range(MAX_BACKFILL_PAGES + 3)
+    ]
+    conn, caller = _gmail(pages)
+    result = await conn.poll(TEST_USER_ID, None, {})
+    assert len(caller.calls) == MAX_BACKFILL_PAGES
+    assert result.cursor is None, "a truncated backfill holds the (absent) incoming cursor"
 
-    The whole poll is wrapped in a 30s budget by the poller; fetching each new
-    message's detail serially makes wall-clock scale with message count and blows
-    that budget on a busy mailbox. This test proves the details for a page are
-    fetched concurrently by tracking the peak number of in-flight detail GETs:
-    serial execution never exceeds 1; concurrent execution reaches N.
-    """
-    connector = GmailConnector(make_mock_settings())
-    n_messages = 5
-    msg_ids = [f"msg_{i}" for i in range(n_messages)]
 
-    in_flight = 0
-    max_in_flight = 0
+async def test_a_failed_poll_keeps_the_incoming_cursor_and_classifies():
+    cursor = _recent_cursor()
+    conn, _ = _gmail([_Raw({"status": "error", "error": "slow down", "error_code": "rate_limit"})])
+    result = await conn.poll(TEST_USER_ID, cursor, {})
+    assert result.failed is True
+    assert result.error_class == "rate_limited"
+    assert result.cursor == cursor
+    assert result.events == []
 
-    async def fake_get(url: str, **kwargs) -> MagicMock:
-        nonlocal in_flight, max_in_flight
-        if url.endswith("/messages"):
-            resp = MagicMock()
-            resp.status_code = 200
-            resp.json.return_value = {"messages": [{"id": m} for m in msg_ids]}
-            return resp
-        if url.endswith("/profile"):
-            resp = MagicMock()
-            resp.status_code = 200
-            resp.json.return_value = {"historyId": "history_after_sync"}
-            return resp
-        # Per-message detail GET — record concurrency across the yield point.
-        in_flight += 1
-        max_in_flight = max(max_in_flight, in_flight)
-        await asyncio.sleep(0)
-        in_flight -= 1
-        msg_id = url.rstrip("/").rsplit("/", 1)[-1]
-        resp = MagicMock()
-        resp.status_code = 200
-        resp.json.return_value = _make_gmail_message(msg_id=msg_id)
-        return resp
 
-    with patch("httpx.AsyncClient") as mock_cls:
-        mock_client = AsyncMock()
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
-        # Plain async function (not AsyncMock side_effect) so concurrent calls
-        # are routed by URL rather than consumed from an order-sensitive list.
-        mock_client.get = fake_get
-        mock_cls.return_value = mock_client
+async def test_a_shape_mismatch_is_a_failure_not_an_empty_mailbox():
+    """``messages`` is required by the outputSchema, so its absence is a mismatch."""
+    cursor = _recent_cursor()
+    conn, _ = _gmail([_Raw({"status": "ok", "result": json.dumps({"ok": True, "junk": 1})})])
+    result = await conn.poll(TEST_USER_ID, cursor, {})
+    assert result.failed is True
+    assert result.cursor == cursor
 
-        result = await connector.poll(TEST_USER_ID, None, {"access_token": "tok"})
 
-    assert result.ok is True
-    # Every message became an event, regardless of fetch ordering.
-    assert len(result.events) == n_messages
-    assert {e.raw_payload["message_id"] for e in result.events} == set(msg_ids)
-    # The load-bearing assertion: details overlapped in flight.
-    assert max_in_flight > 1
+async def test_a_missing_caller_is_a_failure_not_an_empty_poll():
+    """Perception died silently once already because a dependency was not injected."""
+    conn = GmailConnector(settings=make_mock_settings(), caller=None)
+    cursor = _recent_cursor()
+    result = await conn.poll(TEST_USER_ID, cursor, {})
+    assert result.failed is True
+    assert result.cursor == cursor
+
+
+# ---- wiring --------------------------------------------------------------
+
+
+def test_connector_declares_the_gateway_contract():
+    conn, _ = _gmail([])
+    assert conn.provider == "gmail"
+    assert conn.cursor_type == "timestamp"
+    assert conn.READ_ACTION == "gmail.get_profile"
+    assert conn.FETCH_ACTION == "gmail.fetch_emails"
+    assert conn.supports_actions is False, "writes go through the gateway, not the connector"
+
+
+async def test_health_probe_uses_the_gateway_read_action():
+    conn, caller = _gmail([{"emailAddress": "a@b.c"}])
+    health = await conn.test({})
+    assert health.status == "healthy"
+    assert caller.calls[0][0] == "gmail.get_profile"
