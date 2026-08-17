@@ -516,8 +516,8 @@ at Google.
 2. **OpenConnector.** The gateway `openconnector` container on **:3001**, per
    §2 above (`docker compose up -d` from `infra/gateway/`).
 
-3. **Adapter.** `run_adapter` on `:8100` with `JARVIS_GATEWAY_PROVIDER=gmail`
-   (its default; also brought up by the same compose file, per §2).
+3. **Adapter.** `run_adapter` on `:8100`, serving every registered provider
+   (no provider env var; also brought up by the same compose file, per §2).
 
 4. **API server.** `python run.py` (from `backend/`, venv active) with the
    gateway env from §2 set on the process, plus the platform-JWT PEM from §1:
