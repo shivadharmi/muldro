@@ -1,12 +1,20 @@
-"""Unit tests for src.llm.utility.complete_text — ChatAnthropic.ainvoke is mocked."""
+"""Unit tests for src.llm.utility.complete_text — the resolver seam is mocked.
+
+``complete_text_with_usage`` now resolves a model via ``ModelResolver`` inside a
+short-lived DB session and builds it with ``build_langchain_model``. These tests inject
+a mock model by patching all three seam names in ``src.llm.utility``'s namespace, so the
+message-building + text/usage-extraction logic under test stays exactly as before.
+"""
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager, contextmanager
 from unittest.mock import AsyncMock, patch
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from src.llm.utility import complete_text
+from src.services.model_resolver import ResolvedModel
 
 
 def _mock_model(return_text: str):
@@ -15,9 +23,31 @@ def _mock_model(return_text: str):
     return model
 
 
+@asynccontextmanager
+async def _fake_session():
+    yield object()
+
+
+async def _fake_resolve(self, **kwargs):
+    # model_id here is irrelevant: usage.model comes from the mock model's `.model`
+    # attr via getattr(model, "model", tier), not from the resolved model.
+    return ResolvedModel("anthropic", "claude-haiku-4-5-20251001", "sk", None, {"max_tokens": 64})
+
+
+@contextmanager
+def _seam(model):
+    """Patch the resolver seam so `complete_text*` uses the given mock model."""
+    with (
+        patch("src.llm.utility.build_langchain_model", return_value=model),
+        patch("src.llm.utility.get_session_factory", lambda: lambda: _fake_session()),
+        patch("src.llm.utility.ModelResolver.resolve", _fake_resolve),
+    ):
+        yield
+
+
 async def test_complete_text_returns_model_content():
     model = _mock_model('{"ok": true}')
-    with patch("src.llm.utility.build_utility_model", return_value=model):
+    with _seam(model):
         out = await complete_text(system="sys", user="hello", tier="haiku", max_tokens=256)
     assert out == '{"ok": true}'
     msgs = model.ainvoke.call_args.args[0]
@@ -27,7 +57,7 @@ async def test_complete_text_returns_model_content():
 
 async def test_complete_text_omits_system_when_none():
     model = _mock_model("summary text")
-    with patch("src.llm.utility.build_utility_model", return_value=model):
+    with _seam(model):
         out = await complete_text(system=None, user="u", tier="haiku", max_tokens=300)
     msgs = model.ainvoke.call_args.args[0]
     assert isinstance(msgs[0], HumanMessage)  # no SystemMessage
@@ -37,7 +67,7 @@ async def test_complete_text_omits_system_when_none():
 async def test_complete_text_accepts_block_list_system():
     # context_assembler + intent_classifier pass a [{"type":"text",...}] block-list system.
     model = _mock_model("ok")
-    with patch("src.llm.utility.build_utility_model", return_value=model):
+    with _seam(model):
         await complete_text(
             system=[{"type": "text", "text": "sys prompt"}],
             user="u",
@@ -54,7 +84,7 @@ async def test_complete_text_conversation_ends_with_user_message():
     # ends with an assistant turn. complete_text must never append an assistant
     # (prefill) message — the last message is always the HumanMessage.
     model = _mock_model('{"passed": true}')
-    with patch("src.llm.utility.build_utility_model", return_value=model):
+    with _seam(model):
         out = await complete_text(system="s", user="u", tier="resolved", max_tokens=256)
     msgs = model.ainvoke.call_args.args[0]
     assert isinstance(msgs[-1], HumanMessage)
@@ -73,14 +103,14 @@ async def test_complete_text_joins_block_list_content():
             ]
         )
     )
-    with patch("src.llm.utility.build_utility_model", return_value=model):
+    with _seam(model):
         out = await complete_text(system=None, user="u", tier="haiku", max_tokens=16)
     assert out == "ab"  # only text blocks joined; non-text/non-dict ignored
 
 
 async def test_complete_text_empty_content_returns_empty():
     model = _mock_model("")
-    with patch("src.llm.utility.build_utility_model", return_value=model):
+    with _seam(model):
         out = await complete_text(system="s", user="u", tier="haiku", max_tokens=16)
     assert out == ""
 
@@ -101,7 +131,7 @@ async def test_complete_text_with_usage_surfaces_token_counts():
             },
         )
     )
-    with patch("src.llm.utility.build_utility_model", return_value=model):
+    with _seam(model):
         text, usage = await complete_text_with_usage(
             system="s", user="u", tier="haiku", max_tokens=64
         )
@@ -119,7 +149,7 @@ async def test_complete_text_with_usage_zeros_when_no_metadata():
     model = AsyncMock()
     model.model = "claude-haiku-4-5-20251001"
     model.ainvoke = AsyncMock(return_value=AIMessage(content="x"))  # no usage_metadata
-    with patch("src.llm.utility.build_utility_model", return_value=model):
+    with _seam(model):
         text, usage = await complete_text_with_usage(
             system=None, user="u", tier="haiku", max_tokens=8
         )
