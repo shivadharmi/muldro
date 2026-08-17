@@ -1,6 +1,12 @@
 """OAuth routes: provider listing, authorize-URL generation, and the
 callback that exchanges codes for tokens and provisions integrations.
 
+Serves the providers Jarvis still authenticates natively (slack/notion/
+atlassian). ``google`` and ``github`` were retired here when they moved behind
+the OpenConnector gateway: that gateway owns their OAuth clients and stores
+their credentials, so both hit the "Unknown provider" 400 and are connected
+through ``routes_integrations`` instead.
+
 Extracted from routes_auth.py (decomposition, 2026-06-20)."""
 
 import logging
@@ -15,10 +21,8 @@ from src.api.deps import (
     get_current_workspace_id,
 )
 from src.api.routes_auth_oauth_integration import (
-    _enable_integration_schedules,
     _ensure_integration,
     _error_redirect,
-    _register_webhooks_for_sources,
     _trigger_initial_observation,
 )
 from src.api.routes_auth_schemas import OAuthUrlResponse
@@ -166,44 +170,14 @@ async def oauth_authorize(
     user_id: str = Depends(get_current_user_id),
     settings: Settings = Depends(get_settings),
 ):
-    """Generate OAuth authorization URL for a provider."""
-    if provider == "google":
-        client_id = settings.google_oauth_client_id
-        if not client_id:
-            raise HTTPException(status_code=400, detail="Google OAuth not configured")
+    """Generate OAuth authorization URL for a provider.
 
-        default_scopes = (
-            "openid email profile "
-            "https://www.googleapis.com/auth/gmail.modify "
-            "https://www.googleapis.com/auth/calendar"
-        )
-        params = {
-            "client_id": client_id,
-            "redirect_uri": settings.google_oauth_redirect_uri,
-            "response_type": "code",
-            "scope": scopes or default_scopes,
-            "access_type": "offline",
-            "prompt": "consent",
-            "state": user_id,
-        }
-        url = f"https://accounts.google.com/o/oauth2/v2/auth?{urlencode(params)}"
-        return OAuthUrlResponse(url=url, provider="google")
-
-    elif provider == "github":
-        client_id = settings.github_oauth_client_id
-        if not client_id:
-            raise HTTPException(status_code=400, detail="GitHub OAuth not configured")
-
-        params = {
-            "client_id": client_id,
-            "redirect_uri": settings.github_oauth_redirect_uri,
-            "scope": scopes or "read:user user:email repo",
-            "state": user_id,
-        }
-        url = f"https://github.com/login/oauth/authorize?{urlencode(params)}"
-        return OAuthUrlResponse(url=url, provider="github")
-
-    elif provider == "notion":
+    ``google`` and ``github`` are deliberately absent: both are served by the
+    OpenConnector gateway, which owns their OAuth clients. Minting a Jarvis-side
+    credential for them would produce a token nothing reads, so they fall
+    through to the "Unknown provider" 400 below.
+    """
+    if provider == "notion":
         client_id = settings.notion_oauth_client_id
         if not client_id:
             raise HTTPException(status_code=400, detail="Notion OAuth not configured")
@@ -288,187 +262,7 @@ async def oauth_callback(
         return _error_redirect(settings, "Invalid OAuth state: missing user_id")
     user_id = state
 
-    if provider == "google":
-        client_id = settings.google_oauth_client_id
-        client_secret = settings.google_oauth_client_secret
-        if not client_id or not client_secret:
-            raise HTTPException(status_code=500, detail="Google OAuth not configured")
-
-        async with httpx.AsyncClient() as client:
-            resp = await client.post(
-                "https://oauth2.googleapis.com/token",
-                data={
-                    "grant_type": "authorization_code",
-                    "code": code,
-                    "client_id": client_id,
-                    "client_secret": client_secret,
-                    "redirect_uri": settings.google_oauth_redirect_uri,
-                },
-                timeout=10,
-            )
-            if resp.status_code != 200:
-                logger.error("Google token exchange failed: %s", resp.text)
-                return _error_redirect(settings, "Failed to exchange authorization code")
-            token_data = resp.json()
-
-            # Get user info to confirm the account
-            userinfo_resp = await client.get(
-                "https://www.googleapis.com/oauth2/v2/userinfo",
-                headers={"Authorization": f"Bearer {token_data['access_token']}"},
-                timeout=10,
-            )
-            userinfo = userinfo_resp.json() if userinfo_resp.status_code == 200 else {}
-
-        expires_at = None
-        if token_data.get("expires_in"):
-            expires_at = datetime.now(timezone.utc) + timedelta(seconds=token_data["expires_in"])
-
-        scopes = token_data.get("scope", "").split() if token_data.get("scope") else None
-
-        # Resolve workspace_id for this user
-        db_factory = get_session_factory()
-        from src.api.deps import resolve_workspace_id
-
-        async with db_factory() as _db:
-            workspace_id = await resolve_workspace_id(_db, user_id)
-
-        # Store tokens via OAuthManager (encrypted at rest)
-        oauth_mgr = OAuthManager(
-            db_factory, encryption_key=settings.oauth_encryption_key, settings=settings
-        )
-        await oauth_mgr.store_token(
-            user_id=user_id,
-            provider="google",
-            access_token=token_data["access_token"],
-            refresh_token=token_data.get("refresh_token"),
-            expires_at=expires_at,
-            scopes=scopes,
-            workspace_id=workspace_id,
-        )
-
-        # Google Workspace is a single integration in the UI. gmail/calendar are
-        # perception *sources* of that one connection, not standalone installs —
-        # creating a row per service rendered the single Google link as three
-        # separate cards. Reactivate the seeded google-workspace row (it carries
-        # the account email for agent context) and enable the gmail + calendar
-        # perception schedules directly, without minting extra installation rows.
-        await _ensure_integration(
-            db_factory,
-            user_id,
-            "google-workspace",
-            userinfo.get("email"),
-            workspace_id=workspace_id,
-        )
-        await _enable_integration_schedules(db_factory, "gmail", workspace_id=workspace_id)
-        await _enable_integration_schedules(db_factory, "calendar", workspace_id=workspace_id)
-
-        logger.info(
-            "Google integration linked for %s (%s)",
-            user_id,
-            userinfo.get("email", "unknown"),
-        )
-        background_tasks.add_task(
-            _trigger_initial_observation, user_id, ["gmail", "calendar"], workspace_id
-        )
-        # Best-effort push registration (no-op unless webhooks_configured).
-        # A failure here must never fail the connect — it falls back to poll.
-        background_tasks.add_task(
-            _register_webhooks_for_sources,
-            db_factory,
-            user_id,
-            ["gmail", "calendar"],
-            workspace_id,
-        )
-
-    elif provider == "github":
-        client_id = settings.github_oauth_client_id
-        client_secret = settings.github_oauth_client_secret
-        if not client_id or not client_secret:
-            raise HTTPException(status_code=500, detail="GitHub OAuth not configured")
-
-        async with httpx.AsyncClient() as client:
-            resp = await client.post(
-                "https://github.com/login/oauth/access_token",
-                headers={"Accept": "application/json"},
-                data={
-                    "client_id": client_id,
-                    "client_secret": client_secret,
-                    "code": code,
-                },
-                timeout=10,
-            )
-            if resp.status_code != 200:
-                logger.error("GitHub token exchange failed: %s", resp.text)
-                return _error_redirect(settings, "Failed to exchange authorization code")
-            token_data = resp.json()
-
-        scopes = token_data.get("scope", "").split(",") if token_data.get("scope") else None
-
-        # Fetch GitHub user profile and organizations
-        github_config: dict = {}
-        async with httpx.AsyncClient() as gh_client:
-            user_resp = await gh_client.get(
-                "https://api.github.com/user",
-                headers={
-                    "Authorization": f"Bearer {token_data['access_token']}",
-                    "Accept": "application/vnd.github+json",
-                },
-                timeout=10,
-            )
-            if user_resp.status_code == 200:
-                gh_user = user_resp.json()
-                github_config["username"] = gh_user.get("login", "")
-                github_config["name"] = gh_user.get("name", "")
-                github_config["avatar_url"] = gh_user.get("avatar_url", "")
-
-            orgs_resp = await gh_client.get(
-                "https://api.github.com/user/orgs",
-                headers={
-                    "Authorization": f"Bearer {token_data['access_token']}",
-                    "Accept": "application/vnd.github+json",
-                },
-                timeout=10,
-            )
-            if orgs_resp.status_code == 200:
-                github_config["organizations"] = [
-                    org.get("login", "") for org in orgs_resp.json()[:20]
-                ]
-
-        db_factory = get_session_factory()
-        from src.api.deps import resolve_workspace_id
-
-        async with db_factory() as _db:
-            workspace_id = await resolve_workspace_id(_db, user_id)
-
-        oauth_mgr = OAuthManager(
-            db_factory, encryption_key=settings.oauth_encryption_key, settings=settings
-        )
-        await oauth_mgr.store_token(
-            user_id=user_id,
-            provider="github",
-            access_token=token_data["access_token"],
-            refresh_token=None,
-            expires_at=None,
-            scopes=scopes,
-            workspace_id=workspace_id,
-        )
-
-        await _ensure_integration(
-            db_factory,
-            user_id,
-            "github",
-            workspace_id=workspace_id,
-            extra_config=github_config,
-        )
-
-        logger.info(
-            "GitHub integration linked for %s (%s)",
-            user_id,
-            github_config.get("username", "unknown"),
-        )
-        background_tasks.add_task(_trigger_initial_observation, user_id, ["github"], workspace_id)
-
-    elif provider == "notion":
+    if provider == "notion":
         client_id = settings.notion_oauth_client_id
         client_secret = settings.notion_oauth_client_secret
         if not client_id or not client_secret:
@@ -721,10 +515,9 @@ async def oauth_callback(
     try:
         from src.connectors.mcp_bridge import refresh_server_auth
 
-        # Map provider to MCP server names that use it
+        # Map provider to MCP server names that use it. google/github are absent:
+        # they authenticate through the OpenConnector gateway, never here.
         _provider_servers = {
-            "google": ["google-workspace"],
-            "github": ["github"],
             "slack": ["slack"],
             "notion": ["notion"],
             "atlassian": ["atlassian"],
@@ -741,7 +534,7 @@ async def oauth_callback(
 
     # Auto-resume: clear any needs-reauth state for this provider — un-pause its
     # perception sources and re-queue runs parked in awaiting_reauth. Runs for
-    # ALL providers (google/github/slack/notion/atlassian), best-effort.
+    # every natively-authenticated provider (slack/notion/atlassian), best-effort.
     background_tasks.add_task(
         _resume_after_reauth,
         db_factory,

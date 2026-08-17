@@ -13,6 +13,8 @@ from src.integrations.gateway_actions import (
     ACTION_BY_ID,
     PROVIDER_REGISTRY,
     capabilities_for_server,
+    gateway_provider_for_source,
+    perception_sources_for_provider,
     provider_of_action,
     providers_for_server,
 )
@@ -131,6 +133,55 @@ def test_a_gateway_token_never_spans_installations():
 
 def test_unknown_server_mints_no_capabilities():
     assert capabilities_for_server("nonexistent") == ()
+
+
+def test_no_perception_source_is_claimed_by_two_providers():
+    """Which credential backs a source must have exactly one answer.
+
+    Two providers claiming one source would make the perception gate's decision
+    depend on registry ORDER — a silent, order-sensitive authorization bug.
+    """
+    seen: dict[str, str] = {}
+    for provider_id, provider in PROVIDER_REGISTRY.items():
+        for source in provider.perception_sources:
+            assert source not in seen, (
+                f"perception source {source!r} claimed by both {seen[source]!r} and {provider_id!r}"
+            )
+            seen[source] = provider_id
+
+
+def test_perception_sources_resolve_by_membership_across_the_vocabulary_gap():
+    # The source name and the provider id deliberately differ for calendar.
+    assert gateway_provider_for_source("gmail") == "gmail"
+    assert gateway_provider_for_source("calendar") == "googlecalendar"
+    # Not a source name — the provider id itself must not resolve as one.
+    assert gateway_provider_for_source("googlecalendar") is None
+    # Non-gateway sources stay on the OAuth path.
+    assert gateway_provider_for_source("slack") is None
+    assert gateway_provider_for_source("github") is None
+
+
+def test_github_declares_no_perception_source():
+    assert perception_sources_for_provider("github") == ()
+
+
+def test_perception_sources_for_provider_round_trips():
+    for provider_id, provider in PROVIDER_REGISTRY.items():
+        assert perception_sources_for_provider(provider_id) == provider.perception_sources
+        for source in provider.perception_sources:
+            assert gateway_provider_for_source(source) == provider_id
+    assert perception_sources_for_provider("nonexistent") == ()
+
+
+def test_declared_perception_sources_are_real_scheduler_sources():
+    """A typo here would silently strand a source on the dead OAuth branch."""
+    from src.orchestrator.intent_classifier import VALID_PERCEPTION_SOURCES
+
+    for provider in PROVIDER_REGISTRY.values():
+        for source in provider.perception_sources:
+            assert source in VALID_PERCEPTION_SOURCES, (
+                f"{provider.provider_id} declares unknown perception source {source!r}"
+            )
 
 
 def test_every_provider_declares_a_display_name():

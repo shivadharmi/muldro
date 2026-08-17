@@ -215,4 +215,8 @@ GITHUB = GatewayProvider(
     server_name="github",
     display_name="GitHub",
     actions=GITHUB_ACTIONS,
+    # Deliberately empty: this increment migrates only the Google Workspace
+    # perception sources onto the gateway's connection-derived runnability. The
+    # "github" perception source still resolves through the OAuth branch.
+    perception_sources=(),
 )

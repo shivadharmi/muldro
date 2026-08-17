@@ -17,11 +17,15 @@ logger = logging.getLogger(__name__)
 def _mcp_servers_for_sources(sources: list[str]) -> list[str]:
     """Order-preserving, deduped MCP server names backing ``sources``.
 
-    Perception sources (``gmail``, ``calendar``) are not MCP server names: both
-    are served by the single ``google-workspace`` server. Eager schema discovery
-    must key off server names, so translate each source through its OAuth
-    provider via ``provider_map`` (the single source of truth for the
-    source -> provider -> server relationship).
+    A perception source is not necessarily an MCP server name, and several
+    sources can share one server. Eager schema discovery must key off server
+    names, so translate each source through its OAuth provider via
+    ``provider_map`` (the single source of truth for the source -> provider ->
+    server relationship) and dedupe the result.
+
+    Only the natively-authenticated providers reach here: the gateway-backed
+    installations (google-workspace, github) are connected through
+    ``routes_integrations``, not the OAuth callback.
     """
     from src.integrations.provider_map import provider_for_source, servers_for_provider
 

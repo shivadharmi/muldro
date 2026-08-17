@@ -1,15 +1,14 @@
-"""Tests for Gmail gateway settings defaults.
+"""Tests for the OpenConnector gateway settings defaults.
 
-The gateway slice (ToolHive vMCP + OpenConnector) is opt-in and off by default —
-these fields must default to their poll/legacy-safe values so an unconfigured
-deployment behaves exactly as before.
+Every gateway coordinate defaults to ``None`` so an unconfigured deployment
+fails LOUDLY at session-open (``GatewayNotConfigured``) rather than silently
+half-working. There is deliberately no on/off feature flag — the migrated
+installations have no native transport to fall back to. That the retired
+``gmail_via_gateway`` flag stays gone is pinned in
+``tests/integrations/test_native_retirement.py``.
 """
 
 from src.config.settings import Settings
-
-
-def test_gmail_via_gateway_defaults_false():
-    assert Settings().gmail_via_gateway is False
 
 
 def test_toolhive_vmcp_url_defaults_none():

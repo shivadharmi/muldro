@@ -27,12 +27,16 @@ from src.services.perception_policy import (
 # ---------------------------------------------------------------------------
 
 
+# These tests are about lock/transaction scoping, not credential resolution, so
+# they use OAUTH-backed sources (slack/github) throughout. A gateway-backed source
+# (gmail/calendar) would take the connection_map branch of the runnability gate and
+# be skipped for want of an active connection, emptying the tick under test.
 def _make_state(**overrides) -> PerceptionState:
     defaults = dict(
         state_id="pst_test",
         workspace_id="ws_test",
         user_id="usr_test",
-        source="gmail",
+        source="slack",
         mode="poll",
         base_interval_s=300,
         effective_interval_s=300,
@@ -217,7 +221,7 @@ async def test_claim_leases_source_out_of_due_window():
 
     assert len(claimed) == 1
     assert claimed[0].state_id == "pst_test"
-    assert claimed[0].source == "gmail"
+    assert claimed[0].source == "slack"
     assert claimed[0].user_id == "usr_test"
     assert claimed[0].workspace_id == "ws_test"
 
@@ -340,7 +344,7 @@ async def test_per_source_recording_isolation():
     isolated per source because each records in its own transaction."""
     from src.services.scheduler import SchedulerLoop
 
-    s1 = _make_state(state_id="pst_a", source="gmail")
+    s1 = _make_state(state_id="pst_a", source="github")
     s2 = _make_state(state_id="pst_b", source="slack")
     harness = _TickHarness([s1, s2])
 
@@ -464,8 +468,8 @@ async def test_invalid_token_source_is_dropped_and_not_run():
     from src.services.oauth_manager import TokenResult
     from src.services.scheduler import SchedulerLoop
 
-    s_ok = _make_state(state_id="pst_ok", source="gmail", user_id="usr_ok")
-    s_orphan = _make_state(state_id="pst_orphan", source="gmail", user_id="usr_orphan")
+    s_ok = _make_state(state_id="pst_ok", source="slack", user_id="usr_ok")
+    s_orphan = _make_state(state_id="pst_orphan", source="slack", user_id="usr_orphan")
     harness = _TickHarness([s_ok, s_orphan])
 
     # OAuthManager: usr_ok valid, usr_orphan revoked. ReauthService is a no-op

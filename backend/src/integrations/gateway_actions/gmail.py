@@ -190,4 +190,5 @@ GMAIL = GatewayProvider(
     server_name="google-workspace",
     display_name="Gmail",
     actions=GMAIL_ACTIONS,
+    perception_sources=("gmail",),
 )

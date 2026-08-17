@@ -32,6 +32,14 @@ class GatewayProvider:
     # its raw provider_id via a hand-maintained label table somewhere downstream.
     display_name: str
     actions: tuple[GatewayAction, ...]
+    # The Jarvis PERCEPTION SOURCE names this provider's credential backs, i.e.
+    # the ``perception_state.source`` values the scheduler polls. These names
+    # deliberately DIFFER from ``provider_id`` -- the OC provider
+    # "googlecalendar" backs the source "calendar" -- and declaring them HERE is
+    # what stops that vocabulary gap from becoming yet another hand-maintained
+    # source -> provider table that drifts. A provider that backs no perception
+    # source declares the empty tuple.
+    perception_sources: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.display_name.strip():

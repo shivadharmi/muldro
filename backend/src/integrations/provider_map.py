@@ -27,9 +27,15 @@ _PROVIDER_SOURCES: dict[str, list[str]] = {
 
 # OAuth provider -> the MCP server names it powers. Providers absent from this
 # map run a single server whose name equals the provider (identity).
+#
+# ASYMMETRY WITH ``_PROVIDER_SOURCES`` IS DELIBERATE: ``google`` and ``github``
+# were retired from here when their MCP servers moved behind the OpenConnector
+# gateway — there is no longer a native OAuth provider owning those servers, so
+# the registry in ``src.integrations.gateway_actions`` answers "which server
+# serves this?" instead. ``_PROVIDER_SOURCES`` keeps its ``google`` entry
+# because it maps *perception sources* (gmail/calendar), which the scheduler
+# still polls under the ``google`` provider key regardless of transport.
 _PROVIDER_SERVERS: dict[str, list[str]] = {
-    "google": ["google-workspace"],
-    "github": ["github"],
     "slack": ["slack"],
     "notion": ["notion"],
     "atlassian": ["atlassian"],

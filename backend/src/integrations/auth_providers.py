@@ -1,8 +1,12 @@
 """FastMCP auth provider factory — maps provider names to FastMCP auth instances.
 
-Built-in providers: Google, GitHub (native FastMCP support).
 Custom OAuthProxy: Slack, Notion, Atlassian (Jira + Confluence).
 BearerAuth: static token for simple MCP servers.
+
+Google and GitHub are deliberately absent: both are served by the OpenConnector
+gateway (see ``src.integrations.gateway_actions``), which owns their OAuth
+clients and credentials. Registering them here would advertise a native connect
+path that nothing reads.
 """
 
 from __future__ import annotations
@@ -25,7 +29,7 @@ class ProviderMeta:
 
     name: str
     display_name: str
-    provider_type: str  # "builtin", "oauth_proxy", "bearer"
+    provider_type: str  # "oauth_proxy", "bearer"
     default_scopes: list[str]
     authorize_url: str = ""
     token_url: str = ""
@@ -33,29 +37,6 @@ class ProviderMeta:
 
 # Registry of all supported providers with their metadata.
 SUPPORTED_PROVIDERS: dict[str, ProviderMeta] = {
-    "google": ProviderMeta(
-        name="google",
-        display_name="Google Workspace",
-        provider_type="builtin",
-        default_scopes=[
-            "https://mail.google.com/",
-            # Required for managing Gmail filters/labels (manage_gmail_filter).
-            # Listed explicitly so it appears on the consent screen and lands in
-            # the token's granted-scope set — a token consented before this was
-            # added gets a 403 "insufficient authentication scopes" on filters.
-            "https://www.googleapis.com/auth/gmail.settings.basic",
-            "https://www.googleapis.com/auth/calendar",
-            "https://www.googleapis.com/auth/drive",
-            "https://www.googleapis.com/auth/documents",
-            "https://www.googleapis.com/auth/spreadsheets",
-        ],
-    ),
-    "github": ProviderMeta(
-        name="github",
-        display_name="GitHub",
-        provider_type="builtin",
-        default_scopes=["repo", "read:org", "read:user"],
-    ),
     "slack": ProviderMeta(
         name="slack",
         display_name="Slack",
@@ -121,8 +102,6 @@ def get_server_auth_provider(provider_name: str, settings: Settings) -> Any | No
         logger.warning("Unknown auth provider: %s", provider_name)
         return None
 
-    if meta.provider_type == "builtin":
-        return _build_builtin_provider(provider_name, settings)
     if meta.provider_type == "oauth_proxy":
         return _build_oauth_proxy(provider_name, meta, settings)
 
@@ -141,43 +120,6 @@ def get_client_auth(
     if access_token:
         return BearerAuth(token=access_token)
     return "oauth"
-
-
-def _build_builtin_provider(provider_name: str, settings: Settings) -> Any | None:
-    """Build a native FastMCP auth provider (Google, GitHub)."""
-    base_url = _get_base_url(settings)
-
-    if provider_name == "google":
-        client_id = settings.google_oauth_client_id
-        client_secret = settings.google_oauth_client_secret
-        if not client_id or not client_secret:
-            return None
-
-        from fastmcp.server.auth.providers.google import GoogleProvider
-
-        return GoogleProvider(
-            client_id=client_id,
-            client_secret=client_secret,
-            base_url=base_url,
-            required_scopes=SUPPORTED_PROVIDERS["google"].default_scopes,
-        )
-
-    if provider_name == "github":
-        client_id = settings.github_oauth_client_id
-        client_secret = settings.github_oauth_client_secret
-        if not client_id or not client_secret:
-            return None
-
-        from fastmcp.server.auth.providers.github import GitHubProvider
-
-        return GitHubProvider(
-            client_id=client_id,
-            client_secret=client_secret,
-            base_url=base_url,
-            required_scopes=SUPPORTED_PROVIDERS["github"].default_scopes,
-        )
-
-    return None
 
 
 def _build_oauth_proxy(
@@ -235,11 +177,7 @@ def get_provider_status(settings: Settings) -> list[dict]:
     """Return status of all supported providers (configured/not configured)."""
     statuses = []
     for name, meta in SUPPORTED_PROVIDERS.items():
-        client_id = ""
-        if meta.provider_type == "builtin":
-            client_id = getattr(settings, f"{name}_oauth_client_id", "")
-        else:
-            client_id = getattr(settings, f"{name}_oauth_client_id", "")
+        client_id = getattr(settings, f"{name}_oauth_client_id", "")
 
         statuses.append(
             {

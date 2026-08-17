@@ -220,10 +220,10 @@ class Settings(BaseSettings):
     # Full Pub/Sub topic name "projects/{proj}/topics/{topic}" for Gmail users.watch.
     gmail_pubsub_topic: str = ""  # JARVIS_GMAIL_PUBSUB_TOPIC
 
-    # Gmail gateway slice (OPTIONAL — off by default, direct Gmail MCP unaffected).
-    # When enabled, Gmail tool calls route through a ToolHive vMCP proxy fronting
-    # an OpenConnector MCP server instead of the direct google-workspace-mcp process.
-    gmail_via_gateway: bool = False  # JARVIS_GMAIL_VIA_GATEWAY
+    # OpenConnector gateway. Not optional: the migrated installations
+    # (google-workspace, github) have no native transport to fall back to, so a
+    # deployment without a reachable vMCP simply loses those integrations —
+    # loudly, at session-open time. There is deliberately no feature flag.
     toolhive_vmcp_url: str | None = None  # JARVIS_TOOLHIVE_VMCP_URL
     openconnector_mcp_url: str | None = None  # JARVIS_OPENCONNECTOR_MCP_URL
     openconnector_runtime_token: str | None = None  # JARVIS_OPENCONNECTOR_RUNTIME_TOKEN

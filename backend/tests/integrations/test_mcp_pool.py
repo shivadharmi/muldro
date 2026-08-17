@@ -31,11 +31,8 @@ def _make_installation(**overrides) -> SimpleNamespace:
     return SimpleNamespace(**defaults)
 
 
-def _make_settings(*, gmail_via_gateway: bool = False, toolhive_vmcp_url: str | None):
-    return SimpleNamespace(
-        gmail_via_gateway=gmail_via_gateway,
-        toolhive_vmcp_url=toolhive_vmcp_url,
-    )
+def _make_settings(*, toolhive_vmcp_url: str | None):
+    return SimpleNamespace(toolhive_vmcp_url=toolhive_vmcp_url)
 
 
 def test_any_platform_jwt_installation_routes_to_the_vmcp():
@@ -86,26 +83,10 @@ def test_gateway_routing_fails_loudly_when_the_vmcp_url_is_unset():
     assert issubclass(GatewayNotConfigured, RuntimeError)
 
 
-def test_gateway_routing_ignores_the_gmail_via_gateway_flag():
-    """The flag no longer gates the decision. With the flag at its default
-    (False), a platform_jwt installation still routes to the gateway --
-    the declaration is what routes, not the flag."""
-    inst = _make_installation()
-    settings = _make_settings(
-        gmail_via_gateway=False, toolhive_vmcp_url="http://localhost:8100/mcp"
-    )
-
-    with patch("src.integrations.mcp_pool.get_settings", return_value=settings):
-        config = _installation_to_config(inst)
-
-    assert config["auth_provider"] == "platform_jwt"
-    assert config["url"] == "http://localhost:8100/mcp"
-
-
-def test_non_platform_jwt_installation_uses_native_config_regardless_of_flag():
-    """A google-workspace installation NOT declared platform_jwt (e.g. still on
-    auth_provider="oauth") keeps its native config even with the (now inert)
-    gmail_via_gateway flag ON and a vMCP url set — the flag never routes."""
+def test_non_platform_jwt_installation_uses_native_config():
+    """An installation NOT declared platform_jwt keeps its native config even
+    when a vMCP url IS set — the vMCP url is a destination, not a switch. Only
+    the installation's own ``auth_provider`` decides routing."""
     inst = _make_installation(
         server_name="google-workspace",
         transport="stdio",
@@ -113,7 +94,7 @@ def test_non_platform_jwt_installation_uses_native_config_regardless_of_flag():
         command="uvx",
         args=["google-workspace-mcp"],
     )
-    settings = _make_settings(gmail_via_gateway=True, toolhive_vmcp_url="https://vmcp.example.com")
+    settings = _make_settings(toolhive_vmcp_url="https://vmcp.example.com")
 
     with patch("src.integrations.mcp_pool.get_settings", return_value=settings):
         config = _installation_to_config(inst)

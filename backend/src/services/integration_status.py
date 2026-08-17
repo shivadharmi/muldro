@@ -25,7 +25,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.integrations.gateway_actions import capabilities_for_server, providers_for_server
-from src.integrations.gateway_providers import gateway_oc_provider
 from src.integrations.provider_map import provider_for_server
 from src.models.connection_map import DEFAULT_ACCOUNT_ALIAS, ConnectionMap
 
@@ -153,7 +152,6 @@ class IntegrationStatus:
     # unusable (no_token / no_refresh_token / revoked) — the user must reconnect.
     # Distinct from a transient "refresh_failed" blip, which leaves this False.
     needs_reauth: bool = False
-    oc_provider: str | None = None  # OpenConnector provider if gateway-backed, else None
     # Every OC provider this installation serves, in registry order (empty for
     # non-gateway installations), plus each provider's own connection state so a
     # partially connected installation is reported per provider rather than
@@ -162,7 +160,7 @@ class IntegrationStatus:
     provider_connections: dict[str, bool] = field(default_factory=dict)
 
 
-async def _active_connection_providers(
+async def active_connection_providers(
     db: AsyncSession,
     workspace_id: str,
     user_id: str,
@@ -189,6 +187,11 @@ async def _active_connection_providers(
     One query per installation (not per provider): the whole provider set is
     matched with a single ``IN``. Only ``connection_status == "active"`` counts —
     a "pending"/"revoked"/"error" row is not a usable connection.
+
+    Public because the perception tick's runnability gate
+    (``scheduler/perception_tick.py``) must decide "connected" the SAME way this
+    module does; a second copy of this query is exactly how the two definitions
+    drifted apart before.
     """
     rows = await db.execute(
         select(ConnectionMap.provider_id).where(
@@ -267,7 +270,7 @@ async def get_integration_statuses(
             # (Gmail linked, Calendar declined) stays visible rather than
             # collapsing to "disconnected". `configured` stays True: the gateway
             # owns the OAuth client, not a Jarvis-side client_id setting.
-            active = await _active_connection_providers(db, workspace_id, user_id, providers)
+            active = await active_connection_providers(db, workspace_id, user_id, providers)
             provider_connections = {p: (p in active) for p in providers}
             connected = all(provider_connections.values())
             oc_providers = list(providers)
@@ -315,11 +318,6 @@ async def get_integration_statuses(
                 slug=slug,
                 access_scopes=coarsen_scopes(raw_scopes),
                 needs_reauth=needs_reauth,
-                oc_provider=gateway_oc_provider(
-                    inst.server_name,
-                    gmail_via_gateway=settings.gmail_via_gateway,
-                    toolhive_vmcp_url=settings.toolhive_vmcp_url,
-                ),
                 oc_providers=oc_providers,
                 provider_connections=provider_connections,
             )

@@ -22,10 +22,12 @@ class TestProviderForSource:
 
 
 class TestServersForProvider:
-    def test_google_servers(self):
-        assert servers_for_provider("google") == ["google-workspace"]
-
-    def test_github_servers(self):
+    def test_gateway_migrated_providers_are_not_listed(self):
+        """google/github have no native OAuth provider owning an MCP server any
+        more — the gateway registry (``gateway_actions.providers_for_server``)
+        answers for them, so this map deliberately does not. They therefore hit
+        the identity fallback rather than naming a server."""
+        assert servers_for_provider("google") == ["google"]
         assert servers_for_provider("github") == ["github"]
 
     def test_slack_servers(self):

@@ -30,6 +30,8 @@ __all__ = [
     "GatewayAction",
     "GatewayProvider",
     "capabilities_for_server",
+    "gateway_provider_for_source",
+    "perception_sources_for_provider",
     "provider_labels_for_server",
     "provider_of_action",
     "providers_for_server",
@@ -56,9 +58,51 @@ _PROVIDER_BY_ACTION: MappingProxyType[str, str] = MappingProxyType(
 )
 
 
+def _build_perception_source_index() -> MappingProxyType[str, str]:
+    """Invert every provider's ``perception_sources`` into source -> provider.
+
+    Built with an explicit loop rather than a comprehension so a source claimed
+    by two providers raises at import instead of silently collapsing to whichever
+    provider happens to come last in registry order -- "which credential backs
+    this source" has exactly one answer or the registry is wrong.
+    """
+    index: dict[str, str] = {}
+    for provider in _PROVIDERS:
+        for source in provider.perception_sources:
+            owner = index.get(source)
+            if owner is not None:
+                raise ValueError(
+                    f"perception source {source!r} is claimed by both "
+                    f"{owner!r} and {provider.provider_id!r}"
+                )
+            index[source] = provider.provider_id
+    return MappingProxyType(index)
+
+
+_PROVIDER_BY_PERCEPTION_SOURCE: MappingProxyType[str, str] = _build_perception_source_index()
+
+
 def provider_of_action(action_id: str) -> str | None:
     """Return the provider owning ``action_id``, or None if unregistered."""
     return _PROVIDER_BY_ACTION.get(action_id)
+
+
+def gateway_provider_for_source(source: str) -> str | None:
+    """Return the OC provider whose credential backs a perception source.
+
+    ``None`` means the source is NOT gateway-backed and its runnability is still
+    an OAuthManager question. Resolution is by MEMBERSHIP in the registry-derived
+    index -- never by munging the source name -- because the two vocabularies do
+    not line up (source "calendar" -> provider "googlecalendar") and a
+    name-derived guess would silently invent providers.
+    """
+    return _PROVIDER_BY_PERCEPTION_SOURCE.get(source)
+
+
+def perception_sources_for_provider(provider_id: str) -> tuple[str, ...]:
+    """Return the perception sources an OC provider backs (empty if none/unknown)."""
+    provider = PROVIDER_REGISTRY.get(provider_id)
+    return provider.perception_sources if provider else ()
 
 
 def providers_for_server(server_name: str) -> tuple[str, ...]:
