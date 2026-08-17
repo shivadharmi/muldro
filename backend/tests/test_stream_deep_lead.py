@@ -399,7 +399,7 @@ async def test_build_chat_lead_uses_invoker_agents_and_returns_lead():
 
 async def test_build_chat_lead_forwards_invoker_cheap_mode():
     """The wrapper forwards ``self._settings.cheap_mode`` — cheap mode halves the lead's
-    thinking budget (4096 -> 2048) while keeping the sonnet tier."""
+    thinking budget (4096 -> 2048) while keeping the balanced tier."""
     agents = {
         "perceiver": SubAgent(
             name="perceiver", prompt="p", model_tier="sonnet", capability_scope=set()
@@ -418,5 +418,5 @@ async def test_build_chat_lead_forwards_invoker_cheap_mode():
         lead = await inv.build_chat_lead([step], "ws")
 
     assert lead.name == "lead"
-    assert lead.model_tier == "sonnet"
+    assert lead.model_tier == "balanced"
     assert lead.thinking.budget_tokens == 2048

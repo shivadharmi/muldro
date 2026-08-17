@@ -585,7 +585,9 @@ async def test_ledger_dedups_write_across_runs():
         async def _run_once() -> dict:
             with patch(
                 "src.deep_runtime.agent_builder.build_chat_model",
-                lambda _a: _FakeModel("send_email", {"to": "f@x.com", "subject": "hi"}),
+                AsyncMock(
+                    return_value=_FakeModel("send_email", {"to": "f@x.com", "subject": "hi"})
+                ),
             ):
                 return await inv.run_autonomous_deep_step(
                     executor=_executor_agent(),
@@ -645,7 +647,7 @@ async def test_read_capability_bypasses_ledger():
         }
         with patch(
             "src.deep_runtime.agent_builder.build_chat_model",
-            lambda _a: _FakeModel("read_email", {"q": "investor"}),
+            AsyncMock(return_value=_FakeModel("read_email", {"q": "investor"})),
         ):
             out = await inv.run_autonomous_deep_step(
                 executor=_executor_agent(),
