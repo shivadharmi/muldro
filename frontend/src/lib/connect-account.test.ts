@@ -52,3 +52,25 @@ test("stops early when shouldStop() becomes true (popup closed)", async () => {
 
   expect(result).toBe("cancelled");
 });
+
+test("confirms once more when the popup closes, so an approval is not lost", async () => {
+  // The popup closed because the user just approved: the last poll still said
+  // pending, but the re-confirm activates the connection.
+  const confirm = vi
+    .fn()
+    .mockResolvedValueOnce({ status: "pending" })
+    .mockResolvedValueOnce({ status: "active" });
+  const sleep = vi.fn().mockResolvedValue(undefined);
+  let calls = 0;
+
+  const result = await pollUntilActive(confirm, {
+    intervalMs: 2000,
+    timeoutMs: 60000,
+    sleep,
+    elapsed: () => 0,
+    shouldStop: () => ++calls >= 2,
+  });
+
+  expect(result).toBe("active");
+  expect(confirm).toHaveBeenCalledTimes(2);
+});

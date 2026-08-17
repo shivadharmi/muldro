@@ -1,24 +1,17 @@
-"""Unified integrations response must expose plural OC provider fields.
+"""Unified integrations response exposes the gateway registry, not a restatement.
 
-Wave 3 added `oc_providers: list[str]` and `provider_connections: dict[str, bool]`
-to `IntegrationStatus` (registry-derived, correct for gateway-backed
-installations) but left the API surface still emitting the legacy singular
-`oc_provider`, which is gated behind a `gmail_via_gateway` flag that defaults
-False and a hardcoded server-name table that never contained "github" — so it
-returns None for both migrated installations (google-workspace, github),
-sending the frontend down a native-OAuth branch that dead-ends in an HTTP 400.
+The unified-integrations API surfaces the registry's per-server provider list
+(`oc_providers`), per-provider connectivity (`provider_connections`), and
+per-provider display labels (`oc_provider_labels`) — sourced from
+`providers_for_server` / `provider_labels_for_server` so they cannot drift
+from `src/integrations/gateway_actions`. There is no singular `oc_provider`
+back-compat alias: a gateway installation fans out to N providers, so any
+API shape must be plural.
 
-This test asserts the API response carries the plural fields (sourced from
-`providers_for_server` so it cannot drift from the registry) and that the
-broken singular field is gone entirely — no back-compat alias.
-
-It also covers a second bug the reviewer flagged: `disconnect_installation`
-derives its response `slug` from `derive_slug(inst.auth_provider, ...)`, and
-since every gateway installation declares `auth_provider="platform_jwt"`, that
-collapses google-workspace and github into the same "platform" slug.
-`integration_status.py` already derives the slug from `server_name` for
-gateway installations on its own path; this test asserts the disconnect
-response does the same.
+Gateway installations also derive their brand `slug` from `server_name`, not
+`auth_provider` — every gateway installation declares the same
+`auth_provider="platform_jwt"`, so deriving the slug from it would collapse
+google-workspace and github into the same "platform" slug.
 
 Runs against a real Postgres (same `_db_reachable` skip-guard idiom as
 `tests/api/test_routes_integrations_disconnect.py`), since `get_integration_statuses`
@@ -32,7 +25,7 @@ import pytest
 
 from src.api.routes_integrations import disconnect_installation, list_unified_integrations
 from src.config.settings import get_settings
-from src.integrations.gateway_actions import providers_for_server
+from src.integrations.gateway_actions import provider_labels_for_server, providers_for_server
 from src.models.connection_map import ConnectionMap
 from tests.conftest import make_test_db, seed_user_workspace
 
@@ -158,6 +151,38 @@ async def test_unified_integrations_expose_plural_oc_provider_fields():
         assert "oc_provider" not in r.model_dump()
 
 
+async def test_unified_integrations_expose_registry_sourced_provider_labels():
+    factory, engine = make_test_db()
+    try:
+        await seed_user_workspace(factory, _USER, _WS)
+        await _clear_connections(factory)
+
+        installations = [
+            _make_inst("google-workspace", "Google Workspace", "platform_jwt"),
+            _make_inst("github", "GitHub", "platform_jwt"),
+            _make_inst("slack", "Slack", "slack"),
+        ]
+
+        results = await _unified(factory, installations)
+    finally:
+        await _clear_connections(factory)
+        await engine.dispose()
+
+    by_server = {r.server_name: r for r in results}
+
+    gws = by_server["google-workspace"]
+    assert gws.oc_provider_labels == provider_labels_for_server("google-workspace")
+    assert gws.oc_provider_labels == {"gmail": "Gmail", "googlecalendar": "Google Calendar"}
+
+    gh = by_server["github"]
+    assert gh.oc_provider_labels == provider_labels_for_server("github")
+    assert gh.oc_provider_labels == {"github": "GitHub"}
+
+    # slack is not gateway-backed: registry has no labels for it.
+    slack = by_server["slack"]
+    assert slack.oc_provider_labels == {}
+
+
 async def test_disconnect_gives_distinct_slugs_to_both_gateway_installations():
     """Both migrated installations share auth_provider="platform_jwt" — the
     slug must come from server_name, or they collapse into the same brand key.
@@ -180,3 +205,28 @@ async def test_disconnect_gives_distinct_slugs_to_both_gateway_installations():
     finally:
         await _clear_connections(factory)
         await engine.dispose()
+
+
+async def test_disconnect_carries_provider_list_with_all_false_connectivity():
+    """A disconnected gateway installation's response must still carry its
+    provider list (all-False connectivity) rather than empty [] / {} — the
+    empty shape is indistinguishable from a native-OAuth integration, which
+    sends a client that trusts this response (e.g. an optimistic-update cache
+    write) down the native branch and into the gateway's HTTP 400.
+    """
+    factory, engine = make_test_db()
+    try:
+        await seed_user_workspace(factory, _USER, _WS)
+        await _clear_connections(factory)
+
+        gws_resp = await _disconnect(
+            factory, _make_inst("google-workspace", "Google Workspace", "platform_jwt")
+        )
+    finally:
+        await _clear_connections(factory)
+        await engine.dispose()
+
+    assert gws_resp.oc_providers == list(providers_for_server("google-workspace"))
+    assert gws_resp.oc_providers == ["gmail", "googlecalendar"]
+    assert gws_resp.provider_connections == {"gmail": False, "googlecalendar": False}
+    assert gws_resp.oc_provider_labels == provider_labels_for_server("google-workspace")

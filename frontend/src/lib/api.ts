@@ -793,6 +793,9 @@ export interface UnifiedIntegration {
   // OpenConnector providers this installation fans out to when gateway-backed
   // (popup-poll connect flow); empty/absent = native OAuth redirect.
   oc_providers?: string[];
+  // Display names for oc_providers, keyed by slug, from the gateway registry's
+  // display_name. The client never restates these; an unmapped slug shows raw.
+  oc_provider_labels?: Record<string, string>;
   // Per-provider connection state, e.g. {"gmail": true, "googlecalendar": false}.
   provider_connections?: Record<string, boolean>;
 }

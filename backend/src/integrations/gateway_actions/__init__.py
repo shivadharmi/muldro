@@ -30,6 +30,7 @@ __all__ = [
     "GatewayAction",
     "GatewayProvider",
     "capabilities_for_server",
+    "provider_labels_for_server",
     "provider_of_action",
     "providers_for_server",
 ]
@@ -80,3 +81,17 @@ def capabilities_for_server(server_name: str) -> tuple[str, ...]:
         for a in PROVIDER_REGISTRY[provider_id].actions
     }
     return tuple(sorted(caps))
+
+
+def provider_labels_for_server(server_name: str) -> dict[str, str]:
+    """Map each of a server's OC provider ids to its registry ``display_name``.
+
+    Composed from ``providers_for_server`` so the server -> provider binding is
+    decided in exactly one place. Consumers (e.g. the unified integrations API)
+    use this instead of hand-maintaining a provider -> label table that silently
+    degrades to a raw slug when a provider is added.
+    """
+    return {
+        provider_id: PROVIDER_REGISTRY[provider_id].display_name
+        for provider_id in providers_for_server(server_name)
+    }
