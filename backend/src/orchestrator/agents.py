@@ -195,7 +195,7 @@ class SubAgent:
 
     name: str
     prompt: str
-    model_tier: str  # opus, sonnet, haiku
+    model_tier: str  # reasoning, balanced, fast
     capability_scope: set[str] = field(default_factory=set)
     max_tokens: int = 4096
     temperature: float = 0.3

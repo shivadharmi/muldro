@@ -208,7 +208,7 @@ No feature flag, no co-existing legacy path: the resolver **is** the path, seede
 - **Prompt caching is Anthropic-specific.** The deep-runtime stamps `cache_control` on tools/prompts. For non-Anthropic providers this must be **gated by `ModelSpec.supports_prompt_cache`** (strip/skip the markers) or the call errors/no-ops. Real integration point.
 - **Streaming.** `stream_adapter.py` consumes LangChain stream events (provider-neutral in principle) but was written against Anthropic frames. Verify per provider; covered by the test matrix.
 - **Budget / cost.** `BudgetTracker` is USD-based; multi-provider cost comes from the catalog's per-model cost fields rather than a single Anthropic rate. Wire the catalog cost into `record_from_span`.
-- **Provider SDK dependencies.** `langchain-openai`, `langchain-google-genai`, `langchain-ollama`, etc. added as optional extras, install-on-demand; startup preflight warns if a configured provider's package is absent.
+- **Provider SDK dependencies.** `langchain-openai`, `langchain-google-genai`, `langchain-ollama`, etc. **Implementation deviation (accepted):** these ship in `[project.dependencies]` (always-installed) rather than as optional extras. They are thin, pure-Python LangChain wrappers, and always-installing them keeps the resolver + build leaf branch-free (no conditional-import guards) — the small dependency-footprint cost is judged worth the simpler code. The startup preflight still warns if a *configured* provider's package is somehow absent (see §11 preflight / `runtime_preflight`).
 - **Tool-calling reliability variance.** Local/open models call tools less reliably than frontier models; out of scope to fix here, but the catalog can flag `tool_calling: strong|weak` for future routing guidance.
 
 ---
