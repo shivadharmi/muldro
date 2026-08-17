@@ -124,7 +124,7 @@ async def build_deep_agent(
         )
 
     return create_deep_agent(
-        model=build_chat_model(agent),
+        model=await build_chat_model(agent, workspace_id=workspace_id, db_factory=db_factory),
         tools=tools,
         system_prompt=system_prompt or agent.prompt,
         middleware=middleware,
