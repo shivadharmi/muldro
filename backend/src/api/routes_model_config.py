@@ -201,8 +201,9 @@ async def test_provider_credential(
         model = build_langchain_model(resolved)
         await model.ainvoke("ping")
         new_status, detail = "valid", None
-    except Exception as e:  # noqa: BLE001 — fail closed: any error is an invalid credential
-        new_status, detail = "invalid", str(e)[:200]
+    except Exception:  # noqa: BLE001 — fail closed: any error is an invalid credential
+        logger.warning("Provider credential test failed for %s", provider, exc_info=True)
+        new_status, detail = "invalid", "credential invalid"
 
     # row may be a NULL-default row; only persist status when it is our workspace row.
     if row.workspace_id == workspace_id:

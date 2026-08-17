@@ -369,3 +369,37 @@ def test_test_credential_valid_and_fail_closed(monkeypatch):
             assert "detail" in boom.json()
     finally:
         _cred_cleanup(engine, factory, ws)
+
+
+@pytest.mark.skipif(not _db_reachable(), reason="Postgres not reachable")
+def test_test_credential_does_not_leak_provider_exception(monkeypatch):
+    """A provider SDK exception must not have its text returned to the client (M8)."""
+    _use_test_key(monkeypatch)
+    engine = create_async_engine(get_settings().database_url, poolclass=NullPool)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    ws = asyncio.run(_seed_ws(factory))
+    app = _cred_app(ws, factory)
+    try:
+        with TestClient(app) as c:
+            put = c.put("/v1/providers/openai/credentials", json={"api_key": "sk-secret-123"})
+            assert put.status_code == 200, put.text
+
+            class _LeakyModel:
+                async def ainvoke(self, _msg):
+                    raise Exception("SENSITIVE-INTERNAL-abcdef-endpoint-https://secret")
+
+            monkeypatch.setattr(
+                "src.api.routes_model_config.build_langchain_model",
+                lambda resolved: _LeakyModel(),
+            )
+            r = c.post("/v1/providers/openai/test")
+            assert r.status_code == 200, r.text
+            body = r.json()
+            assert body["status"] == "invalid"
+            assert body["detail"] == "credential invalid"
+            assert "SENSITIVE" not in (body["detail"] or "")
+            assert "secret" not in (body["detail"] or "")
+            assert "SENSITIVE" not in r.text
+            assert "secret" not in r.text
+    finally:
+        _cred_cleanup(engine, factory, ws)
