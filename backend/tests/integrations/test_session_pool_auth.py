@@ -13,7 +13,10 @@ another installation's capabilities -- and an unregistered installation must
 mint no capabilities at all (fail-closed).
 """
 
+from fastmcp.client.auth import BearerAuth
+
 from src.integrations.gateway_actions import capabilities_for_server
+from src.integrations.mcp_errors import McpAuthRequiredError
 from src.integrations.session_pool import UserMCPSessionPool
 from src.orchestrator.platform_jwt import DEFAULT_AUDIENCE, verify_platform_jwt
 
@@ -69,6 +72,43 @@ async def test_unknown_gateway_server_mints_no_capabilities():
     claims = _claims_from_auth(auth)
 
     assert claims["capabilities"] == []
+
+
+async def test_platform_jwt_branch_returns_a_bearer_without_raising_reauth():
+    """The empty ``_PROVIDER_SOURCES`` in ``provider_map`` rests on THIS property.
+
+    Wave E retired the ``google -> [gmail, calendar]`` fan-out entry from
+    ``src.integrations.provider_map._PROVIDER_SOURCES``. That is safe only
+    because ``sources_for_provider`` is reachable solely through
+    ``McpAuthRequiredError`` -> ``ReauthService.apply_needs_reauth``, and a
+    gateway installation authenticates with a platform JWT — whose branch is
+    the FIRST in ``_resolve_auth`` and returns a ``BearerAuth``
+    unconditionally, before the OAuth branch that owns both raise sites.
+
+    The property is one of branch ORDER, so nothing else pins it. If a future
+    change lets the ``platform_jwt`` branch raise (an expired gateway
+    connection is the natural wish), ``dag_runner._defer_for_reauth`` would
+    resolve ``google-workspace`` -> ``google`` -> ``["google"]`` instead of
+    ``["gmail", "calendar"]``: gmail and calendar perception would keep
+    polling a dead connection and never be paused, silently. Follow
+    ``provider_map``'s in-code restore instruction (re-add the ``google``
+    entry) before making that change.
+    """
+    pool = UserMCPSessionPool()
+
+    try:
+        auth = await pool._resolve_auth(
+            "google-workspace", _USER, dict(_GATEWAY_CONFIG), workspace_id=_WS
+        )
+    except McpAuthRequiredError as exc:  # pragma: no cover - the guard's whole point
+        raise AssertionError(
+            "the platform_jwt branch of _resolve_auth raised McpAuthRequiredError; "
+            "restore _PROVIDER_SOURCES['google'] = ['gmail', 'calendar'] in "
+            "src/integrations/provider_map.py or gmail/calendar perception will "
+            "never be paused for re-auth"
+        ) from exc
+
+    assert isinstance(auth, BearerAuth)
 
 
 async def test_unknown_gateway_server_is_logged_as_an_error(caplog):

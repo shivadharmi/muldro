@@ -44,7 +44,10 @@ from __future__ import annotations
 #   ``McpAuthRequiredError`` is raised solely on the stdio-token and
 #   OAuthManager branches of ``session_pool._resolve_auth``, and a
 #   ``platform_jwt`` installation (google-workspace, github) returns before
-#   either.
+#   either. That branch ORDER is pinned executably by
+#   ``tests/integrations/test_session_pool_auth.py::
+#   test_platform_jwt_branch_returns_a_bearer_without_raising_reauth`` — if it
+#   goes red, restore the entry below before doing anything else.
 #
 # Re-add an entry here the moment a native OAuth provider backs more than one
 # perception source — without it that provider's extra sources are invisible to
