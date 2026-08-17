@@ -40,50 +40,32 @@ async def _clear_stale_tool_schemas(db: AsyncSession, server_name: str, workspac
 # Default installations — each maps to a former get_*_config() function
 _DEFAULT_INSTALLATIONS: list[dict] = [
     {
+        # Gateway-backed: routed to the OpenConnector adapter (gmail +
+        # googlecalendar providers). Credentials live in OpenConnector, not
+        # OAuthManager — Jarvis never sees the Google OAuth token directly.
         "server_name": "google-workspace",
         "display_name": "Google Workspace",
         "transport": "streamable-http",
         "remote_url": None,
-        "managed_local": True,
         "command": None,
         "args": None,
         "env_template": {},
-        "auth_provider": "google",
-        "scopes_granted": [
-            "email.send",
-            "email.list",
-            "email.read",
-            "email.search",
-            "email.draft",
-            "calendar.list",
-            "calendar.get",
-            "calendar.create",
-            "calendar.update",
-            "doc.drive_list",
-            "doc.drive_search",
-            "doc.drive_create",
-        ],
+        "auth_provider": "platform_jwt",
+        "scopes_granted": None,
     },
     {
+        # Gateway-backed: routed to the OpenConnector adapter (github
+        # provider). Credentials live in OpenConnector, not OAuthManager —
+        # Jarvis never sees the GitHub OAuth token directly.
         "server_name": "github",
         "display_name": "GitHub",
         "transport": "streamable-http",
-        "remote_url": "https://api.githubcopilot.com/mcp/",
+        "remote_url": None,
         "command": None,
         "args": None,
         "env_template": {},
-        "auth_provider": "github",
-        "scopes_granted": [
-            "issue.create",
-            "issue.list",
-            "issue.search",
-            "issue.comment",
-            "repo.create_pr",
-            "repo.merge_pr",
-            "repo.search_code",
-            "repo.search_repos",
-            "repo.list_prs",
-        ],
+        "auth_provider": "platform_jwt",
+        "scopes_granted": None,
     },
     {
         "server_name": "slack",
