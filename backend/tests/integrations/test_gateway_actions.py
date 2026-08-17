@@ -1,4 +1,5 @@
-from src.integrations.gateway_actions import GMAIL_ACTIONS, GatewayAction
+from src.integrations.gateway_actions import GatewayAction
+from src.integrations.gateway_actions.gmail import GMAIL_ACTIONS
 
 BY_ID = {a.action_id: a for a in GMAIL_ACTIONS}
 

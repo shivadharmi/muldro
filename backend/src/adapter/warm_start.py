@@ -4,7 +4,7 @@ Registers one FastMCP tool per allowlisted OpenConnector action, named with the
 agent-legal (underscore) form of the actionId (``gmail.get_profile`` ->
 ``gmail_get_profile`` via ``gateway_naming.action_id_to_tool_name``) — Anthropic
 and OpenAI-compatible tool-calling APIs forbid dots in tool names. Each tool's
-schema comes from ``gateway_actions.GMAIL_ACTIONS`` (the single hand-typed
+schema comes from ``gateway_actions.gmail.GMAIL_ACTIONS`` (the single hand-typed
 source of truth — OC exposes no machine-readable per-action schema; see
 ``infra/gateway/spike-findings-guide.md``), and its handler stays bound to the
 DOTTED actionId, forwarding to the four-step-enforced ``handle_execute_action``.
@@ -33,7 +33,7 @@ from src.adapter.enforcement import GatewayProfile
 from src.adapter.http_context import bearer_token
 from src.adapter.openconnector_client import get_action_guide
 from src.adapter.server import handle_execute_action
-from src.integrations.gateway_actions import GMAIL_ACTIONS
+from src.integrations.gateway_actions.gmail import GMAIL_ACTIONS
 from src.integrations.gateway_naming import action_id_to_tool_name
 from src.models.database import get_session_factory
 
@@ -43,7 +43,7 @@ _OPAQUE_SCHEMA = {"type": "object", "additionalProperties": True}
 
 GuideFetcher = Callable[[str], Awaitable[dict]]
 
-# Hand-typed JSON Schemas, keyed by dotted OC actionId. gateway_actions.GMAIL_ACTIONS
+# Hand-typed JSON Schemas, keyed by dotted OC actionId. gateway_actions.gmail.GMAIL_ACTIONS
 # is the single source of truth (enforcement.py, warm_start.py, and catalog.py all
 # derive from it), so this module holds no schema data of its own.
 _SCHEMA_BY_ACTION: dict[str, dict] = {a.action_id: a.input_schema for a in GMAIL_ACTIONS}

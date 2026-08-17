@@ -15,7 +15,7 @@ from src.adapter.enforcement import (
     force_connection_name,
     strip_secrets,
 )
-from src.integrations.gateway_actions import GMAIL_ACTIONS
+from src.integrations.gateway_actions.gmail import GMAIL_ACTIONS
 
 
 def test_gmail_profile_is_derived_from_the_table():

@@ -5,7 +5,7 @@ from fastmcp import FastMCP
 
 from src.adapter.enforcement import GMAIL_PROFILE, GatewayProfile
 from src.adapter.warm_start import _param_names_from_guide, register_gateway_tools
-from src.integrations.gateway_actions import GMAIL_ACTIONS
+from src.integrations.gateway_actions.gmail import GMAIL_ACTIONS
 from src.integrations.gateway_naming import action_id_to_tool_name
 
 _BY_ID = {a.action_id: a for a in GMAIL_ACTIONS}

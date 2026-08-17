@@ -16,7 +16,7 @@ from dataclasses import dataclass
 
 from pydantic import BaseModel
 
-from src.integrations.gateway_actions import GMAIL_ACTIONS
+from src.integrations.gateway_actions.gmail import GMAIL_ACTIONS
 from src.integrations.gateway_naming import action_id_to_tool_name
 from src.tools.schemas import (
     AddToBriefInput,
@@ -558,7 +558,7 @@ EXTERNAL_TOOL_SEEDS: list[ExternalToolSeed] = [
 ]
 
 # google-workspace via ToolHive+OpenConnector gateway — DERIVED from the single
-# source of truth (gateway_actions.GMAIL_ACTIONS) with the agent-legal naming
+# source of truth (gateway_actions.gmail.GMAIL_ACTIONS) with the agent-legal naming
 # contract (dots are illegal in Anthropic/OpenAI tool names). Names MUST match
 # what the adapter warm-start exposes (action_id_to_tool_name).
 EXTERNAL_TOOL_SEEDS += [

@@ -1,4 +1,4 @@
-from src.integrations.gateway_actions import GMAIL_ACTIONS
+from src.integrations.gateway_actions.gmail import GMAIL_ACTIONS
 from src.integrations.gateway_naming import action_id_to_tool_name
 from src.tools.catalog import EXTERNAL_TOOL_SEEDS
 

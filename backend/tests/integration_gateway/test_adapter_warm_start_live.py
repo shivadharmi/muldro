@@ -11,7 +11,7 @@ named tool shows up with a non-empty object input schema — the actual
 regression this task guards against: warm-start silently not running, or
 running but never reaching the served tool list. (Under the ``hackernews``
 profile the served schema is the opaque fallback, since
-``gateway_actions.GMAIL_ACTIONS`` is gmail-only; this test verifies the named
+``gateway_actions.gmail.GMAIL_ACTIONS`` is gmail-only; this test verifies the named
 tool is *served*, not its exact schema shape.)
 
 Runs only when the stack is up (conftest gates on adapter :8100) AND the

@@ -13,9 +13,9 @@ import re
 from dataclasses import dataclass
 from types import MappingProxyType
 
-from src.integrations.gateway_actions import GMAIL_ACTIONS
+from src.integrations.gateway_actions.gmail import GMAIL_ACTIONS
 
-# Derived from the single source of truth (gateway_actions.GMAIL_ACTIONS) so the
+# Derived from the single source of truth (gateway_actions.gmail.GMAIL_ACTIONS) so the
 # allowlist, capability map, warm-start schemas, and catalog seeds never drift.
 #
 # NOTE: this boundary check is only as tight as the minted token. Today

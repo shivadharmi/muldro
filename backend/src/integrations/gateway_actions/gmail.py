@@ -1,26 +1,8 @@
-"""Single source of truth for the gateway's OpenConnector actions.
-
-Each GatewayAction is the one place an action's policy (capability, risk,
-approval) and its hand-typed input schema (OpenConnector exposes no
-machine-readable schema — see infra/gateway/spike-findings-guide.md) are
-declared. enforcement.py, warm_start.py, and catalog.py all DERIVE from this
-table (allowlist, capability map, tool schemas, catalog seeds), so the three
-never drift. This is the north-star verb->capability+risk policy table.
-"""
+"""Gmail actions served through the OpenConnector gateway."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-
-
-@dataclass(frozen=True)
-class GatewayAction:
-    action_id: str  # OC-native, dotted (sent to OpenConnector)
-    capability: str  # Jarvis capability (email.read/search/list/send)
-    risk: str
-    requires_approval: bool
-    input_schema: dict  # hand-typed; OC exposes no machine-readable schema
-
+from src.integrations.gateway_actions import GatewayAction, GatewayProvider
 
 GMAIL_ACTIONS: tuple[GatewayAction, ...] = (
     GatewayAction(
@@ -178,4 +160,10 @@ GMAIL_ACTIONS: tuple[GatewayAction, ...] = (
             },
         },
     ),
+)
+
+GMAIL = GatewayProvider(
+    provider_id="gmail",
+    server_name="google-workspace",
+    actions=GMAIL_ACTIONS,
 )
