@@ -103,6 +103,41 @@ test("keeps the binding's current provider in options when de-configured", () =>
   expect(select.value).toBe("anthropic");
 });
 
+test("fires onDeleteProvider when Remove is clicked for a configured provider (R2)", async () => {
+  const onDeleteProvider = vi.fn();
+  render(
+    <ModelTab
+      open
+      loading={false}
+      catalog={catalog}
+      config={config}
+      onLoad={() => {}}
+      onDeleteProvider={onDeleteProvider}
+    />,
+  );
+  // config has anthropic configured -> the Remove control is shown.
+  await userEvent.click(screen.getByRole("button", { name: /^remove$/i }));
+  expect(onDeleteProvider).toHaveBeenCalledWith("anthropic");
+});
+
+test("hides Remove for an unconfigured provider (R2)", () => {
+  const deconfigured: ModelConfig = {
+    ...config,
+    providers: [{ provider: "anthropic", configured: false, status: "unconfigured" }],
+  };
+  render(
+    <ModelTab
+      open
+      loading={false}
+      catalog={catalog}
+      config={deconfigured}
+      onLoad={() => {}}
+      onDeleteProvider={() => {}}
+    />,
+  );
+  expect(screen.queryByRole("button", { name: /^remove$/i })).not.toBeInTheDocument();
+});
+
 test("clamps a cleared max_tokens field to at least 1, never 0 (N1)", async () => {
   render(
     <ModelTab open loading={false} catalog={catalog} config={config} onLoad={() => {}} />,

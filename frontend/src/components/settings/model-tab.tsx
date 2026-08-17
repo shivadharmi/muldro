@@ -19,6 +19,7 @@ interface ModelTabProps {
   onSaveConfig?: (body: { tiers: TierBinding[]; agent_overrides: TierBinding[] }) => void;
   onSaveProviderKey?: (provider: string, apiKey: string, baseUrl?: string) => void;
   onTestProvider?: (provider: string) => void;
+  onDeleteProvider?: (provider: string) => void;
   savingConfig?: boolean;
   providerBusy?: string | null;
 }
@@ -177,10 +178,11 @@ interface ProviderRowProps {
   busy: boolean;
   onSaveKey?: (provider: string, apiKey: string, baseUrl?: string) => void;
   onTest?: (provider: string) => void;
+  onDelete?: (provider: string) => void;
 }
 
 /** Write-only credential row: the key input is never pre-filled. */
-function ProviderRow({ provider, status, busy, onSaveKey, onTest }: ProviderRowProps) {
+function ProviderRow({ provider, status, busy, onSaveKey, onTest, onDelete }: ProviderRowProps) {
   const [apiKey, setApiKey] = useState("");
   const [baseUrl, setBaseUrl] = useState("");
 
@@ -239,6 +241,18 @@ function ProviderRow({ provider, status, busy, onSaveKey, onTest }: ProviderRowP
             >
               Test
             </button>
+            {/* Revoke a stored credential (e.g. a compromised key). Hidden until
+                the provider is configured; an env-backed default has no row to remove. */}
+            {status?.configured && onDelete && (
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => onDelete(provider)}
+                className={`${GHOST_BTN_CLASS} text-j-danger hover:text-j-danger`}
+              >
+                Remove
+              </button>
+            )}
           </div>
         </div>
       </CardBody>
@@ -254,6 +268,7 @@ export function ModelTab({
   onSaveConfig,
   onSaveProviderKey,
   onTestProvider,
+  onDeleteProvider,
   savingConfig,
   providerBusy,
 }: ModelTabProps) {
@@ -392,6 +407,7 @@ export function ModelTab({
                 busy={providerBusy === provider}
                 onSaveKey={onSaveProviderKey}
                 onTest={onTestProvider}
+                onDelete={onDeleteProvider}
               />
             ))}
           </div>

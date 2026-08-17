@@ -16,6 +16,7 @@ import {
   saveModelConfig,
   saveProviderKey,
   testProviderKey,
+  deleteProviderKey,
 } from "@/lib/api";
 import { useToast } from "@/components/ui/toast";
 import { useAuth } from "@/lib/auth";
@@ -367,6 +368,23 @@ export function SettingsModal() {
     [addToast],
   );
 
+  const handleDeleteProviderKey = useCallback(
+    async (provider: string) => {
+      setProviderBusy(provider);
+      try {
+        await deleteProviderKey(provider);
+        const config = await fetchModelConfig();
+        setModelConfig(config);
+        addToast(`${provider} credentials removed`, "success");
+      } catch (err) {
+        addToast(errorToMessage(err), "error");
+      } finally {
+        setProviderBusy(null);
+      }
+    },
+    [addToast],
+  );
+
   if (!open) return null;
 
   // Group trust entries by family.
@@ -498,6 +516,7 @@ export function SettingsModal() {
                 onSaveConfig={handleSaveModelConfig}
                 onSaveProviderKey={handleSaveProviderKey}
                 onTestProvider={handleTestProvider}
+                onDeleteProvider={handleDeleteProviderKey}
                 savingConfig={savingModelConfig}
                 providerBusy={providerBusy}
               />

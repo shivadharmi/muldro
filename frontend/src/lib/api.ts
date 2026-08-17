@@ -16,6 +16,7 @@ import type {
   ModelConfig,
   Notification,
   PlanOutput,
+  ProviderStatus,
   SearchResponse,
   TierBinding,
   SystemDashboard,
@@ -1071,4 +1072,10 @@ export async function testProviderKey(
   provider: string
 ): Promise<{ status: string }> {
   return api(`/providers/${provider}/test`, { method: "POST" });
+}
+
+export async function deleteProviderKey(
+  provider: string
+): Promise<ProviderStatus> {
+  return api(`/providers/${provider}/credentials`, { method: "DELETE" });
 }

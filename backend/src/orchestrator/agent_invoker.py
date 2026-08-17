@@ -239,9 +239,14 @@ class AgentInvoker:
         """Get the Claude model ID for an agent's tier."""
         return default_model_id_for_tier(agent.model_tier) or default_model_id_for_tier("balanced")
 
-    async def _resolve_model_id_for_budget(self, agent: SubAgent, workspace_id: str) -> str:
-        """The resolved model id for budget attribution (workspace-aware). Falls back to the
-        tier default id when no binding resolves or lookup fails."""
+    async def _resolved_model_id(self, agent: SubAgent, workspace_id: str) -> str:
+        """The workspace-resolved model id that actually runs for this agent — used for both
+        budget attribution and streaming metadata (``agent_start.model``). Replays §10
+        override-degradation via ModelResolver.resolved_model_id. Falls back to the tier
+        default id when no binding resolves or lookup fails.
+
+        Distinct from ``get_model_for_agent`` (the catalog-default Anthropic id), which stays
+        the key for the general-purpose-subagent disable and other deployment-default uses."""
         from src.services.model_resolver import ModelResolver
 
         try:
@@ -530,7 +535,7 @@ class AgentInvoker:
         # Authoritative cost record (@after_model). model = the RESOLVED model id
         # (workspace binding-aware) so a non-Anthropic model is priced from its own
         # catalog entry, not silently at the Anthropic tier default.
-        budget_model = await self._resolve_model_id_for_budget(agent, workspace_id)
+        budget_model = await self._resolved_model_id(agent, workspace_id)
         budget_mw = make_budget_middleware(
             agent_name=agent.name,
             model=budget_model,
@@ -696,7 +701,9 @@ class AgentInvoker:
             yield {"event": "error", "message": f"Unknown agent: {agent_name}"}
             return
 
-        model = self.get_model_for_agent(agent)
+        # Streaming metadata (agent_start.model) must name the model that actually runs
+        # for this workspace, not the catalog default (workspace overrides / non-Anthropic).
+        model = await self._resolved_model_id(agent, workspace_id)
         tools = await self._resolve_tools(agent, workspace_id, tools_override)
         capability_summary = await self._maybe_capability_summary(
             agent_name, capability_summary, workspace_id
@@ -907,7 +914,7 @@ class AgentInvoker:
         # runtime-call counter with the fixed "deep" label, mirroring ``call_agent_stream``'s
         # per-call increment. Dormant in 5a (no live caller).
         AGENT_RUNTIME_CALLS.labels(runtime="deep").inc()
-        model = self.get_model_for_agent(lead)
+        model = await self._resolved_model_id(lead, workspace_id)
         system_blocks = self.build_system_prompt(lead, context_block)
         # A-5: PRESENTER_VOICE always on the lead — inline_format=True AND is_reply_lead=True
         # force the append regardless of the deep_inline_format flag (single-lead subsumes it).
@@ -1062,7 +1069,7 @@ class AgentInvoker:
             approval.decided_at = now
             approval.approved_by = user_id
 
-        model = self.get_model_for_agent(agent)
+        model = await self._resolved_model_id(agent, workspace_id)
         tools = await self._resolve_tools(agent, workspace_id, None)
         system_blocks = self.build_system_prompt(agent, persisted_context)
         deep_agent = await self._build_deep_agent_for(
@@ -1205,7 +1212,7 @@ class AgentInvoker:
             if decision == "approve":
                 approval.artifact_refs = values["artifact_refs"]
 
-        model = self.get_model_for_agent(lead)
+        model = await self._resolved_model_id(lead, workspace_id)
         tools = await self._resolve_tools(lead, workspace_id, None)
         system_blocks = self.build_system_prompt(lead, persisted_context)
         # PRESENTER_VOICE (parity with stream_deep_lead): the RESUMED lead IS the reply-producing
@@ -1436,7 +1443,8 @@ class AgentInvoker:
         if not agent:
             raise ValueError(f"Unknown agent: {agent_name}")
 
-        model = self.get_model_for_agent(agent)
+        # Streaming metadata (agent_start.model) must name the workspace-resolved model.
+        model = await self._resolved_model_id(agent, workspace_id)
         tools = await self._resolve_tools(agent, workspace_id, tools_override)
         capability_summary = await self._maybe_capability_summary(
             agent_name, capability_summary, workspace_id
