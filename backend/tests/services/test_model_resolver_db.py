@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 
 import pytest
 from cryptography.fernet import Fernet
+from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 from ulid import ULID
@@ -47,6 +48,12 @@ async def _session():
 
 
 async def _seed_workspace(db) -> str:
+    # Clear any committed deployment-default (NULL-workspace) config rows so this
+    # test's own NULL-workspace inserts don't collide with the startup seed that an
+    # app-lifespan test (e.g. an API test using create_app()) may have committed.
+    # These deletes roll back with the test's transaction, leaving real defaults intact.
+    await db.execute(delete(ModelBinding).where(ModelBinding.workspace_id.is_(None)))
+    await db.execute(delete(ProviderCredential).where(ProviderCredential.workspace_id.is_(None)))
     suffix = str(ULID())
     uid = f"usr_{suffix}"
     ws = f"ws_{suffix}"
