@@ -14,46 +14,49 @@ granted that capability.
 import pytest
 
 from src.adapter.enforcement import (
-    ACTION_REQUIRED_CAPABILITY,
-    GMAIL_ACTION_ALLOWLIST,
     CapabilityDenied,
     ensure_capability_allowed,
+    get_gateway_profile,
 )
+
+GMAIL_PROFILE = get_gateway_profile("gmail")
+GMAIL_ACTION_ALLOWLIST = GMAIL_PROFILE.action_allowlist
+ACTION_REQUIRED_CAPABILITY = GMAIL_PROFILE.action_required_capability
 
 
 def test_send_denied_for_read_only_token():
     """A token scoped to email.search cannot invoke gmail.send_email."""
     with pytest.raises(CapabilityDenied):
-        ensure_capability_allowed("gmail.send_email", ("email.search",))
+        ensure_capability_allowed("gmail.send_email", ("email.search",), GMAIL_PROFILE)
 
 
 def test_send_allowed_when_send_capability_granted():
     """A token carrying email.send may invoke gmail.send_email."""
-    ensure_capability_allowed("gmail.send_email", ("email.search", "email.send"))
+    ensure_capability_allowed("gmail.send_email", ("email.search", "email.send"), GMAIL_PROFILE)
 
 
 def test_search_allowed_for_search_capability():
     """A token carrying email.search may invoke gmail.fetch_emails."""
-    ensure_capability_allowed("gmail.fetch_emails", ("email.search",))
+    ensure_capability_allowed("gmail.fetch_emails", ("email.search",), GMAIL_PROFILE)
 
 
 def test_unmapped_action_denied_fail_closed():
     """An action with no capability mapping is denied even with broad scope."""
     with pytest.raises(CapabilityDenied):
-        ensure_capability_allowed("gmail.unknown", ("email.search", "email.send"))
+        ensure_capability_allowed("gmail.unknown", ("email.search", "email.send"), GMAIL_PROFILE)
 
 
 def test_empty_capabilities_denies_everything():
     """A token with no capabilities cannot invoke any action."""
     with pytest.raises(CapabilityDenied):
-        ensure_capability_allowed("gmail.fetch_emails", ())
+        ensure_capability_allowed("gmail.fetch_emails", (), GMAIL_PROFILE)
 
 
 def test_every_allowlisted_action_has_a_required_capability():
     """Guard: no allowlisted action may bypass capability enforcement.
 
-    If a future action is added to GMAIL_ACTION_ALLOWLIST without a matching
-    ACTION_REQUIRED_CAPABILITY entry, ensure_capability_allowed would have no
+    If a future action is added to the Gmail profile's allowlist without a
+    matching required-capability entry, ensure_capability_allowed would have no
     capability to check — this test turns that silent gap into a failure.
     """
     for action in GMAIL_ACTION_ALLOWLIST:

@@ -16,7 +16,7 @@ Endpoints:
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.deps import get_current_user_id, get_current_workspace_id
@@ -84,17 +84,25 @@ class UnifiedIntegrationResponse(BaseModel):
     health_status: str
     enabled: bool
     install_id: str | None = None
-    scopes: list[str] = []
+    scopes: list[str] = Field(default_factory=list)
     # Stable lowercase brand key for logo asset lookup (e.g. "google", "github").
     slug: str = ""
     # Coarse access level derived from `scopes`: subset of ["read", "write"].
-    access_scopes: list[str] = []
+    access_scopes: list[str] = Field(default_factory=list)
     # True when an OAuth integration is configured but its token is permanently
     # unusable — the user must reconnect (gates the "Reconnect" UI affordance).
     needs_reauth: bool = False
-    # OpenConnector provider name when this integration is gateway-backed
-    # (e.g. "gmail"), else None — tells the frontend which connect flow to use.
-    oc_provider: str | None = None
+    # Every OC provider this installation serves, in registry order (empty for
+    # non-gateway installations) — tells the frontend which connect flow to use.
+    oc_providers: list[str] = Field(default_factory=list)
+    # Per-provider connectivity from `connection_map` (empty for non-gateway
+    # installations), so a partially connected installation stays visible
+    # instead of collapsing into one "disconnected".
+    provider_connections: dict[str, bool] = Field(default_factory=dict)
+    # Registry `display_name` per OC provider (empty for non-gateway
+    # installations) — the frontend renders these instead of hand-maintaining
+    # its own provider -> label table that degrades to a raw slug.
+    oc_provider_labels: dict[str, str] = Field(default_factory=dict)
 
 
 # ── Endpoints ────────────────────────────────────────────────────────
@@ -135,6 +143,7 @@ async def list_unified_integrations(
     db: AsyncSession = Depends(get_db),
 ):
     """Unified view: joins MCP installations with OAuth provider status."""
+    from src.integrations.gateway_actions import provider_labels_for_server
     from src.services.integration_status import get_integration_statuses
 
     statuses = await get_integration_statuses(db, user_id, workspace_id)
@@ -153,7 +162,9 @@ async def list_unified_integrations(
             slug=s.slug,
             access_scopes=s.access_scopes,
             needs_reauth=s.needs_reauth,
-            oc_provider=s.oc_provider,
+            oc_providers=s.oc_providers,
+            provider_connections=s.provider_connections,
+            oc_provider_labels=provider_labels_for_server(s.server_name),
         )
         for s in statuses
     ]
@@ -240,15 +251,45 @@ async def _clear_connection_artifacts(
     """Revoke credentials + close live sessions for an integration.
 
     Shared by /disconnect (keeps row) and DELETE (drops row).
-    Deletes the OAuth token, closes cached MCP sessions, and unregisters the
-    server config so stale tool schemas are not reused on reconnect.
+    Revokes the credential — the OAuth token for a native installation, the
+    `connection_map` rows for a gateway-backed one — then closes cached MCP
+    sessions and unregisters the server config so stale tool schemas are not
+    reused on reconnect.
     """
+    from sqlalchemy import update
+
     from src.config.settings import get_settings
+    from src.integrations.gateway_actions import providers_for_server
     from src.integrations.mcp_pool import get_workspace_pool
+    from src.models.connection_map import ConnectionMap
     from src.models.database import get_session_factory
     from src.services.oauth_manager import OAuthManager
 
     settings = get_settings()
+
+    # Gateway-backed installations hold no OAuthManager token: their credential
+    # lives in OpenConnector and `integration_status` reads connectivity from
+    # `connection_map`. They also all declare auth_provider="platform_jwt",
+    # which misses the OAuth provider map below — so without this branch
+    # Disconnect would clear sessions, then the next status refetch would read
+    # the still-"active" rows and report connected again.
+    gateway_providers = providers_for_server(inst.server_name)
+    if gateway_providers:
+        # Scoped exactly like the rest of this endpoint: this workspace, this
+        # principal. Every alias of the installation's providers is revoked —
+        # "Disconnect" means all of this user's accounts for this integration.
+        # TODO: revoking on the OpenConnector side (deleting the stored
+        # credential via the OC admin API) is still outstanding — a later wave.
+        # Flipping the local rows only stops Jarvis resolving/reporting them.
+        await db.execute(
+            update(ConnectionMap)
+            .where(
+                ConnectionMap.workspace_id == workspace_id,
+                ConnectionMap.principal_id == user_id,
+                ConnectionMap.provider_id.in_(gateway_providers),
+            )
+            .values(connection_status="revoked")
+        )
 
     # Map server auth_provider → OAuth provider name (same table used by
     # /unified). Only oauth-backed installations have tokens to delete.
@@ -330,7 +371,15 @@ async def disconnect_installation(
     if inst.auth_provider and inst.auth_provider not in ("token", "none"):
         provider_name = inst.auth_provider
 
+    from src.integrations.gateway_actions import provider_labels_for_server, providers_for_server
     from src.services.integration_status import coarsen_scopes, derive_slug
+
+    # Every gateway installation declares the same auth_provider
+    # ("platform_jwt"), so deriving the brand slug from it collapses them
+    # all into "platform" — a collision between google-workspace and github.
+    # Derive from server_name for those instead, matching integration_status.py.
+    gateway_providers = providers_for_server(inst.server_name)
+    is_gateway = bool(gateway_providers)
 
     raw_scopes = inst.scopes_granted or []
     return UnifiedIntegrationResponse(
@@ -344,8 +393,14 @@ async def disconnect_installation(
         enabled=inst.enabled,
         install_id=inst.install_id,
         scopes=raw_scopes,
-        slug=derive_slug(provider_name, inst.server_name),
+        slug=derive_slug(None if is_gateway else provider_name, inst.server_name),
         access_scopes=coarsen_scopes(raw_scopes),
+        # Every provider this installation serves is disconnected post-clear,
+        # so all-False here — same shape list_unified_integrations returns for
+        # a fully disconnected gateway installation.
+        oc_providers=list(gateway_providers),
+        provider_connections={p: False for p in gateway_providers},
+        oc_provider_labels=provider_labels_for_server(inst.server_name),
     )
 
 

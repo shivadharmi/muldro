@@ -3,105 +3,113 @@
 No DB access, no I/O, no network calls — every function here is a pure
 transformation over in-memory data so it can be unit tested without any
 fixtures or mocks. These helpers are the building blocks the adapter layer
-composes to keep an OpenConnector-backed tool call within the Gmail
-gateway's allowed surface area (allowlisted actions, a server-forced
-connection identity, and secret-free payloads).
+composes to keep an OpenConnector-backed tool call within its provider's
+allowed surface area (allowlisted actions, a server-forced connection
+identity, and secret-free payloads).
+
+One adapter process now serves a reviewed SET of providers (spec decision
+D2), not a single hardcoded one — every action resolves its OWN policy
+profile from its OWN action_id (``profile_for_action``), fail-closed on an
+unregistered id. There is no default profile: a caller that forgets to
+resolve one gets a ``TypeError`` at the call site, not a silent check
+against the wrong provider's allowlist.
 """
 
 import copy
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
+from functools import cached_property
 from types import MappingProxyType
 
-from src.integrations.gateway_actions import GMAIL_ACTIONS
+from src.integrations.gateway_actions import (
+    ACTION_BY_ID,
+    PROVIDER_REGISTRY,
+    GatewayAction,
+    provider_of_action,
+)
 
-# Derived from the single source of truth (gateway_actions.GMAIL_ACTIONS) so the
-# allowlist, capability map, warm-start schemas, and catalog seeds never drift.
-#
-# NOTE: this boundary check is only as tight as the minted token. Today
-# ``session_pool._resolve_auth`` mints a blanket ``["email.search","email.send"]``
-# for every gateway JWT, so the send-vs-read distinction does not yet bite in
-# practice — the mint must become step-scoped (carrying only the capabilities
-# the current step needs) for this gate to be load-bearing. Tracked as part of
-# the connect-flow / per-step-JWT work; enforcing here is the correct boundary
-# regardless of how the token is currently scoped.
-GMAIL_ACTION_ALLOWLIST = frozenset(a.action_id for a in GMAIL_ACTIONS)
-ACTION_REQUIRED_CAPABILITY = {a.action_id: a.capability for a in GMAIL_ACTIONS}
+
+class ActionNotAllowed(Exception):  # noqa: N818 - name fixed by adapter interface spec
+    """Raised when an action is not in any registered provider's allowlist."""
+
+
+class CapabilityDenied(Exception):  # noqa: N818 - matches ActionNotAllowed/ConnectionDenied
+    """Raised when the principal lacks the capability an action requires."""
 
 
 @dataclass(frozen=True)
 class GatewayProfile:
-    """The per-provider policy surface the adapter enforces for one instance.
+    """The per-provider policy surface the adapter enforces.
 
-    An adapter instance serves exactly ONE provider (matching the per-provider
-    vMCP design). The profile bundles the three provider-specific values the
-    boundary needs: which provider connections are resolved, which actions are
-    allowlisted, and each action's required capability. These are CODE-defined
-    and reviewed — the active provider is *selected* by a setting, but the
-    allowlist itself is never env-injected (that would let ops widen the
-    boundary out-of-band).
+    One adapter serves a reviewed provider SET; every action resolves its own
+    profile from its own action_id (see profile_for_action), fail-closed on an
+    unknown action. Allowlist and capability map are DERIVED from ``actions`` so
+    they can never drift from the registry.
+
+    Both derived views are ``cached_property``: they sit on the per-request
+    enforcement path, and a plain ``@property`` rebuilt the frozenset/mapping on
+    every access. This works on a frozen dataclass because ``cached_property``
+    writes straight into ``instance.__dict__`` rather than going through
+    ``__setattr__`` (the frozen guard) — which holds only while this class has no
+    ``__slots__``. Immutability is unaffected: ``actions`` is a tuple of frozen
+    ``GatewayAction``s, and ``action_required_capability`` is still handed out as
+    a read-only ``MappingProxyType``.
     """
 
     provider_id: str
-    action_allowlist: frozenset[str]
-    action_required_capability: dict[str, str]
+    display_name: str
+    actions: tuple[GatewayAction, ...]
 
-    def __post_init__(self) -> None:
-        # Completeness invariant: every allowlisted action MUST have a required
-        # capability, or ``ensure_capability_allowed`` would deny it anyway —
-        # but catching it at construction turns a silent policy hole into an
-        # import-time failure. Then freeze the map (frozen=True only stops
-        # rebinding the attribute, not mutating the dict it points at).
-        missing = set(self.action_allowlist) - set(self.action_required_capability)
-        if missing:
-            raise ValueError(
-                f"gateway profile {self.provider_id!r}: allowlisted actions "
-                f"missing a required-capability mapping: {sorted(missing)}"
-            )
-        object.__setattr__(
-            self,
-            "action_required_capability",
-            MappingProxyType(dict(self.action_required_capability)),
-        )
+    @cached_property
+    def action_allowlist(self) -> frozenset[str]:
+        return frozenset(a.action_id for a in self.actions)
+
+    @cached_property
+    def action_required_capability(self) -> Mapping[str, str]:
+        return MappingProxyType({a.action_id: a.capability for a in self.actions})
 
 
-GMAIL_PROFILE = GatewayProfile(
-    provider_id="gmail",
-    action_allowlist=GMAIL_ACTION_ALLOWLIST,
-    action_required_capability=ACTION_REQUIRED_CAPABILITY,
-)
-
-# A no-auth provider used ONLY by the automated integration harness to drive a
-# real action through the full adapter over HTTP (Gmail's OAuth can't be
-# headless). Read-only; the sole allowlisted action is a public HN read.
-HACKERNEWS_ACTION_ALLOWLIST = frozenset(
-    {
-        "hackernews.get_ask_stories",
-        "hackernews.get_top_stories",
-    }
-)
-HACKERNEWS_ACTION_REQUIRED_CAPABILITY = {
-    "hackernews.get_ask_stories": "hackernews.read",
-    "hackernews.get_top_stories": "hackernews.read",
-}
-HACKERNEWS_PROFILE = GatewayProfile(
-    provider_id="hackernews",
-    action_allowlist=HACKERNEWS_ACTION_ALLOWLIST,
-    action_required_capability=HACKERNEWS_ACTION_REQUIRED_CAPABILITY,
-)
-
-PROVIDER_PROFILES: dict[str, GatewayProfile] = {
-    GMAIL_PROFILE.provider_id: GMAIL_PROFILE,
-    HACKERNEWS_PROFILE.provider_id: HACKERNEWS_PROFILE,
+# Derived from the single source of truth (gateway_actions.PROVIDER_REGISTRY) so the
+# allowlist, capability map, warm-start schemas, and catalog seeds never drift.
+#
+# NOTE: this boundary check is only as tight as the minted token. Today
+# ``session_pool._resolve_auth`` mints a blanket capability list for every
+# gateway JWT; the mint is being made registry-derived (via
+# ``gateway_actions.capabilities_for_server``, a per-server union) so the
+# send-vs-read distinction bites in practice — the mint must become
+# step-scoped (carrying only the capabilities the current step needs) for
+# this gate to be fully load-bearing. Tracked as part of the connect-flow /
+# per-step-JWT work; enforcing here is the correct boundary regardless of how
+# the token is currently scoped.
+_PROFILES: dict[str, GatewayProfile] = {
+    provider_id: GatewayProfile(
+        provider_id=provider_id,
+        display_name=provider.display_name,
+        actions=provider.actions,
+    )
+    for provider_id, provider in PROVIDER_REGISTRY.items()
 }
 
 
 def get_gateway_profile(provider: str) -> GatewayProfile:
     """Return the reviewed profile for ``provider``; fail-closed on unknown."""
-    profile = PROVIDER_PROFILES.get(provider)
+    profile = _PROFILES.get(provider)
     if profile is None:
         raise ValueError(f"No gateway profile for provider {provider!r}")
     return profile
+
+
+def profile_for_action(action_id: str) -> GatewayProfile:
+    """Resolve the profile owning ``action_id``. Fail-closed on unregistered ids.
+
+    Resolution is by MEMBERSHIP in the registry, never by splitting on the first
+    dot, so a caller-supplied prefix cannot select a profile.
+    """
+    provider = provider_of_action(action_id)
+    if provider is None or action_id not in ACTION_BY_ID:
+        raise ActionNotAllowed(f"Action not allowed: {action_id}")
+    return _PROFILES[provider]
 
 
 # Secret key names in NORMALIZED form: lowercased with every non-alphanumeric
@@ -134,15 +142,7 @@ def _normalize_key(key: object) -> str:
     return re.sub(r"[^a-z0-9]", "", str(key).lower())
 
 
-class ActionNotAllowed(Exception):  # noqa: N818 - name fixed by adapter interface spec
-    """Raised when an action is not in the Gmail gateway's allowlist."""
-
-
-class CapabilityDenied(Exception):  # noqa: N818 - matches ActionNotAllowed/ConnectionDenied
-    """Raised when the principal lacks the capability an action requires."""
-
-
-def ensure_action_allowed(action_id: str, profile: GatewayProfile = GMAIL_PROFILE) -> None:
+def ensure_action_allowed(action_id: str, profile: GatewayProfile) -> None:
     """Raise ActionNotAllowed if action_id is not in the profile's allowlist."""
     if action_id not in profile.action_allowlist:
         raise ActionNotAllowed(f"Action not allowed: {action_id}")
@@ -151,7 +151,7 @@ def ensure_action_allowed(action_id: str, profile: GatewayProfile = GMAIL_PROFIL
 def ensure_capability_allowed(
     action_id: str,
     capabilities: tuple[str, ...],
-    profile: GatewayProfile = GMAIL_PROFILE,
+    profile: GatewayProfile,
 ) -> None:
     """Raise CapabilityDenied unless the principal is authorized for action_id.
 

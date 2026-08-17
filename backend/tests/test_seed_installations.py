@@ -8,23 +8,25 @@ class TestSeedInstallations:
         return next(s for s in _DEFAULT_INSTALLATIONS if s["server_name"] == server_name)
 
     def test_google_workspace_http_transport(self):
-        """Google Workspace seed uses streamable-http with managed_local process (no static URL)."""
+        """Google Workspace seed uses streamable-http; gateway-routed, no static URL/local proc."""
         seed = self._get_seed("google-workspace")
         assert seed["transport"] == "streamable-http", (
             f"Expected streamable-http transport, got '{seed['transport']}'"
         )
-        # URL is resolved at runtime by LocalMCPProcessManager — no static remote_url.
+        # URL is resolved at runtime by the OpenConnector gateway adapter —
+        # no static remote_url and no uvx-managed local process.
         assert seed.get("remote_url") is None, (
-            "Google Workspace is managed_local; remote_url should be None"
+            "Google Workspace is gateway-routed; remote_url should be None"
         )
-        assert seed.get("managed_local") is True, (
-            "Google Workspace must have managed_local=True "
-            "(URL resolved via LocalMCPProcessManager)"
+        assert not seed.get("managed_local"), (
+            "Google Workspace is gateway-routed, not managed_local "
+            "(no uvx process; the OpenConnector adapter resolves the URL)"
         )
         assert seed.get("command") is None, "HTTP transport should not have a command"
         assert seed.get("args") is None, "HTTP transport should not have args"
-        assert seed["auth_provider"] == "google", (
-            f"auth_provider must be 'google' for OAuth, got '{seed['auth_provider']}'"
+        assert seed["auth_provider"] == "platform_jwt", (
+            f"auth_provider must be 'platform_jwt' for gateway-routed servers, "
+            f"got '{seed['auth_provider']}'"
         )
         assert seed["env_template"] == {}, (
             "HTTP service env vars live in LocalServerSpec, not in seed"
@@ -95,11 +97,14 @@ class TestAuthProviderLabels:
     def _get_seed(self, server_name: str) -> dict:
         return next(s for s in _DEFAULT_INSTALLATIONS if s["server_name"] == server_name)
 
-    def test_github_auth_provider_is_oauth(self):
+    def test_github_auth_provider_is_platform_jwt(self):
+        # GitHub is gateway-routed: Jarvis authenticates to the OpenConnector
+        # adapter via platform_jwt; the GitHub OAuth token itself lives in
+        # OpenConnector, not OAuthManager.
         seed = self._get_seed("github")
         actual = seed["auth_provider"]
-        assert actual == "github", (
-            f"GitHub uses OAuth flow — auth_provider must be 'github', got '{actual}'"
+        assert actual == "platform_jwt", (
+            f"GitHub is gateway-routed — auth_provider must be 'platform_jwt', got '{actual}'"
         )
 
     def test_notion_auth_provider_is_oauth(self):

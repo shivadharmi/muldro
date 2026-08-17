@@ -4,6 +4,8 @@ import asyncio
 import logging
 from datetime import datetime, timezone
 
+from src.integrations.gateway_actions import gateway_provider_for_source
+
 logger = logging.getLogger(__name__)
 
 # Token-acquisition reasons that mean the credential is PERMANENTLY unusable and
@@ -300,9 +302,79 @@ class PerceptionTickMixin:
 
         return oauth_manager, reauth_service
 
+    async def _gateway_connection_index(
+        self, db, due_states
+    ) -> dict[tuple[str, str], set[str] | None]:
+        """Batch-resolve which OC providers each principal can actually resolve.
+
+        Returns ``{(workspace_id, user_id): active_provider_ids | None}``, where
+        ``None`` means "could not determine" and is treated fail-open by the
+        caller (same posture as the OAuth branch's validity-check failure).
+
+        ONE query per distinct ``(workspace_id, user_id)`` — never one per source
+        — mirroring the per-``(user, provider)`` caching the OAuth branch uses, so
+        a tick with many due gateway sources still costs a handful of selects.
+
+        The lookup delegates to ``integration_status.active_connection_providers``
+        rather than restating its WHERE clause: "runnable" must mean exactly what
+        ``adapter/connection_resolver`` will resolve (workspace + principal +
+        provider + the DEFAULT account alias + ``connection_status == "active"``),
+        and a second copy of that query is how the two definitions drift apart.
+        """
+        from src.services import integration_status
+
+        wanted: dict[tuple[str, str], set[str]] = {}
+        for s in due_states:
+            provider = gateway_provider_for_source(s.source)
+            if provider is None:
+                continue
+            wanted.setdefault((s.workspace_id or "", s.user_id), set()).add(provider)
+
+        index: dict[tuple[str, str], set[str] | None] = {}
+        for key, providers in wanted.items():
+            workspace_id, user_id = key
+            if not workspace_id:
+                # A source with no workspace cannot be scoped to a connection.
+                # Fail-open (keep) rather than silently going dark: the cycle's
+                # own error path reports a real failure, which is visible.
+                logger.debug("Gateway source for %s has no workspace_id; keeping", user_id)
+                index[key] = None
+                continue
+            try:
+                index[key] = await integration_status.active_connection_providers(
+                    db, workspace_id, user_id, tuple(sorted(providers))
+                )
+            except Exception:
+                logger.debug(
+                    "Gateway connection lookup failed for %s/%s; keeping sources",
+                    workspace_id,
+                    user_id,
+                    exc_info=True,
+                )
+                index[key] = None
+        return index
+
     async def _drop_tokenless_sources(self, db, due_states, marked_out=None):
-        """Validity-aware re-auth gate: drop + surface re-auth for permanently
-        unusable credentials, keep everything else.
+        """Runnability gate: drop sources whose credential cannot be used, keep
+        the rest. Two branches, because Jarvis now holds credentials two ways.
+
+        **Gateway-backed sources** (``gateway_provider_for_source`` resolves —
+        gmail, calendar) hold their credential inside OpenConnector, recorded
+        locally as a ``connection_map`` row. OAuthManager holds no token for them
+        and no route can mint one, so consulting it answers ``no_token`` forever
+        — a PERMANENT reason, which used to drop these sources AND mark them
+        ``needs_reauth`` unrecoverably, silently ending Gmail/Calendar
+        perception. These sources are decided ONLY by an active connection and
+        never touch OAuthManager. When there is no active connection the source
+        is SKIPPED, deliberately NOT marked ``needs_reauth``: "not connected yet"
+        is not a revoked credential, and the reauth mark pauses the row behind a
+        recovery path (``_tick_reauth_recovery``) that can only ever re-check
+        OAuthManager — i.e. it would strand the source exactly as the bug did.
+        Skipping leaves the row due, so the next tick re-checks it and it starts
+        running the moment the user finishes connecting.
+
+        **OAuth-backed sources** (slack, notion, ... — everything else) keep the
+        original behaviour verbatim:
 
         For each due source, group by ``(user_id, provider)`` and call
         ``OAuthManager.get_valid_token_with_reason`` ONCE per pair (cached within
@@ -328,18 +400,47 @@ class PerceptionTickMixin:
         Fail-open: if the OAuthManager is unavailable or the validity check itself
         throws, every source is kept rather than nuking the tick.
         """
-        oauth_manager, reauth_service = self._validity_gate_collaborators()
-        if oauth_manager is None:
-            return due_states
+        gateway_index = await self._gateway_connection_index(db, due_states)
+
+        # Only build the OAuth collaborators when a non-gateway source is due —
+        # a gmail/calendar-only tick must not need an OAuthManager to exist.
+        oauth_manager = reauth_service = None
+        if any(gateway_provider_for_source(s.source) is None for s in due_states):
+            oauth_manager, reauth_service = self._validity_gate_collaborators()
 
         # Cache one validity result per (user, provider) for the tick.
         reason_cache: dict[tuple[str, str], str] = {}
         # Providers already surfaced for re-auth this tick (one set of writes
         # per pair).
         marked: set[tuple[str, str]] = set()
+        # (user, provider) pairs already logged as unconnected this tick.
+        unconnected_logged: set[tuple[str, str]] = set()
 
         keep = []
         for s in due_states:
+            gateway_provider = gateway_provider_for_source(s.source)
+            if gateway_provider is not None:
+                active = gateway_index.get((s.workspace_id or "", s.user_id))
+                if active is None or gateway_provider in active:
+                    keep.append(s)
+                    continue
+                key = (s.user_id, gateway_provider)
+                if key not in unconnected_logged:
+                    unconnected_logged.add(key)
+                    logger.info(
+                        "Skipping perception source %s/%s — gateway provider %s "
+                        "has no active connection (not paused; runs on connect)",
+                        s.user_id,
+                        s.source,
+                        gateway_provider,
+                    )
+                continue
+
+            if oauth_manager is None:
+                # No OAuthManager available — fail-open for the OAuth branch.
+                keep.append(s)
+                continue
+
             provider = self._provider_for_source(s.source)
             key = (s.user_id, provider)
             try:

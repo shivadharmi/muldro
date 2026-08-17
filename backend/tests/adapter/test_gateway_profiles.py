@@ -1,16 +1,16 @@
 """Provider profiles — the adapter's allowlist/capability-map/provider are
 selected by a single code-defined profile, not hardcoded to Gmail.
 
-The allowlist stays CODE-defined (never env-injected): a setting only selects
-WHICH reviewed profile is active. Gmail remains the default so the existing
-adapter behavior is unchanged; a no-auth `hackernews` profile exists so the
-automated integration harness can drive a real provider through the adapter.
+The allowlist stays CODE-defined (never env-injected). Every action resolves
+its OWN profile from its OWN action_id (fail-closed on an unknown action), so
+one adapter can serve several providers at once.
 """
+
+from types import MappingProxyType
 
 import pytest
 
 from src.adapter.enforcement import (
-    GMAIL_PROFILE,
     ActionNotAllowed,
     CapabilityDenied,
     GatewayProfile,
@@ -18,21 +18,21 @@ from src.adapter.enforcement import (
     ensure_capability_allowed,
     get_gateway_profile,
 )
+from src.integrations.gateway_actions import GatewayAction
+
+GMAIL_PROFILE = get_gateway_profile("gmail")
 
 
-def test_gmail_profile_is_the_default_provider():
+def test_gmail_profile_is_registered():
     assert GMAIL_PROFILE.provider_id == "gmail"
     assert "gmail.fetch_emails" in GMAIL_PROFILE.action_allowlist
     assert get_gateway_profile("gmail") is GMAIL_PROFILE
 
 
-def test_hackernews_profile_exists_and_is_no_auth_read():
-    hn = get_gateway_profile("hackernews")
-    assert hn.provider_id == "hackernews"
-    assert "hackernews.get_ask_stories" in hn.action_allowlist
-    # Every allowlisted action maps to a required capability (fail-closed guard).
-    for action in hn.action_allowlist:
-        assert action in hn.action_required_capability
+def test_every_allowlisted_action_maps_to_a_required_capability():
+    """Fail-closed guard: an allowlisted action with no capability is a policy hole."""
+    for action in GMAIL_PROFILE.action_allowlist:
+        assert action in GMAIL_PROFILE.action_required_capability
 
 
 def test_unknown_provider_is_denied_fail_closed():
@@ -40,24 +40,29 @@ def test_unknown_provider_is_denied_fail_closed():
         get_gateway_profile("dropbox")
 
 
-def test_enforcement_respects_the_selected_profile():
-    hn = get_gateway_profile("hackernews")
-    # A gmail action is NOT allowed under the hackernews profile.
+def test_enforcement_reads_the_profile_it_is_handed():
+    """Enforcement reads the profile it is handed, not a hardcoded Gmail policy."""
+    other = GatewayProfile(
+        provider_id="other",
+        display_name="Other",
+        actions=(
+            GatewayAction(
+                "other.read_thing",
+                "other.read",
+                "low",
+                False,
+                {"type": "object"},
+            ),
+        ),
+    )
+    # A gmail action is NOT allowed under a different provider's profile.
     with pytest.raises(ActionNotAllowed):
-        ensure_action_allowed("gmail.send_email", hn)
-    # The hackernews action is allowed, and needs the hackernews capability.
-    ensure_action_allowed("hackernews.get_ask_stories", hn)
-    ensure_capability_allowed("hackernews.get_ask_stories", ("hackernews.read",), hn)
+        ensure_action_allowed("gmail.send_email", other)
+    # That profile's own action is allowed, and needs that profile's capability.
+    ensure_action_allowed("other.read_thing", other)
+    ensure_capability_allowed("other.read_thing", ("other.read",), other)
     with pytest.raises(CapabilityDenied):
-        ensure_capability_allowed("hackernews.get_ask_stories", ("email.search",), hn)
-
-
-def test_enforcement_defaults_to_gmail_profile_when_unspecified():
-    # Backward compatibility: existing call sites pass no profile -> Gmail.
-    ensure_action_allowed("gmail.fetch_emails")
-    ensure_capability_allowed("gmail.fetch_emails", ("email.search",))
-    with pytest.raises(ActionNotAllowed):
-        ensure_action_allowed("hackernews.get_ask_stories")
+        ensure_capability_allowed("other.read_thing", ("email.search",), other)
 
 
 def test_gateway_profile_is_frozen():
@@ -66,17 +71,29 @@ def test_gateway_profile_is_frozen():
         GMAIL_PROFILE.provider_id = "x"
 
 
-def test_incomplete_profile_is_rejected_at_construction():
-    """An allowlisted action with no capability mapping must fail to construct."""
-    with pytest.raises(ValueError):
-        GatewayProfile(
-            provider_id="broken",
-            action_allowlist=frozenset({"broken.read"}),
-            action_required_capability={},  # missing the mapping
-        )
-
-
 def test_profile_capability_map_is_immutable():
-    """The capability map cannot be mutated after construction (defense-in-depth)."""
+    """What actually makes the profile's policy state unmutatable after construction.
+
+    ``action_required_capability`` is now a ``cached_property``, so a caller holds
+    the SAME object the profile does — mutating the returned proxy would be a real
+    mutation, not a throwaway one. Immutability therefore rests on two things,
+    both asserted here: the mapping is handed out as a read-only
+    ``MappingProxyType``, and the state it is derived from (``profile.actions``)
+    is a tuple of frozen ``GatewayAction`` dataclasses.
+    """
+    capability_map = GMAIL_PROFILE.action_required_capability
+    assert isinstance(capability_map, MappingProxyType)
     with pytest.raises(TypeError):
-        GMAIL_PROFILE.action_required_capability["gmail.send_email"] = "email.read"
+        capability_map["gmail.send_email"] = "email.read"
+
+    assert isinstance(GMAIL_PROFILE.actions, tuple)
+    for action in GMAIL_PROFILE.actions:
+        assert isinstance(action, GatewayAction)
+        with pytest.raises((AttributeError, TypeError)):
+            action.capability = "email.read"
+
+
+def test_derived_views_are_cached_not_rebuilt_per_access():
+    """They sit on the per-request enforcement path; a plain @property reallocated."""
+    assert GMAIL_PROFILE.action_allowlist is GMAIL_PROFILE.action_allowlist
+    assert GMAIL_PROFILE.action_required_capability is GMAIL_PROFILE.action_required_capability

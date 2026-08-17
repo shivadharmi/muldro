@@ -9,8 +9,15 @@ from src.api.deps import get_current_user, get_current_user_id
 from tests.conftest import TEST_USER_ID
 
 
-class TestGoogleAuthRoutes:
-    """Test Google OAuth flow endpoints."""
+class TestOAuthConnectRoutes:
+    """The native OAuth connect routes, and what they no longer serve.
+
+    ``google`` and ``github`` moved behind the OpenConnector gateway, which owns
+    their OAuth clients. Their native authorize/callback branches were deleted,
+    so both now fall through to the shared "Unknown provider" 400 — even when
+    Jarvis-side client credentials happen to be configured. Minting a token
+    nothing reads was the failure mode this closes.
+    """
 
     def _client(self):
         _user = MagicMock()
@@ -23,7 +30,8 @@ class TestGoogleAuthRoutes:
         app.dependency_overrides.pop(get_current_user, None)
         app.dependency_overrides.pop(get_current_user_id, None)
 
-    def test_authorize_url_returns_url(self):
+    def test_google_authorize_is_retired(self):
+        """Configured Google credentials must NOT resurrect the native flow."""
         from src.config.settings import get_settings
         from tests.conftest import make_mock_settings
 
@@ -37,39 +45,38 @@ class TestGoogleAuthRoutes:
         client = self._client()
         try:
             resp = client.get("/v1/auth/oauth/google/authorize")
-            assert resp.status_code == 200
-            data = resp.json()
-            assert "url" in data
-            assert "test_client_id" in data["url"]
+            assert resp.status_code == 400
+            assert "test_client_id" not in resp.text
         finally:
             app.dependency_overrides.pop(get_settings, None)
             self._cleanup()
 
-    def test_authorize_url_missing_client_id(self):
+    def test_github_authorize_is_retired(self):
         from src.config.settings import get_settings
         from tests.conftest import make_mock_settings
 
         mock_settings = make_mock_settings(
-            google_oauth_client_id="",
-            google_oauth_client_secret="",
+            github_oauth_client_id="gh_client_id",
+            github_oauth_client_secret="gh_secret",
             backend_token="",
         )
         app.dependency_overrides[get_settings] = lambda: mock_settings
+        client = self._client()
         try:
-            client = self._client()
-            resp = client.get("/v1/auth/oauth/google/authorize")
-            assert resp.status_code in (400, 500)
+            resp = client.get("/v1/auth/oauth/github/authorize")
+            assert resp.status_code == 400
+            assert "gh_client_id" not in resp.text
         finally:
             app.dependency_overrides.pop(get_settings, None)
             self._cleanup()
 
-    def test_callback_missing_credentials(self):
+    def test_google_callback_is_retired(self):
         from src.config.settings import get_settings
         from tests.conftest import make_mock_settings
 
         mock_settings = make_mock_settings(
-            google_oauth_client_id="",
-            google_oauth_client_secret="",
+            google_oauth_client_id="test_client_id",
+            google_oauth_client_secret="test_secret",
             backend_token="",
         )
         app.dependency_overrides[get_settings] = lambda: mock_settings
@@ -79,8 +86,27 @@ class TestGoogleAuthRoutes:
                 f"/v1/auth/oauth/google/callback?code=test_code&state={TEST_USER_ID}",
                 follow_redirects=False,
             )
-            # Missing credentials → _error_redirect (307 to frontend with error)
-            assert resp.status_code in (307, 400, 500)
+            assert resp.status_code == 400
+        finally:
+            app.dependency_overrides.pop(get_settings, None)
+            self._cleanup()
+
+    def test_unmigrated_provider_still_authorizes(self):
+        """Retirement is scoped: notion keeps its native authorize URL."""
+        from src.config.settings import get_settings
+        from tests.conftest import make_mock_settings
+
+        mock_settings = make_mock_settings(
+            notion_oauth_client_id="notion_client_id",
+            notion_oauth_redirect_uri="http://localhost:3000/auth/callback",
+            backend_token="",
+        )
+        app.dependency_overrides[get_settings] = lambda: mock_settings
+        client = self._client()
+        try:
+            resp = client.get("/v1/auth/oauth/notion/authorize")
+            assert resp.status_code == 200
+            assert "notion_client_id" in resp.json()["url"]
         finally:
             app.dependency_overrides.pop(get_settings, None)
             self._cleanup()

@@ -8,7 +8,11 @@ from src.services.integration_status import IntegrationStatus, get_integration_s
 from src.services.oauth_manager import TokenResult
 
 
-def _make_inst(server_name="github", auth_provider="github", **kw):
+# NOTE: uses slack (a native-OAuth installation), NOT github/google-workspace —
+# those are gateway-backed now, so their connectivity comes from connection_map
+# and never touches OAuthManager. Gateway coverage lives in
+# tests/test_integration_status_gateway.py.
+def _make_inst(server_name="slack", auth_provider="slack", **kw):
     inst = MagicMock()
     inst.server_name = server_name
     inst.display_name = kw.get("display_name", server_name.title())
@@ -44,7 +48,7 @@ async def _run_statuses(token_result, *, configured=True):
 
     settings = MagicMock()
     settings.oauth_encryption_key = "key" if configured else ""
-    settings.github_oauth_client_id = "cid" if configured else ""
+    settings.slack_oauth_client_id = "cid" if configured else ""
 
     oauth_mgr = MagicMock()
     oauth_mgr.get_valid_token_with_reason = AsyncMock(return_value=token_result)

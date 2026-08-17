@@ -19,6 +19,17 @@ from src.integrations.session_pool import UserMCPSessionPool
 logger = logging.getLogger(__name__)
 
 
+class GatewayNotConfigured(RuntimeError):  # noqa: N818 - a config state, not an error class
+    """A gateway-declared installation cannot be routed: no vMCP URL is set.
+
+    Narrow on purpose. ``initialize_from_db`` skips exactly this and keeps
+    registering the remaining installations; catching bare ``RuntimeError``
+    there would mis-report any unrelated failure as "vMCP not configured".
+    Subclasses ``RuntimeError`` so callers that treat it as a generic runtime
+    misconfiguration still work.
+    """
+
+
 @dataclass
 class ServerEntry:
     """A registered MCP server for a workspace."""
@@ -291,7 +302,24 @@ class WorkspaceMCPPool:
 
                 count = 0
                 for inst in installations:
-                    config = _installation_to_config(inst)
+                    try:
+                        config = _installation_to_config(inst)
+                    except GatewayNotConfigured as exc:
+                        # A gateway-backed installation with no vMCP URL configured is
+                        # a config error for THAT installation alone (and only that
+                        # case — the exception type is narrow so an unrelated
+                        # RuntimeError is never mislabelled). Skip it loudly and
+                        # keep going: the enclosing try/except spans the whole loop and
+                        # logs at DEBUG, so letting this propagate would silently drop
+                        # every remaining installation -- taking unmigrated servers
+                        # (slack, notion, atlassian) down with the misconfigured one.
+                        logger.error(
+                            "Skipping MCP server %r for workspace %s: %s",
+                            inst.server_name,
+                            inst.workspace_id,
+                            exc,
+                        )
+                        continue
                     await self.add_server(inst.workspace_id, inst.server_name, config)
                     count += 1
 
@@ -348,15 +376,20 @@ class WorkspaceMCPPool:
 def _installation_to_config(inst: Any) -> dict:
     """Convert a IntegrationInstallation ORM object to a config dict."""
     settings = get_settings()
-    if (
-        settings.gmail_via_gateway
-        and inst.server_name == "google-workspace"
-        and settings.toolhive_vmcp_url
-    ):
-        # Gmail gateway slice: route the google-workspace installation at the
-        # ToolHive vMCP (fronting an OpenConnector MCP server) instead of the
-        # native local google-workspace-mcp process. auth_provider="platform_jwt"
-        # is resolved in UserMCPSessionPool._resolve_auth (Task 12).
+    if inst.auth_provider == "platform_jwt":
+        # Gateway-backed: the installation DECLARES that its tools are served by
+        # the OpenConnector adapter. No server-name special-casing -- adding a
+        # provider is a registry change, not a routing change. A short-lived
+        # platform JWT is minted in UserMCPSessionPool._resolve_auth, with
+        # capabilities derived from gateway_actions.capabilities_for_server.
+        if not settings.toolhive_vmcp_url:
+            raise GatewayNotConfigured(
+                f"Installation '{inst.server_name}' declares auth_provider="
+                "'platform_jwt' but settings.toolhive_vmcp_url is not set (env "
+                "JARVIS_TOOLHIVE_VMCP_URL). There is no native fallback for "
+                "gateway-routed installations -- set the vMCP URL or disable "
+                "the installation."
+            )
         return {
             "transport": "streamable-http",
             "auth_provider": "platform_jwt",

@@ -187,14 +187,14 @@ def test_special_tool_properties():
 
 
 def test_external_tool_seeds_count():
-    """Verify exactly 113 external tool seeds are registered."""
-    assert len(EXTERNAL_TOOL_SEEDS) == 113
+    """Verify exactly 87 external tool seeds are registered."""
+    assert len(EXTERNAL_TOOL_SEEDS) == 87
 
 
 def test_verified_seeds_count():
-    """Verify exactly 69 seeds are verified."""
+    """Verify exactly 65 seeds are verified."""
     verified = get_verified_seeds()
-    assert len(verified) == 69
+    assert len(verified) == 65
 
 
 def test_no_duplicate_external_names_per_server():
@@ -224,8 +224,8 @@ def test_notion_seeds_api_prefix():
 def test_seeds_for_server_counts():
     """Verify per-server tool counts match expected."""
     expected_counts = {
-        "google-workspace": 25,
-        "github": 22,
+        "google-workspace": 13,
+        "github": 8,
         "slack": 8,
         "notion": 22,
         "playwright": 22,
@@ -255,19 +255,21 @@ def test_get_seeds_for_server_helper():
 def test_get_verified_seeds_helper():
     """Verify get_verified_seeds only returns verified=True entries."""
     verified = get_verified_seeds()
-    assert len(verified) == 69
+    assert len(verified) == 65
 
     # All returned seeds should be verified
     for seed in verified:
         assert seed.verified is True
 
-    # Verify expected servers are present in verified seeds
+    # Verify expected servers are present in verified seeds. google-workspace
+    # and github are gateway-only servers; their derived seeds are all
+    # verified=True (adapter warm-start is the ground truth for these names).
     verified_servers = {seed.server for seed in verified}
-    expected_verified = {"notion", "playwright", "google-workspace"}
+    expected_verified = {"notion", "playwright", "google-workspace", "github"}
     assert expected_verified.issubset(verified_servers)
 
     # Verify unverified servers are NOT in verified seeds
-    unverified_servers = {"github", "slack", "atlassian", "_composite"}
+    unverified_servers = {"slack", "atlassian", "_composite"}
     assert verified_servers.isdisjoint(unverified_servers)
 
 
@@ -300,7 +302,7 @@ def test_verified_tool_servers():
     """Verify exactly 4 servers have verified tools."""
     verified = get_verified_seeds()
     verified_servers = {seed.server for seed in verified}
-    assert verified_servers == {"notion", "playwright", "google-workspace"}
+    assert verified_servers == {"notion", "playwright", "google-workspace", "github"}
 
 
 def test_composite_tools():

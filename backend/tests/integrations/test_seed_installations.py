@@ -10,18 +10,21 @@ def _by_name(name: str) -> dict:
 
 
 def test_github_is_remote_http_not_docker():
+    # github is gateway-routed (Wave 3): no static remote_url, no local
+    # process, no docker — the OpenConnector adapter resolves the endpoint.
     gh = _by_name("github")
     assert gh["transport"] == "streamable-http"
-    assert gh["remote_url"] == "https://api.githubcopilot.com/mcp/"
+    assert gh["remote_url"] is None
     assert gh["command"] is None
     assert gh["args"] is None
-    assert gh["auth_provider"] == "github"
     assert "docker" not in str(gh.get("args"))
 
 
-def test_google_workspace_seed_is_managed_local():
+def test_google_workspace_seed_is_gateway_routed_not_managed_local():
+    # google-workspace is gateway-routed (Wave 3): no uvx-managed local
+    # process, no static remote_url — the OpenConnector adapter resolves it.
     gw = _by_name("google-workspace")
-    assert gw["managed_local"] is True
+    assert not gw.get("managed_local")
     assert gw["remote_url"] is None
     assert gw["transport"] == "streamable-http"
 
@@ -43,3 +46,23 @@ def test_npx_servers_are_version_pinned():
         # scoped packages (@scope/name@1.2.3) strip the leading scope first.
         tail = pkg[1:] if pkg.startswith("@") else pkg
         assert re.search(r"@\d", tail), f"{name} npx package '{pkg}' is not version-pinned"
+
+
+def test_migrated_installations_declare_platform_jwt():
+    for name in ("google-workspace", "github"):
+        inst = _by_name(name)
+        assert inst["auth_provider"] == "platform_jwt"
+        assert inst["transport"] == "streamable-http"
+
+
+def test_migrated_installations_carry_no_native_transport_config():
+    for name in ("google-workspace", "github"):
+        inst = _by_name(name)
+        assert inst.get("command") is None
+        assert inst.get("remote_url") is None
+        assert not inst.get("managed_local")
+
+
+def test_unmigrated_installations_keep_native_transport():
+    assert _by_name("slack")["command"] == "npx"
+    assert _by_name("atlassian")["remote_url"] == "https://mcp.atlassian.com/v1/mcp"

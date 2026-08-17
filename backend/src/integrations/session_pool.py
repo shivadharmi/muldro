@@ -15,6 +15,12 @@ from typing import Any
 from fastmcp import Client
 from fastmcp.client.auth import BearerAuth
 
+from src.integrations.gateway_actions import (
+    PROVIDER_REGISTRY,
+    capabilities_for_server,
+    providers_for_server,
+)
+from src.integrations.gateway_naming import action_id_to_tool_name
 from src.integrations.local_process_manager import get_local_process_manager
 from src.integrations.mcp_errors import McpAuthRequiredError
 from src.integrations.provider_map import provider_for_server
@@ -69,6 +75,59 @@ def _platform_jwt_exp(token: str) -> float | None:
         return None
     exp = claims.get("exp")
     return float(exp) if exp is not None else None
+
+
+def _gateway_owned_tool_names(server_name: str) -> frozenset[str] | None:
+    """Registry-owned tool names for a gateway-backed server, or None if not one.
+
+    ``None`` (not an empty set) means the server is NOT gateway-backed and its
+    discovery response must be taken verbatim — auto-registering unknown MCP
+    tools is deliberate behaviour for ordinary MCP servers.
+
+    A server is gateway-backed exactly when ``providers_for_server`` is
+    non-empty, the same signal ``services/integration_status.py`` uses.
+    """
+    provider_ids = providers_for_server(server_name)
+    if not provider_ids:
+        return None
+    return frozenset(
+        action_id_to_tool_name(a.action_id)
+        for provider_id in provider_ids
+        for a in PROVIDER_REGISTRY[provider_id].actions
+    )
+
+
+def _narrow_discovered_tools(raw_tools: list, server_name: str) -> list:
+    """Narrow a gateway server's discovery response to the tools it actually owns.
+
+    WHY: ONE OpenConnector gateway adapter endpoint serves SEVERAL Jarvis
+    installations (google-workspace and github both resolve to the same
+    ``/mcp`` URL). ``list_tools()`` therefore returns the union of every
+    provider's named tools plus the generic ``execute_action`` /
+    ``list_connections`` escape hatches — a discovery response is NOT
+    per-installation. Taken verbatim, whichever gateway installation is
+    discovered FIRST claims every name, so ``get_server_for_tool`` resolves
+    e.g. ``gmail_get_profile`` to ``github``, a github session is opened, and
+    its platform JWT is minted from github's capabilities only — the adapter's
+    capability gate then refuses the call.
+
+    Narrowing by the registry restores the per-installation view. Non-gateway
+    servers are returned unchanged.
+    """
+    owned = _gateway_owned_tool_names(server_name)
+    if owned is None:
+        return raw_tools
+    narrowed = [t for t in raw_tools if t.name in owned]
+    if raw_tools and not narrowed:
+        logger.warning(
+            "[mcp:session] gateway server %s discovered %d tool(s), none of which "
+            "the gateway registry recognises (registry owns %d name(s)) — "
+            "registering an empty tool map",
+            server_name,
+            len(raw_tools),
+            len(owned),
+        )
+    return narrowed
 
 
 @dataclass
@@ -290,6 +349,13 @@ class UserMCPSessionPool:
             # Connect and discover tools
             client = await client_ctx.__aenter__()
             raw_tools = await client.list_tools()
+
+            # A gateway endpoint is shared by several installations, so narrow
+            # its response to the tools the registry says THIS server owns
+            # before anything is derived from it. Applied here so the single
+            # narrowed list feeds _server_tools, _tool_metadata AND
+            # _register_discovered_tools alike. See _narrow_discovered_tools.
+            raw_tools = _narrow_discovered_tools(raw_tools, server_name)
 
             # Skip normalization — store real MCP names end-to-end
             tool_mapping = {}
@@ -857,7 +923,7 @@ class UserMCPSessionPool:
         auth_provider = config.get("auth_provider", "none")
 
         if auth_provider == "platform_jwt":
-            # Gmail gateway slice: mint a fresh short-lived platform JWT for the
+            # Gateway slice: mint a fresh short-lived platform JWT for the
             # ToolHive vMCP instead of resolving a stored OAuth/static token. The
             # JWT's tenant_id MUST match how connection_map rows are keyed (the
             # workspace_id) so the downstream adapter can resolve the caller's
@@ -866,17 +932,43 @@ class UserMCPSessionPool:
             from src.orchestrator.platform_jwt import mint_platform_jwt
 
             tenant = workspace_id or user_id
-            # Blanket read+write email caps (stopgap; the proper fix is step-scoped
-            # minting — carry only the current step's capability). Read caps
-            # (email.read/list) are REQUIRED alongside the writes: without them the
-            # adapter's capability gate denies read-only gmail actions
-            # (get_profile/get_message/list_*), and omitting them also violates the
-            # read-before-write principle (never grant a write cap without its read).
+            # Capabilities are DERIVED from the gateway_actions registry as the
+            # union across the providers this installation serves (see
+            # capabilities_for_server), so a GitHub session's token carries no
+            # email capability and vice versa — which is what makes the
+            # adapter's per-action capability gate load-bearing ACROSS
+            # installations, not just within one. An unregistered server_name
+            # mints an empty capability list (fail-closed): it must not
+            # inherit another installation's capabilities.
+            #
+            # Known remaining limitation (separate scheduled increment, not
+            # fixed here): the token is minted once per SESSION creation,
+            # cached by SessionKey across steps, and rebuilt only near
+            # bound_token_exp — so it is not step-scoped. Narrowing to the
+            # current step's capability would need either a capability-keyed
+            # session key or a per-call re-mint, plus a ContextVar that does
+            # not exist today. WITHIN one installation, the deep runtime's
+            # capability_scope middleware is the first-line guard.
+            capabilities = list(capabilities_for_server(server_name))
+            if not capabilities:
+                # The two gateway-ness signals have diverged: this installation
+                # DECLARES auth_provider="platform_jwt" (so it routes to the
+                # vMCP) but the registry knows no providers for its
+                # server_name. The token mints empty, so every gateway call it
+                # makes will be denied at the adapter's capability gate — a
+                # useless installation. Registry invariant tests pin the seeded
+                # set; this catches a DB row that drifted from it.
+                logger.error(
+                    "Installation %r declares auth_provider='platform_jwt' but the gateway "
+                    "registry knows no providers for it — minting an EMPTY capability set, "
+                    "so every gateway call for this server will be denied.",
+                    server_name,
+                )
             token = mint_platform_jwt(
                 principal_id=user_id,
                 tenant_id=tenant,
                 workspace_id=tenant,
-                capabilities=["email.read", "email.search", "email.list", "email.send"],
+                capabilities=capabilities,
             )
             return BearerAuth(token=token)
 

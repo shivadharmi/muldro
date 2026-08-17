@@ -1,26 +1,31 @@
 """Warm-start the gateway adapter's named-action tool surface.
 
-Registers one FastMCP tool per allowlisted OpenConnector action, named with the
-agent-legal (underscore) form of the actionId (``gmail.get_profile`` ->
-``gmail_get_profile`` via ``gateway_naming.action_id_to_tool_name``) — Anthropic
+Registers one FastMCP tool per action in the ``GatewayProfile`` it is handed,
+named with the agent-legal (underscore) form of the actionId (``gmail.get_profile``
+-> ``gmail_get_profile`` via ``gateway_naming.action_id_to_tool_name``) — Anthropic
 and OpenAI-compatible tool-calling APIs forbid dots in tool names. Each tool's
-schema comes from ``gateway_actions.GMAIL_ACTIONS`` (the single hand-typed
-source of truth — OC exposes no machine-readable per-action schema; see
-``infra/gateway/spike-findings-guide.md``), and its handler stays bound to the
-DOTTED actionId, forwarding to the four-step-enforced ``handle_execute_action``.
-So the LLM calls ``gmail_get_profile`` and the adapter calls OpenConnector with
-``gmail.get_profile``.
+schema comes straight from that action's ``input_schema`` (hand-typed, transcribed
+from a live OpenConnector admin capture — OC exposes no machine-readable
+per-action schema at runtime; see ``infra/gateway/spike-findings-guide.md``), and
+its handler stays bound to the DOTTED actionId, forwarding to the
+four-step-enforced ``handle_execute_action``. So the LLM calls ``gmail_get_profile``
+and the adapter calls OpenConnector with ``gmail.get_profile``.
 
 Hybrid drift check: at warm-start we still call ``get_action_guide`` live and
 compare OpenConnector's *current* parameter names to our hand-typed schema,
 logging a warning when they diverge — a maintenance signal to update the schema.
 The live call NEVER changes the served schema, so a guide-fetch failure or an
-unparseable guide only skips the check; the tool still ships its hand-typed
-schema (or an opaque schema if none is defined for the action).
+unparseable guide only skips the check; the tool still ships its hand-typed schema.
+Because the check is advisory, the guide fetches run CONCURRENTLY and outside the
+registration loop — ``openconnector_client`` builds a fresh Client + handshake per
+call, so serial fetches would pay one connect/initialize/teardown per action (and,
+with OpenConnector unreachable, one connection timeout per action) before
+``adapter.run()`` is ever reached: a hang rather than a loud failure.
 """
 
 from __future__ import annotations
 
+import asyncio
 import copy
 import logging
 import re
@@ -33,26 +38,23 @@ from src.adapter.enforcement import GatewayProfile
 from src.adapter.http_context import bearer_token
 from src.adapter.openconnector_client import get_action_guide
 from src.adapter.server import handle_execute_action
-from src.integrations.gateway_actions import GMAIL_ACTIONS
 from src.integrations.gateway_naming import action_id_to_tool_name
 from src.models.database import get_session_factory
 
 logger = logging.getLogger(__name__)
 
-_OPAQUE_SCHEMA = {"type": "object", "additionalProperties": True}
-
 GuideFetcher = Callable[[str], Awaitable[dict]]
 
-# Hand-typed JSON Schemas, keyed by dotted OC actionId. gateway_actions.GMAIL_ACTIONS
-# is the single source of truth (enforcement.py, warm_start.py, and catalog.py all
-# derive from it), so this module holds no schema data of its own.
-_SCHEMA_BY_ACTION: dict[str, dict] = {a.action_id: a.input_schema for a in GMAIL_ACTIONS}
 
+def _describe(display_name: str, action_id: str) -> str:
+    """Human-readable tool description for the agent's tool list.
 
-def _describe(action_id: str) -> str:
-    """Human-readable tool description for the agent's tool list."""
+    ``display_name`` comes from the provider registry (``GatewayProvider``), never
+    from a label table maintained here — a new provider must not silently degrade
+    to its raw provider_id in the text the LLM reads to pick a tool.
+    """
     verb = action_id.split(".", 1)[-1].replace("_", " ")
-    return f"Gmail: {verb} (via the OpenConnector gateway)."
+    return f"{display_name}: {verb} (via the OpenConnector gateway)."
 
 
 def _guide_markdown(guide: object) -> str:
@@ -128,47 +130,48 @@ async def register_gateway_tools(
     *,
     guide_fetcher: GuideFetcher = get_action_guide,
 ) -> int:
-    """Register one named FastMCP tool per allowlisted action. Returns the count.
+    """Register one named FastMCP tool per action in ``profile``. Returns the count.
 
-    Serves the hand-typed schema (opaque fallback if none is defined). Runs a
+    Every action in a ``GatewayProfile`` carries its own hand-typed
+    ``input_schema`` by construction, so no fallback is needed. Runs a
     best-effort live drift check via ``guide_fetcher`` that never affects the
-    served schema.
+    served schema; the fetches are gathered CONCURRENTLY before the loop, and a
+    failed fetch only skips that action's check — registration still happens for
+    every action.
     """
+    actions = sorted(profile.actions, key=lambda a: a.action_id)
+    guides = await asyncio.gather(
+        *(guide_fetcher(a.action_id) for a in actions), return_exceptions=True
+    )
     count = 0
-    for action_id in sorted(profile.action_allowlist):
-        schema = _SCHEMA_BY_ACTION.get(action_id)
-        if schema is None:
-            logger.warning("warm-start: no hand-typed schema for %s — serving opaque", action_id)
-            schema = dict(_OPAQUE_SCHEMA)
-        else:
-            try:
-                guide = await guide_fetcher(action_id)
-                live = _param_names_from_guide(guide)
-                declared = set(schema.get("properties", {}))
-                if live and live != declared:
-                    logger.warning(
-                        "warm-start: %s parameter drift — OpenConnector=%s hand-typed=%s",
-                        action_id,
-                        sorted(live),
-                        sorted(declared),
-                    )
-            except Exception:
+    for action, guide in zip(actions, guides, strict=True):
+        schema = copy.deepcopy(action.input_schema)
+        try:
+            if isinstance(guide, BaseException):
+                raise guide
+            live = _param_names_from_guide(guide)
+            declared = set(schema.get("properties", {}))
+            if live and live != declared:
                 logger.warning(
-                    "warm-start: drift check skipped for %s (guide fetch failed)", action_id
+                    "warm-start: %s parameter drift - OpenConnector=%s hand-typed=%s",
+                    action.action_id,
+                    sorted(live),
+                    sorted(declared),
                 )
-            # Serve a deep copy so FastMCP can never mutate GMAIL_ACTIONS, the
-            # module-level source of truth, through the served tool's schema.
-            schema = copy.deepcopy(schema)
+        except Exception:
+            logger.warning(
+                "warm-start: drift check skipped for %s (guide fetch failed)", action.action_id
+            )
         adapter.add_tool(
             FunctionTool(
                 # Agent-legal name (dots -> underscores): Anthropic/OpenAI tool
                 # names forbid dots. The handler below stays bound to the
                 # DOTTED actionId, so the LLM calls e.g. gmail_get_profile and
                 # the adapter forwards gmail.get_profile to OpenConnector.
-                name=action_id_to_tool_name(action_id),
-                description=_describe(action_id),
+                name=action_id_to_tool_name(action.action_id),
+                description=_describe(profile.display_name, action.action_id),
                 parameters=schema,
-                fn=_make_handler(action_id),
+                fn=_make_handler(action.action_id),
             )
         )
         count += 1

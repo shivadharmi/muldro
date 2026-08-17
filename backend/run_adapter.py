@@ -1,7 +1,8 @@
-"""Entrypoint for the Gmail gateway Connection Context Adapter.
+"""Entrypoint for the OpenConnector gateway Connection Context Adapter.
 
 Exposes the generic ``execute_action`` / ``list_connections`` tools plus one
-named tool per allowlisted OpenConnector action, warm-started from OC's
+named tool per allowlisted OpenConnector action across EVERY provider in the
+registry (gmail, googlecalendar, github, ...), warm-started from OC's
 ``get_action_guide`` at startup. The bearer token carrying the caller's
 platform JWT is read from the HTTP Authorization header via the shared
 ``bearer_token`` helper (never from tool args).
@@ -21,12 +22,12 @@ from src.adapter.http_context import bearer_token
 from src.adapter.openconnector_client import get_action_guide
 from src.adapter.server import handle_execute_action, handle_list_connections
 from src.adapter.warm_start import register_gateway_tools
-from src.config.settings import get_settings
+from src.integrations.gateway_actions import PROVIDER_REGISTRY
 from src.models.database import get_session_factory
 
 logger = logging.getLogger(__name__)
 
-adapter = FastMCP("gmail-gateway-adapter")
+adapter = FastMCP("openconnector-gateway-adapter")
 
 _HOST = "0.0.0.0"  # noqa: S104 - intentional: gateway must be reachable off-host
 _PORT = 8100
@@ -38,7 +39,7 @@ async def execute_action(
     input: dict,
     account_alias: str | None = None,
 ) -> dict:
-    """Execute an allowlisted Gmail action through the caller's owned connection."""
+    """Execute an allowlisted gateway action through the caller's owned connection."""
     token = bearer_token()
     args = {"actionId": actionId, "input": input}
     if account_alias is not None:
@@ -56,11 +57,17 @@ async def list_connections() -> dict:
 
 
 async def warm_start() -> int:
-    """Register the named per-action tools from OpenConnector guides."""
-    profile = get_gateway_profile(get_settings().gateway_provider)
-    count = await register_gateway_tools(adapter, profile, guide_fetcher=get_action_guide)
-    logger.info("warm-start: registered %d named gateway tools", count)
-    return count
+    """Register named per-action tools for every provider in the registry."""
+    total = 0
+    for provider_id in PROVIDER_REGISTRY:
+        profile = get_gateway_profile(provider_id)
+        total += await register_gateway_tools(adapter, profile, guide_fetcher=get_action_guide)
+    logger.info(
+        "warm-start: registered %d named gateway tools across %d providers",
+        total,
+        len(PROVIDER_REGISTRY),
+    )
+    return total
 
 
 if __name__ == "__main__":

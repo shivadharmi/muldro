@@ -89,13 +89,13 @@ class TestToolToCapability:
         assert len(calendar_caps) >= 2, "Should have at least 2 calendar-capability tools"
 
     def test_github_mcp_tools_mapped(self):
+        """GitHub is gateway-only; tool names are derived from PROVIDER_REGISTRY."""
         tool_to_cap = self._build_tool_to_cap()
         github_mcp_tools = [
-            "issue_write",
-            "create_pull_request",
-            "merge_pull_request",
-            "search_code",
-            "search_repositories",
+            "github_create_issue",
+            "github_create_pull_request",
+            "github_search_code",
+            "github_search_repositories",
         ]
         for tool in github_mcp_tools:
             assert tool in tool_to_cap, f"GitHub MCP tool '{tool}' not mapped"

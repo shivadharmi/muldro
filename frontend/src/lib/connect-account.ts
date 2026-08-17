@@ -16,13 +16,22 @@ export interface PollOptions {
  * Poll `confirm` until it reports "active", the timeout ceiling is reached, or
  * `shouldStop()` fires. Pure: all time + side effects are injected, so this is
  * unit-testable without a real clock or DOM. The React hook wraps it.
+ *
+ * When `shouldStop()` fires we confirm ONE more time before reporting a cancel.
+ * The popup very often closes *because* the user just approved: the grant is
+ * live at the gateway, but `/connections/confirm` is what activates our own
+ * connection row. Returning "cancelled" without that last call would leave a
+ * genuinely connected provider reading "Not connected" until a manual reload.
  */
 export async function pollUntilActive(
   confirm: () => Promise<ConfirmConnectionResponse>,
   opts: PollOptions,
 ): Promise<PollResult> {
   for (;;) {
-    if (opts.shouldStop?.()) return "cancelled";
+    if (opts.shouldStop?.()) {
+      const { status } = await confirm();
+      return status === "active" ? "active" : "cancelled";
+    }
     const { status } = await confirm();
     if (status === "active") return "active";
     if (opts.elapsed() >= opts.timeoutMs) return "timeout";

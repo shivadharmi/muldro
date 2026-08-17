@@ -13,16 +13,20 @@ denies any non-``active`` connection, so the flow is fail-closed until confirmed
 from __future__ import annotations
 
 import hashlib
+import logging
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.config.settings import get_settings
+from src.integrations.gateway_actions import perception_sources_for_provider
 from src.models.connection_map import ConnectionMap
 from src.services.openconnector_admin_client import (
     OpenConnectorAdminClient,
     OpenConnectorAdminError,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def mint_connection_name(tenant_id: str, principal_id: str, provider: str, alias: str) -> str:
@@ -139,4 +143,45 @@ class ConnectionService:
             return False
         if configured and row.connection_status != "active":
             row.connection_status = "active"
+            # Only on the pending -> active EDGE: a repeat confirm (polling, a
+            # re-connect of an already-live account) must not re-enable schedules
+            # the user has since turned off.
+            await self._enable_perception_schedules(db, workspace_id, provider)
         return row.connection_status == "active"
+
+    @staticmethod
+    async def _enable_perception_schedules(
+        db: AsyncSession, workspace_id: str, provider: str
+    ) -> None:
+        """Turn on the observe_* schedules this OC provider's sources feed.
+
+        Native OAuth connects do this through
+        ``routes_auth_oauth_integration._enable_integration_schedules``, but the
+        Google/GitHub callbacks that used to reach it were deleted with their
+        OAuth branches — those brands now arrive HERE instead. Without this, a
+        correctly connected workspace never gets its observe_* schedules enabled
+        and never provisions the PerceptionState rows the scheduler polls, so
+        perception silently never starts. WHICH sources a provider backs is read
+        from the gateway registry, never restated here.
+
+        Non-fatal by construction: the writes run inside a SAVEPOINT, so a
+        seeding failure rolls back only the schedule changes and can neither fail
+        nor poison the caller's transaction — the connection activation on the
+        same session still commits.
+        """
+        sources = perception_sources_for_provider(provider)
+        if not sources:
+            return
+        try:
+            from src.services.schedule_seeder import enable_schedules_for_connector
+
+            async with db.begin_nested():
+                for source in sources:
+                    await enable_schedules_for_connector(db, source, workspace_id=workspace_id)
+        except Exception:
+            logger.warning(
+                "Failed to enable perception schedules for %s in %s",
+                provider,
+                workspace_id,
+                exc_info=True,
+            )

@@ -40,50 +40,32 @@ async def _clear_stale_tool_schemas(db: AsyncSession, server_name: str, workspac
 # Default installations — each maps to a former get_*_config() function
 _DEFAULT_INSTALLATIONS: list[dict] = [
     {
+        # Gateway-backed: routed to the OpenConnector adapter (gmail +
+        # googlecalendar providers). Credentials live in OpenConnector, not
+        # OAuthManager — Jarvis never sees the Google OAuth token directly.
         "server_name": "google-workspace",
         "display_name": "Google Workspace",
         "transport": "streamable-http",
         "remote_url": None,
-        "managed_local": True,
         "command": None,
         "args": None,
         "env_template": {},
-        "auth_provider": "google",
-        "scopes_granted": [
-            "email.send",
-            "email.list",
-            "email.read",
-            "email.search",
-            "email.draft",
-            "calendar.list",
-            "calendar.get",
-            "calendar.create",
-            "calendar.update",
-            "doc.drive_list",
-            "doc.drive_search",
-            "doc.drive_create",
-        ],
+        "auth_provider": "platform_jwt",
+        "scopes_granted": None,
     },
     {
+        # Gateway-backed: routed to the OpenConnector adapter (github
+        # provider). Credentials live in OpenConnector, not OAuthManager —
+        # Jarvis never sees the GitHub OAuth token directly.
         "server_name": "github",
         "display_name": "GitHub",
         "transport": "streamable-http",
-        "remote_url": "https://api.githubcopilot.com/mcp/",
+        "remote_url": None,
         "command": None,
         "args": None,
         "env_template": {},
-        "auth_provider": "github",
-        "scopes_granted": [
-            "issue.create",
-            "issue.list",
-            "issue.search",
-            "issue.comment",
-            "repo.create_pr",
-            "repo.merge_pr",
-            "repo.search_code",
-            "repo.search_repos",
-            "repo.list_prs",
-        ],
+        "auth_provider": "platform_jwt",
+        "scopes_granted": None,
     },
     {
         "server_name": "slack",
@@ -269,12 +251,20 @@ async def seed_installations(db: AsyncSession, workspace_id: str, user_id: str) 
                 inst.config = new_cfg
                 needs_update = True
 
-        # Sync managed_local flag into JSONB config for managed servers.
-        if inst_data.get("managed_local"):
-            current_cfg = inst.config if isinstance(inst.config, dict) else {}
-            if not current_cfg.get("managed_local"):
-                inst.config = {**current_cfg, "managed_local": True}
-                needs_update = True
+        # Sync managed_local into JSONB config — SYMMETRICALLY. Setting it but
+        # never clearing it is a one-way door: an installation seeded as
+        # managed_local before it moved to another transport would keep
+        # {"managed_local": True} forever, contradicting its own seed.
+        current_cfg = inst.config if isinstance(inst.config, dict) else {}
+        wants_managed_local = bool(inst_data.get("managed_local"))
+        if wants_managed_local != bool(current_cfg.get("managed_local")):
+            new_cfg = {**current_cfg}
+            if wants_managed_local:
+                new_cfg["managed_local"] = True
+            else:
+                new_cfg.pop("managed_local", None)
+            inst.config = new_cfg
+            needs_update = True
 
         if needs_update:
             changed += 1
