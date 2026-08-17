@@ -33,6 +33,22 @@ _HOST = "0.0.0.0"  # noqa: S104 - intentional: gateway must be reachable off-hos
 _PORT = 8100
 
 
+def configure_logging() -> None:
+    """Attach a root handler so warm-start + drift warnings are actually emitted.
+
+    Without this the module logger has no handler and every record — including
+    ``warm_start``'s parameter-drift warnings, the only signal that a hand-typed
+    schema has diverged from OpenConnector's — is silently discarded. Idempotent
+    so a re-entrant call cannot double-log.
+    """
+    if logging.getLogger().handlers:
+        return
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    )
+
+
 @adapter.tool()
 async def execute_action(
     actionId: str,  # noqa: N803 - matches OpenConnector's camelCase tool schema
@@ -71,5 +87,6 @@ async def warm_start() -> int:
 
 
 if __name__ == "__main__":
+    configure_logging()
     asyncio.run(warm_start())
     adapter.run(transport="http", host=_HOST, port=_PORT)
