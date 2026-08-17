@@ -183,8 +183,11 @@ class UserMCPSessionPool:
         self._server_configs: dict[tuple[str, str], dict] = {}
         # (workspace_id, server_name) → tool mapping (canonical → raw)
         self._server_tools: dict[tuple[str, str], dict[str, str]] = {}
-        # canonical_name → metadata (global — names don't conflict across workspaces)
-        self._tool_metadata: dict[str, dict[str, Any]] = {}
+        # Keyed by (workspace_id, server_name, tool_name): a tool's identity is
+        # the triple, not the bare name. Two servers may legitimately serve the
+        # same tool name (e.g. two gateway installations behind one adapter
+        # endpoint) and must coexist rather than overwrite.
+        self._tool_metadata: dict[tuple[str, str, str], dict[str, Any]] = {}
 
     def register_server_config(
         self,
@@ -366,7 +369,7 @@ class UserMCPSessionPool:
                     or getattr(t, "input_schema", None)
                     or {"type": "object", "properties": {}}
                 )
-                self._tool_metadata[t.name] = {
+                self._tool_metadata[(workspace_id, server_name, t.name)] = {
                     "name": t.name,
                     "server": server_name,
                     "description": t.description or "",
@@ -814,7 +817,7 @@ class UserMCPSessionPool:
         self._server_configs.pop((workspace_id, server_name), None)
         removed_tools = self._server_tools.pop((workspace_id, server_name), {})
         for canonical in removed_tools:
-            self._tool_metadata.pop(canonical, None)
+            self._tool_metadata.pop((workspace_id, server_name, canonical), None)
 
     def has_server_config(self, server_name: str, workspace_id: str = "") -> bool:
         """Check if a server config is registered."""
@@ -850,13 +853,32 @@ class UserMCPSessionPool:
         return False
 
     def get_server_for_tool(self, tool_name: str, workspace_id: str = "") -> str | None:
-        """Find which server provides a canonical tool name."""
-        for key, tools in self._server_tools.items():
-            if workspace_id and key[0] != workspace_id:
-                continue
-            if tool_name in tools:
-                return key[1]  # server_name
-        return None
+        """Find which server provides a canonical tool name.
+
+        Resolution is deterministic (lexicographically first server) rather than
+        first-match-over-a-dict, because ``_server_tools`` is ordered by discovery
+        and would otherwise resolve the same collision differently across
+        restarts. A collision is also warned about: increment 2 hit exactly this
+        shape when two gateway installations shared one MCP endpoint and every
+        Gmail tool silently resolved to the ``github`` server.
+        """
+        candidates = [
+            key[1]
+            for key, tools in self._server_tools.items()
+            if (not workspace_id or key[0] == workspace_id) and tool_name in tools
+        ]
+        if not candidates:
+            return None
+        if len(candidates) > 1:
+            logger.warning(
+                "[mcp:pool] tool %r is served by %d servers (%s) — resolving to %r; "
+                "tool identity is (workspace, server, name), so a bare name is ambiguous",
+                tool_name,
+                len(candidates),
+                ", ".join(sorted(candidates)),
+                min(candidates),
+            )
+        return min(candidates)
 
     def get_all_tools(self, workspace_id: str = "") -> dict[str, str]:
         """Return all tools across all servers: {canonical_name: server_name}."""
@@ -881,11 +903,11 @@ class UserMCPSessionPool:
         ever want to override (call_tool preserves caller-supplied keys).
         """
         result: list[dict[str, Any]] = []
-        for name, meta in self._tool_metadata.items():
+        for key, meta in self._tool_metadata.items():
             if workspace_id and meta.get("_workspace_id") and meta["_workspace_id"] != workspace_id:
                 continue
             item = dict(meta)
-            item["name"] = name
+            item["name"] = key[2]
 
             server_name = meta.get("server")
             server_cfg = self._server_configs.get((workspace_id, server_name)) or {}

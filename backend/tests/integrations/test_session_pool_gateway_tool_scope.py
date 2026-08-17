@@ -95,7 +95,7 @@ async def test_github_discovery_claims_only_its_own_tools():
 
     # _tool_metadata and _register_discovered_tools derive from the same list.
     metadata_for_github = {
-        name for name, meta in pool._tool_metadata.items() if meta["server"] == "github"
+        key[2] for key, meta in pool._tool_metadata.items() if meta["server"] == "github"
     }
     assert metadata_for_github == _owned_names("github")
     assert set(pool._last_registered_tools) == _owned_names("github")
