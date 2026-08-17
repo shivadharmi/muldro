@@ -16,7 +16,7 @@ Endpoints:
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.deps import get_current_user_id, get_current_workspace_id
@@ -92,9 +92,13 @@ class UnifiedIntegrationResponse(BaseModel):
     # True when an OAuth integration is configured but its token is permanently
     # unusable — the user must reconnect (gates the "Reconnect" UI affordance).
     needs_reauth: bool = False
-    # OpenConnector provider name when this integration is gateway-backed
-    # (e.g. "gmail"), else None — tells the frontend which connect flow to use.
-    oc_provider: str | None = None
+    # Every OC provider this installation serves, in registry order (empty for
+    # non-gateway installations) — tells the frontend which connect flow to use.
+    oc_providers: list[str] = Field(default_factory=list)
+    # Per-provider connectivity from `connection_map` (empty for non-gateway
+    # installations), so a partially connected installation stays visible
+    # instead of collapsing into one "disconnected".
+    provider_connections: dict[str, bool] = Field(default_factory=dict)
 
 
 # ── Endpoints ────────────────────────────────────────────────────────
@@ -153,7 +157,8 @@ async def list_unified_integrations(
             slug=s.slug,
             access_scopes=s.access_scopes,
             needs_reauth=s.needs_reauth,
-            oc_provider=s.oc_provider,
+            oc_providers=s.oc_providers,
+            provider_connections=s.provider_connections,
         )
         for s in statuses
     ]
@@ -360,7 +365,14 @@ async def disconnect_installation(
     if inst.auth_provider and inst.auth_provider not in ("token", "none"):
         provider_name = inst.auth_provider
 
+    from src.integrations.gateway_actions import providers_for_server
     from src.services.integration_status import coarsen_scopes, derive_slug
+
+    # Every gateway installation declares the same auth_provider
+    # ("platform_jwt"), so deriving the brand slug from it collapses them
+    # all into "platform" — a collision between google-workspace and github.
+    # Derive from server_name for those instead, matching integration_status.py.
+    is_gateway = bool(providers_for_server(inst.server_name))
 
     raw_scopes = inst.scopes_granted or []
     return UnifiedIntegrationResponse(
@@ -374,7 +386,7 @@ async def disconnect_installation(
         enabled=inst.enabled,
         install_id=inst.install_id,
         scopes=raw_scopes,
-        slug=derive_slug(provider_name, inst.server_name),
+        slug=derive_slug(None if is_gateway else provider_name, inst.server_name),
         access_scopes=coarsen_scopes(raw_scopes),
     )
 
