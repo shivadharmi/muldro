@@ -5,6 +5,7 @@ optional: None resolves against the deployment-default (NULL-workspace) rows.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Any
 
@@ -17,6 +18,8 @@ from src.config.model_catalog import get_model_spec
 from src.config.settings import get_settings
 from src.models.model_binding import ModelBinding
 from src.models.provider_credential import ProviderCredential
+
+logger = logging.getLogger(__name__)
 
 # Env-var fallback per provider (used when no DB credential row exists).
 _ENV_KEY_ATTR = {
@@ -58,6 +61,28 @@ class ModelResolver:
         if binding is None:
             raise ModelConfigError(f"no model binding for tier={tier} agent={agent}")
 
+        try:
+            return await self._build_resolved(binding, workspace_id, thinking_enabled)
+        except ModelConfigError:
+            # §10 override-degradation: an AGENT override that can't be resolved (missing
+            # credential or otherwise) falls back to the tier binding rather than breaking the
+            # turn. A genuinely broken tier config still raises (the retry surfaces its error).
+            if binding.scope_type == "agent" and agent_tier is not None:
+                tier_binding = await self._binding_row("tier", agent_tier, workspace_id)
+                if tier_binding is not None and tier_binding.id != binding.id:
+                    logger.warning(
+                        "model override for agent=%s (%s/%s) unusable; falling back to tier '%s'",
+                        agent,
+                        binding.provider,
+                        binding.model_id,
+                        agent_tier,
+                    )
+                    return await self._build_resolved(tier_binding, workspace_id, thinking_enabled)
+            raise
+
+    async def _build_resolved(
+        self, binding: ModelBinding, workspace_id: str | None, thinking_enabled: bool
+    ) -> ResolvedModel:
         spec = get_model_spec(binding.provider, binding.model_id)
         if spec is None:
             raise ModelConfigError(f"unknown model {binding.provider}/{binding.model_id}")

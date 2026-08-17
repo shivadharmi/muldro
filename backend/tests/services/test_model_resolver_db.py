@@ -173,3 +173,101 @@ async def test_missing_credential_raises(monkeypatch):
         await db.flush()
         with pytest.raises(ModelConfigError):
             await ModelResolver(db).resolve(tier="fast", workspace_id=ws)
+
+
+async def test_override_missing_credential_degrades_to_tier(monkeypatch):
+    """§10: a per-agent override whose provider credential is missing falls back to
+    the tier binding rather than breaking the turn."""
+    key = Fernet.generate_key().decode()
+    monkeypatch.setattr(secret_crypto, "_config_key", lambda: key)
+    # No openai env fallback, so the override provider is genuinely unconfigured.
+    monkeypatch.setattr(get_settings(), "openai_api_key", "", raising=False)
+    async with _session() as db:
+        ws = await _seed_workspace(db)
+        # Tier default: anthropic (configured via encrypted credential).
+        db.add(
+            ProviderCredential(
+                workspace_id=None,
+                provider="anthropic",
+                api_key_encrypted=secret_crypto.encrypt_secret("sk-a"),
+                status="valid",
+            )
+        )
+        db.add(
+            ModelBinding(
+                workspace_id=None,
+                scope_type="tier",
+                scope_key="balanced",
+                provider="anthropic",
+                model_id="claude-sonnet-4-6",
+                effort="medium",
+                max_tokens=4096,
+            )
+        )
+        # Agent override: openai with NO credential (no row, no env).
+        db.add(
+            ModelBinding(
+                workspace_id=None,
+                scope_type="agent",
+                scope_key="planner",
+                provider="openai",
+                model_id="gpt-5",
+                effort="high",
+                max_tokens=8192,
+            )
+        )
+        await db.flush()
+        r = await ModelResolver(db).resolve(agent="planner", agent_tier="balanced", workspace_id=ws)
+        # Degraded to the tier default, not the broken override.
+        assert r.provider == "anthropic" and r.model_id == "claude-sonnet-4-6"
+        assert r.api_key == "sk-a"
+
+
+async def test_override_with_credential_still_resolves_to_override(monkeypatch):
+    """Happy path unchanged: a valid override wins over the tier binding."""
+    key = Fernet.generate_key().decode()
+    monkeypatch.setattr(secret_crypto, "_config_key", lambda: key)
+    async with _session() as db:
+        ws = await _seed_workspace(db)
+        db.add(
+            ProviderCredential(
+                workspace_id=None,
+                provider="anthropic",
+                api_key_encrypted=secret_crypto.encrypt_secret("sk-a"),
+                status="valid",
+            )
+        )
+        db.add(
+            ProviderCredential(
+                workspace_id=None,
+                provider="openai",
+                api_key_encrypted=secret_crypto.encrypt_secret("sk-o"),
+                status="valid",
+            )
+        )
+        db.add(
+            ModelBinding(
+                workspace_id=None,
+                scope_type="tier",
+                scope_key="balanced",
+                provider="anthropic",
+                model_id="claude-sonnet-4-6",
+                effort="medium",
+                max_tokens=4096,
+            )
+        )
+        db.add(
+            ModelBinding(
+                workspace_id=None,
+                scope_type="agent",
+                scope_key="planner",
+                provider="openai",
+                model_id="gpt-5",
+                effort="high",
+                max_tokens=8192,
+            )
+        )
+        await db.flush()
+        r = await ModelResolver(db).resolve(agent="planner", agent_tier="balanced", workspace_id=ws)
+        assert r.provider == "openai" and r.model_id == "gpt-5"
+        assert r.api_key == "sk-o"
