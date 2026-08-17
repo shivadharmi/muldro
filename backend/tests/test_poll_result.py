@@ -64,128 +64,14 @@ class TestPollResultType:
 # ---------------------------------------------------------------------------
 
 
-class TestGmailConnectorFailurePropagation:
-    """Gmail connector poll() must return typed PollResult on failure."""
-
-    @pytest.mark.asyncio
-    async def test_exception_returns_transient_poll_result(self):
-        """Network exception → PollResult with error_class='transient'."""
-        from src.connectors.gmail import GmailConnector
-        from src.connectors.poll_result import PollResult
-
-        connector = GmailConnector(make_mock_settings())
-        with patch("httpx.AsyncClient") as mock_cls:
-            mock_client = AsyncMock()
-            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-            mock_client.__aexit__ = AsyncMock(return_value=False)
-            mock_client.get = AsyncMock(side_effect=httpx.ConnectTimeout("timeout"))
-            mock_cls.return_value = mock_client
-
-            result = await connector.poll(TEST_USER_ID, "cursor_abc", {"access_token": "tok"})
-
-        assert isinstance(result, PollResult)
-        assert result.failed is True
-        assert result.error_class == "transient"
-        # Cursor must NOT advance on failure
-        assert result.cursor == "cursor_abc"
-
-    @pytest.mark.asyncio
-    async def test_non_200_history_response_returns_failure(self):
-        """HTTP 503 on history API → PollResult with error_class='transient'."""
-        from src.connectors.gmail import GmailConnector
-        from src.connectors.poll_result import PollResult
-
-        connector = GmailConnector(make_mock_settings())
-        mock_resp = MagicMock()
-        mock_resp.status_code = 503
-
-        with patch("httpx.AsyncClient") as mock_cls:
-            mock_client = AsyncMock()
-            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-            mock_client.__aexit__ = AsyncMock(return_value=False)
-            mock_client.get = AsyncMock(return_value=mock_resp)
-            mock_cls.return_value = mock_client
-
-            result = await connector.poll(TEST_USER_ID, "cursor_abc", {"access_token": "tok"})
-
-        assert isinstance(result, PollResult)
-        assert result.failed is True
-        assert result.error_class == "transient"
-        assert result.cursor == "cursor_abc"
-
-    @pytest.mark.asyncio
-    async def test_401_returns_auth_failed(self):
-        """HTTP 401 on history API → PollResult with error_class='auth_failed'."""
-        from src.connectors.gmail import GmailConnector
-        from src.connectors.poll_result import PollResult
-
-        connector = GmailConnector(make_mock_settings())
-        mock_resp = MagicMock()
-        mock_resp.status_code = 401
-
-        with patch("httpx.AsyncClient") as mock_cls:
-            mock_client = AsyncMock()
-            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-            mock_client.__aexit__ = AsyncMock(return_value=False)
-            mock_client.get = AsyncMock(return_value=mock_resp)
-            mock_cls.return_value = mock_client
-
-            result = await connector.poll(TEST_USER_ID, "cursor_abc", {"access_token": "tok"})
-
-        assert isinstance(result, PollResult)
-        assert result.failed is True
-        assert result.error_class == "auth_failed"
-        assert result.cursor == "cursor_abc"
-
-    @pytest.mark.asyncio
-    async def test_429_returns_rate_limited(self):
-        """HTTP 429 on history API → PollResult with error_class='rate_limited'."""
-        from src.connectors.gmail import GmailConnector
-        from src.connectors.poll_result import PollResult
-
-        connector = GmailConnector(make_mock_settings())
-        mock_resp = MagicMock()
-        mock_resp.status_code = 429
-
-        with patch("httpx.AsyncClient") as mock_cls:
-            mock_client = AsyncMock()
-            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-            mock_client.__aexit__ = AsyncMock(return_value=False)
-            mock_client.get = AsyncMock(return_value=mock_resp)
-            mock_cls.return_value = mock_client
-
-            result = await connector.poll(TEST_USER_ID, "cursor_abc", {"access_token": "tok"})
-
-        assert isinstance(result, PollResult)
-        assert result.failed is True
-        assert result.error_class == "rate_limited"
-        assert result.cursor == "cursor_abc"
-
-    @pytest.mark.asyncio
-    async def test_empty_ok_poll_returns_ok_poll_result(self):
-        """200 with no messages → PollResult ok with events=[] and advanced cursor."""
-        from src.connectors.gmail import GmailConnector
-        from src.connectors.poll_result import PollResult
-
-        connector = GmailConnector(make_mock_settings())
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.json.return_value = {"historyId": "new_cursor_999", "history": []}
-
-        with patch("httpx.AsyncClient") as mock_cls:
-            mock_client = AsyncMock()
-            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-            mock_client.__aexit__ = AsyncMock(return_value=False)
-            mock_client.get = AsyncMock(return_value=mock_resp)
-            mock_cls.return_value = mock_client
-
-            result = await connector.poll(TEST_USER_ID, "old_cursor", {"access_token": "tok"})
-
-        assert isinstance(result, PollResult)
-        assert result.ok is True
-        assert result.events == []
-        # Cursor advances on success
-        assert result.cursor == "new_cursor_999"
+# The Gmail failure-propagation tests that lived here drove provider REST via a
+# patched httpx.AsyncClient. That transport is gone: GmailConnector is now a
+# GatewayConnector and reads through the OpenConnector action gmail.fetch_emails,
+# so those tests exercised nothing (two of them still "passed", vacuously, because
+# an un-injected gateway caller also returns transient). Every behaviour they
+# covered — failure classified + incoming cursor held, empty window holds the
+# cursor, a missing transport is a failure and not an empty mailbox — is asserted
+# against the real envelope in tests/test_gmail_connector.py.
 
 
 class TestSlackConnectorFailurePropagation:
@@ -373,51 +259,12 @@ class TestSlackConnectorFailurePropagation:
         assert result.cursor == "ts_abc"
 
 
-class TestCalendarConnectorFailurePropagation:
-    """Calendar connector poll() must return typed PollResult on failure."""
-
-    @pytest.mark.asyncio
-    async def test_exception_returns_transient_poll_result(self):
-        from src.connectors.calendar import CalendarConnector
-        from src.connectors.poll_result import PollResult
-
-        connector = CalendarConnector(make_mock_settings())
-        with patch("httpx.AsyncClient") as mock_cls:
-            mock_client = AsyncMock()
-            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-            mock_client.__aexit__ = AsyncMock(return_value=False)
-            mock_client.get = AsyncMock(side_effect=httpx.ReadTimeout("timed out"))
-            mock_cls.return_value = mock_client
-
-            result = await connector.poll(TEST_USER_ID, "sync_tok", {"access_token": "tok"})
-
-        assert isinstance(result, PollResult)
-        assert result.failed is True
-        assert result.error_class == "transient"
-        assert result.cursor == "sync_tok"
-
-    @pytest.mark.asyncio
-    async def test_401_returns_auth_failed(self):
-        from src.connectors.calendar import CalendarConnector
-        from src.connectors.poll_result import PollResult
-
-        connector = CalendarConnector(make_mock_settings())
-        mock_resp = MagicMock()
-        mock_resp.status_code = 401
-
-        with patch("httpx.AsyncClient") as mock_cls:
-            mock_client = AsyncMock()
-            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-            mock_client.__aexit__ = AsyncMock(return_value=False)
-            mock_client.get = AsyncMock(return_value=mock_resp)
-            mock_cls.return_value = mock_client
-
-            result = await connector.poll(TEST_USER_ID, "sync_tok", {"access_token": "tok"})
-
-        assert isinstance(result, PollResult)
-        assert result.failed is True
-        assert result.error_class == "auth_failed"
-        assert result.cursor == "sync_tok"
+# TestCalendarConnectorFailurePropagation was deleted with the Calendar
+# connector's httpx transport: both of its tests patched httpx.AsyncClient and
+# asserted on an HTTP status the gateway path never produces, so neither could
+# fail for the reason it claimed. The gateway equivalents — a failed poll keeps
+# the incoming cursor, and MCP error codes map to PollErrorClass — live in
+# tests/test_calendar_connector.py.
 
 
 class TestGitHubConnectorFailurePropagation:
