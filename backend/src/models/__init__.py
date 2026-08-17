@@ -18,12 +18,14 @@ from src.models.integration_installation import IntegrationInstallation
 from src.models.interaction_log import InteractionLog
 from src.models.mcp_server_catalog import MCPServerCatalog
 from src.models.memory import Memory
+from src.models.model_binding import ModelBinding
 from src.models.notifications import Notification
 from src.models.oauth_token import OAuthToken
 from src.models.observation_cursor import ObservationCursor
 from src.models.org_allowlist import OrgAllowlist
 from src.models.perception_state import PerceptionState
 from src.models.plans import Plan, PlanTask
+from src.models.provider_credential import ProviderCredential
 from src.models.runtime_event import RuntimeEvent
 from src.models.schedules import Schedule
 from src.models.server_trust import ServerTrustRecord
@@ -108,4 +110,7 @@ __all__ = [
     # Traces
     "Trace",
     "ModelCall",
+    # Model configuration
+    "ProviderCredential",
+    "ModelBinding",
 ]
