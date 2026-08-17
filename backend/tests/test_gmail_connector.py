@@ -498,6 +498,123 @@ async def test_the_initial_backfill_is_capped_separately():
     assert result.cursor is None, "a truncated backfill holds the (absent) incoming cursor"
 
 
+# ---- the write-side cursor clamp -----------------------------------------
+#
+# The read side (_sane_epoch_cursor) already rejects a cursor beyond
+# now + CURSOR_SKEW. Without the SAME bound on the write side the two sides
+# deadlock: a sender-controlled `Date` header in the future is written to the
+# cursor, the next poll's read clamp rejects it, the initial window re-observes
+# the same message, and the same bogus value is written again. out == in for
+# ever, and Gmail is silently demoted to a rolling 3-day window capped at
+# MAX_BACKFILL_PAGES * PAGE_SIZE messages while test() still reports healthy.
+
+
+def _future_stamp(days: int = 1500) -> datetime:
+    """A stamp beyond CURSOR_SKEW — what a misconfigured mail client emits."""
+    return datetime.now(timezone.utc) + timedelta(days=days)
+
+
+async def test_a_future_dated_message_does_not_become_the_cursor():
+    """The bogus stamp is excluded; the real mail in the same page still advances."""
+    real = datetime.now(timezone.utc) - timedelta(hours=1)
+    conn, _ = _gmail(
+        [
+            {
+                "messages": [
+                    _oc_message(message_id="bogus", when=_future_stamp(), with_payload=False),
+                    _oc_message(message_id="real", when=real, with_payload=False),
+                ]
+            }
+        ]
+    )
+    result = await conn.poll(TEST_USER_ID, _recent_cursor(seconds_ago=7200), {})
+
+    assert result.ok is True
+    assert len(result.events) == 2, "the future-dated message is still ingested as an event"
+    assert result.cursor == str(int(real.timestamp())), (
+        "the watermark must be the newest BELIEVABLE stamp, not the newest stamp"
+    )
+
+
+async def test_an_excluded_future_stamp_names_the_message_and_the_value(caplog):
+    """Silently ignoring sender-controlled input is how it becomes invisible."""
+    future = _future_stamp()
+    conn, _ = _gmail(
+        [{"messages": [_oc_message(message_id="bogus", when=future, with_payload=False)]}]
+    )
+    with caplog.at_level(logging.WARNING, logger="src.connectors.gmail"):
+        await conn.poll(TEST_USER_ID, _recent_cursor(), {})
+
+    messages = [r.getMessage() for r in caplog.records]
+    assert any("bogus" in m and str(int(future.timestamp())) in m for m in messages)
+
+
+async def test_a_page_of_only_future_dated_mail_holds_the_incoming_cursor():
+    """Nothing believable observed means nothing to advance TO."""
+    cursor = _recent_cursor()
+    conn, _ = _gmail(
+        [{"messages": [_oc_message(message_id="bogus", when=_future_stamp(), with_payload=False)]}]
+    )
+    result = await conn.poll(TEST_USER_ID, cursor, {})
+
+    assert result.ok is True
+    assert len(result.events) == 1
+    assert result.cursor == cursor
+
+
+async def test_a_future_dated_message_cannot_pin_the_connector_to_the_initial_window():
+    """The whole loop, end to end: three polls over the same undated-but-future page.
+
+    Before the write-side clamp this ran
+        poll 1  after:<cursor> is:inbox   -> cursor jumps to 2030
+        poll 2  is:inbox newer_than:3d    -> read clamp rejected it
+        poll 3  is:inbox newer_than:3d    -> and again, for ever
+    """
+    bogus = _oc_message(message_id="bogus", when=_future_stamp(), with_payload=False)
+    page = [{"messages": [bogus]}]
+    cursor = _recent_cursor(seconds_ago=300)
+    queries: list[str] = []
+    for _ in range(3):
+        conn, caller = _gmail(list(page))
+        result = await conn.poll(TEST_USER_ID, cursor, {})
+        queries.append(caller.calls[0][1]["query"])
+        cursor = result.cursor
+
+    assert all(q.startswith("after:") for q in queries), (
+        f"incremental mode must never be lost to a bogus stamp; got {queries}"
+    )
+    assert INITIAL_QUERY not in queries
+
+
+# ---- a null page is a shape mismatch, not an empty window -----------------
+
+
+async def test_a_mid_walk_null_messages_page_fails_and_holds_the_cursor():
+    """``messages: null`` is not an empty page — the outputSchema types it array.
+
+    Page 1 carries real rows and a nextPageToken; page 2 answers null. Coercing
+    that null to ``[]`` ends the walk cleanly and advances the cursor past a
+    window that was never drained — indistinguishable from a truncated page.
+    """
+    cursor = _recent_cursor(seconds_ago=7200)
+    recent = datetime.now(timezone.utc) - timedelta(minutes=10)
+    conn, _ = _gmail(
+        [
+            {
+                "messages": [_oc_message(message_id="m1", when=recent, with_payload=False)],
+                "nextPageToken": "p2",
+            },
+            {"messages": None},
+        ]
+    )
+    result = await conn.poll(TEST_USER_ID, cursor, {})
+
+    assert result.failed is True, "a null page must not be laundered into a clean empty page"
+    assert result.error_class == "transient"
+    assert result.events == []
+    assert result.cursor == cursor
+
+
 async def test_a_failed_poll_keeps_the_incoming_cursor_and_classifies():
     cursor = _recent_cursor()
     conn, _ = _gmail([_Raw({"status": "error", "error": "slow down", "error_code": "rate_limit"})])

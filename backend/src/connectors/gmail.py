@@ -202,6 +202,27 @@ class GmailConnector(GatewayConnector):
         if walk.error_class is not None:
             return PollResult(events=[], cursor=cursor, error_class=walk.error_class)
 
+        # THE WRITE-SIDE CLAMP, sharing the read side's bound by construction.
+        # `messageTimestamp` derives from the sender-controlled `Date` header,
+        # and misconfigured mail clients routinely emit future dates. Folding
+        # one into the watermark pins the connector: the value is written, the
+        # next poll's _sane_epoch_cursor rejects it as implausible, the initial
+        # window re-reads the same message, and the same value is written
+        # again — out == in for ever, with Gmail silently demoted to a rolling
+        # `is:inbox newer_than:3d` capped at MAX_BACKFILL_PAGES * PAGE_SIZE
+        # while test() still reports healthy.
+        #
+        # Only the FUTURE side is clamped. An implausibly OLD stamp cannot pin:
+        # `observed` is a max over the window, so an ancient stamp only wins
+        # when nothing else in the window has a parseable one, and the read
+        # side's CURSOR_FLOOR_DAYS check then falls back to the bounded initial
+        # window — which the next real stamp advances straight back out of.
+        # A future stamp has no such recovery, because the fallback window
+        # re-observes the very stamp that caused it. Excluding old stamps would
+        # also silently discard legitimately old mail (imported or forwarded
+        # messages carry real old `Date` headers), so the cost is unequal too.
+        ceiling = self._epoch_cursor_ceiling()
+
         events: list[RawEvent] = []
         seen: set[str] = set()
         observed: int | None = None
@@ -215,9 +236,21 @@ class GmailConnector(GatewayConnector):
                     continue
                 seen.add(message_id)
                 events.append(event)
-                if event.occurred_at is not None:
-                    epoch = int(event.occurred_at.timestamp())
-                    observed = epoch if observed is None else max(observed, epoch)
+                if event.occurred_at is None:
+                    continue
+                epoch = int(event.occurred_at.timestamp())
+                if epoch > ceiling:
+                    # Never silently: an ignored sender-controlled input that
+                    # leaves no trace is how this class of bug stays invisible.
+                    logger.warning(
+                        "gmail message %s carries an implausible future timestamp %d "
+                        "(%s) — excluded from the watermark; the message is still ingested",
+                        message_id,
+                        epoch,
+                        event.occurred_at.isoformat(),
+                    )
+                    continue
+                observed = epoch if observed is None else max(observed, epoch)
 
         # The hold-or-advance rule lives in _resolve_cursor, never inline: on a
         # truncated walk the remainder was not read, and with nothing observed
