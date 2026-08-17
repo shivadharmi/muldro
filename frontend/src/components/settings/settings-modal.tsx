@@ -11,11 +11,21 @@ import {
   fetchTrustDashboard,
   setTrustCeiling,
   resetTrust,
+  fetchModelCatalog,
+  fetchModelConfig,
+  saveModelConfig,
+  saveProviderKey,
+  testProviderKey,
 } from "@/lib/api";
 import { useToast } from "@/components/ui/toast";
 import { useAuth } from "@/lib/auth";
 import { errorToMessage } from "@/lib/api-error";
-import type { TrustDashboardEntry } from "@/lib/types";
+import type {
+  TrustDashboardEntry,
+  ModelCatalog,
+  ModelConfig,
+  TierBinding,
+} from "@/lib/types";
 import { TRUST_LEVEL_LABELS } from "@/components/settings/trust-constants";
 import {
   useSettingsModalStore,
@@ -26,6 +36,7 @@ import { PreferencesTab } from "./preferences-tab";
 import { PolicyTab } from "./policy-tab";
 import { TrustTab } from "./trust-tab";
 import { SpendingTab } from "./spending-tab";
+import { ModelTab } from "./model-tab";
 
 const TABS: Array<{ key: SettingsTab; label: string }> = [
   { key: "account", label: "Account" },
@@ -33,6 +44,7 @@ const TABS: Array<{ key: SettingsTab; label: string }> = [
   { key: "policy", label: "Policy" },
   { key: "budget", label: "Budget" },
   { key: "trust", label: "Trust" },
+  { key: "model", label: "Model" },
 ];
 
 /**
@@ -85,6 +97,13 @@ function TabIcon({ tab }: { tab: SettingsTab }) {
         <svg {...common}>
           <circle cx="8" cy="8" r="6" />
           <path d="M5.5 8.2l1.7 1.7 3.3-3.6" />
+        </svg>
+      );
+    case "model": // chip / CPU
+      return (
+        <svg {...common}>
+          <rect x="5" y="5" width="6" height="6" rx="1" />
+          <path d="M6.5 2.5v2M9.5 2.5v2M6.5 11.5v2M9.5 11.5v2M2.5 6.5h2M2.5 9.5h2M11.5 6.5h2M11.5 9.5h2" />
         </svg>
       );
     default:
@@ -143,6 +162,12 @@ export function SettingsModal() {
   const [ceilingLoading, setCeilingLoading] = useState<string | null>(null);
   const [resetLoading, setResetLoading] = useState<string | null>(null);
   const trustLoadedOnce = useRef(false);
+  const [modelCatalog, setModelCatalog] = useState<ModelCatalog | null>(null);
+  const [modelConfig, setModelConfig] = useState<ModelConfig | null>(null);
+  const [modelLoading, setModelLoading] = useState(false);
+  const [savingModelConfig, setSavingModelConfig] = useState(false);
+  const [providerBusy, setProviderBusy] = useState<string | null>(null);
+  const modelLoadedOnce = useRef(false);
 
   // Load policy + budget when the modal first opens.
   useEffect(() => {
@@ -273,6 +298,75 @@ export function SettingsModal() {
     [loadTrust, addToast],
   );
 
+  const handleModelLoad = useCallback(async () => {
+    if (modelLoadedOnce.current) return;
+    modelLoadedOnce.current = true;
+    setModelLoading(true);
+    try {
+      const [catalog, config] = await Promise.all([
+        fetchModelCatalog(),
+        fetchModelConfig(),
+      ]);
+      setModelCatalog(catalog);
+      setModelConfig(config);
+    } catch (err) {
+      modelLoadedOnce.current = false;
+      addToast(errorToMessage(err), "error");
+    } finally {
+      setModelLoading(false);
+    }
+  }, [addToast]);
+
+  const handleSaveModelConfig = useCallback(
+    async (body: { tiers: TierBinding[]; agent_overrides: TierBinding[] }) => {
+      setSavingModelConfig(true);
+      try {
+        const updated = await saveModelConfig(body);
+        setModelConfig(updated);
+        addToast("Model configuration saved", "success");
+      } catch (err) {
+        addToast(errorToMessage(err), "error");
+      } finally {
+        setSavingModelConfig(false);
+      }
+    },
+    [addToast],
+  );
+
+  const handleSaveProviderKey = useCallback(
+    async (provider: string, apiKey: string, baseUrl?: string) => {
+      setProviderBusy(provider);
+      try {
+        await saveProviderKey(provider, apiKey, baseUrl);
+        const config = await fetchModelConfig();
+        setModelConfig(config);
+        addToast(`${provider} credentials saved`, "success");
+      } catch (err) {
+        addToast(errorToMessage(err), "error");
+      } finally {
+        setProviderBusy(null);
+      }
+    },
+    [addToast],
+  );
+
+  const handleTestProvider = useCallback(
+    async (provider: string) => {
+      setProviderBusy(provider);
+      try {
+        const result = await testProviderKey(provider);
+        const config = await fetchModelConfig();
+        setModelConfig(config);
+        addToast(`${provider} test: ${result.status}`, "success");
+      } catch (err) {
+        addToast(errorToMessage(err), "error");
+      } finally {
+        setProviderBusy(null);
+      }
+    },
+    [addToast],
+  );
+
   if (!open) return null;
 
   // Group trust entries by family.
@@ -391,6 +485,21 @@ export function SettingsModal() {
                 onReset={handleResetTrust}
                 ceilingLoading={ceilingLoading}
                 resetLoading={resetLoading}
+              />
+            )}
+
+            {activeTab === "model" && (
+              <ModelTab
+                open={open}
+                loading={modelLoading}
+                catalog={modelCatalog}
+                config={modelConfig}
+                onLoad={handleModelLoad}
+                onSaveConfig={handleSaveModelConfig}
+                onSaveProviderKey={handleSaveProviderKey}
+                onTestProvider={handleTestProvider}
+                savingConfig={savingModelConfig}
+                providerBusy={providerBusy}
               />
             )}
           </div>

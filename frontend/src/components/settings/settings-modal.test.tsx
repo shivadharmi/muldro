@@ -26,6 +26,36 @@ vi.mock("@/lib/api", () => ({
   fetchTrustDashboard: vi.fn().mockResolvedValue({ capabilities: [] }),
   setTrustCeiling: vi.fn().mockResolvedValue({}),
   resetTrust: vi.fn().mockResolvedValue({}),
+  fetchModelCatalog: vi.fn().mockResolvedValue({
+    providers: {
+      anthropic: [
+        {
+          model_id: "claude-sonnet-4-6",
+          display_name: "Claude Sonnet 4.6",
+          thinking_style: "anthropic_legacy",
+          accepts_temperature: true,
+          suggested_tier: "balanced",
+        },
+      ],
+    },
+  }),
+  fetchModelConfig: vi.fn().mockResolvedValue({
+    tiers: [
+      {
+        tier: "balanced",
+        provider: "anthropic",
+        model_id: "claude-sonnet-4-6",
+        effort: "medium",
+        max_tokens: 4096,
+        temperature: null,
+      },
+    ],
+    agent_overrides: [],
+    providers: [{ provider: "anthropic", configured: true, status: "valid" }],
+  }),
+  saveModelConfig: vi.fn().mockResolvedValue({}),
+  saveProviderKey: vi.fn().mockResolvedValue({ status: "valid" }),
+  testProviderKey: vi.fn().mockResolvedValue({ status: "valid" }),
 }));
 
 import { SettingsModal } from "./settings-modal";
@@ -33,6 +63,7 @@ import {
   setPolicyMode,
   updateBudgetLimit,
   fetchTrustDashboard,
+  fetchModelConfig,
 } from "@/lib/api";
 import { useSettingsModalStore } from "@/stores/settings-modal-store";
 
@@ -80,6 +111,12 @@ test("trust tab loads the dashboard on open", async () => {
   render(<SettingsModal />);
   await userEvent.click(screen.getByRole("button", { name: /^trust$/i }));
   await waitFor(() => expect(fetchTrustDashboard).toHaveBeenCalled());
+});
+
+test("model tab loads the config on open", async () => {
+  render(<SettingsModal />);
+  await userEvent.click(screen.getByRole("button", { name: /^model$/i }));
+  await waitFor(() => expect(fetchModelConfig).toHaveBeenCalled());
 });
 
 test("budget tab edits the daily limit", async () => {
