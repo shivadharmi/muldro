@@ -887,9 +887,33 @@ The poller classifies it as a **non-permanent skip** — never `auth_failed`, wh
 permanent at threshold 1 and would open the circuit after a single attempt. GitHub
 *tool* calls (the agent path) are unaffected; they were never broken.
 
-### Also orphaned by retirement (same increment)
+### Push webhooks — KEPT, and the gap is now measured rather than assumed
 
 `_register_webhooks_for_sources` (`backend/src/api/routes_auth_oauth_integration.py`)
-has **zero production callers** — its `resource_map` covers exactly `gmail` and
-`calendar`, so Gmail/Calendar push webhooks are never registered and those sources
-would be poll-only even once polling works.
+has **zero production callers**, and its `resource_map` covers exactly `gmail` and
+`calendar` — the two providers whose native OAuth was retired. It looks like debris.
+It is not.
+
+**It is the only entry point into a subsystem that is otherwise live and
+structurally complete:** the `/v1/webhooks/{provider}/{subscription_id}` route is
+mounted, `PushReceiver` constructs a `WebhookManager`, and the scheduler runs a
+`webhook_renewal_tick` that re-registers channels before expiry. Deleting the
+function would make that route and that tick permanently unreachable. Debris and
+load-bearing look identical from a caller count alone.
+
+**Re-homing it is structurally blocked, not merely unwired.** It builds an
+`OAuthManager` to obtain a Google token, and `WebhookManager.register` needs that
+token to call Google's `watch` API — but OpenConnector holds the credential now,
+and the Wave 0 spike settled the rest: OC exposes **`gmail.stop_watch` and no
+`watch`/start action at all**, with `googlecalendar` having neither. You can stop a
+push channel you cannot start. Wiring registration to `confirm_connection` today
+would wire it to a call that cannot succeed.
+
+So Gmail and Calendar are **poll-only**, deliberately, and this is a documented gap
+rather than a silent one. If OpenConnector ever exposes a watch action, re-home
+registration to `confirm_connection`'s `pending→active` edge — where perception
+schedules are already enabled — which is a small follow-up rather than a rebuild.
+See `spike-findings-perception.md` Q5.
+
+A default-off feature flag (`webhooks_configured`) is what let this read as an
+intentional no-op for as long as it did.
