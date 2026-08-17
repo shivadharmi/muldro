@@ -10,6 +10,9 @@ Each cycle: Observer -> Librarian -> Planner -> (Governor -> Presenter if needed
 
 import logging
 
+from src.connectors.mcp_bridge import close_turn_sessions
+from src.integrations.turn_scope import turn_scope
+
 logger = logging.getLogger(__name__)
 
 
@@ -57,54 +60,62 @@ class PerceptionCoordinator:
             due_states = await svc.get_due_sources(self._user_id)
 
             results: list[dict] = []
-            for state in due_states:
-                source = state.source
-                logger.info("perception_cycle_starting", extra={"source": source})
+            # ONE MCP session scope for the whole cycle, not one per source.
+            # Gateway-backed connectors now open MCP sessions during their poll,
+            # and gmail + calendar share the google-workspace SessionKey — so
+            # refcounting gives them a single session torn down deterministically
+            # here. Without a scope the scheduler (a detached background task,
+            # exactly what TurnScope's docstring warns about) would leak a
+            # session per poll for the idle reaper to collect.
+            async with turn_scope(on_close=close_turn_sessions):
+                for state in due_states:
+                    source = state.source
+                    logger.info("perception_cycle_starting", extra={"source": source})
 
-                try:
-                    result = await self._orchestrator.run_perception_cycle(
-                        source,
-                        user_id=self._user_id,
-                        workspace_id=self._workspace_id,
-                    )
-                    results.append(result)
-
-                    if result.get("status") == "error":
-                        from src.connectors.poll_result import MISSING_ERROR_SENTINEL
-
-                        await svc.record_failure(
-                            state, result.get("error") or MISSING_ERROR_SENTINEL
+                    try:
+                        result = await self._orchestrator.run_perception_cycle(
+                            source,
+                            user_id=self._user_id,
+                            workspace_id=self._workspace_id,
                         )
-                    else:
-                        event_count = result.get("events", 0)
-                        await svc.record_success(
-                            state, event_count, budget_multiplier=budget_multiplier
+                        results.append(result)
+
+                        if result.get("status") == "error":
+                            from src.connectors.poll_result import MISSING_ERROR_SENTINEL
+
+                            await svc.record_failure(
+                                state, result.get("error") or MISSING_ERROR_SENTINEL
+                            )
+                        else:
+                            event_count = result.get("events", 0)
+                            await svc.record_success(
+                                state, event_count, budget_multiplier=budget_multiplier
+                            )
+
+                        await self._publish_event(
+                            "connector.synced",
+                            self._user_id,
+                            {"source": source, "status": result.get("status", "ok")},
                         )
+                    except Exception as e:
+                        # An uncategorized cycle failure has no recognized keyword,
+                        # so a bare str(e) would classify as unknown (threshold 3).
+                        # Fail-safe to the transient sentinel (threshold 6) —
+                        # consistent with the connector-poller error paths. The
+                        # real error is preserved in the log extra below.
+                        from src.connectors.poll_result import error_class_to_policy_error
 
-                    await self._publish_event(
-                        "connector.synced",
-                        self._user_id,
-                        {"source": source, "status": result.get("status", "ok")},
-                    )
-                except Exception as e:
-                    # An uncategorized cycle failure has no recognized keyword,
-                    # so a bare str(e) would classify as unknown (threshold 3).
-                    # Fail-safe to the transient sentinel (threshold 6) —
-                    # consistent with the connector-poller error paths. The
-                    # real error is preserved in the log extra below.
-                    from src.connectors.poll_result import error_class_to_policy_error
-
-                    logger.error(
-                        "perception_cycle_failed",
-                        extra={"source": source, "error": str(e)},
-                    )
-                    results.append({"status": "error", "source": source, "error": str(e)})
-                    await svc.record_failure(state, error_class_to_policy_error("transient"))
-                    await self._publish_event(
-                        "connector.error",
-                        self._user_id,
-                        {"source": source, "error": str(e)[:500]},
-                    )
+                        logger.error(
+                            "perception_cycle_failed",
+                            extra={"source": source, "error": str(e)},
+                        )
+                        results.append({"status": "error", "source": source, "error": str(e)})
+                        await svc.record_failure(state, error_class_to_policy_error("transient"))
+                        await self._publish_event(
+                            "connector.error",
+                            self._user_id,
+                            {"source": source, "error": str(e)[:500]},
+                        )
 
             await db.commit()
         return results

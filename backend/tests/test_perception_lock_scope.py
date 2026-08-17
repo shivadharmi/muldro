@@ -21,6 +21,7 @@ from src.services.perception_policy import (
     LEASE_TTL_S,
     PerceptionPolicyService,
 )
+from tests.conftest import TEST_USER_ID
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -507,3 +508,63 @@ async def test_invalid_token_source_is_dropped_and_not_run():
 
     assert cycles == ["usr_ok"]  # only the valid-token source was polled
     reauth.apply_needs_reauth.assert_awaited_once()  # the revoked source surfaced re-auth
+
+
+# ---------------------------------------------------------------------------
+# Task 12: one turn_scope per perception cycle, not one per source
+# ---------------------------------------------------------------------------
+
+
+async def test_run_due_cycles_opens_exactly_one_turn_scope():
+    """MCP sessions opened during a poll must be torn down at cycle end.
+
+    TurnScope's docstring warns that detached background work — the scheduler is
+    exactly that — must not open turn-scoped sessions without a scope, or they
+    survive until the idle reaper. Gmail and Calendar share the
+    google-workspace SessionKey, so ONE refcounted scope around the whole
+    due-sources loop serves both. One scope per user, not per source.
+    """
+    from src.orchestrator.perception import PerceptionCoordinator
+
+    orchestrator = MagicMock()
+    orchestrator.run_perception_cycle = AsyncMock(return_value={"status": "ok", "events": 0})
+    orchestrator._publish_event = AsyncMock()
+
+    state_a = MagicMock()
+    state_a.source = "gmail"
+    state_b = MagicMock()
+    state_b.source = "calendar"
+
+    svc = AsyncMock()
+    svc.get_due_sources = AsyncMock(return_value=[state_a, state_b])
+    svc.record_success = AsyncMock()
+    svc.record_failure = AsyncMock()
+
+    mock_db = AsyncMock()
+    mock_db.flush = AsyncMock()
+    mock_db.commit = AsyncMock()
+
+    mock_cm = AsyncMock()
+    mock_cm.__aenter__ = AsyncMock(return_value=mock_db)
+    mock_cm.__aexit__ = AsyncMock(return_value=False)
+    mock_factory_fn = MagicMock(return_value=mock_cm)
+
+    scope_cm = MagicMock()
+    scope_cm.__aenter__ = AsyncMock(return_value=None)
+    scope_cm.__aexit__ = AsyncMock(return_value=False)
+
+    with (
+        patch("src.models.database.get_session_factory", return_value=mock_factory_fn),
+        patch("src.services.perception_policy.PerceptionPolicyService", return_value=svc),
+        patch(
+            "src.orchestrator.perception.turn_scope", MagicMock(return_value=scope_cm)
+        ) as mock_scope,
+    ):
+        coord = PerceptionCoordinator(orchestrator, user_id=TEST_USER_ID, workspace_id="ws_test")
+        await coord.run_due_cycles()
+
+    assert orchestrator.run_perception_cycle.await_count == 2, "both sources should run"
+    assert mock_scope.call_count == 1, (
+        f"expected ONE turn_scope for the whole cycle, got {mock_scope.call_count}"
+    )
+    scope_cm.__aexit__.assert_awaited_once()
