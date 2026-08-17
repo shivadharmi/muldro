@@ -437,7 +437,7 @@ class TestPerceptionCycleRouting:
                     new_cursor,
                     poll_error,
                     cursor_type,
-                ) = await ConnectorPoller.poll(poller, "gmail", TEST_USER_ID, "ws_test")
+                ) = await ConnectorPoller.poll(poller, "slack", TEST_USER_ID, "ws_test")
 
             assert events == []
             assert poll_error is not None
@@ -484,7 +484,7 @@ class TestPerceptionCycleRouting:
                     new_cursor,
                     poll_error,
                     cursor_type,
-                ) = await ConnectorPoller.poll(poller, "gmail", TEST_USER_ID, "ws_test")
+                ) = await ConnectorPoller.poll(poller, "slack", TEST_USER_ID, "ws_test")
 
             assert events == []
             assert poll_error is None
@@ -556,7 +556,7 @@ class TestErrorClassPropagation:
 # ---------------------------------------------------------------------------
 
 
-async def _run_poll_with_token(token, *, source="gmail", reason=None):
+async def _run_poll_with_token(token, *, source="slack", reason=None):
     """Drive ConnectorPoller.poll with a stubbed connector + given OAuth token.
 
     The connector itself returns an ok-empty PollResult; the test controls
@@ -687,7 +687,7 @@ class TestPreflightErrorClassification:
                 mock_oauth_cls.return_value = mock_oauth
 
                 events, _, poll_error, _ = await ConnectorPoller.poll(
-                    poller, "gmail", TEST_USER_ID, "ws_test"
+                    poller, "slack", TEST_USER_ID, "ws_test"
                 )
 
         assert events == []
@@ -739,3 +739,156 @@ def test_every_mapped_value_is_a_valid_poll_error_class():
     valid = {"transient", "permanent", "rate_limited", "auth_failed"}
     bad = {k: v for k, v in MCP_CODE_TO_POLL_CLASS.items() if v not in valid}
     assert not bad, f"invalid PollErrorClass values: {bad}"
+
+
+# ---------------------------------------------------------------------------
+# (g) Credential discriminator — where a source's credential lives is a
+#     REGISTRY question (gateway_provider_for_source), not a hardcoded map.
+#
+#     Three outcomes, exhaustive:
+#       None       + any            -> OAuthManager token (unchanged)
+#       provider   + GatewayConnector -> GatewayToolCaller, no OAuthManager
+#       provider   + native connector -> NON-permanent skip (github deferral)
+#
+#     These tests must supply REAL classes: the discriminator calls
+#     issubclass(connector_cls, GatewayConnector), which raises TypeError on a
+#     MagicMock. That is why this block does not reuse the MagicMock registry
+#     idiom the older poll() tests above use.
+# ---------------------------------------------------------------------------
+
+
+class TestCredentialDiscriminator:
+    @staticmethod
+    def _poller():
+        from src.orchestrator.connector_poller import ConnectorPoller
+
+        poller = MagicMock(spec=ConnectorPoller)
+        poller._settings = make_mock_settings()
+        mock_db = AsyncMock()
+        mock_db.__aenter__ = AsyncMock(return_value=mock_db)
+        mock_db.__aexit__ = AsyncMock(return_value=False)
+        mock_result = MagicMock()
+        mock_result.first = MagicMock(return_value=None)
+        mock_db.execute = AsyncMock(return_value=mock_result)
+        poller._db_factory = MagicMock(return_value=mock_db)
+        return poller
+
+    async def test_gateway_source_never_constructs_oauth_manager(self):
+        """A gateway source's credential lives in OpenConnector, not OAuthManager."""
+        from src.connectors.gateway_connector import GatewayConnector
+        from src.connectors.poll_result import PollResult
+        from src.orchestrator.connector_poller import ConnectorPoller
+
+        recorded = {}
+
+        class _Ported(GatewayConnector):
+            provider = "gmail"
+            cursor_type = "timestamp"
+            READ_ACTION = "gmail.get_profile"
+
+            def __init__(self, settings=None, caller=None):
+                super().__init__(settings=settings, caller=caller)
+                recorded["caller"] = caller
+
+            async def poll(self, user_id, cursor, credentials):
+                recorded["credentials"] = credentials
+                return PollResult(events=[], cursor="1755400000", error_class="none")
+
+        def _explode(*args, **kwargs):
+            raise AssertionError("OAuthManager was constructed for a gateway source")
+
+        with patch("src.connectors.base.CONNECTOR_REGISTRY", {"gmail": _Ported}):
+            with patch("src.services.oauth_manager.OAuthManager", _explode):
+                events, cursor, error, cursor_type = await ConnectorPoller.poll(
+                    self._poller(), "gmail", TEST_USER_ID, "ws_test"
+                )
+
+        assert events == []
+        assert error is None
+        assert cursor == "1755400000"
+        assert cursor_type == "timestamp"
+        assert recorded["caller"] is not None
+        assert recorded["caller"].user_id == TEST_USER_ID
+        assert recorded["caller"].workspace_id == "ws_test"
+
+    async def test_gateway_backed_but_unported_connector_skips_non_permanently(self):
+        """github is gateway-backed but still a native connector (deferred port).
+
+        Without the issubclass guard it would skip OAuthManager, read an empty
+        access_token and return auth_failed — and auth_failed is PERMANENT,
+        i.e. threshold 1. A source whose data path was deliberately not built
+        must never open a permanent circuit.
+        """
+        from src.connectors.base import CONNECTOR_REGISTRY
+        from src.connectors.gateway_connector import GatewayConnector
+        from src.integrations.gateway_actions import gateway_provider_for_source
+        from src.orchestrator.connector_poller import ConnectorPoller
+        from src.services.perception_policy import classify_error
+
+        # Preconditions: github really is in this middle state.
+        assert gateway_provider_for_source("github") is not None
+        assert not issubclass(CONNECTOR_REGISTRY["github"], GatewayConnector)
+
+        def _explode(*args, **kwargs):
+            raise AssertionError("OAuthManager was constructed for a gateway source")
+
+        with patch("src.services.oauth_manager.OAuthManager", _explode):
+            events, cursor, error, _cursor_type = await ConnectorPoller.poll(
+                self._poller(), "github", TEST_USER_ID, "ws_test"
+            )
+
+        assert events == []
+        assert cursor is None
+        assert error is not None
+        assert "permanent" not in error.lower()
+        assert "transient" in error.lower()
+        assert classify_error(error) == "transient"
+
+    async def test_native_source_still_takes_the_oauth_path(self):
+        """A source the registry does not claim is still an OAuthManager question."""
+        from src.connectors.base import BaseConnector, ConnectorHealth
+        from src.connectors.poll_result import PollResult
+        from src.integrations.gateway_actions import gateway_provider_for_source
+        from src.orchestrator.connector_poller import ConnectorPoller
+        from src.services.oauth_manager import TokenResult
+
+        assert gateway_provider_for_source("slack") is None
+
+        recorded = {}
+
+        class _Native(BaseConnector):
+            provider = "slack"
+            cursor_type = "per_channel_ts"
+
+            async def poll(self, user_id, cursor, credentials):
+                recorded["credentials"] = credentials
+                return PollResult(events=[], cursor="ts_1", error_class="none")
+
+            def get_auth_url(self, scopes=None) -> str:  # pragma: no cover - unused
+                return "https://example.invalid/auth"
+
+            async def test(self, credentials) -> ConnectorHealth:  # pragma: no cover
+                return ConnectorHealth(status="healthy")
+
+        mock_oauth = AsyncMock()
+        mock_oauth.get_valid_token_with_reason = AsyncMock(
+            return_value=TokenResult(token="tok_native", reason="ok")
+        )
+
+        with patch("src.connectors.base.CONNECTOR_REGISTRY", {"slack": _Native}):
+            with patch("src.services.oauth_manager.OAuthManager") as mock_oauth_cls:
+                mock_oauth_cls.return_value = mock_oauth
+                events, cursor, error, cursor_type = await ConnectorPoller.poll(
+                    self._poller(), "slack", TEST_USER_ID, "ws_test"
+                )
+
+        assert events == []
+        assert error is None
+        assert cursor == "ts_1"
+        assert cursor_type == "per_channel_ts"
+        assert recorded["credentials"] == {"access_token": "tok_native"}
+        assert mock_oauth.get_valid_token_with_reason.await_count == 1
+        assert mock_oauth.get_valid_token_with_reason.await_args.args == (
+            TEST_USER_ID,
+            "slack",
+        )

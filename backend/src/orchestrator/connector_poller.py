@@ -58,8 +58,9 @@ class ConnectorPoller:
     ) -> tuple[list, str | None, str | None, str]:
         """Poll a connector for new events. Returns (events, new_cursor, error, cursor_type)."""
         from src.connectors.base import CONNECTOR_REGISTRY
+        from src.connectors.gateway_connector import GatewayConnector
         from src.connectors.poll_result import error_class_to_policy_error
-        from src.services.oauth_manager import OAuthManager
+        from src.integrations.gateway_actions import gateway_provider_for_source
 
         connector_cls = CONNECTOR_REGISTRY.get(source)
         if not connector_cls:
@@ -74,42 +75,77 @@ class ConnectorPoller:
                 "opaque",
             )
 
-        connector = connector_cls(settings=self._settings)
-        cursor_type = connector.cursor_type
+        # Read the cursor type off the class: the credential discriminator below
+        # can return before a connector instance exists.
+        cursor_type: str = getattr(connector_cls, "cursor_type", "opaque")
 
-        # Get OAuth credentials
-        oauth_mgr = OAuthManager(
-            self._db_factory,
-            encryption_key=self._settings.oauth_encryption_key,
-            settings=self._settings,
-        )
-        # Map source to OAuth provider (gmail/calendar share "google" provider)
-        oauth_provider = "google" if source in ("gmail", "calendar") else source
-        token_result = await oauth_mgr.get_valid_token_with_reason(user_id, oauth_provider)
-        if token_result.token is None:
-            # Distinguish a genuine token-refresh blip (transient — retry) from a
-            # confirmed "no usable credential" (never connected / no refresh token /
-            # revoked). The latter cannot self-heal by retrying, so classify it
-            # auth_failed (-> permanent, threshold 1): the circuit opens fast and
-            # re-authorization can be surfaced, instead of looping forever on a
-            # source the user never connected. A live provider 401/403 still
-            # surfaces as PollResult.auth_failed on the connector return path.
-            from src.connectors.poll_result import (
-                CREDENTIAL_ACQUISITION_ERROR,
-                error_class_to_policy_error,
-            )
+        # Where this source's credential lives is a REGISTRY question, not a
+        # hardcoded map. ``gateway_provider_for_source`` returns None for a
+        # source that is not gateway-backed — that source's runnability is
+        # still an OAuthManager question.
+        gateway_provider = gateway_provider_for_source(source)
+        caller = None
+        access_token = ""
 
-            if token_result.reason == "refresh_failed":
-                err = CREDENTIAL_ACQUISITION_ERROR
-            else:  # no_token | no_refresh_token | revoked
-                err = error_class_to_policy_error("auth_failed")
-            return (
-                [],
-                None,
-                f"No valid credentials for {source} — {err}",
-                cursor_type,
+        if gateway_provider is not None:
+            if not issubclass(connector_cls, GatewayConnector):
+                # Gateway-backed but its connector is not ported yet (the github
+                # deferral: OpenConnector exposes no notifications action).
+                # Classify NON-permanently — "permanent" is threshold 1, so the
+                # circuit would open after a single attempt for a source whose
+                # data path we deliberately have not built.
+                logger.info(
+                    "perception_source_not_ported",
+                    extra={"source": source, "gateway_provider": gateway_provider},
+                )
+                return (
+                    [],
+                    None,
+                    f"Poll skipped for {source}: {error_class_to_policy_error('transient')}",
+                    cursor_type,
+                )
+
+            from src.connectors.gateway_caller import GatewayToolCaller
+
+            # The credential lives in OpenConnector and is bound by the gateway
+            # at call time — no OAuthManager token is fetched or needed here.
+            caller = GatewayToolCaller(user_id=user_id, workspace_id=workspace_id)
+        else:
+            # Native source: unchanged OAuth path.
+            from src.services.oauth_manager import OAuthManager
+
+            oauth_mgr = OAuthManager(
+                self._db_factory,
+                encryption_key=self._settings.oauth_encryption_key,
+                settings=self._settings,
             )
-        access_token = token_result.token
+            token_result = await oauth_mgr.get_valid_token_with_reason(user_id, source)
+            if token_result.token is None:
+                # Distinguish a genuine token-refresh blip (transient — retry) from a
+                # confirmed "no usable credential" (never connected / no refresh token /
+                # revoked). The latter cannot self-heal by retrying, so classify it
+                # auth_failed (-> permanent, threshold 1): the circuit opens fast and
+                # re-authorization can be surfaced, instead of looping forever on a
+                # source the user never connected. A live provider 401/403 still
+                # surfaces as PollResult.auth_failed on the connector return path.
+                from src.connectors.poll_result import CREDENTIAL_ACQUISITION_ERROR
+
+                if token_result.reason == "refresh_failed":
+                    err = CREDENTIAL_ACQUISITION_ERROR
+                else:  # no_token | no_refresh_token | revoked
+                    err = error_class_to_policy_error("auth_failed")
+                return (
+                    [],
+                    None,
+                    f"No valid credentials for {source} — {err}",
+                    cursor_type,
+                )
+            access_token = token_result.token
+
+        if caller is not None:
+            connector = connector_cls(settings=self._settings, caller=caller)
+        else:
+            connector = connector_cls(settings=self._settings)
 
         # Get current cursor
         cursor = None
