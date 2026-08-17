@@ -8,7 +8,7 @@ response models without importing the routes module.
 
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class TierBinding(BaseModel):
@@ -19,7 +19,8 @@ class TierBinding(BaseModel):
     provider: str
     model_id: str
     effort: str = "none"
-    max_tokens: int = 4096
+    # >=1: max_tokens=0 yields a legacy thinking budget of -1 and breaks every call.
+    max_tokens: int = Field(4096, ge=1)
     temperature: float | None = None
 
 

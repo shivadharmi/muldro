@@ -116,11 +116,13 @@ class ModelResolver:
     ) -> bool:
         """Whether the model backing this (agent/tier) supports prompt caching.
 
-        Binding + catalog only — NO credential decryption. Returns True when the
-        binding or spec cannot be determined (Anthropic-safe default).
+        Reflects the model resolve() actually runs: it replays §10 override-degradation
+        so an unusable Anthropic override that falls back to a non-Anthropic tier does not
+        keep Anthropic cache_control on the wrong model (H1 regression under degradation).
+        Returns True when the binding or spec cannot be determined (Anthropic-safe default).
         """
         try:
-            binding = await self._pick_binding(
+            binding = await self._effective_binding(
                 tier=tier, agent=agent, agent_tier=agent_tier, workspace_id=workspace_id
             )
             if binding is None:
@@ -138,15 +140,42 @@ class ModelResolver:
         agent_tier: str | None = None,
         workspace_id: str | None = None,
     ) -> str | None:
-        """The model id the binding for this (agent/tier) resolves to — binding + precedence
-        only, no credential work. None when no binding is found (caller falls back)."""
+        """The model id the (agent/tier) actually resolves to, for budget attribution.
+
+        Replays §10 override-degradation so a degraded override is priced as the tier
+        model that actually runs, not the unusable override. None when no binding is
+        found (caller falls back to the tier default)."""
         try:
-            binding = await self._pick_binding(
+            binding = await self._effective_binding(
                 tier=tier, agent=agent, agent_tier=agent_tier, workspace_id=workspace_id
             )
             return binding.model_id if binding is not None else None
         except Exception:
             return None
+
+    async def _effective_binding(
+        self, *, tier, agent, agent_tier, workspace_id
+    ) -> ModelBinding | None:
+        """The binding resolve() actually runs, replaying §10 override-degradation: an
+        agent override whose provider credential is unusable falls back to the agent's
+        tier binding. Mirrors resolve()'s fallback condition (missing credential for a
+        non-keyless provider) so the identity/cache helpers report the running model.
+
+        Costs one credential lookup only when an agent override is present — tier lookups
+        stay credential-free. The trade of a once-per-build lookup for correct cache
+        gating / cost attribution supersedes the earlier credential-free-helper note."""
+        binding = await self._pick_binding(
+            tier=tier, agent=agent, agent_tier=agent_tier, workspace_id=workspace_id
+        )
+        if binding is None:
+            return None
+        if binding.scope_type == "agent" and agent_tier is not None:
+            api_key, _ = await self.resolve_credential(binding.provider, workspace_id)
+            if api_key is None and binding.provider not in KEYLESS_PROVIDERS:
+                tier_binding = await self._binding_row("tier", agent_tier, workspace_id)
+                if tier_binding is not None and tier_binding.id != binding.id:
+                    return tier_binding
+        return binding
 
     async def _pick_binding(self, *, tier, agent, agent_tier, workspace_id) -> ModelBinding | None:
         # Precedence: agent-override row -> tier row. Each lookup prefers the

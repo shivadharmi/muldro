@@ -271,3 +271,128 @@ async def test_override_with_credential_still_resolves_to_override(monkeypatch):
         r = await ModelResolver(db).resolve(agent="planner", agent_tier="balanced", workspace_id=ws)
         assert r.provider == "openai" and r.model_id == "gpt-5"
         assert r.api_key == "sk-o"
+
+
+async def test_identity_helpers_replay_override_degradation(monkeypatch):
+    """resolved_model_id and supports_prompt_cache must report the model that resolve()
+    actually runs after §10 override-degradation, not the unusable override (N2+N3).
+
+    Setup: an anthropic override with NO usable credential degrades to a configured
+    openai tier. The dangerous case for cache gating — the override *supports* prompt
+    cache but the running (openai) model does not, so keeping the override's identity
+    would leave Anthropic cache_control on a non-Anthropic model.
+    """
+    key = Fernet.generate_key().decode()
+    monkeypatch.setattr(secret_crypto, "_config_key", lambda: key)
+    # Clear BOTH env fallbacks so the anthropic override is genuinely unconfigured
+    # (the test env sets JARVIS_ANTHROPIC_API_KEY, which would otherwise rescue it).
+    monkeypatch.setattr(get_settings(), "anthropic_api_key", "", raising=False)
+    monkeypatch.setattr(get_settings(), "openai_api_key", "", raising=False)
+    async with _session() as db:
+        ws = await _seed_workspace(db)
+        # Tier default: openai (configured via encrypted credential; no prompt cache).
+        db.add(
+            ProviderCredential(
+                workspace_id=None,
+                provider="openai",
+                api_key_encrypted=secret_crypto.encrypt_secret("sk-o"),
+                status="valid",
+            )
+        )
+        db.add(
+            ModelBinding(
+                workspace_id=None,
+                scope_type="tier",
+                scope_key="balanced",
+                provider="openai",
+                model_id="gpt-5-mini",
+                effort="none",
+                max_tokens=2048,
+            )
+        )
+        # Agent override: anthropic (supports cache) with NO credential -> unusable.
+        db.add(
+            ModelBinding(
+                workspace_id=None,
+                scope_type="agent",
+                scope_key="planner",
+                provider="anthropic",
+                model_id="claude-sonnet-4-6",
+                effort="medium",
+                max_tokens=4096,
+            )
+        )
+        await db.flush()
+        resolver = ModelResolver(db)
+
+        # resolve() degrades to the openai tier.
+        r = await resolver.resolve(agent="planner", agent_tier="balanced", workspace_id=ws)
+        assert r.provider == "openai" and r.model_id == "gpt-5-mini"
+
+        # The identity/cache helpers must agree with the degraded model, not the override.
+        mid = await resolver.resolved_model_id(
+            agent="planner", agent_tier="balanced", workspace_id=ws
+        )
+        assert mid == "gpt-5-mini"  # N2: budget attribution follows the running model
+
+        supports = await resolver.supports_prompt_cache(
+            agent="planner", agent_tier="balanced", workspace_id=ws
+        )
+        assert supports is False  # N3: openai model -> strip Anthropic cache_control
+
+
+async def test_identity_helpers_keep_override_when_usable(monkeypatch):
+    """A usable override is NOT degraded: the helpers report the override's identity."""
+    key = Fernet.generate_key().decode()
+    monkeypatch.setattr(secret_crypto, "_config_key", lambda: key)
+    monkeypatch.setattr(get_settings(), "anthropic_api_key", "", raising=False)
+    monkeypatch.setattr(get_settings(), "openai_api_key", "", raising=False)
+    async with _session() as db:
+        ws = await _seed_workspace(db)
+        db.add(
+            ProviderCredential(
+                workspace_id=None,
+                provider="anthropic",
+                api_key_encrypted=secret_crypto.encrypt_secret("sk-a"),
+                status="valid",
+            )
+        )
+        db.add(
+            ProviderCredential(
+                workspace_id=None,
+                provider="openai",
+                api_key_encrypted=secret_crypto.encrypt_secret("sk-o"),
+                status="valid",
+            )
+        )
+        db.add(
+            ModelBinding(
+                workspace_id=None,
+                scope_type="tier",
+                scope_key="balanced",
+                provider="openai",
+                model_id="gpt-5-mini",
+                effort="none",
+                max_tokens=2048,
+            )
+        )
+        db.add(
+            ModelBinding(
+                workspace_id=None,
+                scope_type="agent",
+                scope_key="planner",
+                provider="anthropic",
+                model_id="claude-sonnet-4-6",
+                effort="medium",
+                max_tokens=4096,
+            )
+        )
+        await db.flush()
+        resolver = ModelResolver(db)
+        mid = await resolver.resolved_model_id(
+            agent="planner", agent_tier="balanced", workspace_id=ws
+        )
+        assert mid == "claude-sonnet-4-6"
+        assert await resolver.supports_prompt_cache(
+            agent="planner", agent_tier="balanced", workspace_id=ws
+        )

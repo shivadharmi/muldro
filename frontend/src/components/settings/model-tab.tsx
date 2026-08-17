@@ -133,7 +133,8 @@ function BindingRow({ binding, catalog, configuredProviders, onChange, onRemove 
         min="1"
         value={binding.max_tokens}
         onChange={(e) =>
-          onChange({ ...binding, max_tokens: Number(e.target.value) || 0 })
+          // Never persist 0 — max_tokens=0 breaks every model call (backend rejects <1).
+          onChange({ ...binding, max_tokens: Math.max(1, Number(e.target.value) || 1) })
         }
         className={`${INPUT_CLASS} w-24`}
       />

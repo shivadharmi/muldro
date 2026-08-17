@@ -570,6 +570,30 @@ def test_put_config_removes_omitted_agent_overrides():
         asyncio.run(_cleanup())
 
 
+def test_put_config_rejects_zero_max_tokens():
+    """max_tokens=0 must be rejected — it produces a legacy thinking budget of -1 and
+    breaks every model call on that binding (N1). Validation is at the schema boundary,
+    so no DB is needed."""
+    with _client() as c:
+        for bad in (0, -5):
+            r = c.put(
+                "/v1/model-config",
+                json={
+                    "tiers": [
+                        {
+                            "tier": "balanced",
+                            "provider": "anthropic",
+                            "model_id": "claude-sonnet-4-6",
+                            "effort": "medium",
+                            "max_tokens": bad,
+                        }
+                    ],
+                    "agent_overrides": [],
+                },
+            )
+            assert r.status_code == 422, f"max_tokens={bad} should be rejected: {r.text}"
+
+
 def test_model_catalog_includes_agents():
     """The catalog must expose the agent roster + each agent's default tier so the
     Settings UI can offer per-agent override creation (F1)."""

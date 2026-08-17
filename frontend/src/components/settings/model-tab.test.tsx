@@ -103,6 +103,17 @@ test("keeps the binding's current provider in options when de-configured", () =>
   expect(select.value).toBe("anthropic");
 });
 
+test("clamps a cleared max_tokens field to at least 1, never 0 (N1)", async () => {
+  render(
+    <ModelTab open loading={false} catalog={catalog} config={config} onLoad={() => {}} />,
+  );
+  const maxTokens = screen.getByLabelText("balanced max tokens") as HTMLInputElement;
+  await userEvent.clear(maxTokens);
+  // Clearing the field must not yield 0 (which produces a -1 thinking budget server-side).
+  expect(maxTokens.value).not.toBe("0");
+  expect(Number(maxTokens.value)).toBeGreaterThanOrEqual(1);
+});
+
 test("can add and remove a per-agent override from the UI (F1)", async () => {
   const onSaveConfig = vi.fn();
   render(

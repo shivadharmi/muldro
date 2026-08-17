@@ -51,7 +51,16 @@ def build_model_kwargs(
             kwargs["temperature"] = temperature
         return kwargs
 
-    # "gemini" and "none": no special thinking shape wired here
+    if style == "gemini":
+        # Gemini 2.5 takes a token thinking budget (ChatGoogleGenerativeAI.thinking_budget);
+        # map the neutral effort level so the Settings effort selector is not a no-op.
+        if thinking_on:
+            kwargs["thinking_budget"] = _effort_to_budget(effort)
+        if spec.accepts_temperature and temperature is not None:
+            kwargs["temperature"] = temperature
+        return kwargs
+
+    # "none": plain completion, no thinking shape.
     if spec.accepts_temperature and temperature is not None:
         kwargs["temperature"] = temperature
     return kwargs
