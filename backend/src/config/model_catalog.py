@@ -148,6 +148,16 @@ def get_model_spec(provider: str, model_id: str) -> ModelSpec | None:
     return None
 
 
+def get_model_spec_by_id(model_id: str) -> ModelSpec | None:
+    """Return the first ModelSpec across all providers whose model_id matches, or None.
+    Provider-agnostic lookup for cost/pricing sites that only have a model id."""
+    for specs in MODEL_CATALOG.values():
+        for spec in specs:
+            if spec.model_id == model_id:
+                return spec
+    return None
+
+
 def default_model_id_for_tier(tier: str) -> str | None:
     """Return the default (Anthropic) model id whose suggested_tier == *tier*.
 

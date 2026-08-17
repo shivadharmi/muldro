@@ -12,6 +12,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from ulid import ULID
 
+from src.config.model_catalog import get_model_spec_by_id
 from src.models.token_usage import TokenUsage
 
 logger = logging.getLogger(__name__)
@@ -82,14 +83,24 @@ class BudgetTracker:
         if billable_tokens <= 0:
             return 0.0
 
-        pricing = MODEL_PRICING.get(model)
-        if not pricing:
-            logger.warning(
-                "Unknown model %r not in MODEL_PRICING — billing at Sonnet rates; "
-                "Opus would be under-billed. Add it to MODEL_PRICING.",
-                model,
-            )
-            pricing = MODEL_PRICING["claude-sonnet-4-6"]
+        # Catalog is the primary, multi-provider source of truth (per-1k costs).
+        # MODEL_PRICING (per-million) is a legacy fallback for ids not in the catalog
+        # (e.g. dated Anthropic ids). Sonnet is the last-resort fallback.
+        spec = get_model_spec_by_id(model)
+        if spec is not None:
+            pricing = {
+                "input": spec.input_cost_per_1k * 1000,
+                "output": spec.output_cost_per_1k * 1000,
+            }
+        else:
+            pricing = MODEL_PRICING.get(model)
+            if not pricing:
+                logger.warning(
+                    "Unknown model %r not in catalog or MODEL_PRICING — billing at Sonnet "
+                    "rates. Add it to the model catalog.",
+                    model,
+                )
+                pricing = MODEL_PRICING["claude-sonnet-4-6"]
         per_m = 1_000_000
         input_cost = (input_tokens / per_m) * pricing["input"]
         output_cost = (output_tokens / per_m) * pricing["output"]

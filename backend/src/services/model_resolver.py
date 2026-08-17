@@ -101,6 +101,24 @@ class ModelResolver:
         except Exception:
             return True
 
+    async def resolved_model_id(
+        self,
+        *,
+        tier: str | None = None,
+        agent: str | None = None,
+        agent_tier: str | None = None,
+        workspace_id: str | None = None,
+    ) -> str | None:
+        """The model id the binding for this (agent/tier) resolves to — binding + precedence
+        only, no credential work. None when no binding is found (caller falls back)."""
+        try:
+            binding = await self._pick_binding(
+                tier=tier, agent=agent, agent_tier=agent_tier, workspace_id=workspace_id
+            )
+            return binding.model_id if binding is not None else None
+        except Exception:
+            return None
+
     async def _pick_binding(self, *, tier, agent, agent_tier, workspace_id) -> ModelBinding | None:
         # Precedence: agent-override row -> tier row. Each lookup prefers the
         # workspace row, else the deployment-default (NULL) row.

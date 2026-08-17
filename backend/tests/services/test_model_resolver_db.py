@@ -126,6 +126,34 @@ async def test_agent_override_beats_tier(monkeypatch):
         assert r.provider == "openai" and r.model_id == "gpt-5"
 
 
+async def test_resolved_model_id_returns_binding_model():
+    """resolved_model_id returns the binding's model_id with no credential work."""
+    async with _session() as db:
+        ws = await _seed_workspace(db)
+        db.add(
+            ModelBinding(
+                workspace_id=None,
+                scope_type="tier",
+                scope_key="balanced",
+                provider="anthropic",
+                model_id="claude-sonnet-4-6",
+                effort="medium",
+                max_tokens=4096,
+            )
+        )
+        await db.flush()
+        mid = await ModelResolver(db).resolved_model_id(tier="balanced", workspace_id=ws)
+        assert mid == "claude-sonnet-4-6"
+
+
+async def test_resolved_model_id_none_when_no_binding():
+    """No binding for the tier -> None (caller falls back to the tier default)."""
+    async with _session() as db:
+        ws = await _seed_workspace(db)
+        mid = await ModelResolver(db).resolved_model_id(tier="nonexistent", workspace_id=ws)
+        assert mid is None
+
+
 async def test_missing_credential_raises(monkeypatch):
     key = Fernet.generate_key().decode()
     monkeypatch.setattr(secret_crypto, "_config_key", lambda: key)

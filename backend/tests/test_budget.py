@@ -130,7 +130,7 @@ class TestUnknownModelWarning:
                 thinking_tokens=0,
             )
         assert cost == 0.0
-        assert not any("not in MODEL_PRICING" in r.message for r in caplog.records), (
+        assert not any("not in catalog or MODEL_PRICING" in r.message for r in caplog.records), (
             "warning must not fire for a zero-token span"
         )
 
@@ -142,7 +142,7 @@ class TestUnknownModelWarning:
                 output_tokens=500,
             )
         # Warning must still fire for a genuine unknown model with real usage.
-        assert any("not in MODEL_PRICING" in r.message for r in caplog.records)
+        assert any("not in catalog or MODEL_PRICING" in r.message for r in caplog.records)
         # And it must fall back to Sonnet pricing.
         expected = self.tracker.calculate_cost(
             model="claude-sonnet-4-6",
@@ -159,7 +159,7 @@ class TestUnknownModelWarning:
                 output_tokens=0,
             )
         assert cost == 0.0
-        assert not any("not in MODEL_PRICING" in r.message for r in caplog.records)
+        assert not any("not in catalog or MODEL_PRICING" in r.message for r in caplog.records)
 
     def test_api_span_records_real_model_priced_as_opus(self, caplog):
         """A span that made an API call carries its real model id; Opus is
@@ -178,7 +178,62 @@ class TestUnknownModelWarning:
             output_tokens=500,
         )
         assert cost != sonnet
-        assert not any("not in MODEL_PRICING" in r.message for r in caplog.records)
+        assert not any("not in catalog or MODEL_PRICING" in r.message for r in caplog.records)
+
+
+class TestCatalogSourcedPricing:
+    """calculate_cost prices from the model catalog first, MODEL_PRICING as a
+    legacy fallback, then the Sonnet fallback for genuinely unknown ids.
+
+    Expected values are computed from the live catalog / MODEL_PRICING so the
+    assertions survive later catalog cost-data corrections (e.g. L5).
+    """
+
+    def setup_method(self):
+        self.tracker = BudgetTracker(daily_limit_usd=10.0)
+
+    def test_multiprovider_model_prices_from_catalog(self):
+        from src.config.model_catalog import get_model_spec_by_id
+
+        spec = get_model_spec_by_id("gpt-5")
+        assert spec is not None, "gpt-5 must be in the catalog for this test"
+        cost = self.tracker.calculate_cost(model="gpt-5", input_tokens=1000, output_tokens=1000)
+        # catalog costs are per-1k; calculate_cost works per-million (x1000).
+        expected = (1000 / 1_000_000) * spec.input_cost_per_1k * 1000 + (
+            1000 / 1_000_000
+        ) * spec.output_cost_per_1k * 1000
+        assert abs(cost - expected) < 1e-9
+        # And crucially NOT priced at the Sonnet fallback.
+        sonnet = self.tracker.calculate_cost(
+            model="claude-sonnet-4-6", input_tokens=1000, output_tokens=1000
+        )
+        assert abs(cost - sonnet) > 1e-9
+
+    def test_legacy_id_only_in_model_pricing_still_prices_from_it(self):
+        from src.config.model_catalog import get_model_spec_by_id
+        from src.orchestrator.budget import MODEL_PRICING
+
+        legacy_id = "claude-opus-4-20250514"
+        assert get_model_spec_by_id(legacy_id) is None, "legacy id must not be in catalog"
+        pricing = MODEL_PRICING[legacy_id]
+        cost = self.tracker.calculate_cost(model=legacy_id, input_tokens=1000, output_tokens=1000)
+        expected = (1000 / 1_000_000) * pricing["input"] + (1000 / 1_000_000) * pricing["output"]
+        assert abs(cost - expected) < 1e-9
+
+    def test_unknown_id_warns_and_falls_back_to_sonnet(self, caplog):
+        from src.config.model_catalog import get_model_spec_by_id
+        from src.orchestrator.budget import MODEL_PRICING
+
+        unknown = "totally-made-up-model-9"
+        assert get_model_spec_by_id(unknown) is None
+        assert unknown not in MODEL_PRICING
+        with caplog.at_level(logging.WARNING, logger="src.orchestrator.budget"):
+            cost = self.tracker.calculate_cost(model=unknown, input_tokens=1000, output_tokens=1000)
+        assert any("not in catalog or MODEL_PRICING" in r.message for r in caplog.records)
+        expected = self.tracker.calculate_cost(
+            model="claude-sonnet-4-6", input_tokens=1000, output_tokens=1000
+        )
+        assert cost == expected
 
 
 class TestBudgetStatus:

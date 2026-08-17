@@ -239,6 +239,22 @@ class AgentInvoker:
         """Get the Claude model ID for an agent's tier."""
         return default_model_id_for_tier(agent.model_tier) or default_model_id_for_tier("balanced")
 
+    async def _resolve_model_id_for_budget(self, agent: SubAgent, workspace_id: str) -> str:
+        """The resolved model id for budget attribution (workspace-aware). Falls back to the
+        tier default id when no binding resolves or lookup fails."""
+        from src.services.model_resolver import ModelResolver
+
+        try:
+            async with self._db_factory() as db:
+                resolved = await ModelResolver(db).resolved_model_id(
+                    agent=agent.name,
+                    agent_tier=agent.model_tier,
+                    workspace_id=workspace_id or None,
+                )
+            return resolved or self.get_model_for_agent(agent)
+        except Exception:
+            return self.get_model_for_agent(agent)
+
     def build_system_prompt(
         self, agent: SubAgent, context: str = "", capability_summary: str = ""
     ) -> list[dict]:
@@ -511,11 +527,13 @@ class AgentInvoker:
             db_factory=self._db_factory,
         )
 
-        # Authoritative cost record (@after_model). model = the resolved Anthropic id,
-        # matching what the deep runtime actually builds.
+        # Authoritative cost record (@after_model). model = the RESOLVED model id
+        # (workspace binding-aware) so a non-Anthropic model is priced from its own
+        # catalog entry, not silently at the Anthropic tier default.
+        budget_model = await self._resolve_model_id_for_budget(agent, workspace_id)
         budget_mw = make_budget_middleware(
             agent_name=agent.name,
-            model=self.get_model_for_agent(agent),
+            model=budget_model,
             workspace_id=workspace_id,
             db_factory=self._db_factory,
             budget=self._budget,
