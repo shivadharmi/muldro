@@ -1,23 +1,43 @@
-from src.integrations.gateway_actions.gmail import GMAIL_ACTIONS
+from src.integrations.gateway_actions import PROVIDER_REGISTRY
 from src.integrations.gateway_naming import action_id_to_tool_name
 from src.tools.catalog import EXTERNAL_TOOL_SEEDS
 
-BY = {s.name: s for s in EXTERNAL_TOOL_SEEDS}
+
+def _seeds_for(server: str) -> list:
+    return [s for s in EXTERNAL_TOOL_SEEDS if s.server == server]
 
 
-def test_gmail_gateway_seeds_are_derived_agent_legal_names():
-    for a in GMAIL_ACTIONS:
-        name = action_id_to_tool_name(a.action_id)
-        assert name in BY, name
-        s = BY[name]
-        assert (s.capability, s.server) == (a.capability, "google-workspace")
-        assert (s.risk_level, s.requires_approval) == (a.risk, a.requires_approval)
-        assert "." not in s.name
+def test_every_gateway_action_has_a_seed_with_the_adapter_name():
+    by_name = {s.name: s for s in EXTERNAL_TOOL_SEEDS}
+    for provider in PROVIDER_REGISTRY.values():
+        for action in provider.actions:
+            seed = by_name[action_id_to_tool_name(action.action_id)]
+            assert seed.server == provider.server_name
+            assert seed.capability == action.capability
+            assert seed.risk_level == action.risk
+            assert seed.requires_approval == action.requires_approval
 
 
-def test_no_dotted_gmail_seed_names_remain():
-    assert not any(s.name.startswith("gmail.") for s in EXTERNAL_TOOL_SEEDS)
+def test_no_dotted_gateway_seed_names_remain():
+    assert not any("." in s.name for s in EXTERNAL_TOOL_SEEDS)
 
 
-def test_native_gmail_seeds_retained():
-    assert "search_gmail_messages" in BY and "send_gmail_message" in BY
+def test_native_seeds_for_migrated_servers_are_gone():
+    """google-workspace and github are gateway-only; native tool names must not survive."""
+    names = {s.name for s in _seeds_for("google-workspace")} | {
+        s.name for s in _seeds_for("github")
+    }
+    for legacy in (
+        "search_gmail_messages",
+        "send_gmail_message",
+        "get_events",
+        "list_calendars",
+        "issue_write",
+        "merge_pull_request",
+        "search_orgs",
+    ):
+        assert legacy not in names
+
+
+def test_unmigrated_servers_keep_their_native_seeds():
+    assert _seeds_for("slack") and _seeds_for("notion") and _seeds_for("atlassian")

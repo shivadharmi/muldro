@@ -106,14 +106,13 @@ def test_downward_risk_divergence_is_allowlisted():
     is to force review, since a downward divergence is the only direction that can weaken a
     gate. (Upward divergence — tool stricter than capability — is always safe.)
     """
-    # name -> (tool_risk, capability_risk). Every entry below is verified safe: gmail
-    # label-ops and create_directory keep requires_approval=True; browser ops belong to the
-    # approval-exempt browser family. See src/tools/catalog.py risk-divergence note.
+    # name -> (tool_risk, capability_risk). Every entry below is verified safe: browser
+    # ops belong to the approval-exempt browser family. See src/tools/catalog.py
+    # risk-divergence note. The gmail native label/filter-management tools that used to
+    # diverge downward from email.send (high) were deleted when google-workspace moved
+    # to the gateway; the gateway's gmail action set has no label/filter-management
+    # action, so that divergence no longer exists.
     expected = {
-        "modify_gmail_message_labels": ("medium", "high"),
-        "batch_modify_gmail_message_labels": ("medium", "high"),
-        "manage_gmail_filter": ("medium", "high"),
-        "manage_gmail_label": ("medium", "high"),
         "browser_tabs": ("low", "medium"),
         "browser_close": ("low", "medium"),
         "browser_resize": ("low", "medium"),
