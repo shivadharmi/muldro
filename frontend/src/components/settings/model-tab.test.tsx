@@ -70,3 +70,31 @@ test("shows Configured for a configured provider", () => {
   );
   expect(screen.getByText(/configured/i)).toBeInTheDocument();
 });
+
+test("lists an env-backed configured provider in the tier dropdown", () => {
+  // anthropic is reported configured (env-backed) with no explicit credential row.
+  render(
+    <ModelTab open loading={false} catalog={catalog} config={config} onLoad={() => {}} />,
+  );
+  const select = screen.getByLabelText("balanced provider") as HTMLSelectElement;
+  const options = Array.from(select.options).map((o) => o.value);
+  expect(options).toContain("anthropic");
+  // And its provider card still surfaces the configured badge.
+  expect(screen.getByText(/configured/i)).toBeInTheDocument();
+});
+
+test("keeps the binding's current provider in options when de-configured", () => {
+  // Provider reported unconfigured, yet the tier is still bound to it: the
+  // select must still list it so it never renders blank/mismatched.
+  const deconfigured: ModelConfig = {
+    ...config,
+    providers: [{ provider: "anthropic", configured: false, status: "unconfigured" }],
+  };
+  render(
+    <ModelTab open loading={false} catalog={catalog} config={deconfigured} onLoad={() => {}} />,
+  );
+  const select = screen.getByLabelText("balanced provider") as HTMLSelectElement;
+  const options = Array.from(select.options).map((o) => o.value);
+  expect(options).toContain("anthropic");
+  expect(select.value).toBe("anthropic");
+});

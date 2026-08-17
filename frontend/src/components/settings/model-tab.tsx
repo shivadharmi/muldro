@@ -71,6 +71,12 @@ function BindingRow({ binding, catalog, configuredProviders, onChange }: Binding
   const showEffort = !!selectedModel && selectedModel.thinking_style !== "none";
   const showTemperature = !!selectedModel && selectedModel.accepts_temperature;
 
+  // Always include the binding's current provider so a de-configured provider
+  // never yields a blank/mismatched select.
+  const providerOptions = Array.from(
+    new Set([binding.provider, ...configuredProviders]),
+  );
+
   return (
     <div className="flex flex-wrap items-center gap-2">
       <span className="text-sm text-t-secondary font-medium w-24 shrink-0 capitalize">
@@ -83,7 +89,7 @@ function BindingRow({ binding, catalog, configuredProviders, onChange }: Binding
         onChange={(e) => onChange({ ...binding, provider: e.target.value, model_id: "" })}
         className={INPUT_CLASS}
       >
-        {configuredProviders.map((p) => (
+        {providerOptions.map((p) => (
           <option key={p} value={p}>
             {p}
           </option>

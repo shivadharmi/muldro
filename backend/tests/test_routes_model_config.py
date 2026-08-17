@@ -157,11 +157,16 @@ def test_put_then_get_model_config():
             overrides = {o["tier"]: o for o in body["agent_overrides"]}
             assert overrides["planner"]["model_id"] == "claude-opus-4-8"
 
-            # Provider statuses cover the whole catalog; none configured here.
+            # Provider statuses cover the whole catalog. Anthropic has no
+            # credential row here, but the deployment env key (JARVIS_ANTHROPIC_API_KEY)
+            # is set, so it reports as an env-backed working default. A provider with
+            # neither a row nor an env key (ollama uses base_url only) is unconfigured.
             providers = {p["provider"]: p for p in body["providers"]}
             assert "anthropic" in providers
-            assert providers["anthropic"]["configured"] is False
-            assert providers["anthropic"]["status"] == "unconfigured"
+            assert providers["anthropic"]["configured"] is True
+            assert providers["anthropic"]["status"] == "valid"
+            assert providers["ollama"]["configured"] is False
+            assert providers["ollama"]["status"] == "unconfigured"
 
             # Unknown model is rejected.
             bad = c.put(

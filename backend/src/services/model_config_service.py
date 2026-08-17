@@ -14,8 +14,10 @@ from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.config.model_catalog import MODEL_CATALOG
+from src.config.settings import get_settings
 from src.models.model_binding import ModelBinding
 from src.models.provider_credential import ProviderCredential
+from src.services.model_resolver import _ENV_KEY_ATTR
 
 TIER_ORDER = ("reasoning", "balanced", "fast")
 
@@ -143,11 +145,28 @@ class ModelConfigService:
         statuses = []
         for provider in MODEL_CATALOG:
             cred = cred_by_provider.get(provider)
+            if cred is not None:
+                # A real credential row always wins (its own status).
+                configured, status = True, cred.status
+            elif self._env_key_set(provider):
+                # No row, but the deployment's env fallback key is set: the same
+                # key the resolver uses, so the provider is a working default.
+                configured, status = True, "valid"
+            else:
+                configured, status = False, "unconfigured"
             statuses.append(
                 provider_status_cls(
                     provider=provider,
-                    configured=cred is not None,
-                    status=cred.status if cred is not None else "unconfigured",
+                    configured=configured,
+                    status=status,
                 )
             )
         return statuses
+
+    @staticmethod
+    def _env_key_set(provider: str) -> bool:
+        """Whether the per-provider env fallback key (used by the resolver when no
+        credential row exists) is non-empty. Providers with no env attr (e.g.
+        ``ollama``, which uses base_url) are never env-configured."""
+        attr = _ENV_KEY_ATTR.get(provider)
+        return bool(getattr(get_settings(), attr, "")) if attr else False
