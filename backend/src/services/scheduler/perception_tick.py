@@ -285,10 +285,17 @@ class PerceptionTickMixin:
 
     @staticmethod
     def _provider_for_source(source: str) -> str:
-        """Map a perception source to its OAuth provider (gmail/calendar share
-        the ``google`` provider).
+        """Map a perception source to its OAuth provider.
 
         Delegates to :mod:`src.integrations.provider_map` (the canonical map).
+        Every remaining source maps to a provider of its own name: the one
+        fan-out entry (``google -> [gmail, calendar]``) was retired when those
+        two sources moved behind the gateway. Both call sites here only ever
+        see a natively-authenticated source — the validity gate short-circuits
+        on ``gateway_provider_for_source`` first, and the reauth-clear branch
+        selects only rows with ``last_error == "needs_reauth"``, a state a
+        gateway-backed source cannot reach (nothing raises
+        ``McpAuthRequiredError`` for it).
         """
         from src.integrations.provider_map import provider_for_source
 
