@@ -7,6 +7,6 @@ it is wired in incrementally behind a runtime flag in later phases.
 """
 
 from src.deep_runtime.agent_builder import build_deep_agent
-from src.deep_runtime.model_factory import MODEL_TIER_IDS, build_chat_model
+from src.deep_runtime.model_factory import build_chat_model
 
-__all__ = ["build_chat_model", "build_deep_agent", "MODEL_TIER_IDS"]
+__all__ = ["build_chat_model", "build_deep_agent"]

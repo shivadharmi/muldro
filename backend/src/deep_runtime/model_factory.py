@@ -8,14 +8,6 @@ from src.llm.model_factory import build_langchain_model
 from src.orchestrator.agents import SubAgent
 from src.services.model_resolver import ModelResolver
 
-# TEMP: retained until Task 4.2 deletes it and fixes importers
-# (deep_runtime/__init__, agent_invoker).
-MODEL_TIER_IDS: dict[str, str] = {
-    "opus": "claude-opus-4-8",
-    "sonnet": "claude-sonnet-4-6",
-    "haiku": "claude-haiku-4-5-20251001",
-}
-
 
 async def build_chat_model(
     agent: SubAgent, *, workspace_id: str = "", db_factory=None

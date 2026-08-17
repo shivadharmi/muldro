@@ -162,7 +162,7 @@ def disable_general_purpose_subagent(model_name: str) -> None:
     so a lead whose model resolves to that key is built without the GP child.
 
     Model-scoped by design: the key is ``f"anthropic:{model_name}"`` (the direct
-    Anthropic model id, e.g. ``MODEL_TIER_IDS["sonnet"]`` == ``"claude-sonnet-4-6"``).
+    Anthropic model id, e.g. ``claude-sonnet-4-6``).
     Verified in the Phase-0 spike as preferred over the provider-wide ``"anthropic"``
     key — disabling GP for a sonnet lead leaves GP intact for opus/haiku agents built
     in the same process.

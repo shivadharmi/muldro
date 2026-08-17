@@ -25,3 +25,12 @@ def test_sonnet_is_legacy_thinking():
 
 def test_unknown_model_returns_none():
     assert get_model_spec("anthropic", "no-such-model") is None
+
+
+def test_default_model_id_for_tier():
+    from src.config.model_catalog import default_model_id_for_tier
+
+    assert default_model_id_for_tier("reasoning") == "claude-opus-4-8"
+    assert default_model_id_for_tier("balanced") == "claude-sonnet-4-6"
+    assert default_model_id_for_tier("fast") == "claude-haiku-4-5-20251001"
+    assert default_model_id_for_tier("nope") is None

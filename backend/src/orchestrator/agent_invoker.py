@@ -25,7 +25,7 @@ from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.types import Command
 from sqlalchemy import update
 
-from src.config.models import MODEL_TIERS
+from src.config.model_catalog import default_model_id_for_tier
 from src.config.settings import Settings
 from src.deep_runtime.agent_builder import build_deep_agent
 from src.deep_runtime.authorization import AuthorizationSource
@@ -45,7 +45,6 @@ from src.deep_runtime.middleware.readback import make_readback_middleware
 from src.deep_runtime.middleware.trust_gate import _resolve_tool_def, make_trust_gate_middleware
 from src.deep_runtime.middleware.unavailable_server import make_unavailable_server_middleware
 from src.deep_runtime.middleware.write_lock import make_write_lock_middleware
-from src.deep_runtime.model_factory import MODEL_TIER_IDS
 from src.deep_runtime.prompt_bridge import build_system_message
 from src.deep_runtime.readback_readfn import FreshSessionToolLister, make_readback_read_fn
 from src.deep_runtime.stream_adapter import stream_deep_agent_events
@@ -238,7 +237,7 @@ class AgentInvoker:
 
     def get_model_for_agent(self, agent: SubAgent) -> str:
         """Get the Claude model ID for an agent's tier."""
-        return MODEL_TIERS.get(agent.model_tier, MODEL_TIERS["sonnet"])
+        return default_model_id_for_tier(agent.model_tier) or default_model_id_for_tier("balanced")
 
     def build_system_prompt(
         self, agent: SubAgent, context: str = "", capability_summary: str = ""
@@ -513,11 +512,11 @@ class AgentInvoker:
             db_factory=self._db_factory,
         )
 
-        # Authoritative cost record (@after_model). model = the direct-Anthropic id
-        # (MODEL_TIER_IDS), matching what the deep runtime actually builds.
+        # Authoritative cost record (@after_model). model = the resolved Anthropic id,
+        # matching what the deep runtime actually builds.
         budget_mw = make_budget_middleware(
             agent_name=agent.name,
-            model=MODEL_TIER_IDS.get(agent.model_tier, MODEL_TIER_IDS["sonnet"]),
+            model=self.get_model_for_agent(agent),
             workspace_id=workspace_id,
             db_factory=self._db_factory,
             budget=self._budget,
@@ -618,8 +617,8 @@ class AgentInvoker:
         the singleton preserves the Perceiver's sonnet/6144 thinking AND applies the SAME cheap-mode
         transform the lead received.
 
-        GP-disable keys off ``MODEL_TIER_IDS.get(<tier>, MODEL_TIER_IDS["sonnet"])`` — the
-        direct-Anthropic model id (a malformed tier degrades to the sonnet id, never a tier
+        GP-disable keys off ``get_model_for_agent(<agent>)`` — the resolved Anthropic
+        model id (a malformed tier degrades to the balanced/sonnet id, never a tier
         name) the deep
         runtime always builds via ``build_chat_model`` (deepagents derives the harness-profile
         key from that built model). Disabling GP on BOTH models, BEFORE either is built, stops the
@@ -643,12 +642,8 @@ class AgentInvoker:
         # the lead can otherwise serve alone — degrade to no delegates instead.
         try:
             perceiver_cfg = build_agent_set(AGENTS, self._settings.cheap_mode)["perceiver"]
-            disable_general_purpose_subagent(
-                MODEL_TIER_IDS.get(lead_agent.model_tier, MODEL_TIER_IDS["sonnet"])
-            )
-            disable_general_purpose_subagent(
-                MODEL_TIER_IDS.get(perceiver_cfg.model_tier, MODEL_TIER_IDS["sonnet"])
-            )
+            disable_general_purpose_subagent(self.get_model_for_agent(lead_agent))
+            disable_general_purpose_subagent(self.get_model_for_agent(perceiver_cfg))
             tools = await self._resolve_tools(perceiver_cfg, workspace_id, None)
             delegate = await build_read_only_delegate(
                 perceiver_cfg,

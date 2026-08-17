@@ -146,3 +146,17 @@ def get_model_spec(provider: str, model_id: str) -> ModelSpec | None:
         if spec.model_id == model_id:
             return spec
     return None
+
+
+def default_model_id_for_tier(tier: str) -> str | None:
+    """Return the default (Anthropic) model id whose suggested_tier == *tier*.
+
+    A sync, catalog-sourced tier->id lookup for cost/harness label sites that need
+    a model id without a DB round-trip. Behavior-preserving replacement for the
+    deleted MODEL_TIERS / MODEL_TIER_IDS maps (reasoning->opus, balanced->sonnet,
+    fast->haiku).
+    """
+    for spec in MODEL_CATALOG.get("anthropic", []):
+        if spec.suggested_tier == tier:
+            return spec.model_id
+    return None
