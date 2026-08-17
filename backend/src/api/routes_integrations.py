@@ -92,6 +92,9 @@ class UnifiedIntegrationResponse(BaseModel):
     # True when an OAuth integration is configured but its token is permanently
     # unusable — the user must reconnect (gates the "Reconnect" UI affordance).
     needs_reauth: bool = False
+    # OpenConnector provider name when this integration is gateway-backed
+    # (e.g. "gmail"), else None — tells the frontend which connect flow to use.
+    oc_provider: str | None = None
 
 
 # ── Endpoints ────────────────────────────────────────────────────────
@@ -150,6 +153,7 @@ async def list_unified_integrations(
             slug=s.slug,
             access_scopes=s.access_scopes,
             needs_reauth=s.needs_reauth,
+            oc_provider=s.oc_provider,
         )
         for s in statuses
     ]

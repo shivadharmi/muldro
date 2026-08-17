@@ -39,7 +39,7 @@ services:
   openconnector:
     image: ghcr.io/oomol-lab/open-connector:v1.3.5
     ports:
-      - "3000:3000"
+      - "3001:3001"
     environment:
       # MANDATORY. OpenConnector will not start correctly without a stable
       # encryption key (spec §10, mirrors settings.py:256-262's hard-fail
@@ -50,6 +50,11 @@ services:
       # Gates POST /mcp — confirmed by spike-findings.md §3 (401 without it).
       # Generate with: openssl rand -hex 24
       OOMOL_CONNECT_RUNTIME_TOKEN: ${OOMOL_CONNECT_RUNTIME_TOKEN:?Set OOMOL_CONNECT_RUNTIME_TOKEN before starting the stack — see README.md}
+      # OpenConnector computes its OAuth redirect_uri from this PORT var (it
+      # also drives the container's own listen port) — see
+      # spike-findings-port.md. Must match the port mapping above and every
+      # inter-container URL that points at this service.
+      PORT: 3001
     volumes:
       - oc-data:/app/data
     restart: unless-stopped
@@ -78,7 +83,7 @@ services:
     environment:
       # OpenConnector, reached over the compose network by service name —
       # matches spike-findings.md's confirmed POST /mcp endpoint shape.
-      JARVIS_OPENCONNECTOR_MCP_URL: http://openconnector:3000/mcp
+      JARVIS_OPENCONNECTOR_MCP_URL: http://openconnector:3001/mcp
       JARVIS_OPENCONNECTOR_RUNTIME_TOKEN: ${OOMOL_CONNECT_RUNTIME_TOKEN:?Set OOMOL_CONNECT_RUNTIME_TOKEN before starting the stack — see README.md}
       # RSA private key (PEM) used to verify inbound platform JWTs — must be
       # the SAME key Jarvis's API process uses to mint them

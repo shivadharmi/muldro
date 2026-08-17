@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.integrations.gateway_providers import gateway_oc_provider
 from src.integrations.provider_map import provider_for_server
 
 logger = logging.getLogger(__name__)
@@ -143,6 +144,7 @@ class IntegrationStatus:
     # unusable (no_token / no_refresh_token / revoked) — the user must reconnect.
     # Distinct from a transient "refresh_failed" blip, which leaves this False.
     needs_reauth: bool = False
+    oc_provider: str | None = None  # OpenConnector provider if gateway-backed, else None
 
 
 async def get_integration_statuses(
@@ -226,6 +228,11 @@ async def get_integration_statuses(
                 slug=derive_slug(provider_name, inst.server_name),
                 access_scopes=coarsen_scopes(raw_scopes),
                 needs_reauth=needs_reauth,
+                oc_provider=gateway_oc_provider(
+                    inst.server_name,
+                    gmail_via_gateway=settings.gmail_via_gateway,
+                    toolhive_vmcp_url=settings.toolhive_vmcp_url,
+                ),
             )
         )
 

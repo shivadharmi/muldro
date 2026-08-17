@@ -14,6 +14,7 @@ import {
 } from "@/lib/api";
 import { errorToMessage } from "@/lib/api-error";
 import { useToast } from "@/components/ui/toast";
+import { useConnectAccount } from "@/hooks/useConnectAccount";
 import { SkeletonGrid } from "@/components/ui/skeleton";
 import {
   GoogleLogo,
@@ -57,6 +58,18 @@ function IntegrationsContent() {
   const searchParams = useSearchParams();
   const [connecting, setConnecting] = useState<string | null>(null);
   const { addToast } = useToast();
+  const gatewayConnect = useConnectAccount();
+
+  useEffect(() => {
+    if (gatewayConnect.state === "active") {
+      queryClient.invalidateQueries({ queryKey: ["unified-integrations"] });
+      addToast("Connected successfully", "success");
+    } else if (gatewayConnect.state === "timeout") {
+      addToast("Connection timed out — please try again", "error");
+    } else if (gatewayConnect.state === "error") {
+      addToast("Failed to start connection", "error");
+    }
+  }, [gatewayConnect.state, queryClient, addToast]);
 
   useEffect(() => {
     const status = searchParams.get("status");
@@ -109,6 +122,14 @@ function IntegrationsContent() {
   });
 
   async function handleConnect(integration: UnifiedIntegration) {
+    // Gateway-backed providers (OpenConnector) use the popup-poll flow; OC owns
+    // the OAuth callback and never redirects back to us (spike-findings-connect §4).
+    if (integration.oc_provider) {
+      setConnecting(integration.server_name);
+      gatewayConnect.start(integration.oc_provider);
+      return;
+    }
+    // Native providers keep the full-page OAuth-redirect flow.
     const provider = integration.provider;
     if (!provider) return;
     setConnecting(integration.server_name);
@@ -116,10 +137,7 @@ function IntegrationsContent() {
       const { url } = await getAuthUrl(provider);
       window.location.assign(url);
     } catch (err) {
-      addToast(
-        `Failed to start OAuth: ${errorToMessage(err)}`,
-        "error",
-      );
+      addToast(`Failed to start OAuth: ${errorToMessage(err)}`, "error");
       setConnecting(null);
     }
   }
@@ -133,6 +151,9 @@ function IntegrationsContent() {
 
   function renderCard(integration: UnifiedIntegration) {
     const Logo = LOGOS[integration.server_name];
+    const isPending =
+      connecting === integration.server_name &&
+      (!integration.oc_provider || gatewayConnect.state === "connecting");
 
     return (
       <Card key={integration.server_name}>
@@ -217,13 +238,10 @@ function IntegrationsContent() {
               ) : (
                 <button
                   onClick={() => handleConnect(integration)}
-                  disabled={
-                    connecting === integration.server_name ||
-                    !integration.configured
-                  }
+                  disabled={isPending || !integration.configured}
                   className="text-xs px-2.5 py-1 rounded-[var(--radius-md)] bg-j-primary text-j-primary-fg hover:bg-j-primary-hover disabled:opacity-50"
                 >
-                  {connecting === integration.server_name
+                  {isPending
                     ? "Redirecting..."
                     : !integration.configured
                       ? "Not configured"

@@ -12,6 +12,8 @@ denies any non-``active`` connection, so the flow is fail-closed until confirmed
 
 from __future__ import annotations
 
+import hashlib
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -24,8 +26,20 @@ from src.services.openconnector_admin_client import (
 
 
 def mint_connection_name(tenant_id: str, principal_id: str, provider: str, alias: str) -> str:
-    """The canonical namespaced connectionName (matches what the adapter forces)."""
-    return f"{tenant_id}:{principal_id}:{provider}:{alias}"
+    """The canonical OC-valid connectionName for an identity tuple.
+
+    OpenConnector v1.3.5 rejects a connectionName outside ``[A-Za-z0-9_-]`` and
+    caps it at 64 chars; a colon-joined ``{tenant}:{principal}:{provider}:{alias}``
+    both violates the charset and (with 26-char ULIDs) blows the length. A
+    blake2b digest of the tuple is a stable, collision-negligible (80-bit),
+    20-char hex string that satisfies the rule. It is never reversed:
+    ``connection_map`` stores it and the adapter's resolver reads the stored
+    value (``adapter/connection_resolver.py``), so opacity is fine. Determinism
+    keeps ``begin`` and ``confirm`` in agreement without shared state, and makes
+    reconnecting the same alias idempotent (OC refreshes creds under one name).
+    """
+    raw = f"{tenant_id}:{principal_id}:{provider}:{alias}".encode()
+    return hashlib.blake2b(raw, digest_size=10).hexdigest()
 
 
 def _default_admin_client() -> OpenConnectorAdminClient:
