@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock, patch
 
 from fastmcp import FastMCP
 
-from src.adapter.enforcement import GMAIL_PROFILE, GatewayProfile
+from src.adapter.enforcement import get_gateway_profile
 from src.adapter.warm_start import _param_names_from_guide, register_gateway_tools
 from src.integrations.gateway_actions.gmail import GMAIL_ACTIONS
 from src.integrations.gateway_naming import action_id_to_tool_name
@@ -15,6 +15,10 @@ _EMPTY_GUIDE = {"data": {"markdown": ""}}
 def _guide(markdown: str) -> dict:
     """A guide payload shaped like OpenConnector's get_action_guide response."""
     return {"data": {"markdown": markdown, "capability": {}}}
+
+
+async def _noop_guide(action_id: str) -> dict:
+    return {}
 
 
 _FETCH_EMAILS_MD = """\
@@ -54,7 +58,7 @@ def test_param_names_from_guide_returns_empty_when_no_markdown():
 async def test_registers_agent_legal_names_not_dotted():
     adapter = FastMCP("t")
     await register_gateway_tools(
-        adapter, GMAIL_PROFILE, guide_fetcher=AsyncMock(return_value=_EMPTY_GUIDE)
+        adapter, get_gateway_profile("gmail"), guide_fetcher=AsyncMock(return_value=_EMPTY_GUIDE)
     )
     names = {t.name for t in await adapter.list_tools()}
     assert "gmail.get_profile" not in names  # dotted (illegal) must NOT be exposed
@@ -66,7 +70,7 @@ async def test_registers_agent_legal_names_not_dotted():
 async def test_named_tool_carries_the_table_schema():
     adapter = FastMCP("t")
     await register_gateway_tools(
-        adapter, GMAIL_PROFILE, guide_fetcher=AsyncMock(return_value=_EMPTY_GUIDE)
+        adapter, get_gateway_profile("gmail"), guide_fetcher=AsyncMock(return_value=_EMPTY_GUIDE)
     )
     tool = await adapter.get_tool("gmail_send_email")
     assert tool.parameters == _BY_ID["gmail.send_email"].input_schema
@@ -75,7 +79,7 @@ async def test_named_tool_carries_the_table_schema():
 async def test_handler_forwards_the_dotted_actionid():
     adapter = FastMCP("t")
     await register_gateway_tools(
-        adapter, GMAIL_PROFILE, guide_fetcher=AsyncMock(return_value=_EMPTY_GUIDE)
+        adapter, get_gateway_profile("gmail"), guide_fetcher=AsyncMock(return_value=_EMPTY_GUIDE)
     )
     captured = {}
 
@@ -102,7 +106,9 @@ async def test_handler_forwards_the_dotted_actionid():
 async def test_guide_fetch_failure_still_ships_table_schema():
     adapter = FastMCP("t")
     await register_gateway_tools(
-        adapter, GMAIL_PROFILE, guide_fetcher=AsyncMock(side_effect=RuntimeError("down"))
+        adapter,
+        get_gateway_profile("gmail"),
+        guide_fetcher=AsyncMock(side_effect=RuntimeError("down")),
     )
     tool = await adapter.get_tool("gmail_get_message")
     assert tool.parameters == _BY_ID["gmail.get_message"].input_schema
@@ -111,10 +117,11 @@ async def test_guide_fetch_failure_still_ships_table_schema():
 async def test_register_still_registers_when_guide_fetch_fails():
     adapter = FastMCP("test")
     fetcher = AsyncMock(side_effect=RuntimeError("OC down"))
+    profile = get_gateway_profile("gmail")
 
-    count = await register_gateway_tools(adapter, GMAIL_PROFILE, guide_fetcher=fetcher)
+    count = await register_gateway_tools(adapter, profile, guide_fetcher=fetcher)
 
-    assert count == len(GMAIL_PROFILE.action_allowlist)
+    assert count == len(profile.action_allowlist)
 
 
 async def test_register_warns_on_param_drift(caplog):
@@ -127,30 +134,54 @@ async def test_register_warns_on_param_drift(caplog):
     fetcher = AsyncMock(return_value=drifted)
 
     with caplog.at_level(logging.WARNING):
-        await register_gateway_tools(adapter, GMAIL_PROFILE, guide_fetcher=fetcher)
+        await register_gateway_tools(adapter, get_gateway_profile("gmail"), guide_fetcher=fetcher)
 
     assert any("drift" in r.message for r in caplog.records)
 
 
-async def test_register_opaque_fallback_for_action_without_hand_typed_schema():
-    profile = GatewayProfile(
-        provider_id="gmail",
-        action_allowlist=frozenset({"gmail.unknown_action"}),
-        action_required_capability={"gmail.unknown_action": "email.read"},
-    )
+async def test_register_never_serves_the_opaque_schema():
+    """D3 fix: every registered tool gets its OWN action's schema, never opaque."""
     adapter = FastMCP("test")
+    profile = get_gateway_profile("gmail")
     fetcher = AsyncMock(return_value=_guide(""))
 
     await register_gateway_tools(adapter, profile, guide_fetcher=fetcher)
 
-    tool = await adapter.get_tool(action_id_to_tool_name("gmail.unknown_action"))
-    assert tool.parameters == {"type": "object", "additionalProperties": True}
+    tools = await adapter.list_tools()
+    by_name = {t.name: t for t in tools}
+    for action in profile.actions:
+        tool = by_name[action_id_to_tool_name(action.action_id)]
+        assert tool.parameters == action.input_schema
+        assert tool.parameters != {"type": "object", "additionalProperties": True}
+
+
+async def test_non_gmail_profile_gets_its_own_schemas_not_opaque():
+    """The D3 regression: a github profile must not fall back to opaque schemas."""
+    adapter = FastMCP("test")
+    profile = get_gateway_profile("github")
+    count = await register_gateway_tools(adapter, profile, guide_fetcher=_noop_guide)
+
+    assert count == len(profile.actions)
+    tools = await adapter.list_tools()
+    by_name = {t.name: t for t in tools}
+    for action in profile.actions:
+        tool = by_name[action.action_id.replace(".", "_")]
+        assert tool.parameters == action.input_schema
+        assert tool.parameters != {"type": "object", "additionalProperties": True}
+
+
+async def test_description_names_the_actual_provider():
+    adapter = FastMCP("test")
+    profile = get_gateway_profile("googlecalendar")
+    await register_gateway_tools(adapter, profile, guide_fetcher=_noop_guide)
+    tools = await adapter.list_tools()
+    assert all("Gmail" not in t.description for t in tools)
 
 
 async def test_named_tool_handler_forwards_actionid_input_and_token():
     adapter = FastMCP("test")
     await register_gateway_tools(
-        adapter, GMAIL_PROFILE, guide_fetcher=AsyncMock(return_value=_guide(""))
+        adapter, get_gateway_profile("gmail"), guide_fetcher=AsyncMock(return_value=_guide(""))
     )
 
     captured: dict = {}
