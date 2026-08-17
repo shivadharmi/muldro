@@ -1266,7 +1266,6 @@ class AgentInvoker:
         run_id: str,
         step_id: str,
         pre_approved_capabilities: frozenset[str],
-        model: str | None = None,
         cancel_event=None,
     ) -> dict:
         """Execute one approved autonomous step via a durable deep agent (Step 10C).
@@ -1369,6 +1368,11 @@ class AgentInvoker:
         auth_required: dict | None = None
         approval_blocked = False
         error_occurred = False
+
+        # Streaming metadata (agent_start.model) names the workspace-resolved model this step
+        # actually runs — resolved here rather than threaded from the deployment-global
+        # settings default, so a workspace override / non-Anthropic model is reported truthfully.
+        model = await self._resolved_model_id(executor, workspace_id)
 
         async for frame in stream_deep_agent_events(
             deep_agent,
