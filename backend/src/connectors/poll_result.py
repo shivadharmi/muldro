@@ -114,3 +114,40 @@ class PollResult:
     def failed(self) -> bool:
         """True when the poll encountered an error."""
         return self.error_class != "none"
+
+
+# Map mcp_errors.MCPErrorCode values to a PollErrorClass. Lives here beside
+# _classify_http_status because HTTP-status classification and MCP-code
+# classification are one concern: "how did this poll fail, and how fast should
+# the circuit open". Gateway-backed connectors classify from MCP codes; native
+# ones from HTTP status.
+MCP_CODE_TO_POLL_CLASS: dict[str, PollErrorClass] = {
+    "auth_error": "permanent",
+    "timeout": "transient",
+    "rate_limit": "rate_limited",
+    "server_error": "transient",
+    "validation_error": "permanent",
+    "circuit_open": "transient",
+    "not_found": "permanent",
+    "unknown_error": "transient",
+    # AUTH_REQUIRED is deliberately TRANSIENT, not permanent. Permanent means
+    # threshold 1, i.e. the circuit opens after a single attempt — precisely the
+    # no_token -> permanent -> needs_reauth failure Wave 5.3 removed. A gateway
+    # source that is simply not connected yet must stay skipped-and-recoverable.
+    # Do not "correct" this to permanent.
+    "auth_required": "transient",
+    # The MCP transport died; mcp_errors documents it as recoverable by
+    # rebuilding the session and retrying.
+    "session_lost": "transient",
+}
+
+
+def mcp_code_to_poll_class(error_code: str | None) -> PollErrorClass:
+    """Classify an MCP error code, defaulting to the fail-safe bucket.
+
+    An unknown code is "transient" (threshold 6) rather than permanent: an
+    under-specified failure must not open the circuit fast.
+    """
+    if not error_code:
+        return "transient"
+    return MCP_CODE_TO_POLL_CLASS.get(error_code, "transient")

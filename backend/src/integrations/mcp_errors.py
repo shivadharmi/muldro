@@ -24,6 +24,11 @@ class MCPErrorCode:
     # refreshing the bearer). AUTH_REQUIRED is a *permanent* "user must
     # reconnect" state surfaced before/at session creation when no usable
     # credential exists at all (no_token / no_refresh_token / revoked).
+    # NOTE: "permanent" here is this subsystem's vocabulary (a credential
+    # problem the user must resolve). The perception poller deliberately
+    # classifies AUTH_REQUIRED as "transient" in
+    # poll_result.MCP_CODE_TO_POLL_CLASS, because in *its* vocabulary
+    # "permanent" means threshold 1 — open the circuit after one attempt.
     AUTH_REQUIRED = "auth_required"
     TIMEOUT = "timeout"
     RATE_LIMIT = "rate_limit"

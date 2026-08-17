@@ -24,22 +24,6 @@ from src.orchestrator.services import ServiceContainer
 
 logger = logging.getLogger(__name__)
 
-# Map mcp_errors.MCPErrorCode string values to a PollErrorClass so generic poll()
-# exceptions route through error_class_to_policy_error() and carry a classification
-# keyword. Unmapped/unknown codes fall back to "transient" (fail-safe threshold 6) at
-# the call site. Auth-related exceptions are permanent: a confirmed auth failure thrown
-# from the connector won't self-heal on retry.
-_MCP_CODE_TO_POLL_CLASS: dict[str, str] = {
-    "auth_error": "permanent",
-    "timeout": "transient",
-    "rate_limit": "rate_limited",
-    "server_error": "transient",
-    "validation_error": "permanent",
-    "circuit_open": "transient",
-    "not_found": "permanent",
-    "unknown_error": "transient",
-}
-
 
 class ConnectorPoller:
     """Polls connectors, ingests raw events, and advances observation cursors."""
@@ -182,6 +166,7 @@ class ConnectorPoller:
             )
             return [], cursor, "Poll timed out after 30s", cursor_type
         except Exception as e:
+            from src.connectors.poll_result import mcp_code_to_poll_class
             from src.integrations.mcp_errors import classify_error
 
             error_code = classify_error(e)
@@ -192,7 +177,7 @@ class ConnectorPoller:
             # so the failure carries a classification keyword. A truly unknown
             # exception is treated as transient (threshold 6) — fail safe, never
             # open the circuit fast on an under-classified blip.
-            poll_class = _MCP_CODE_TO_POLL_CLASS.get(error_code, "transient")
+            poll_class = mcp_code_to_poll_class(error_code)
             policy_err = error_class_to_policy_error(poll_class)
             logger.warning(
                 "connector_poll_error",

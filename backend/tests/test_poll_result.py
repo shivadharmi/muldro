@@ -847,3 +847,48 @@ class TestPreflightErrorClassification:
         assert poll_error is not None
         # A generic exception must not silently bucket as unknown/threshold-3.
         assert classify_error(poll_error) != "unknown"
+
+
+def test_mcp_code_map_covers_every_defined_error_code():
+    """Every MCPErrorCode must have an explicit PollErrorClass.
+
+    AUTH_REQUIRED and SESSION_LOST were both returned by session_pool but absent
+    from the map, surviving only on the unmapped default. An explicit mapping is
+    what stops the next reader from "correcting" AUTH_REQUIRED to permanent.
+    """
+    from src.connectors.poll_result import MCP_CODE_TO_POLL_CLASS
+    from src.integrations.mcp_errors import MCPErrorCode
+
+    defined = {
+        v for k, v in vars(MCPErrorCode).items() if not k.startswith("_") and isinstance(v, str)
+    }
+    missing = defined - set(MCP_CODE_TO_POLL_CLASS)
+    assert not missing, f"MCPErrorCode values with no PollErrorClass: {sorted(missing)}"
+
+
+def test_auth_required_is_transient_not_permanent():
+    """Permanent means threshold 1 — the circuit opens after ONE attempt.
+
+    That is exactly the no_token -> permanent -> needs_reauth failure Wave 5.3
+    removed. A gateway source that is merely unconnected must never open a
+    permanent circuit.
+    """
+    from src.connectors.poll_result import MCP_CODE_TO_POLL_CLASS
+    from src.integrations.mcp_errors import MCPErrorCode
+
+    assert MCP_CODE_TO_POLL_CLASS[MCPErrorCode.AUTH_REQUIRED] == "transient"
+
+
+def test_session_lost_is_transient():
+    from src.connectors.poll_result import MCP_CODE_TO_POLL_CLASS
+    from src.integrations.mcp_errors import MCPErrorCode
+
+    assert MCP_CODE_TO_POLL_CLASS[MCPErrorCode.SESSION_LOST] == "transient"
+
+
+def test_every_mapped_value_is_a_valid_poll_error_class():
+    from src.connectors.poll_result import MCP_CODE_TO_POLL_CLASS
+
+    valid = {"transient", "permanent", "rate_limited", "auth_failed"}
+    bad = {k: v for k, v in MCP_CODE_TO_POLL_CLASS.items() if v not in valid}
+    assert not bad, f"invalid PollErrorClass values: {bad}"
