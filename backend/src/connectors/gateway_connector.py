@@ -324,9 +324,19 @@ class GatewayConnector(BaseConnector):
                 )
                 return PageWalk(pages=[], error_class="transient", truncated=False)
 
+            # A `None` here falls through to the type guard BY DESIGN, and that
+            # design was reversed once. The earlier reasoning — "coerce null to
+            # [] so a provider using null-for-empty does not circuit-break every
+            # empty poll" — loses to the schema and to the failure shape: the
+            # recorded outputSchema marks `messages`/`items` `required` AND
+            # types them `array`, so `null` is not a valid empty, it is a
+            # mismatch; and a mid-walk null is indistinguishable from a
+            # truncated page, which is precisely the silent-loss shape (page 1
+            # rows + nextPageToken, page 2 null -> walk ends "cleanly", cursor
+            # advances past an undrained window). If a provider genuinely
+            # answers null-for-empty we will see loud `transient` failures and
+            # can revisit WITH EVIDENCE, which beats losing mail quietly.
             rows = result[items_key]
-            if rows is None:
-                rows = []
             if not isinstance(rows, list):
                 logger.warning(
                     "gateway action %s returned a %s under %r; the recorded outputSchema "
@@ -387,6 +397,23 @@ class GatewayConnector(BaseConnector):
 
     # ---- cursor plausibility --------------------------------------------
 
+    def _epoch_cursor_ceiling(self) -> int:
+        """The single upper bound an epoch-seconds watermark may hold.
+
+        The READ side (:meth:`_sane_epoch_cursor`) and the WRITE side (a
+        subclass folding a provider timestamp into its watermark) must share
+        this bound, which is why it is a method rather than a constant repeated
+        at each site. If the two ever disagree, a stamp the writer accepts and
+        the reader rejects PINS the cursor: written -> rejected on read ->
+        initial window -> the same row re-observed -> the same value written
+        again, for ever, with no error and no log.
+
+        Provider timestamps are sender-controlled (Gmail's ``messageTimestamp``
+        derives from the ``Date`` header), so a future stamp is routine input,
+        not a corruption.
+        """
+        return int((datetime.now(timezone.utc) + CURSOR_SKEW).timestamp())
+
     def _sane_epoch_cursor(self, cursor: str | None) -> int | None:
         """Return an epoch-seconds cursor only if it is a believable watermark.
 
@@ -405,7 +432,7 @@ class GatewayConnector(BaseConnector):
 
         now = datetime.now(timezone.utc)
         floor = int((now - timedelta(days=CURSOR_FLOOR_DAYS)).timestamp())
-        ceiling = int((now + CURSOR_SKEW).timestamp())
+        ceiling = self._epoch_cursor_ceiling()
         if value < floor or value > ceiling:
             logger.warning(
                 "discarding implausible %s cursor %r (outside %d-day window) — "

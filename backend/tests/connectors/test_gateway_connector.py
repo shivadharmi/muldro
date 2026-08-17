@@ -495,6 +495,50 @@ async def test_walk_pages_rejects_a_wrong_typed_items_value():
     assert (walk.error_class, walk.pages) == ("transient", [])
 
 
+async def test_walk_pages_rejects_a_null_items_value():
+    """``null`` is a wrong TYPE, not an empty list.
+
+    The recorded outputSchema lists ``messages``/``items`` as ``required`` AND
+    types them ``array``, so null is a shape mismatch. Coercing it to ``[]``
+    (which this code did on purpose, to protect a hypothetical null-for-empty
+    provider) hands the caller a clean empty page and advances its cursor. If a
+    provider really does answer null-for-empty we want the loud transient
+    failures — a revisit with evidence beats losing mail quietly.
+    """
+    conn, _ = _probe([{"messages": None}])
+    walk = await conn._walk_pages("gmail.fetch_emails", {}, items_key="messages", max_pages=5)
+    assert (walk.error_class, walk.pages, walk.truncated) == ("transient", [], False)
+
+
+async def test_walk_pages_rejects_a_mid_walk_null_page():
+    """Page 1 has rows and a nextPageToken; page 2 answers null.
+
+    A mid-walk null is indistinguishable from a truncated page, so it is exactly
+    the silent-loss shape: the walk must abort with no partial pages rather than
+    end cleanly on an "empty" page 2.
+    """
+    conn, caller = _probe(
+        [
+            {"messages": [{"id": "m1"}], "nextPageToken": "p2"},
+            {"messages": None},
+        ]
+    )
+    walk = await conn._walk_pages("gmail.fetch_emails", {}, items_key="messages", max_pages=5)
+    assert len(caller.calls) == 2
+    assert walk.error_class == "transient"
+    assert walk.pages == [], "no partial pages — a partial walk plus an advanced cursor loses data"
+    assert walk.truncated is False
+
+
+async def test_walk_pages_logs_the_null_items_type(caplog):
+    conn, _ = _probe([{"messages": None}])
+    with caplog.at_level(logging.WARNING):
+        await conn._walk_pages("gmail.fetch_emails", {}, items_key="messages", max_pages=5)
+    assert any(
+        "NoneType" in r.getMessage() and "messages" in r.getMessage() for r in caplog.records
+    ), "a laundered null is the defect; it must name itself in the log"
+
+
 async def test_walk_pages_drops_non_dict_rows_and_says_so(caplog):
     """A scalar among the rows cannot become a RawEvent — but it must not vanish."""
     conn, _ = _probe([{"messages": [{"id": "a"}, "junk", None, {"id": "b"}]}])
