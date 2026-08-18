@@ -118,8 +118,17 @@ class RateLimitMiddleware:
         if redis is not None:
             if self._redis_limiter is None:
                 self._redis_limiter = RedisRateLimiter(redis, self._rpm)
+            # The try covers ONLY the Redis call. Keeping `await self.app(...)`
+            # inside it made this except swallow every downstream endpoint
+            # exception, then re-enter the app on the in-memory path below —
+            # and that second pass blocks forever on a request body the first
+            # pass already drained. Widening this except is never safe.
             try:
-                if not await self._redis_limiter.is_allowed(client_ip):
+                allowed = await self._redis_limiter.is_allowed(client_ip)
+            except Exception:
+                logger.debug("Redis rate limiter failed, falling back to in-memory")
+            else:
+                if not allowed:
                     path = scope.get("path", "")
                     logger.warning("Rate limit exceeded: %s %s", client_ip, path)
                     await _send_json_response(
@@ -130,8 +139,6 @@ class RateLimitMiddleware:
                     return
                 await self.app(scope, receive, send)
                 return
-            except Exception:
-                logger.debug("Redis rate limiter failed, falling back to in-memory")
 
         # Fallback to in-memory limiter
         if not self._limiter.is_allowed(client_ip):

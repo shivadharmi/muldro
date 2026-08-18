@@ -10,21 +10,27 @@ installations have no native transport to fall back to. That the retired
 
 from src.config.settings import Settings
 
+# `_env_file=None` on every one of these: a bare ``Settings()`` reads the
+# developer's own backend/.env, so without it these assert "my .env happens not
+# to set this", not "the default is None" — and they flip to red the moment
+# anyone configures a local gateway. The isolated form is what the admin-settings
+# tests below already use.
+
 
 def test_toolhive_vmcp_url_defaults_none():
-    assert Settings().toolhive_vmcp_url is None
+    assert Settings(_env_file=None).toolhive_vmcp_url is None
 
 
 def test_openconnector_mcp_url_defaults_none():
-    assert Settings().openconnector_mcp_url is None
+    assert Settings(_env_file=None).openconnector_mcp_url is None
 
 
 def test_openconnector_runtime_token_defaults_none():
-    assert Settings().openconnector_runtime_token is None
+    assert Settings(_env_file=None).openconnector_runtime_token is None
 
 
 def test_platform_jwt_private_pem_defaults_none():
-    assert Settings().platform_jwt_private_pem is None
+    assert Settings(_env_file=None).platform_jwt_private_pem is None
 
 
 def test_openconnector_admin_settings_default_none():
