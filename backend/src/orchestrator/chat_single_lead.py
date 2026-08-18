@@ -126,6 +126,7 @@ class _ChatSingleLeadMixin:
         user_id: str,
         workspace_id: str,
         effective_mode: str,
+        presence: str,
         user_steps,
     ) -> AsyncGenerator[CoreEvent, None]:
         """The deep single-lead chat BRANCH (P2.3): taken for the resolved effective mode
@@ -175,6 +176,7 @@ class _ChatSingleLeadMixin:
             user_id=user_id,
             workspace_id=workspace_id,
             effective_mode=effective_mode,
+            presence=presence,
         ):
             yield evt
 
@@ -189,6 +191,7 @@ class _ChatSingleLeadMixin:
         user_id: str,
         workspace_id: str,
         effective_mode: str,
+        presence: str,
     ) -> AsyncGenerator[CoreEvent, None]:
         """Stream a built lead, handle the pause seam, re-home the reply, and run the completion
         tail. Shared verbatim by the planned (:meth:`_run_single_lead`) and planless
@@ -206,6 +209,9 @@ class _ChatSingleLeadMixin:
             intent=intent,
             trace=trace,
             permission_mode=effective_mode,
+            # Whether a human is on this turn. `present` keeps today's confirm-and-suspend
+            # behaviour; `absent` makes the gates PREPARE a gated write instead of stalling.
+            presence=presence,
         ):
             # PAUSE SEAM (P2.3): the action-time permission gate paused this turn for the
             # user's confirmation. Emit the typed pause event and `return` — ending the
@@ -259,6 +265,7 @@ class _ChatSingleLeadMixin:
         user_id: str,
         workspace_id: str,
         effective_mode: str,
+        presence: str,
         conversation_id: str | None = None,
     ) -> AsyncGenerator[CoreEvent, None]:
         """The PLANLESS deep single-lead chat BRANCH (P2.5c) — the Planner never ran.
@@ -319,6 +326,7 @@ class _ChatSingleLeadMixin:
             user_id=user_id,
             workspace_id=workspace_id,
             effective_mode=effective_mode,
+            presence=presence,
         ):
             yield evt
 

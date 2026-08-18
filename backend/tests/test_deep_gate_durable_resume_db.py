@@ -282,6 +282,10 @@ async def test_interrupt_resume_spans_durable_postgres_saver():
                     workspace_id=workspace_id,
                     thread_id=thread_id,
                     authorization_source="autonomous",
+                    # This test drives the LIVE confirmation path, so it declares a human on
+                    # the turn; the parameter's own default is the fail-safe ``absent``, which
+                    # PREPARES the write instead of suspending on it.
+                    presence="present",
                     system_prompt=build_system_message(invoker.build_system_prompt(agent, "")),
                 )
                 config = {"configurable": {"thread_id": thread_id}}

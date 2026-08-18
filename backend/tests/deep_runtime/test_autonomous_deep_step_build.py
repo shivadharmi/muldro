@@ -99,6 +99,10 @@ def _bc_gate(*, pre_approved, db_factory, assess_risk, thread_id="t_bc"):
         db_factory=db_factory,
         assess_risk=assess_risk,
         pre_approved_capabilities=pre_approved,
+        # These tests are about pre_approved_capabilities SET MEMBERSHIP, driven through the
+        # LIVE confirmation path — so they declare a human on the turn. The parameter's own
+        # default is the fail-safe ``absent``, which PREPARES the write instead of suspending.
+        presence="present",
     )
 
 

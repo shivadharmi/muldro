@@ -547,7 +547,14 @@ async def test_paused_turn_checkpoint_survives():
                 frames = [
                     f
                     async for f in invoker.call_agent_stream(
-                        "executor", "go", user_id, workspace_id=workspace_id
+                        "executor",
+                        "go",
+                        user_id,
+                        workspace_id=workspace_id,
+                        # This test drives the LIVE confirmation path, so it declares a human
+                        # on the turn; the parameter's own default is the fail-safe ``absent``,
+                        # which PREPARES the write instead of suspending on it.
+                        presence="present",
                     )
                 ]
 

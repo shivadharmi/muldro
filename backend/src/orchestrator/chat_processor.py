@@ -464,6 +464,7 @@ class ChatProcessor(_ChatSingleLeadMixin):
                             user_id=user_id,
                             workspace_id=workspace_id,
                             effective_mode=effective_mode,
+                            presence=presence,
                             conversation_id=conversation_id,
                         ):
                             yield evt
@@ -539,6 +540,7 @@ class ChatProcessor(_ChatSingleLeadMixin):
                         user_id=user_id,
                         trace=trace,
                         workspace_id=workspace_id,
+                        presence=presence,
                     ):
                         yield agent_event_from_sse(evt)
                         if evt.get("event") == "agent_done":
@@ -626,6 +628,7 @@ class ChatProcessor(_ChatSingleLeadMixin):
                         user_id=user_id,
                         workspace_id=workspace_id,
                         effective_mode=effective_mode,
+                        presence=presence,
                         user_steps=user_steps,
                     ):
                         yield evt
@@ -681,6 +684,7 @@ class ChatProcessor(_ChatSingleLeadMixin):
                             trace=trace,
                             workspace_id=workspace_id,
                             tools_override=tools if tools else None,
+                            presence=presence,
                         ):
                             yield agent_event_from_sse(evt)
                             if evt.get("event") == "agent_done":
@@ -746,6 +750,7 @@ class ChatProcessor(_ChatSingleLeadMixin):
                             user_id=user_id,
                             trace=trace,
                             workspace_id=workspace_id,
+                            presence=presence,
                         ):
                             yield agent_event_from_sse(evt)
                             if evt.get("event") == "agent_done":

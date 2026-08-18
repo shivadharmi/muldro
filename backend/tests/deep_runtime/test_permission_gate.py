@@ -196,7 +196,16 @@ def _gate(
     lead_scope=LEAD_SCOPE,
     context_block: str = "",
     user_message: str = "",
+    presence: str = "present",
 ):
+    """Build the gate under test.
+
+    ``presence`` defaults to ``"present"`` HERE, unlike the factory's own fail-safe
+    ``"absent"`` default: every test in this file below the PREPARE section exercises the
+    LIVE confirmation path (a human is answering), and spelling that out in one place keeps
+    those bodies byte-identical to before presence branched. The PREPARE tests pass
+    ``presence="absent"`` explicitly.
+    """
     return make_permission_gate_middleware(
         permission_mode=permission_mode,
         workspace_id=WORKSPACE_ID,
@@ -209,6 +218,7 @@ def _gate(
         context_block=context_block,
         lead_scope=lead_scope,
         user_message=user_message,
+        presence=presence,
     )
 
 
@@ -774,6 +784,9 @@ async def test_persist_ask_mode_defaults_reversible_and_blast_radius():
             context_block="X" * 20000,
             permission_mode="ask",
             lead_scope=frozenset({"calendar.create", "email.send"}),
+            # This test pins the LIVE (interrupt) record shape, so it now says so explicitly —
+            # the parameter's own default is the fail-safe ``absent``, which PREPARES instead.
+            presence="present",
         )
 
     assert approval_id == "apr_ask"
@@ -786,6 +799,188 @@ async def test_persist_ask_mode_defaults_reversible_and_blast_radius():
     # context_block is capped (bounded artifact row).
     assert len(refs["context_block"]) <= 8000
     assert captured["risk_level"] == "n/a"
+
+
+# ── PREPARE: a CONFIRM verdict with nobody on the turn stages the write ──────
+
+
+def _exploding_interrupt(payload):
+    """A stand-in for ``interrupt()`` that makes an accidental suspend LOUD.
+
+    On an absent turn there is nobody to answer, so reaching ``interrupt()`` at all is the
+    exact failure this branch exists to prevent — in production it is a turn that hangs
+    forever, which a silent mock would hide.
+    """
+    raise AssertionError(f"interrupt() must NOT be called on an absent turn: {payload!r}")
+
+
+async def test_an_absent_turn_prepares_instead_of_interrupting(handler):
+    """ask mode + an ABSENT turn: the write is recorded and the gate returns a SUCCESS
+    ToolMessage naming the approval — the tool never runs and the turn never suspends."""
+    assess_risk = AsyncMock(name="assess_risk")
+    resolve_capability = AsyncMock(return_value=(True, "email.send"))
+
+    async def fake_create_approval(db, **kwargs):
+        return SimpleNamespace(approval_id="apr_prepared")
+
+    mw = _gate(
+        permission_mode="ask",
+        resolve_capability=resolve_capability,
+        assess_risk=assess_risk,
+        db_factory=_persist_db_factory(),
+        presence="absent",
+    )
+    with (
+        patch(f"{MODULE}.interrupt", _exploding_interrupt),
+        patch(f"{APPROVAL_PERSISTENCE_MODULE}.create_approval", side_effect=fake_create_approval),
+    ):
+        result = await _hook(mw)(_request("echo", {"text": "hi"}, "c1"), handler)
+
+    handler.assert_not_awaited()
+    assert isinstance(result, ToolMessage)
+    # LOAD-BEARING: "error" would map to the frozen `blocked` SSE frame and stop the lead.
+    assert result.status == "success"
+    assert result.tool_call_id == "c1"
+    payload = json.loads(result.content)
+    assert payload["prepared"] is True
+    assert payload["approval_id"] == "apr_prepared"
+    assert payload["capability"] == "email.send"
+
+
+async def test_a_present_turn_still_interrupts(handler):
+    """The UNCHANGED live path: a present turn suspends, and an approve verdict reaches the
+    handler. This is the regression guard for the whole pre-existing confirmation feature."""
+    assess_risk = AsyncMock(name="assess_risk")
+    resolve_capability = AsyncMock(return_value=(True, "email.send"))
+    seen: list[dict] = []
+
+    def fake_interrupt(payload):
+        seen.append(payload)
+        return "approve"
+
+    async def fake_create_approval(db, **kwargs):
+        return SimpleNamespace(approval_id="apr_live")
+
+    mw = _gate(
+        permission_mode="ask",
+        resolve_capability=resolve_capability,
+        assess_risk=assess_risk,
+        db_factory=_persist_db_factory(),
+        presence="present",
+    )
+    with (
+        patch(f"{MODULE}.interrupt", fake_interrupt),
+        patch(f"{APPROVAL_PERSISTENCE_MODULE}.create_approval", side_effect=fake_create_approval),
+    ):
+        result = await _hook(mw)(_request("echo", {"text": "hi"}, "c1"), handler)
+
+    assert seen, "a present turn MUST still call interrupt()"
+    assert seen[0]["approval_id"] == "apr_live"
+    handler.assert_awaited_once()
+    assert result is handler.return_value
+
+
+async def test_a_prepared_write_does_not_stop_the_turn(handler):
+    """A prepared write is STAGED, not failed: the very next tool call in the same turn
+    still reaches the dispatcher. This is what ``status=\"success\"`` buys."""
+    caps = {"echo": "email.send", "read_email": "email.read"}
+    resolve_capability = AsyncMock(side_effect=lambda name: (True, caps[name]))
+
+    async def fake_create_approval(db, **kwargs):
+        return SimpleNamespace(approval_id="apr_prepared")
+
+    mw = _gate(
+        permission_mode="ask",
+        resolve_capability=resolve_capability,
+        assess_risk=AsyncMock(name="assess_risk"),
+        db_factory=_persist_db_factory(),
+        presence="absent",
+    )
+    with (
+        patch(f"{MODULE}.interrupt", _exploding_interrupt),
+        patch(f"{APPROVAL_PERSISTENCE_MODULE}.create_approval", side_effect=fake_create_approval),
+    ):
+        staged = await _hook(mw)(_request("echo", {"text": "hi"}, "c1"), handler)
+        handler.assert_not_awaited()
+        followup = await _hook(mw)(_request("read_email", {}, "c2"), handler)
+
+    assert json.loads(staged.content)["prepared"] is True
+    handler.assert_awaited_once()
+    assert followup is handler.return_value
+
+
+async def test_a_prepared_approval_is_typed_and_not_chat_flagged():
+    """The PREPARED record: typed ``prepared_action`` with a TTL, flagged ``prepared``, and
+    WITHOUT the ``chat`` flag — it has no live thread to resume, so it belongs on the standard
+    approval endpoints (``_guard_not_chat_approval`` 409s anything carrying ``chat``).
+    ``lead_scope`` MUST survive: ``resume_deep_lead`` denies a resume without it."""
+    captured: dict = {}
+
+    async def fake_create_approval(db, **kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(approval_id="apr_prepared")
+
+    with patch(f"{APPROVAL_PERSISTENCE_MODULE}.create_approval", side_effect=fake_create_approval):
+        approval_id = await _persist_permission_approval(
+            name="echo",
+            capability="email.send",
+            assessment=None,
+            risk_level="n/a",
+            workspace_id=WORKSPACE_ID,
+            user_id=USER_ID,
+            thread_id=THREAD_ID,
+            tool_call_id="call_echo",
+            agent_name="lead",
+            db_factory=_persist_db_factory(),
+            context_block="",
+            permission_mode="ask",
+            lead_scope=frozenset({"calendar.create", "email.send"}),
+            presence="absent",
+        )
+
+    assert approval_id == "apr_prepared"
+    assert captured["approval_type"] == "prepared_action"
+    assert captured["expires_at"] is not None
+    refs = captured["artifact_refs"]
+    assert refs["prepared"] is True
+    assert refs["presence"] == "absent"
+    assert "chat" not in refs
+    assert refs["lead_scope"] == ["calendar.create", "email.send"]
+
+
+async def test_a_live_approval_still_carries_the_chat_flag():
+    """The live (present) path is untouched: ``chat`` is still written, the approval keeps its
+    ``tool:<name>`` type and default TTL, and no ``prepared`` marker appears."""
+    captured: dict = {}
+
+    async def fake_create_approval(db, **kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(approval_id="apr_live")
+
+    with patch(f"{APPROVAL_PERSISTENCE_MODULE}.create_approval", side_effect=fake_create_approval):
+        await _persist_permission_approval(
+            name="echo",
+            capability="email.send",
+            assessment=None,
+            risk_level="n/a",
+            workspace_id=WORKSPACE_ID,
+            user_id=USER_ID,
+            thread_id=THREAD_ID,
+            tool_call_id="call_echo",
+            agent_name="lead",
+            db_factory=_persist_db_factory(),
+            context_block="",
+            permission_mode="ask",
+            lead_scope=frozenset({"email.send"}),
+            presence="present",
+        )
+
+    assert captured["approval_type"] == "tool:echo"
+    assert captured["expires_at"] is None
+    refs = captured["artifact_refs"]
+    assert refs["chat"] is True
+    assert "prepared" not in refs
+    assert refs["presence"] == "present"
 
 
 # ── M3: replay-safe idempotent persist (real Postgres) ───────────────────────

@@ -615,6 +615,10 @@ async def _pause_lead_then_resume(*, decision: str, reason: str | None = None):
                     user_id=user_id,
                     workspace_id=workspace_id,
                     permission_mode="ask",
+                    # This test drives the LIVE confirmation path, so it declares a human on
+                    # the turn; the parameter's own default is the fail-safe ``absent``, which
+                    # PREPARES the write instead of suspending on it.
+                    presence="present",
                 )
             ]
             approval_frames = [f for f in frames1 if f["event"] == "approval_needed"]

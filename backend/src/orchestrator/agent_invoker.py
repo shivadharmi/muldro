@@ -30,6 +30,7 @@ from src.config.settings import Settings
 from src.deep_runtime.agent_builder import build_deep_agent
 from src.deep_runtime.authorization import AuthorizationSource
 from src.deep_runtime.checkpoint_reaper import reap_thread
+from src.deep_runtime.confirmation import Presence
 from src.deep_runtime.middleware.budget import make_budget_middleware
 from src.deep_runtime.middleware.governor_audit import make_governor_audit_middleware
 from src.deep_runtime.middleware.governor_delegate_critique import (
@@ -342,6 +343,7 @@ class AgentInvoker:
         require_write_lock: bool = False,
         permission_mode: str | None = None,
         user_message: str = "",
+        presence: Presence = "absent",
     ):
         """Build a compiled deep agent WITH the full gated middleware chain:
         capability_scope (installed by ``build_deep_agent`` when ``db_factory`` is given)
@@ -376,6 +378,13 @@ class AgentInvoker:
         unserialized while Redis is down. Defaults to False, keeping ALL other callers
         (``call_agent_stream`` deep branch, ``resume_deep_turn``, ``run_autonomous_deep_step``)
         byte-identical to before this param existed.
+
+        ``presence`` (``present``/``absent``, single-lead cutover): whether a human is on this
+        turn to answer a confirmation. Forwarded to BOTH write gates, where a CONFIRM verdict
+        becomes an ``interrupt()`` only when someone is present; otherwise the write is
+        PREPARED (recorded in full, reported to the model, turn continues). Defaults to
+        ``absent`` — the fail-safe direction, so a caller that forgets to thread it stages its
+        writes rather than executing them or stalling on a confirmation nobody will answer.
 
         ``permission_mode`` (P2.1, ADDITIVE): the chat permission model (``bypass``/``ask``/
         ``auto``). When ``"ask"`` or ``"auto"`` the action-time ``permission_gate`` is inserted
@@ -447,6 +456,10 @@ class AgentInvoker:
             resolve_capability=_gate_cap,
             context_block=context_block,
             pre_approved_capabilities=pre_approved_capabilities,
+            # Trap 2: SNAPSHOT the acting agent's scope onto any Approval this gate persists,
+            # so confirmation is checked against the authority the founder reviewed under.
+            agent_capability_scope=frozenset(agent.capability_scope),
+            presence=presence,
         )
 
         # P2.1: action-time chat permission gate — installed ONLY for ask/auto, immediately
@@ -469,6 +482,7 @@ class AgentInvoker:
                 context_block=context_block,
                 lead_scope=agent.capability_scope,
                 user_message=user_message,
+                presence=presence,
             )
             permission_gate_chain = (permission_gate,)
 
@@ -712,8 +726,13 @@ class AgentInvoker:
         workspace_id: str = "",
         capability_summary: str = "",
         tools_override: list[dict] | None = None,
+        presence: Presence = "absent",
     ) -> AsyncGenerator[dict[str, Any], None]:
-        """Call a sub-agent with streaming, yielding SSE-compatible dicts."""
+        """Call a sub-agent with streaming, yielding SSE-compatible dicts.
+
+        ``presence`` says whether a human is on this turn; it reaches both write gates, where
+        it decides interrupt-vs-PREPARE. Defaults to ``absent`` (fail-safe).
+        """
         agent = self._agents.get(agent_name)
         if not agent:
             yield {"event": "error", "message": f"Unknown agent: {agent_name}"}
@@ -800,6 +819,7 @@ class AgentInvoker:
             # on, so the resume path can re-inject it (dormant on direct chat — the gate
             # short-circuits before persisting — but threaded uniformly through the seam).
             context_block=context_block,
+            presence=presence,
         )
         graph_input = {"messages": [{"role": "user", "content": message}]}
         async for frame in self._stream_and_reap(
@@ -892,6 +912,7 @@ class AgentInvoker:
         intent: str | None = None,
         trace=None,
         permission_mode: str | None = None,
+        presence: Presence = "absent",
     ) -> AsyncGenerator[dict[str, Any], None]:
         """Run ONE synthetic deep lead over a whole user goal, streaming SSE-compatible frames
         (Step 10D A-5). Generalizes the ``call_agent_stream`` deep branch for a
@@ -925,6 +946,10 @@ class AgentInvoker:
         ``permission_mode`` (P2.1): forwarded verbatim into ``_build_deep_agent_for`` — ``ask``/
         ``auto`` install the action-time permission gate, ``None`` (default) / ``bypass`` leave
         the chain byte-identical. Current 5b callers pass nothing; P2.3 wires the per-turn mode.
+
+        ``presence`` (single-lead cutover): forwarded to the gates, where a CONFIRM verdict
+        interrupts only when a human is on the turn and PREPARES otherwise. Defaults to
+        ``absent`` (fail-safe).
         """
         if tools is None:
             tools = await self._resolve_tools(lead, workspace_id, None)
@@ -956,6 +981,7 @@ class AgentInvoker:
             # A1: persist the ORIGINAL user message on any Approval this turn pauses on, so an
             # approved resume can fire the interaction-learner (parity with the non-paused tail).
             user_message=message,
+            presence=presence,
         )
         graph_input = {"messages": [{"role": "user", "content": message}]}
         async for frame in self._stream_and_reap(
@@ -1105,6 +1131,9 @@ class AgentInvoker:
             # if this resumed continuation pauses AGAIN (a second write) carries the same
             # context — otherwise the trust_gate would persist context_block="" for it.
             context_block=persisted_context,
+            # A resume IS a present human answering: the replayed gate MUST reach interrupt()
+            # to consume the persisted verdict. PREPARING here would drop a REJECT on the floor.
+            presence="present",
         )
         async for frame in self._stream_and_reap(
             deep_agent,
@@ -1256,6 +1285,9 @@ class AgentInvoker:
             require_write_lock=True,
             # THE invariant: ALWAYS install the permission_gate on resume (fail-closed ask/auto).
             permission_mode=resume_mode,
+            # A resume IS a present human answering — that is what a resume request means, so a
+            # CHAINED write later in this continuation may legitimately interrupt again.
+            presence="present",
         )
         async for frame in self._stream_and_reap(
             deep_agent,
@@ -1378,6 +1410,9 @@ class AgentInvoker:
             context_block=context_block,
             execute_tool=_ledgered_execute_tool,
             pre_approved_capabilities=pre_approved_capabilities,
+            # Scheduler-driven; nobody is on this turn, so a CONFIRM verdict PREPARES rather
+            # than stalls.
+            presence="absent",
         )
 
         result = ""

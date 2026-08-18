@@ -143,6 +143,7 @@ def _make_chat(
         intent=None,
         trace=None,
         permission_mode=None,
+        presence=None,
     ):
         rec.lead_calls.append(
             {
@@ -155,6 +156,7 @@ def _make_chat(
                 "intent": intent,
                 "trace": trace,
                 "permission_mode": permission_mode,
+                "presence": presence,
             }
         )
         yield {"event": "agent_start", "agent": "lead", "model": "m"}
@@ -619,8 +621,10 @@ async def test_single_lead_pause_suspends_turn_and_skips_tail():
     learner.learn = MagicMock(return_value=MagicMock())
     chat._interaction_learner = learner
 
-    async def _pausing_stream_deep_lead(lead, tools=None, *, permission_mode=None, **kw):
-        rec.lead_calls.append({"permission_mode": permission_mode})
+    async def _pausing_stream_deep_lead(
+        lead, tools=None, *, permission_mode=None, presence=None, **kw
+    ):
+        rec.lead_calls.append({"permission_mode": permission_mode, "presence": presence})
         yield {"event": "agent_start", "agent": "lead", "model": "m"}
         yield {
             "event": "approval_needed",

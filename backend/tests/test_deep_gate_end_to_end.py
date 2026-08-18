@@ -270,6 +270,10 @@ async def test_forced_autonomous_pauses_persists_then_approve_executes_idempoten
                 workspace_id=workspace_id,
                 thread_id=thread_id,
                 authorization_source="autonomous",
+                # This test drives the LIVE confirmation path, so it declares a human on
+                # the turn; the parameter's own default is the fail-safe ``absent``, which
+                # PREPARES the write instead of suspending on it.
+                presence="present",
                 system_prompt=build_system_message(invoker.build_system_prompt(agent, "")),
             )
             config = {"configurable": {"thread_id": thread_id}}
@@ -371,6 +375,10 @@ async def test_forced_autonomous_reject_blocks_the_tool():
                 workspace_id=workspace_id,
                 thread_id=thread_id,
                 authorization_source="autonomous",
+                # This test drives the LIVE confirmation path, so it declares a human on
+                # the turn; the parameter's own default is the fail-safe ``absent``, which
+                # PREPARES the write instead of suspending on it.
+                presence="present",
                 system_prompt=build_system_message(invoker.build_system_prompt(agent, "")),
             )
             config = {"configurable": {"thread_id": thread_id}}
@@ -521,6 +529,10 @@ async def test_negative_control_bypassed_gate_check_does_not_pause():
                 workspace_id=workspace_id,
                 thread_id=thread_id,
                 authorization_source="autonomous",
+                # This test drives the LIVE confirmation path, so it declares a human on
+                # the turn; the parameter's own default is the fail-safe ``absent``, which
+                # PREPARES the write instead of suspending on it.
+                presence="present",
                 system_prompt=build_system_message(invoker.build_system_prompt(agent, "")),
             )
             config = {"configurable": {"thread_id": thread_id}}
@@ -611,6 +623,10 @@ async def _drive_pause_then_approve_counting_assess(*, patch_find_existing):
                 workspace_id=workspace_id,
                 thread_id=thread_id,
                 authorization_source="autonomous",
+                # This test drives the LIVE confirmation path, so it declares a human on
+                # the turn; the parameter's own default is the fail-safe ``absent``, which
+                # PREPARES the write instead of suspending on it.
+                presence="present",
                 system_prompt=build_system_message(invoker.build_system_prompt(agent, "")),
             )
             config = {"configurable": {"thread_id": thread_id}}
