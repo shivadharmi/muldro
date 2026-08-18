@@ -152,7 +152,7 @@ graph LR
 
 ### Stream Architecture
 
-- Stream name: `jarvis:events:{user_id}`
+- Stream name: `muldro:events:{user_id}`
 - Each consumer group reads independently
 - Consumer groups enable exactly-once processing per handler
 - Failed messages go to DLQ (Dead Letter Queue)
@@ -197,7 +197,7 @@ per `(workspace, user, source)` row, so users remain independent.
 Services are initialized lazily on first chat request (not at startup):
 
 ```
-First POST /v1/jarvis/chat
+First POST /v1/muldro/chat
     → _build_orchestrator()
     → Create long-lived DB session
     → Build: EventProcessor, WorldModel, MemoryService, Planner,

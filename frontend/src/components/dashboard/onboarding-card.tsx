@@ -51,7 +51,7 @@ export function OnboardingCard() {
           Connect your first source
         </p>
         <p className="text-sm text-t-tertiary leading-relaxed mb-6">
-          Jarvis gets sharper the more it can see. Connect a source to begin —
+          Muldro gets sharper the more it can see. Connect a source to begin —
           you can add more anytime.
         </p>
         <div className="flex flex-wrap justify-center gap-3 mb-6">

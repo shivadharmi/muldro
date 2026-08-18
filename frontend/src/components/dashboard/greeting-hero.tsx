@@ -47,7 +47,7 @@ export function GreetingHero({
               <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
                 <path d="M3 3h10v7H6l-3 3V3z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
               </svg>
-              Talk to Jarvis
+              Talk to Muldro
             </Link>
             {approvalCount > 0 && (
               <Link

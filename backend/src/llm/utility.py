@@ -138,7 +138,7 @@ async def complete_text(
 
     The conversation always ends with the user message. Assistant-message *prefill*
     (seeding the reply with ``"{"`` to force JSON) is intentionally NOT supported:
-    every model Jarvis runs is an adaptive-thinking model, and those reject a
+    every model Muldro runs is an adaptive-thinking model, and those reject a
     conversation that ends with an assistant turn (400 "does not support assistant
     message prefill"). Callers that need JSON instruct it in the system prompt and
     lean on ``llm_utils.parse_llm_json``, which tolerates fences and surrounding prose.

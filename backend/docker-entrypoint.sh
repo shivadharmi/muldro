@@ -7,5 +7,5 @@ set -e
 echo "[entrypoint] Applying database migrations (alembic upgrade head)..."
 alembic upgrade head
 
-echo "[entrypoint] Starting Jarvis API + worker..."
+echo "[entrypoint] Starting Muldro API + worker..."
 exec python run.py --worker

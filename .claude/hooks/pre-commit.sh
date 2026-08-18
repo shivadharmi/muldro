@@ -1,5 +1,5 @@
 #!/bin/bash
-# Pre-commit hook for Jarvis project
+# Pre-commit hook for Muldro project
 # Mirrors CI checks: ruff lint + format, TypeScript types, secrets scan
 
 set -e

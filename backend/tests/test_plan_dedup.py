@@ -41,7 +41,7 @@ def test_plan_idempotency_index_is_workspace_scoped():
 
     Plan keys carry no workspace component, so a global unique index would let
     one workspace's plan block another's on a shared key. The dedup query is
-    already workspace-scoped (jarvis.persist path); this aligns the DB index.
+    already workspace-scoped (muldro.persist path); this aligns the DB index.
     Mirrors the NormalizedEvent fix.
     """
     from src.models.plans import Plan

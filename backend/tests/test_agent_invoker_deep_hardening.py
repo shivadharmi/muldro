@@ -2,7 +2,7 @@
 shells + central dispatcher + SystemMessage + durable checkpointer + trust gate.
 
 Tests confirm:
-- runtime="deep": build_tool_shells, make_jarvis_tool_dispatcher, make_trust_gate_middleware,
+- runtime="deep": build_tool_shells, make_muldro_tool_dispatcher, make_trust_gate_middleware,
   build_system_message, and checkpointer_provider are all wired correctly into
   build_deep_agent via the shared ``_build_deep_agent_for`` helper (Step 6B Task 5).
 - The gate is OUTER of the write lock and dispatcher
@@ -94,7 +94,7 @@ async def test_deep_branch_uses_shells_dispatcher_systemmessage_and_provider():
             "src.orchestrator.agent_invoker.build_tool_shells", return_value=["SHELL"]
         ) as mock_shells,
         patch(
-            "src.orchestrator.agent_invoker.make_jarvis_tool_dispatcher",
+            "src.orchestrator.agent_invoker.make_muldro_tool_dispatcher",
             return_value=sentinel_dispatcher,
         ) as mock_dispatcher,
         patch(
@@ -257,7 +257,7 @@ async def test_deep_readback_flag_on_inserts_readback_between_write_lock_and_dis
         patch("src.orchestrator.agent_invoker.build_deep_agent", new=AsyncMock()) as mock_build,
         patch("src.orchestrator.agent_invoker.build_tool_shells", return_value=["SHELL"]),
         patch(
-            "src.orchestrator.agent_invoker.make_jarvis_tool_dispatcher",
+            "src.orchestrator.agent_invoker.make_muldro_tool_dispatcher",
             return_value=sentinel_dispatcher,
         ),
         patch(
@@ -344,7 +344,7 @@ async def test_deep_branch_passes_durability_sync_to_stream_adapter():
         patch("src.orchestrator.agent_invoker.build_deep_agent", new=AsyncMock()),
         patch("src.orchestrator.agent_invoker.build_tool_shells", return_value=["SHELL"]),
         patch(
-            "src.orchestrator.agent_invoker.make_jarvis_tool_dispatcher",
+            "src.orchestrator.agent_invoker.make_muldro_tool_dispatcher",
             return_value=object(),
         ),
         patch(
@@ -403,7 +403,7 @@ async def test_direct_user_request_deep_turn_is_dormant():
         patch("src.orchestrator.agent_invoker.build_deep_agent", new=AsyncMock()),
         patch("src.orchestrator.agent_invoker.build_tool_shells", return_value=["SHELL"]),
         patch(
-            "src.orchestrator.agent_invoker.make_jarvis_tool_dispatcher",
+            "src.orchestrator.agent_invoker.make_muldro_tool_dispatcher",
             return_value=object(),
         ),
         patch(
@@ -453,7 +453,7 @@ async def test_deep_branch_falls_back_to_memorysaver_when_provider_returns_none(
         patch("src.orchestrator.agent_invoker.build_deep_agent", new=AsyncMock()) as mock_build,
         patch("src.orchestrator.agent_invoker.build_tool_shells", return_value=["SHELL"]),
         patch(
-            "src.orchestrator.agent_invoker.make_jarvis_tool_dispatcher",
+            "src.orchestrator.agent_invoker.make_muldro_tool_dispatcher",
             return_value=object(),
         ),
         patch(
@@ -502,7 +502,7 @@ async def test_deep_chat_write_lock_defaults_fail_open():
     with (
         patch("src.orchestrator.agent_invoker.build_deep_agent", new=AsyncMock()),
         patch("src.orchestrator.agent_invoker.build_tool_shells", return_value=["SHELL"]),
-        patch("src.orchestrator.agent_invoker.make_jarvis_tool_dispatcher", return_value=object()),
+        patch("src.orchestrator.agent_invoker.make_muldro_tool_dispatcher", return_value=object()),
         patch("src.orchestrator.agent_invoker.make_trust_gate_middleware", return_value=object()),
         patch(
             "src.orchestrator.agent_invoker.make_write_lock_middleware", return_value=object()
@@ -525,7 +525,7 @@ async def test_deep_chat_write_lock_defaults_fail_open():
 
 async def test_librarian_learn_closure_adapts_interaction_learner():
     """The seam's ``learn`` closure (Step 7B1 P3) adapts the existing InteractionLearner:
-    it constructs it with the SAME ctor deps the live jarvis path uses (settings, db_factory,
+    it constructs it with the SAME ctor deps the live muldro path uses (settings, db_factory,
     vector_store; redis/event_bus resolve to None via getattr) and calls ``.learn`` with the
     turn's user_id/workspace_id/message/response, intent=None, trace_id=thread_id.
 
@@ -561,7 +561,7 @@ async def test_librarian_learn_closure_adapts_interaction_learner():
     with (
         patch("src.orchestrator.agent_invoker.build_deep_agent", new=AsyncMock()),
         patch("src.orchestrator.agent_invoker.build_tool_shells", return_value=["SHELL"]),
-        patch("src.orchestrator.agent_invoker.make_jarvis_tool_dispatcher", return_value=object()),
+        patch("src.orchestrator.agent_invoker.make_muldro_tool_dispatcher", return_value=object()),
         patch("src.orchestrator.agent_invoker.make_trust_gate_middleware", return_value=object()),
         patch(
             "src.orchestrator.agent_invoker.make_librarian_extract_middleware",

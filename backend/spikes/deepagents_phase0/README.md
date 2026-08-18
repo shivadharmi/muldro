@@ -10,9 +10,9 @@ fallback is scoped).
   effort, replacing the hand-rolled `orchestrator/agent_loop.build_thinking_params`.
   *(Decision: direct Anthropic API, not Bedrock — so this is a confirmation, not a gamble.)*
 - **G2 — middleware surface:** LangChain middleware (`@wrap_tool_call`, `@after_model`)
-  can host Jarvis's two load-bearing per-call policies — **fail-closed capability-scope
+  can host Muldro's two load-bearing per-call policies — **fail-closed capability-scope
   enforcement** and **token/cost capture**. If a deep agent can block an out-of-scope
-  tool and observe per-call tokens, every other Jarvis policy (TrustEngine gate, budget,
+  tool and observe per-call tokens, every other Muldro policy (TrustEngine gate, budget,
   ContextPack, turn-scope) has a confirmed home.
 
 ## Run
@@ -20,7 +20,7 @@ fallback is scoped).
 cd backend
 source .venv/bin/activate
 pip install -r spikes/deepagents_phase0/requirements.txt
-JARVIS_ANTHROPIC_API_KEY=<your-anthropic-key> python spikes/deepagents_phase0/spike.py
+MULDRO_ANTHROPIC_API_KEY=<your-anthropic-key> python spikes/deepagents_phase0/spike.py
 ```
 
 ## Reading the result

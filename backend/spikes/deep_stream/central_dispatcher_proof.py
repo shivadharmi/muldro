@@ -1,5 +1,5 @@
 """PROOF (Step 6A.5 research): a single wrap_tool_call middleware can be the universal
-executor for Jarvis tools.
+executor for Muldro tools.
 
 Assertions:
 1. A schema-shell StructuredTool whose coroutine RAISES is registered; the model calls it,
@@ -7,7 +7,7 @@ Assertions:
    ToolMessage without calling `handler`).
 2. The fake `execute_tool` IS called with (name, args) recovered from request.tool_call.
 3. The middleware's synthesized ToolMessage reaches the model (turn-2 final answer produced).
-4. deepagents' OWN built-in tool `write_todos` is NOT hijacked: for a non-Jarvis name the
+4. deepagents' OWN built-in tool `write_todos` is NOT hijacked: for a non-Muldro name the
    middleware falls through to `handler(request)` and the real built-in body runs (todos land
    in state).
 """
@@ -47,18 +47,18 @@ def _make_shell(name: str, schema: dict) -> StructuredTool:
                           args_schema=schema, coroutine=_shell_body)
 
 
-# --- the fake Jarvis dispatcher (stands in for ToolExecutor.execute_tool) ---
+# --- the fake Muldro dispatcher (stands in for ToolExecutor.execute_tool) ---
 async def fake_execute_tool(name: str, tool_input: dict, user_id: str, workspace_id: str) -> dict:
     EXECUTE_TOOL_CALLS.append((name, tool_input))
     return {"ok": True, "echoed": tool_input}
 
 
 # --- the ONE central-dispatcher middleware ----------------------------------
-def make_central_dispatcher(jarvis_names: set[str], *, user_id: str, workspace_id: str) -> AgentMiddleware:
+def make_central_dispatcher(muldro_names: set[str], *, user_id: str, workspace_id: str) -> AgentMiddleware:
     @wrap_tool_call
     async def central_dispatcher(request, handler):
         name = request.tool_call["name"]
-        if name not in jarvis_names:
+        if name not in muldro_names:
             # deepagents built-in (write_todos, ls, ...) — run its real body.
             return await handler(request)
         args = request.tool_call["args"]
@@ -74,7 +74,7 @@ def make_central_dispatcher(jarvis_names: set[str], *, user_id: str, workspace_i
     return central_dispatcher
 
 
-# --- scripted fake model: turn 1 calls echo (Jarvis) AND write_todos (builtin) ---
+# --- scripted fake model: turn 1 calls echo (Muldro) AND write_todos (builtin) ---
 class _ScriptedModel(BaseChatModel):
     @property
     def _llm_type(self) -> str:

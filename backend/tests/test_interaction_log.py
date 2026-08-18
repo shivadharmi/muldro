@@ -29,7 +29,7 @@ class TestInteractionLogModel:
             user_id="usr_01",
             trace_id="trc_02",
             conversation_id="conv_01",
-            message_preview="Hello Jarvis",
+            message_preview="Hello Muldro",
             plan_summary="Simple greeting",
             plan_id="plan_01",
             run_id="run_01",
@@ -40,7 +40,7 @@ class TestInteractionLogModel:
             cost_usd=0.002,
             latency_ms=320,
         )
-        assert log.message_preview == "Hello Jarvis"
+        assert log.message_preview == "Hello Muldro"
         assert log.intent == "greeting"
         assert log.cost_usd == 0.002
 

@@ -1,4 +1,4 @@
-/** Routes A2UI actions back to the Jarvis backend via WebSocket.
+/** Routes A2UI actions back to the Muldro backend via WebSocket.
  *
  * Simplified: always sends payload.action + full payload.
  * The backend ACTION_HANDLERS registry handles dispatch.

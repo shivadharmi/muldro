@@ -49,7 +49,7 @@ class _Recorder:
         return any(name == agent_name for name, _ in self.agent_messages)
 
 
-def _step(step_id, capability, *, actor="jarvis", risk="none", description="do", user_context=None):
+def _step(step_id, capability, *, actor="muldro", risk="none", description="do", user_context=None):
     return PlanStep(
         step_id=step_id,
         description=description,
@@ -660,13 +660,13 @@ async def test_single_lead_pause_suspends_turn_and_skips_tail():
     chat._trace_manager.finish_trace.assert_awaited_once()
 
 
-# ── Facade plumbing: jarvis.py forwards permission_mode (independent field) ──────
+# ── Facade plumbing: muldro.py forwards permission_mode (independent field) ──────
 
 
-async def test_jarvis_facade_forwards_permission_mode_events():
-    from src.orchestrator.jarvis import JarvisOrchestrator
+async def test_muldro_facade_forwards_permission_mode_events():
+    from src.orchestrator.muldro import MuldroOrchestrator
 
-    orch = JarvisOrchestrator.__new__(JarvisOrchestrator)
+    orch = MuldroOrchestrator.__new__(MuldroOrchestrator)
     orch._chat = MagicMock()
     orch._chat.process_message_events = MagicMock(return_value=iter([]))
     orch.process_message_events(
@@ -678,10 +678,10 @@ async def test_jarvis_facade_forwards_permission_mode_events():
     assert orch._chat.process_message_events.call_args.kwargs["permission_mode"] == "bypass"
 
 
-async def test_jarvis_facade_forwards_permission_mode_stream():
-    from src.orchestrator.jarvis import JarvisOrchestrator
+async def test_muldro_facade_forwards_permission_mode_stream():
+    from src.orchestrator.muldro import MuldroOrchestrator
 
-    orch = JarvisOrchestrator.__new__(JarvisOrchestrator)
+    orch = MuldroOrchestrator.__new__(MuldroOrchestrator)
     orch._chat = MagicMock()
     orch._chat.process_message_stream = MagicMock(return_value=iter([]))
     orch.process_message_stream(
@@ -693,10 +693,10 @@ async def test_jarvis_facade_forwards_permission_mode_stream():
     assert orch._chat.process_message_stream.call_args.kwargs["permission_mode"] == "bypass"
 
 
-async def test_jarvis_facade_forwards_permission_mode_batch():
-    from src.orchestrator.jarvis import JarvisOrchestrator
+async def test_muldro_facade_forwards_permission_mode_batch():
+    from src.orchestrator.muldro import MuldroOrchestrator
 
-    orch = JarvisOrchestrator.__new__(JarvisOrchestrator)
+    orch = MuldroOrchestrator.__new__(MuldroOrchestrator)
     orch._chat = MagicMock()
     orch._chat.process_message = AsyncMock(return_value={})
     await orch.process_message(
@@ -724,7 +724,7 @@ async def test_chat_request_permission_mode_default_is_non_bypass():
     assert not hasattr(req2, "mode")
 
 
-# ── P2.5c: planless reroute (JARVIS_CHAT_PLANLESS) ──────────────────────────────────────
+# ── P2.5c: planless reroute (MULDRO_CHAT_PLANLESS) ──────────────────────────────────────
 #
 # When chat_planless is ON and the single-lead path is already active, _process_core drops
 # the Planner entirely and routes the turn through ONE connector-scoped lead. Flag-OFF must

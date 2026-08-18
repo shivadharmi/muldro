@@ -3,7 +3,7 @@
 **Date:** 2026-08-17
 **Status:** Approved design, pending implementation plan
 **Branch:** `worktree-multi-provider-model-config`
-**Scope:** Cut Jarvis over from Claude-only to a configurable multi-provider model layer, and introduce end-to-end model configuration (backend + UI) where none exists today.
+**Scope:** Cut Muldro over from Claude-only to a configurable multi-provider model layer, and introduce end-to-end model configuration (backend + UI) where none exists today.
 
 ---
 
@@ -11,7 +11,7 @@
 
 ### Goal
 
-Today Jarvis is hardwired to Anthropic: a fixed `tier → Claude model ID` map (`config/models.py`), a single `ChatAnthropic` build leaf (`llm/model_factory.py`), and an Anthropic-only reasoning-parameter surface (`deep_runtime/_thinking.py`). Nothing about model choice is configurable at runtime — it is code + env only.
+Today Muldro is hardwired to Anthropic: a fixed `tier → Claude model ID` map (`config/models.py`), a single `ChatAnthropic` build leaf (`llm/model_factory.py`), and an Anthropic-only reasoning-parameter surface (`deep_runtime/_thinking.py`). Nothing about model choice is configurable at runtime — it is code + env only.
 
 This spec makes the model layer **provider-agnostic and configurable**:
 
@@ -100,11 +100,11 @@ MODEL_CATALOG: dict[str, list[ModelSpec]]   # provider -> models
 - `scope_type` ∈ `{tier, agent}`; `scope_key` = tier name (`reasoning`/`balanced`/`fast`) or agent name. (Utility completions resolve straight to a `tier` row — no per-utility override row today; a `utility` scope_type can be added later if a utility role ever needs to diverge from its tier.)
 - `provider`, `model_id`, `effort` (neutral: `none`/`low`/`medium`/`high`), `max_tokens`, `temperature`, `params` JSONB, `enabled`, timestamps.
 
-Both tables follow Jarvis conventions: `workspace_id` FK, ULID-prefixed IDs, JSONB for flexible fields, typed columns for indexed fields.
+Both tables follow Muldro conventions: `workspace_id` FK, ULID-prefixed IDs, JSONB for flexible fields, typed columns for indexed fields.
 
 ### 4.3 Credential encryption
 
-Envelope encryption with a master key from env/secrets-manager (`JARVIS_CONFIG_ENCRYPTION_KEY`, AES-GCM or Fernet). Each `api_key` is encrypted before persistence and decrypted **only** inside the resolver at model-build time. Plaintext keys are **never logged** and **never returned** over the API (write-only). Missing master key at startup is a fail-loud config error when any non-env credential exists.
+Envelope encryption with a master key from env/secrets-manager (`MULDRO_CONFIG_ENCRYPTION_KEY`, AES-GCM or Fernet). Each `api_key` is encrypted before persistence and decrypted **only** inside the resolver at model-build time. Plaintext keys are **never logged** and **never returned** over the API (write-only). Missing master key at startup is a fail-loud config error when any non-env credential exists.
 
 ---
 
@@ -119,7 +119,7 @@ The caller states what it is resolving:
 1. **Determine the fallback tier** — for an agent call, from `agents.model_tier`; for a utility call, the passed `tier`.
 2. **Binding lookup (precedence):** for an agent call, an `agent` override row for that name → else the `tier` row for its tier; for a utility call, the `tier` row directly. In all cases, a missing workspace row falls through to the deployment-default (`workspace_id IS NULL`) row.
 3. **Catalog lookup:** `MODEL_CATALOG[provider][model_id]` → `ModelSpec` (capabilities + cost).
-4. **Credential lookup + decrypt:** workspace `(workspace_id, provider)` row → else deployment-default row → else env fallback (`JARVIS_ANTHROPIC_API_KEY` is still a valid anthropic credential source).
+4. **Credential lookup + decrypt:** workspace `(workspace_id, provider)` row → else deployment-default row → else env fallback (`MULDRO_ANTHROPIC_API_KEY` is still a valid anthropic credential source).
 5. **Capability mapping** (see 5.2) → provider-specific kwargs.
 6. Return `ResolvedModel { provider, model_id, api_key, base_url, kwargs }`.
 
@@ -181,13 +181,13 @@ Frontend rules from the project standards apply: hooks unconditional at top, no 
 1. **Alembic migration** creates `provider_credentials` + `model_bindings`.
 2. **Behavior-preserving seed** — seed deployment-default (`workspace_id IS NULL`) bindings that reproduce today exactly:
    - `reasoning → claude-opus-4-8`, `balanced → claude-sonnet-4-6`, `fast → claude-haiku-4-5-*`, provider `anthropic`, effort/params matching the current per-agent thinking budgets.
-   - Anthropic credential resolved from the existing env `JARVIS_ANTHROPIC_API_KEY`.
+   - Anthropic credential resolved from the existing env `MULDRO_ANTHROPIC_API_KEY`.
    The cutover ships with **identical behavior**; only the resolution path changed.
 3. **Tier rename** `opus/sonnet/haiku → reasoning/balanced/fast`:
    - Data migration on `agents.model_tier`.
    - `cheap_mode` (opus→sonnet + halved thinking) re-expressed in the new tier terms (`reasoning → balanced` downgrade).
    - Seed functions (`AGENT_MODEL_TIERS`, `AgentRegistry.seed_defaults`) updated to the new tier names.
-4. **Delete** `MODEL_TIERS`, `MODEL_TIER_IDS`, and `_thinking.py`'s Anthropic-only branch — replaced by `model_catalog.py` + `ModelResolver`. The env `JARVIS_ANTHROPIC_API_KEY` survives **only** as a recognized credential source, not a separate code path.
+4. **Delete** `MODEL_TIERS`, `MODEL_TIER_IDS`, and `_thinking.py`'s Anthropic-only branch — replaced by `model_catalog.py` + `ModelResolver`. The env `MULDRO_ANTHROPIC_API_KEY` survives **only** as a recognized credential source, not a separate code path.
 
 No feature flag, no co-existing legacy path: the resolver **is** the path, seeded to reproduce current behavior. (Consistent with the project's pre-launch "design the clean end state, replace-and-delete" principle.)
 

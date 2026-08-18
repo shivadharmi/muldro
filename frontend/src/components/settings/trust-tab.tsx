@@ -38,8 +38,8 @@ export function TrustTab({
   return (
     <div className="space-y-6">
       <p className="text-sm text-t-tertiary leading-relaxed">
-        Per-capability trust fine-tunes how much Jarvis can do on its own for each
-        kind of action. Levels build as Jarvis acts and you approve or reject.
+        Per-capability trust fine-tunes how much Muldro can do on its own for each
+        kind of action. Levels build as Muldro acts and you approve or reject.
       </p>
 
       {loading && (
@@ -58,7 +58,7 @@ export function TrustTab({
                 No trust data yet
               </p>
               <p className="text-xs text-t-muted">
-                Trust levels build as Jarvis performs actions and you approve or
+                Trust levels build as Muldro performs actions and you approve or
                 reject them.
               </p>
             </div>

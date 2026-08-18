@@ -15,7 +15,7 @@ from dataclasses import dataclass
 @dataclass(frozen=True)
 class GatewayAction:
     action_id: str  # OC-native, dotted (sent to OpenConnector)
-    capability: str  # Jarvis capability (email.send, calendar.list, issue.create)
+    capability: str  # Muldro capability (email.send, calendar.list, issue.create)
     risk: str
     requires_approval: bool
     input_schema: dict  # hand-typed; OC's runtime guide exposes no schema
@@ -23,7 +23,7 @@ class GatewayAction:
 
 @dataclass(frozen=True)
 class GatewayProvider:
-    """One OpenConnector service, and the Jarvis installation that serves it."""
+    """One OpenConnector service, and the Muldro installation that serves it."""
 
     provider_id: str  # OC service id: "gmail" | "googlecalendar" | "github"
     server_name: str  # IntegrationInstallation.server_name
@@ -32,7 +32,7 @@ class GatewayProvider:
     # its raw provider_id via a hand-maintained label table somewhere downstream.
     display_name: str
     actions: tuple[GatewayAction, ...]
-    # The Jarvis PERCEPTION SOURCE names this provider's credential backs, i.e.
+    # The Muldro PERCEPTION SOURCE names this provider's credential backs, i.e.
     # the ``perception_state.source`` values the scheduler polls. These names
     # deliberately DIFFER from ``provider_id`` -- the OC provider
     # "googlecalendar" backs the source "calendar" -- and declaring them HERE is

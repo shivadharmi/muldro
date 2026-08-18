@@ -433,7 +433,7 @@ async def test_no_trust_gate_write_lock_or_presenter_voice():
     mw_ids = {getattr(m, "name", None) or type(m).__name__ for m in middleware}
     assert len(middleware) == 2
     assert "capability_scope_guard" in mw_ids
-    assert "jarvis_tool_dispatcher" in mw_ids
+    assert "muldro_tool_dispatcher" in mw_ids
     lowered = " ".join(str(x).lower() for x in mw_ids)
     assert "trust_gate" not in lowered
     assert "write_lock" not in lowered

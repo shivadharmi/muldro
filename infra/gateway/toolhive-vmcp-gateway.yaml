@@ -28,7 +28,7 @@
 #      The Connection Context Adapter (backend/run_adapter.py) now serves
 #      EVERY provider in the registry
 #      (backend/src/integrations/gateway_actions/ — currently 3 OC providers
-#      across 2 Jarvis installations: google-workspace -> gmail,
+#      across 2 Muldro installations: google-workspace -> gmail,
 #      googlecalendar; github -> github; 21 actions total), not Gmail alone.
 #      There is no provider-selection env var — the adapter process has no
 #      per-provider on/off switch; it serves the whole registry. Each action
@@ -58,13 +58,13 @@
 #      [...]` list below — they must stay identical.
 #
 # 3. `issuer` IS DELIBERATELY NOT A URL:
-#      Jarvis's platform-JWT minter (src/orchestrator/platform_jwt.py) sets
-#      `iss: "jarvis-auth"` — a bare string, not the Jarvis API base URL.
-#      A "Jarvis API base" issuer (as one might assume by default) would NOT
-#      match the tokens Jarvis actually mints. Because `issuer` here is not a
+#      Muldro's platform-JWT minter (src/orchestrator/platform_jwt.py) sets
+#      `iss: "muldro-auth"` — a bare string, not the Muldro API base URL.
+#      A "Muldro API base" issuer (as one might assume by default) would NOT
+#      match the tokens Muldro actually mints. Because `issuer` here is not a
 #      fetchable URL, OIDC discovery (`{issuer}/.well-known/openid-configuration`)
 #      cannot work — `jwksUrl` is set explicitly below to bypass discovery
-#      and point straight at Jarvis's real JWKS route
+#      and point straight at Muldro's real JWKS route
 #      (`src/api/routes_jwks.py`, mounted root-level, NOT under /v1).
 #
 # 4. OUTGOING-AUTH "PASSTHROUGH" FIELD NAME IS A GUESS:
@@ -151,22 +151,22 @@ spec:
       failureHandling:
         healthCheckInterval: 30s
 
-  # --- Incoming auth: validate the caller (Jarvis) -> vMCP ------------------
+  # --- Incoming auth: validate the caller (Muldro) -> vMCP ------------------
   incomingAuth:
     type: oidc
     oidc:
       # Matches ISSUER in src/orchestrator/platform_jwt.py verbatim — this is
       # NOT a URL. See caveat 3 above.
-      issuer: jarvis-auth
+      issuer: muldro-auth
       # Matches DEFAULT_AUDIENCE in src/orchestrator/platform_jwt.py and
       # audience="toolhive-vmcp" in src/adapter/identity.py.
       audience: toolhive-vmcp
       # Explicit JWKS URL — required because `issuer` above is not
       # discoverable. Root-level route (src/api/routes_jwks.py), NOT under
-      # /v1. Replace <jarvis-api-base> with the real deployment base URL
-      # (e.g. https://api.jarvis.example.com or http://host.docker.internal:8000
+      # /v1. Replace <muldro-api-base> with the real deployment base URL
+      # (e.g. https://api.muldro.example.com or http://host.docker.internal:8000
       # for local dev against the host-run backend).
-      jwksUrl: "<jarvis-api-base>/.well-known/jwks.json"
+      jwksUrl: "<muldro-api-base>/.well-known/jwks.json"
 
     # Cedar default-deny authorization: nothing is permitted unless an
     # explicit `permit` matches (ToolHive's authz engine denies by default

@@ -1,4 +1,4 @@
-"""Distributed tracing for Jarvis intelligence cycles.
+"""Distributed tracing for Muldro intelligence cycles.
 
 Every orchestrator cycle gets a trace_id. Each sub-agent call within
 that cycle gets a span. This provides full observability into the
@@ -70,7 +70,7 @@ class AgentSpan:
 
 
 @dataclass
-class JarvisTrace:
+class MuldroTrace:
     trace_id: str
     trigger: str  # user_message, perception_gmail, scheduled_briefing, etc.
     started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
@@ -169,11 +169,11 @@ class TraceManager:
     """Manages active traces for the orchestrator."""
 
     def __init__(self, trace_store=None):
-        self._active_traces: dict[str, JarvisTrace] = {}
+        self._active_traces: dict[str, MuldroTrace] = {}
         self._trace_store = trace_store
 
-    def start_trace(self, trigger: str) -> JarvisTrace:
-        trace = JarvisTrace(
+    def start_trace(self, trigger: str) -> MuldroTrace:
+        trace = MuldroTrace(
             trace_id=f"trace_{ULID()}",
             trigger=trigger,
         )
@@ -186,7 +186,7 @@ class TraceManager:
 
     async def finish_trace(
         self, trace_id: str, *, user_id: str, workspace_id: str
-    ) -> JarvisTrace | None:
+    ) -> MuldroTrace | None:
         trace = self._active_traces.pop(trace_id, None)
         if trace:
             trace.finish()
@@ -212,5 +212,5 @@ class TraceManager:
                     logger.warning("Failed to persist trace %s", trace_id, exc_info=True)
         return trace
 
-    def get_trace(self, trace_id: str) -> JarvisTrace | None:
+    def get_trace(self, trace_id: str) -> MuldroTrace | None:
         return self._active_traces.get(trace_id)

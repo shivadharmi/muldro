@@ -2,7 +2,7 @@
 """Step 6C Task 1.2: deep-runtime write-lock middleware.
 
 The middleware is a ``@wrap_tool_call`` interceptor placed BETWEEN trust_gate (OUTER)
-and jarvis_tool_dispatcher (INNER). It acquires the SHARED cross-path write lock
+and muldro_tool_dispatcher (INNER). It acquires the SHARED cross-path write lock
 (``src.services.write_lock``) only around external WRITES; reads and built-ins pass
 straight through and never touch Redis.
 

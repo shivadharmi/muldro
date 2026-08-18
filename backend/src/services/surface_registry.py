@@ -32,7 +32,7 @@ class SurfaceRegistry:
         self._local: dict[str, dict[str, SurfaceInfo]] = {}
 
     def _key(self, user_id: str) -> str:
-        return f"jarvis:surfaces:{user_id}"
+        return f"muldro:surfaces:{user_id}"
 
     async def register(
         self,

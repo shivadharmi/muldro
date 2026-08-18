@@ -7,12 +7,12 @@ Validation goals
 ----------------
 G1. MODEL LAYER (decision: direct Anthropic API, not Bedrock)
     Can `ChatAnthropic` drive Opus 4.8 with *adaptive* thinking + effort the way
-    Jarvis's hand-rolled `build_thinking_params` does (orchestrator/agent_loop.py)?
+    Muldro's hand-rolled `build_thinking_params` does (orchestrator/agent_loop.py)?
     If yes → we delete `build_thinking_params`. If no → fallback is a thin custom
     BaseChatModel wrapping the raw Anthropic client (small, isolated).
 
 G2. MIDDLEWARE SURFACE
-    Can LangChain middleware host Jarvis's two load-bearing per-call policies?
+    Can LangChain middleware host Muldro's two load-bearing per-call policies?
       - capability-scope enforcement (today: agent_loop._resolve_tool_scope_and_server),
         fail-closed, via @wrap_tool_call
       - per-call cost/budget capture (today: agent_loop budget.record_usage +
@@ -25,7 +25,7 @@ Run
     cd backend
     source .venv/bin/activate
     pip install -r spikes/deepagents_phase0/requirements.txt
-    JARVIS_ANTHROPIC_API_KEY=<your-anthropic-key> python spikes/deepagents_phase0/spike.py
+    MULDRO_ANTHROPIC_API_KEY=<your-anthropic-key> python spikes/deepagents_phase0/spike.py
 
 Expected: G1 prints a thinking summary with no 400; G2 prints that the
 out-of-scope tool was BLOCKED and that >0 output tokens were observed.
@@ -56,9 +56,9 @@ OPUS = "claude-opus-4-8"  # direct Anthropic model id (CLAUDE.md)
 
 
 def _require_key() -> str:
-    key = os.environ.get("JARVIS_ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")
+    key = os.environ.get("MULDRO_ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")
     if not key:
-        sys.exit("Set JARVIS_ANTHROPIC_API_KEY (or ANTHROPIC_API_KEY) to run the spike.")
+        sys.exit("Set MULDRO_ANTHROPIC_API_KEY (or ANTHROPIC_API_KEY) to run the spike.")
     return key
 
 
@@ -66,7 +66,7 @@ def _require_key() -> str:
 def goal1_model_layer(api_key: str) -> bool:
     from langchain_anthropic import ChatAnthropic
 
-    # The adaptive-thinking + effort surface. Jarvis's build_thinking_params sends
+    # The adaptive-thinking + effort surface. Muldro's build_thinking_params sends
     #   thinking={"type":"adaptive","display":"summarized"}
     #   output_config={"effort": "high"}
     # and OMITS temperature for Opus 4.8. ChatAnthropic 1.4.6 has first-class
@@ -130,7 +130,7 @@ def goal2_middleware(api_key: str) -> bool:
     observed = {"output_tokens": 0, "blocked": []}
     AGENT_SCOPE = {"math.add"}  # pretend this agent may only do math.add
 
-    # Map tool name -> capability (Jarvis does this via ToolRegistry.get_tool).
+    # Map tool name -> capability (Muldro does this via ToolRegistry.get_tool).
     # `multiply` is a benign, NON-destructive out-of-scope tool: the policy block
     # (not the model's own judgement) is what must stop it. Using a benign tool
     # avoids the model self-refusing a scary-sounding call, which would mean the

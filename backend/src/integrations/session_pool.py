@@ -100,7 +100,7 @@ def _gateway_owned_tool_names(server_name: str) -> frozenset[str] | None:
 def _narrow_discovered_tools(raw_tools: list, server_name: str) -> list:
     """Narrow a gateway server's discovery response to the tools it actually owns.
 
-    WHY: ONE OpenConnector gateway adapter endpoint serves SEVERAL Jarvis
+    WHY: ONE OpenConnector gateway adapter endpoint serves SEVERAL Muldro
     installations (google-workspace and github both resolve to the same
     ``/mcp`` URL). ``list_tools()`` therefore returns the union of every
     provider's named tools plus the generic ``execute_action`` /

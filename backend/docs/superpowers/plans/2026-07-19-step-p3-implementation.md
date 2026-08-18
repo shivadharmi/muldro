@@ -31,8 +31,8 @@ active. **No migrations. Not pushed/merged.** Full gate at every commit:
 
 **Files:**
 - Create: `frontend/src/lib/todos.ts`, `frontend/src/lib/todos.test.ts`
-- Create: `frontend/src/components/jarvis/chat-todos.tsx`, `frontend/src/components/jarvis/chat-todos.test.tsx`
-- Modify: `frontend/src/components/jarvis/chat-panel.tsx` (`tool_call` case ~:409, `tool_result` case ~:429; assistant message model + render)
+- Create: `frontend/src/components/muldro/chat-todos.tsx`, `frontend/src/components/muldro/chat-todos.test.tsx`
+- Modify: `frontend/src/components/muldro/chat-panel.tsx` (`tool_call` case ~:409, `tool_result` case ~:429; assistant message model + render)
 
 ### Task 1: `todosFromToolCall` pure helper
 
@@ -134,9 +134,9 @@ git commit -F <scratch-msg-file>   # feat(chat-permission-model): P3a — todosF
 
 ### Task 2: `ChatTodos` presentational component
 
-**Files:** Create `frontend/src/components/jarvis/chat-todos.tsx` + `.test.tsx`
+**Files:** Create `frontend/src/components/muldro/chat-todos.tsx` + `.test.tsx`
 
-- [ ] **Step 1: Write the failing test** — `frontend/src/components/jarvis/chat-todos.test.tsx`
+- [ ] **Step 1: Write the failing test** — `frontend/src/components/muldro/chat-todos.test.tsx`
 
 ```typescript
 import { render, screen } from "@testing-library/react";
@@ -169,10 +169,10 @@ test("renders nothing for an empty list", () => {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd frontend && npx vitest run src/components/jarvis/chat-todos.test.tsx`
+Run: `cd frontend && npx vitest run src/components/muldro/chat-todos.test.tsx`
 Expected: FAIL — cannot resolve `./chat-todos`.
 
-- [ ] **Step 3: Write minimal implementation** — `frontend/src/components/jarvis/chat-todos.tsx`
+- [ ] **Step 3: Write minimal implementation** — `frontend/src/components/muldro/chat-todos.tsx`
 
 ```typescript
 import type { Todo, TodoStatus } from "@/lib/todos";
@@ -216,19 +216,19 @@ export function ChatTodos({ todos }: ChatTodosProps) {
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd frontend && npx vitest run src/components/jarvis/chat-todos.test.tsx`
+Run: `cd frontend && npx vitest run src/components/muldro/chat-todos.test.tsx`
 Expected: PASS (3 tests).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add frontend/src/components/jarvis/chat-todos.tsx frontend/src/components/jarvis/chat-todos.test.tsx
+git add frontend/src/components/muldro/chat-todos.tsx frontend/src/components/muldro/chat-todos.test.tsx
 git commit -F <scratch-msg-file>   # feat(chat-permission-model): P3a — ChatTodos component
 ```
 
 ### Task 3: Wire the todos interception into `chat-panel.tsx`
 
-**Files:** Modify `frontend/src/components/jarvis/chat-panel.tsx`
+**Files:** Modify `frontend/src/components/muldro/chat-panel.tsx`
 
 Context (verbatim current `tool_call` case, ~:409): it appends `{ tool, input }` to the running
 agent's `toolCalls`. The `tool_result` case (~:429) attaches `result` to the LAST toolCall. Both SSE
@@ -311,7 +311,7 @@ Expected: all green (no new backend changes; the interception is frontend-only).
 - [ ] **Step 6: Commit**
 
 ```bash
-git add frontend/src/components/jarvis/chat-panel.tsx frontend/src/lib/api.ts
+git add frontend/src/components/muldro/chat-panel.tsx frontend/src/lib/api.ts
 git commit -F <scratch-msg-file>   # feat(chat-permission-model): P3a — inline write_todos checklist in chat
 ```
 
@@ -457,7 +457,7 @@ git commit -F <scratch-msg-file>   # feat(chat-permission-model): P3b — comman
 
 ### Task 6: Frontend — `streamChat` sends `permission_mode`; `chat-panel` send site
 
-**Files:** Modify `frontend/src/lib/api.ts` (`streamChat` :224-250); `frontend/src/components/jarvis/chat-panel.tsx` (:535). Test: `frontend/src/lib/api-stream-chat.test.ts` (create).
+**Files:** Modify `frontend/src/lib/api.ts` (`streamChat` :224-250); `frontend/src/components/muldro/chat-panel.tsx` (:535). Test: `frontend/src/lib/api-stream-chat.test.ts` (create).
 
 - [ ] **Step 1: Write the failing test** — `frontend/src/lib/api-stream-chat.test.ts`
 
@@ -481,7 +481,7 @@ test("streamChat puts permission_mode in the POST body", async () => {
   await streamChat("hi", () => {}, undefined, "conv_1", "bypass");
 
   const [url, init] = fetchMock.mock.calls[0];
-  expect(url).toBe("/api/jarvis/chat");
+  expect(url).toBe("/api/muldro/chat");
   const body = JSON.parse((init as RequestInit).body as string);
   expect(body).toMatchObject({ message: "hi", surface: "web", conversation_id: "conv_1", permission_mode: "bypass" });
   expect(body).not.toHaveProperty("mode");
@@ -509,7 +509,7 @@ export async function streamChat(
   // ...rest of the function unchanged...
 ```
 
-In `frontend/src/components/jarvis/chat-panel.tsx` (~:535), change the last `streamChat` arg:
+In `frontend/src/components/muldro/chat-panel.tsx` (~:535), change the last `streamChat` arg:
 
 ```typescript
         useCommandStore.getState().permissionMode,
@@ -523,7 +523,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit** (build after Task 7)
 
 ```bash
-git add frontend/src/lib/api.ts frontend/src/components/jarvis/chat-panel.tsx frontend/src/lib/api-stream-chat.test.ts
+git add frontend/src/lib/api.ts frontend/src/components/muldro/chat-panel.tsx frontend/src/lib/api-stream-chat.test.ts
 git commit -F <scratch-msg-file>   # feat(chat-permission-model): P3b — streamChat sends permission_mode
 ```
 
@@ -1205,7 +1205,7 @@ git commit -F <scratch-msg-file>   # feat(chat-permission-model): P3c — settin
 
 ### Task 12: Frontend — seed the chat picker from the workspace default
 
-**Files:** Modify `frontend/src/components/jarvis/chat-panel.tsx` (or the picker mount point).
+**Files:** Modify `frontend/src/components/muldro/chat-panel.tsx` (or the picker mount point).
 
 - [ ] **Step 1: Seed on mount** — where the chat UI first mounts (e.g. `chat-panel.tsx` top-level
 `useEffect`), fetch the workspace default and seed the store IF the user has not overridden this
@@ -1237,7 +1237,7 @@ Expected: green.
 - [ ] **Step 3: Commit**
 
 ```bash
-git add frontend/src/components/jarvis/chat-panel.tsx
+git add frontend/src/components/muldro/chat-panel.tsx
 git commit -F <scratch-msg-file>   # feat(chat-permission-model): P3c — seed chat picker from workspace default
 ```
 

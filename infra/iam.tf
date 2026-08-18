@@ -21,7 +21,7 @@ resource "aws_iam_role" "ec2" {
   }
 }
 
-# SSM Parameter Store read access (scoped to /jarvis/*)
+# SSM Parameter Store read access (scoped to /muldro/*)
 resource "aws_iam_role_policy" "ssm_parameters" {
   name = "${var.project_name}-ssm-parameters"
   role = aws_iam_role.ec2.id

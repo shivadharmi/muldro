@@ -1,7 +1,7 @@
 """Launch specs for locally-managed HTTP MCP servers, derived from settings.
 
 Replicates the old infra/docker/google-workspace-mcp/entrypoint.sh env mapping
-(JARVIS_-prefixed settings -> the names workspace-mcp expects) but spawns the
+(MULDRO_-prefixed settings -> the names workspace-mcp expects) but spawns the
 server as a host process via uvx instead of a Docker container.
 """
 

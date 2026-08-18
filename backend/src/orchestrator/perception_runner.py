@@ -1,6 +1,6 @@
 """PerceptionRunner — the perception + cross-source-synthesis engine.
 
-Extracted from ``JarvisOrchestrator`` (god-object decomposition, 2026-06-19).
+Extracted from ``MuldroOrchestrator`` (god-object decomposition, 2026-06-19).
 Owns the autonomous (scheduler-triggered) intelligence loop: orchestrating each
 perception cycle, assessing relevance, asking the Planner to evaluate
 observations, and queuing actionable perception plans for background execution.
@@ -607,14 +607,14 @@ class PerceptionRunner:
 
         # Check if any steps are actionable
         has_system_caps = any(
-            s.capability.startswith("system.") for s in plan.steps if s.actor == "jarvis"
+            s.capability.startswith("system.") for s in plan.steps if s.actor == "muldro"
         )
-        has_write_steps = any(s.risk not in ("none",) for s in plan.steps if s.actor == "jarvis")
+        has_write_steps = any(s.risk not in ("none",) for s in plan.steps if s.actor == "muldro")
         has_tool_steps = any(
             not s.capability.startswith("system.")
             and s.capability not in ("reason", "respond", "none")
             for s in plan.steps
-            if s.actor == "jarvis"
+            if s.actor == "muldro"
         )
 
         if not has_system_caps and not has_write_steps and not has_tool_steps:
@@ -685,7 +685,7 @@ class PerceptionRunner:
         tool_steps = [
             s
             for s in plan.steps
-            if s.actor == "jarvis"
+            if s.actor == "muldro"
             and not s.capability.startswith("system.")
             and s.capability not in ("reason", "respond", "none")
         ]

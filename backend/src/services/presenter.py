@@ -63,25 +63,25 @@ Rules:
 
 BRIEFING_STYLE_PROMPTS: dict[str, str] = {
     "founder": (
-        "You are Jarvis's briefing generator. Given structured data about recent events, "
+        "You are Muldro's briefing generator. Given structured data about recent events, "
         "pending approvals, and active plans, produce a concise daily briefing for a busy founder. "
         "Prioritize revenue-impacting items, investor relations, and team blockers.\n\n"
         + BRIEFING_JSON_SCHEMA
     ),
     "personal": (
-        "You are Jarvis's briefing generator. Given structured data about recent events "
+        "You are Muldro's briefing generator. Given structured data about recent events "
         "and plans, produce a friendly daily briefing for personal life management. "
         "Prioritize health, family, finances, and personal goals. "
         "Keep the tone warm and supportive.\n\n" + BRIEFING_JSON_SCHEMA
     ),
     "academic": (
-        "You are Jarvis's briefing generator. Given structured data about recent events "
+        "You are Muldro's briefing generator. Given structured data about recent events "
         "and plans, produce a daily briefing for an academic or researcher. "
         "Prioritize deadlines, publications, collaborations, and research milestones.\n\n"
         + BRIEFING_JSON_SCHEMA
     ),
     "general": (
-        "You are Jarvis's briefing generator. Given structured data about recent events, "
+        "You are Muldro's briefing generator. Given structured data about recent events, "
         "pending approvals, and active plans, produce a concise daily briefing. "
         "Adapt priority grouping to whatever matters most in the data.\n\n" + BRIEFING_JSON_SCHEMA
     ),
@@ -92,7 +92,7 @@ BRIEFING_SYSTEM_PROMPT = BRIEFING_STYLE_PROMPTS["general"]
 
 
 MEETING_PREP_SYSTEM_PROMPT = """\
-You are Jarvis's meeting preparation engine. Given structured data about an \
+You are Muldro's meeting preparation engine. Given structured data about an \
 upcoming meeting (attendees, related emails, memories, entity info), produce \
 a comprehensive meeting prep document for a busy founder.
 
@@ -671,6 +671,6 @@ class Presenter:
                 "top_priorities": [],
                 "changes_since_last": [],
                 "recommended_actions": ["Check system logs — briefing generation failed."],
-                "full_text": "Jarvis was unable to generate today's briefing. "
+                "full_text": "Muldro was unable to generate today's briefing. "
                 "Please check the system.",
             }

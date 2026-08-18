@@ -3,7 +3,7 @@ durable resume + exactly-once via the REAL IdempotencyLedger.
 
 Extends the Step-1 proof (spikes/postgres_saver/probe.py — a minimal hand-written
 StateGraph) to a REAL deep agent built via ``build_deep_agent`` with the real
-capability-scope guard + the real ``jarvis_tool_dispatcher`` wired to a
+capability-scope guard + the real ``muldro_tool_dispatcher`` wired to a
 ledger-wrapped adapter, compiled under a REAL ``AsyncPostgresSaver`` on a
 ``make_thread_id(workspace_id)`` thread.
 
@@ -70,7 +70,7 @@ from src.config.settings import get_settings
 from src.deep_runtime.agent_builder import build_deep_agent
 from src.deep_runtime.authorization import AuthorizationSource
 from src.deep_runtime.checkpointer import build_async_postgres_saver
-from src.deep_runtime.middleware.jarvis_tool_dispatcher import make_jarvis_tool_dispatcher
+from src.deep_runtime.middleware.muldro_tool_dispatcher import make_muldro_tool_dispatcher
 from src.deep_runtime.middleware.trust_gate import make_trust_gate_middleware
 from src.deep_runtime.thread_identity import make_thread_id, workspace_of_thread_id
 from src.deep_runtime.tool_bridge import build_tool_shells
@@ -247,7 +247,7 @@ def _build_ledger_adapter(factory, workspace_id, run_id):
 
 async def _build_agent(executor, factory, workspace_id, user_id, run_id, saver, *, gated=False):
     """Build a REAL deep agent via build_deep_agent. capability_scope is auto-installed
-    (db_factory given); we append the jarvis_tool_dispatcher wired to a fresh ledger
+    (db_factory given); we append the muldro_tool_dispatcher wired to a fresh ledger
     adapter. When gated=True we ALSO append a trust_gate built with
     authorization_source=AUTONOMOUS (SQ4 compose-with-checkpointer proof)."""
     tool_shells = build_tool_shells(
@@ -263,7 +263,7 @@ async def _build_agent(executor, factory, workspace_id, user_id, run_id, saver, 
         ]
     )
     adapter = _build_ledger_adapter(factory, workspace_id, run_id)
-    dispatcher = make_jarvis_tool_dispatcher(
+    dispatcher = make_muldro_tool_dispatcher(
         execute_tool=adapter, user_id=user_id, workspace_id=workspace_id
     )
     extra = [dispatcher]

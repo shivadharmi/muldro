@@ -92,7 +92,7 @@ def get_server_auth_provider(provider_name: str, settings: Settings) -> Any | No
     """Create a FastMCP server-side auth provider for protecting MCP endpoints.
 
     These providers handle OAuth flows when external clients connect to
-    Jarvis-hosted MCP servers. For client-side auth (Jarvis connecting
+    Muldro-hosted MCP servers. For client-side auth (Muldro connecting
     to external MCP servers), use ``get_client_auth()``.
 
     Returns None if the provider credentials are not configured.

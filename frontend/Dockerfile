@@ -1,4 +1,4 @@
-# Jarvis frontend — Next.js app.
+# Muldro frontend — Next.js app.
 #
 # Single stage: install all deps (the build needs devDependencies), build the
 # production bundle, then serve with `next start`. BACKEND_URL is read at

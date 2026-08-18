@@ -80,7 +80,7 @@ async def test_complete_text_accepts_block_list_system():
 
 
 async def test_complete_text_conversation_ends_with_user_message():
-    # Adaptive-thinking models (every model Jarvis runs) reject a conversation that
+    # Adaptive-thinking models (every model Muldro runs) reject a conversation that
     # ends with an assistant turn. complete_text must never append an assistant
     # (prefill) message — the last message is always the HumanMessage.
     model = _mock_model('{"passed": true}')

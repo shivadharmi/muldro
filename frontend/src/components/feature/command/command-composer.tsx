@@ -55,7 +55,7 @@ export function CommandComposer({ onSend, disabled }: Props) {
           value={input}
           onChange={(e) => setInput(e.target.value)}
           placeholder={
-            permissionMode === "bypass" ? "What should Jarvis do?" : "Ask Jarvis anything..."
+            permissionMode === "bypass" ? "What should Muldro do?" : "Ask Muldro anything..."
           }
           rows={1}
           className="flex-1 bg-surface-1 border border-b-primary rounded-[var(--radius-md)] px-3 py-2 text-sm text-t-primary placeholder:text-t-tertiary resize-none focus:outline-none focus:ring-1 focus:ring-accent-primary"

@@ -9,7 +9,7 @@ interface Props {
 }
 
 // Inline stroke-SVG icons (no icon library in this app) — viewBox 16,
-// currentColor stroke, matching the Jarvis design primitives.
+// currentColor stroke, matching the Muldro design primitives.
 function IconBase({ size = 16, children }: { size?: number; children: React.ReactNode }) {
   return (
     <svg
@@ -275,7 +275,7 @@ export function CommandInput({ onSubmit, disabled }: Props) {
           value={cmdKOpen ? "" : value}
           onChange={(e) => { if (!cmdKOpen) { setValue(e.target.value); setPaletteHidden(false); } }}
           onKeyDown={cmdKOpen ? undefined : handleTextareaKeyDown}
-          placeholder="Ask Jarvis, or give it a task. It will plan, ask for approval, then execute."
+          placeholder="Ask Muldro, or give it a task. It will plan, ask for approval, then execute."
           disabled={disabled}
           className="w-full resize-none bg-transparent px-4 pt-3 pb-1 text-sm text-t-primary placeholder-t-tertiary focus:outline-none disabled:opacity-50"
         />

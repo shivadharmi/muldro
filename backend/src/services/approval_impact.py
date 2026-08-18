@@ -226,5 +226,5 @@ def _explain_policy(approval_type: str | None, risk_level: str | None) -> str:
         )
     return (
         f"This {atype} requires approval because external write actions "
-        "are gated by default in Jarvis v1."
+        "are gated by default in Muldro v1."
     )

@@ -153,7 +153,7 @@ async def main() -> None:
         model=TextOnlyFakeModel(),
         tools=[],
         middleware=[middleware],
-        system_prompt="You are Jarvis's Librarian.",
+        system_prompt="You are Muldro's Librarian.",
         checkpointer=MemorySaver(),
     )
 

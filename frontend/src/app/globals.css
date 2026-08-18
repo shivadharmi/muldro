@@ -1,58 +1,58 @@
 @import "tailwindcss";
 
-/* ── Jarvis Design System ──────────────────────────────────────── */
+/* ── Muldro Design System ──────────────────────────────────────── */
 /* 90% neutral surfaces, 10% purposeful color                      */
 /* Primary: Electric Cyan | Secondary: Deep Violet                 */
 /* Calm, high-trust, operational, intelligent, premium              */
 
 /* ── Light Theme ─────────────────────────────────────────────── */
 :root {
-  --jarvis-bg: hsl(220 20% 97%);
-  --jarvis-surface-1: hsl(0 0% 100%);
-  --jarvis-surface-2: hsl(220 16% 96%);
-  --jarvis-surface-3: hsl(220 14% 93%);
-  --jarvis-surface-4: hsl(220 13% 89%);
+  --muldro-bg: hsl(220 20% 97%);
+  --muldro-surface-1: hsl(0 0% 100%);
+  --muldro-surface-2: hsl(220 16% 96%);
+  --muldro-surface-3: hsl(220 14% 93%);
+  --muldro-surface-4: hsl(220 13% 89%);
 
-  --jarvis-text-primary: hsl(220 30% 12%);
-  --jarvis-text-secondary: hsl(220 16% 36%);
-  --jarvis-text-tertiary: hsl(220 10% 50%);
-  --jarvis-text-muted: hsl(220 8% 62%);
+  --muldro-text-primary: hsl(220 30% 12%);
+  --muldro-text-secondary: hsl(220 16% 36%);
+  --muldro-text-tertiary: hsl(220 10% 50%);
+  --muldro-text-muted: hsl(220 8% 62%);
 
-  --jarvis-border-subtle: hsl(220 14% 90%);
-  --jarvis-border-default: hsl(220 12% 84%);
-  --jarvis-border-strong: hsl(220 12% 72%);
+  --muldro-border-subtle: hsl(220 14% 90%);
+  --muldro-border-default: hsl(220 12% 84%);
+  --muldro-border-strong: hsl(220 12% 72%);
 
-  --jarvis-primary: hsl(193 88% 45%);
-  --jarvis-primary-hover: hsl(193 92% 40%);
-  --jarvis-primary-active: hsl(193 100% 36%);
-  --jarvis-primary-soft: hsl(193 100% 45% / 0.10);
-  --jarvis-primary-fg: hsl(0 0% 100%);
+  --muldro-primary: hsl(193 88% 45%);
+  --muldro-primary-hover: hsl(193 92% 40%);
+  --muldro-primary-active: hsl(193 100% 36%);
+  --muldro-primary-soft: hsl(193 100% 45% / 0.10);
+  --muldro-primary-fg: hsl(0 0% 100%);
 
-  --jarvis-secondary: hsl(247 72% 60%);
-  --jarvis-secondary-hover: hsl(247 66% 54%);
-  --jarvis-secondary-active: hsl(247 60% 48%);
-  --jarvis-secondary-soft: hsl(247 72% 60% / 0.10);
+  --muldro-secondary: hsl(247 72% 60%);
+  --muldro-secondary-hover: hsl(247 66% 54%);
+  --muldro-secondary-active: hsl(247 60% 48%);
+  --muldro-secondary-soft: hsl(247 72% 60% / 0.10);
 
-  --jarvis-accent: hsl(159 70% 38%);
-  --jarvis-accent-hover: hsl(159 74% 32%);
-  --jarvis-accent-soft: hsl(159 70% 38% / 0.10);
+  --muldro-accent: hsl(159 70% 38%);
+  --muldro-accent-hover: hsl(159 74% 32%);
+  --muldro-accent-soft: hsl(159 70% 38% / 0.10);
 
-  --jarvis-success: hsl(155 70% 36%);
-  --jarvis-success-soft: hsl(155 70% 36% / 0.10);
-  --jarvis-warning: hsl(35 92% 48%);
-  --jarvis-warning-soft: hsl(35 92% 48% / 0.10);
-  --jarvis-error: hsl(351 78% 54%);
-  --jarvis-error-soft: hsl(351 78% 54% / 0.10);
-  --jarvis-info: hsl(193 88% 45%);
-  --jarvis-info-soft: hsl(193 88% 45% / 0.10);
+  --muldro-success: hsl(155 70% 36%);
+  --muldro-success-soft: hsl(155 70% 36% / 0.10);
+  --muldro-warning: hsl(35 92% 48%);
+  --muldro-warning-soft: hsl(35 92% 48% / 0.10);
+  --muldro-error: hsl(351 78% 54%);
+  --muldro-error-soft: hsl(351 78% 54% / 0.10);
+  --muldro-info: hsl(193 88% 45%);
+  --muldro-info-soft: hsl(193 88% 45% / 0.10);
 
-  --jarvis-ring: hsl(193 88% 45%);
+  --muldro-ring: hsl(193 88% 45%);
 
-  --jarvis-chart-1: hsl(193 88% 45%);
-  --jarvis-chart-2: hsl(247 72% 60%);
-  --jarvis-chart-3: hsl(159 70% 38%);
-  --jarvis-chart-4: hsl(35 92% 48%);
-  --jarvis-chart-5: hsl(351 78% 54%);
+  --muldro-chart-1: hsl(193 88% 45%);
+  --muldro-chart-2: hsl(247 72% 60%);
+  --muldro-chart-3: hsl(159 70% 38%);
+  --muldro-chart-4: hsl(35 92% 48%);
+  --muldro-chart-5: hsl(351 78% 54%);
 
   --shadow-sm: 0 1px 2px rgba(0,0,0,0.04);
   --shadow-md: 0 4px 16px rgba(0,0,0,0.06), 0 1px 3px rgba(0,0,0,0.04);
@@ -70,52 +70,52 @@
 
 /* ── Dark Theme (default) ────────────────────────────────────── */
 [data-theme="dark"] {
-  --jarvis-bg: hsl(220 20% 7%);
-  --jarvis-surface-1: hsl(220 18% 10%);
-  --jarvis-surface-2: hsl(220 16% 13%);
-  --jarvis-surface-3: hsl(220 14% 17%);
-  --jarvis-surface-4: hsl(220 12% 22%);
+  --muldro-bg: hsl(220 20% 7%);
+  --muldro-surface-1: hsl(220 18% 10%);
+  --muldro-surface-2: hsl(220 16% 13%);
+  --muldro-surface-3: hsl(220 14% 17%);
+  --muldro-surface-4: hsl(220 12% 22%);
 
-  --jarvis-text-primary: hsl(220 20% 95%);
-  --jarvis-text-secondary: hsl(220 12% 72%);
-  --jarvis-text-tertiary: hsl(220 8% 52%);
-  --jarvis-text-muted: hsl(220 6% 40%);
+  --muldro-text-primary: hsl(220 20% 95%);
+  --muldro-text-secondary: hsl(220 12% 72%);
+  --muldro-text-tertiary: hsl(220 8% 52%);
+  --muldro-text-muted: hsl(220 6% 40%);
 
-  --jarvis-border-subtle: hsl(220 16% 16%);
-  --jarvis-border-default: hsl(220 14% 22%);
-  --jarvis-border-strong: hsl(220 12% 32%);
+  --muldro-border-subtle: hsl(220 16% 16%);
+  --muldro-border-default: hsl(220 14% 22%);
+  --muldro-border-strong: hsl(220 12% 32%);
 
-  --jarvis-primary: hsl(193 100% 62%);
-  --jarvis-primary-hover: hsl(193 90% 55%);
-  --jarvis-primary-active: hsl(193 82% 48%);
-  --jarvis-primary-soft: hsl(193 100% 62% / 0.12);
-  --jarvis-primary-fg: hsl(220 20% 7%);
+  --muldro-primary: hsl(193 100% 62%);
+  --muldro-primary-hover: hsl(193 90% 55%);
+  --muldro-primary-active: hsl(193 82% 48%);
+  --muldro-primary-soft: hsl(193 100% 62% / 0.12);
+  --muldro-primary-fg: hsl(220 20% 7%);
 
-  --jarvis-secondary: hsl(247 80% 72%);
-  --jarvis-secondary-hover: hsl(247 72% 66%);
-  --jarvis-secondary-active: hsl(247 64% 60%);
-  --jarvis-secondary-soft: hsl(247 80% 72% / 0.12);
+  --muldro-secondary: hsl(247 80% 72%);
+  --muldro-secondary-hover: hsl(247 72% 66%);
+  --muldro-secondary-active: hsl(247 64% 60%);
+  --muldro-secondary-soft: hsl(247 80% 72% / 0.12);
 
-  --jarvis-accent: hsl(159 68% 50%);
-  --jarvis-accent-hover: hsl(159 62% 44%);
-  --jarvis-accent-soft: hsl(159 68% 50% / 0.12);
+  --muldro-accent: hsl(159 68% 50%);
+  --muldro-accent-hover: hsl(159 62% 44%);
+  --muldro-accent-soft: hsl(159 68% 50% / 0.12);
 
-  --jarvis-success: hsl(155 60% 44%);
-  --jarvis-success-soft: hsl(155 60% 44% / 0.12);
-  --jarvis-warning: hsl(36 90% 60%);
-  --jarvis-warning-soft: hsl(36 90% 60% / 0.12);
-  --jarvis-error: hsl(351 90% 68%);
-  --jarvis-error-soft: hsl(351 90% 68% / 0.12);
-  --jarvis-info: hsl(193 100% 62%);
-  --jarvis-info-soft: hsl(193 100% 62% / 0.12);
+  --muldro-success: hsl(155 60% 44%);
+  --muldro-success-soft: hsl(155 60% 44% / 0.12);
+  --muldro-warning: hsl(36 90% 60%);
+  --muldro-warning-soft: hsl(36 90% 60% / 0.12);
+  --muldro-error: hsl(351 90% 68%);
+  --muldro-error-soft: hsl(351 90% 68% / 0.12);
+  --muldro-info: hsl(193 100% 62%);
+  --muldro-info-soft: hsl(193 100% 62% / 0.12);
 
-  --jarvis-ring: hsl(193 100% 62%);
+  --muldro-ring: hsl(193 100% 62%);
 
-  --jarvis-chart-1: hsl(193 100% 62%);
-  --jarvis-chart-2: hsl(247 80% 72%);
-  --jarvis-chart-3: hsl(159 68% 50%);
-  --jarvis-chart-4: hsl(36 90% 60%);
-  --jarvis-chart-5: hsl(351 90% 68%);
+  --muldro-chart-1: hsl(193 100% 62%);
+  --muldro-chart-2: hsl(247 80% 72%);
+  --muldro-chart-3: hsl(159 68% 50%);
+  --muldro-chart-4: hsl(36 90% 60%);
+  --muldro-chart-5: hsl(351 90% 68%);
 
   --shadow-sm: 0 1px 2px rgba(0,0,0,0.30);
   --shadow-md: 0 4px 16px rgba(0,0,0,0.32), 0 1px 3px rgba(0,0,0,0.20);
@@ -129,72 +129,72 @@
   --font-mono: var(--font-geist-mono);
 
   /* Surfaces */
-  --color-background: var(--jarvis-bg);
-  --color-foreground: var(--jarvis-text-primary);
-  --color-surface-0: var(--jarvis-bg);
-  --color-surface-1: var(--jarvis-surface-1);
-  --color-surface-2: var(--jarvis-surface-2);
-  --color-surface-3: var(--jarvis-surface-3);
-  --color-surface-4: var(--jarvis-surface-4);
+  --color-background: var(--muldro-bg);
+  --color-foreground: var(--muldro-text-primary);
+  --color-surface-0: var(--muldro-bg);
+  --color-surface-1: var(--muldro-surface-1);
+  --color-surface-2: var(--muldro-surface-2);
+  --color-surface-3: var(--muldro-surface-3);
+  --color-surface-4: var(--muldro-surface-4);
 
   /* Text */
-  --color-t-primary: var(--jarvis-text-primary);
-  --color-t-secondary: var(--jarvis-text-secondary);
-  --color-t-tertiary: var(--jarvis-text-tertiary);
-  --color-t-muted: var(--jarvis-text-muted);
+  --color-t-primary: var(--muldro-text-primary);
+  --color-t-secondary: var(--muldro-text-secondary);
+  --color-t-tertiary: var(--muldro-text-tertiary);
+  --color-t-muted: var(--muldro-text-muted);
 
   /* Borders */
-  --color-b-primary: var(--jarvis-border-default);
-  --color-b-secondary: var(--jarvis-border-subtle);
-  --color-b-strong: var(--jarvis-border-strong);
+  --color-b-primary: var(--muldro-border-default);
+  --color-b-secondary: var(--muldro-border-subtle);
+  --color-b-strong: var(--muldro-border-strong);
 
   /* Primary (Cyan) */
-  --color-j-primary: var(--jarvis-primary);
-  --color-j-primary-hover: var(--jarvis-primary-hover);
-  --color-j-primary-soft: var(--jarvis-primary-soft);
-  --color-j-primary-fg: var(--jarvis-primary-fg);
+  --color-j-primary: var(--muldro-primary);
+  --color-j-primary-hover: var(--muldro-primary-hover);
+  --color-j-primary-soft: var(--muldro-primary-soft);
+  --color-j-primary-fg: var(--muldro-primary-fg);
 
   /* Secondary (Violet) */
-  --color-j-secondary: var(--jarvis-secondary);
-  --color-j-secondary-hover: var(--jarvis-secondary-hover);
-  --color-j-secondary-soft: var(--jarvis-secondary-soft);
+  --color-j-secondary: var(--muldro-secondary);
+  --color-j-secondary-hover: var(--muldro-secondary-hover);
+  --color-j-secondary-soft: var(--muldro-secondary-soft);
 
   /* Accent (Emerald) */
-  --color-j-accent: var(--jarvis-accent);
-  --color-j-accent-soft: var(--jarvis-accent-soft);
+  --color-j-accent: var(--muldro-accent);
+  --color-j-accent-soft: var(--muldro-accent-soft);
 
   /* Semantic */
-  --color-j-success: var(--jarvis-success);
-  --color-j-success-soft: var(--jarvis-success-soft);
-  --color-j-warning: var(--jarvis-warning);
-  --color-j-warning-soft: var(--jarvis-warning-soft);
-  --color-j-error: var(--jarvis-error);
-  --color-j-error-soft: var(--jarvis-error-soft);
-  --color-j-info: var(--jarvis-info);
-  --color-j-info-soft: var(--jarvis-info-soft);
+  --color-j-success: var(--muldro-success);
+  --color-j-success-soft: var(--muldro-success-soft);
+  --color-j-warning: var(--muldro-warning);
+  --color-j-warning-soft: var(--muldro-warning-soft);
+  --color-j-error: var(--muldro-error);
+  --color-j-error-soft: var(--muldro-error-soft);
+  --color-j-info: var(--muldro-info);
+  --color-j-info-soft: var(--muldro-info-soft);
 
   /* Ring */
-  --color-j-ring: var(--jarvis-ring);
+  --color-j-ring: var(--muldro-ring);
 
   /* Charts */
-  --color-chart-1: var(--jarvis-chart-1);
-  --color-chart-2: var(--jarvis-chart-2);
-  --color-chart-3: var(--jarvis-chart-3);
-  --color-chart-4: var(--jarvis-chart-4);
-  --color-chart-5: var(--jarvis-chart-5);
+  --color-chart-1: var(--muldro-chart-1);
+  --color-chart-2: var(--muldro-chart-2);
+  --color-chart-3: var(--muldro-chart-3);
+  --color-chart-4: var(--muldro-chart-4);
+  --color-chart-5: var(--muldro-chart-5);
 
   /* Legacy compat — maps old accent-* to primary cyan */
-  --color-accent-50: var(--jarvis-primary-soft);
-  --color-accent-100: var(--jarvis-primary-soft);
-  --color-accent-400: var(--jarvis-primary);
-  --color-accent-500: var(--jarvis-primary);
-  --color-accent-600: var(--jarvis-primary-hover);
+  --color-accent-50: var(--muldro-primary-soft);
+  --color-accent-100: var(--muldro-primary-soft);
+  --color-accent-400: var(--muldro-primary);
+  --color-accent-500: var(--muldro-primary);
+  --color-accent-600: var(--muldro-primary-hover);
 }
 
 /* ── Base ──────────────────────────────────────────────────────── */
 body {
-  background: var(--jarvis-bg);
-  color: var(--jarvis-text-primary);
+  background: var(--muldro-bg);
+  color: var(--muldro-text-primary);
   font-feature-settings: "ss01", "ss02", "cv01";
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
@@ -203,7 +203,7 @@ body {
 /* ── Selection ─────────────────────────────────────────────────── */
 ::selection {
   background: hsl(193 100% 62% / 0.20);
-  color: var(--jarvis-text-primary);
+  color: var(--muldro-text-primary);
 }
 
 /* ── Scrollbar ──────────────────────────────────────────────────── */
@@ -215,16 +215,16 @@ body {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: var(--jarvis-border-subtle);
+  background: var(--muldro-border-subtle);
   border-radius: 3px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--jarvis-border-default);
+  background: var(--muldro-border-default);
 }
 
 /* ── Focus ring ────────────────────────────────────────────────── */
 :focus-visible {
-  outline: 2px solid var(--jarvis-primary);
+  outline: 2px solid var(--muldro-primary);
   outline-offset: 2px;
   border-radius: var(--radius-sm);
 }
@@ -278,9 +278,9 @@ body {
 .skeleton {
   background: linear-gradient(
     90deg,
-    var(--jarvis-surface-2) 25%,
-    var(--jarvis-surface-3) 50%,
-    var(--jarvis-surface-2) 75%
+    var(--muldro-surface-2) 25%,
+    var(--muldro-surface-3) 50%,
+    var(--muldro-surface-2) 75%
   );
   background-size: 200% 100%;
   animation: skeleton-shimmer 1.5s ease-in-out infinite;
@@ -297,10 +297,10 @@ body {
 
 /* ── Brand gradient ───────────────────────────────────────────── */
 .brand-gradient {
-  background: linear-gradient(135deg, var(--jarvis-primary), var(--jarvis-secondary));
+  background: linear-gradient(135deg, var(--muldro-primary), var(--muldro-secondary));
 }
 .brand-gradient-text {
-  background: linear-gradient(135deg, var(--jarvis-primary), var(--jarvis-secondary));
+  background: linear-gradient(135deg, var(--muldro-primary), var(--muldro-secondary));
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
@@ -321,7 +321,7 @@ body {
 }
 .surface-card:hover {
   box-shadow: var(--shadow-md);
-  border-color: var(--jarvis-border-default);
+  border-color: var(--muldro-border-default);
   transform: translateY(-1px);
 }
 

@@ -1,4 +1,4 @@
-"""Entry point for running the Jarvis backend server."""
+"""Entry point for running the Muldro backend server."""
 
 import argparse
 import logging
@@ -77,7 +77,7 @@ def _ensure_worker_mcp_bridge(loop, settings, logger) -> None:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Jarvis Backend")
+    parser = argparse.ArgumentParser(description="Muldro Backend")
     parser.add_argument(
         "--worker", action="store_true", help="Start background worker alongside API"
     )
@@ -98,7 +98,7 @@ def main():
         from src.services.scheduler import SchedulerLoop
         from src.services.worker import StreamConsumerManager
 
-        logger = logging.getLogger("jarvis.worker_thread")
+        logger = logging.getLogger("muldro.worker_thread")
 
         def run_worker():
             _component_health["worker"] = {"status": "starting"}
@@ -109,7 +109,7 @@ def main():
             orchestrator = None
             try:
                 from src.models.database import get_session_factory
-                from src.orchestrator.jarvis import JarvisOrchestrator
+                from src.orchestrator.muldro import MuldroOrchestrator
                 from src.runtime import build_shared
                 from src.tools import configure_tool_servers
 
@@ -153,7 +153,7 @@ def main():
                             exc_info=True,
                         )
 
-                    return JarvisOrchestrator(
+                    return MuldroOrchestrator(
                         settings=settings,
                         db_factory=db_factory,
                         services=services,

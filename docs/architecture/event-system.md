@@ -128,7 +128,7 @@ Memory types: `episodic`, `semantic`, `preference`, `relationship`, `task_contex
 
 ## Initiative Scoring
 
-The `InitiativeScorer` determines when Jarvis should proactively act without explicit user request.
+The `InitiativeScorer` determines when Muldro should proactively act without explicit user request.
 
 ### Composite Formula
 

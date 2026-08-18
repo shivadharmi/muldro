@@ -145,7 +145,7 @@ class TestInitiativeAutoPlanning:
         """High initiative score should log high-priority (planning handled by perception cycle)."""
         event_bus = MagicMock()
         event_bus.publish = AsyncMock()
-        event_bus.event_stream = MagicMock(return_value="jarvis:events:usr_1")
+        event_bus.event_stream = MagicMock(return_value="muldro:events:usr_1")
 
         proc = _make_processor(event_bus=event_bus)
         event = _make_event_model(

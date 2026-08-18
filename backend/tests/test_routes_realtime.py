@@ -20,7 +20,7 @@ async def test_stream_run_progress_rejects_run_owned_by_other_user():
     """A run that does not belong to the requesting user must yield 404.
 
     Regression guard for the IDOR where any authenticated user could stream
-    `jarvis:run:{run_id}` for an arbitrary run_id without an ownership check.
+    `muldro:run:{run_id}` for an arbitrary run_id without an ownership check.
     """
     from fastapi import HTTPException
 

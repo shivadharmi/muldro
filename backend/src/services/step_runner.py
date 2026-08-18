@@ -193,7 +193,7 @@ class StepRunner:
             parts.append(f"\n--- Background ---\n{context_prompt}")
 
         system = (
-            f"You are Jarvis's task execution engine handling a '{task_type}' step. "
+            f"You are Muldro's task execution engine handling a '{task_type}' step. "
             "Complete the task described below. "
             'Respond with JSON: {"status": "completed", "result": "...", "details": {...}}'
         )

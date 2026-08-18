@@ -43,7 +43,7 @@ async def _trigger_initial_observation(user_id: str, sources: list[str], workspa
         from src.config.settings import get_settings
         from src.connectors.base import CONNECTOR_REGISTRY
         from src.models.database import get_session_factory
-        from src.orchestrator.jarvis import JarvisOrchestrator
+        from src.orchestrator.muldro import MuldroOrchestrator
         from src.runtime import build as build_runtime
         from src.tools import configure_tool_servers
 
@@ -57,7 +57,7 @@ async def _trigger_initial_observation(user_id: str, sources: list[str], workspa
             # Pass None: internal tools resolve the thread-local (per-loop) session
             # factory rather than a shared global bound to another loop (Step 11 Phase 3).
             configure_tool_servers(None, settings, svc)
-            orchestrator = JarvisOrchestrator(
+            orchestrator = MuldroOrchestrator(
                 settings=settings,
                 db_factory=db_factory,
                 services=svc,

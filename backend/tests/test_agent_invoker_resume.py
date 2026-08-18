@@ -6,7 +6,7 @@ overrides the db_factory so ``self._db_factory()`` yields a fake session whose
 ``.get(Approval, approval_id)`` returns a fake Approval carrying
 ``artifact_refs={"thread_id": ..., "agent_name": "perceiver"}``.
 
-``build_deep_agent``, ``build_tool_shells``, ``make_jarvis_tool_dispatcher``, and
+``build_deep_agent``, ``build_tool_shells``, ``make_muldro_tool_dispatcher``, and
 ``stream_deep_agent_events`` are all patched — no real LangGraph runtime, no live API.
 """
 
@@ -104,7 +104,7 @@ async def test_resume_approve_calls_stream_with_command_and_marks_approved():
     with (
         patch("src.orchestrator.agent_invoker.build_deep_agent", new=AsyncMock()),
         patch("src.orchestrator.agent_invoker.build_tool_shells", return_value=["SHELL"]),
-        patch("src.orchestrator.agent_invoker.make_jarvis_tool_dispatcher", return_value=object()),
+        patch("src.orchestrator.agent_invoker.make_muldro_tool_dispatcher", return_value=object()),
         patch(
             "src.orchestrator.agent_invoker.stream_deep_agent_events",
             _fake_stream_recorder(recorded),
@@ -140,7 +140,7 @@ async def test_resume_reject_marks_rejected():
     with (
         patch("src.orchestrator.agent_invoker.build_deep_agent", new=AsyncMock()),
         patch("src.orchestrator.agent_invoker.build_tool_shells", return_value=["SHELL"]),
-        patch("src.orchestrator.agent_invoker.make_jarvis_tool_dispatcher", return_value=object()),
+        patch("src.orchestrator.agent_invoker.make_muldro_tool_dispatcher", return_value=object()),
         patch(
             "src.orchestrator.agent_invoker.stream_deep_agent_events",
             _fake_stream_recorder(recorded),

@@ -35,7 +35,7 @@ async def ingest_event(
     raw_payload: str = "",
     workspace_id: str = "",
 ) -> dict:
-    """Ingest an event into the Jarvis intelligence pipeline.
+    """Ingest an event into the Muldro intelligence pipeline.
 
     Normalizes, scores importance/urgency, deduplicates, and triggers
     entity extraction + memory extraction + proactive planning.

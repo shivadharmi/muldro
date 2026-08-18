@@ -1,14 +1,14 @@
 # System Overview
 
-## What Jarvis Is
+## What Muldro Is
 
-Jarvis is a **Personal AI Operating System** for founders. It is NOT a chatbot. It is an OS with a core intelligence loop:
+Muldro is a **Personal AI Operating System** for founders. It is NOT a chatbot. It is an OS with a core intelligence loop:
 
 ```
 Perceive -> Understand -> Update Model -> Plan -> Act -> Communicate
 ```
 
-Jarvis continuously observes data sources (Gmail, Calendar, Slack, GitHub), extracts entities and memories, plans actions, seeks approval for external writes, executes approved plans, and communicates results through a Next.js web frontend.
+Muldro continuously observes data sources (Gmail, Calendar, Slack, GitHub), extracts entities and memories, plans actions, seeks approval for external writes, executes approved plans, and communicates results through a Next.js web frontend.
 
 ## High-Level Architecture
 
@@ -23,7 +23,7 @@ graph TB
     end
 
     subgraph "Orchestrator"
-        ORCH[JarvisOrchestrator<br/>Hub-and-spoke routing]
+        ORCH[MuldroOrchestrator<br/>Hub-and-spoke routing]
         TRACE[TraceManager]
         BUDGET[BudgetTracker]
     end
@@ -112,7 +112,7 @@ These boundaries are strict and must not be violated:
 
 ## Infrastructure Services
 
-Jarvis uses 5 infrastructure services. Postgres and Redis are required; the rest are optional with graceful degradation.
+Muldro uses 5 infrastructure services. Postgres and Redis are required; the rest are optional with graceful degradation.
 
 | Service | Version | Role | Required? | Fallback |
 |---------|---------|------|-----------|----------|
@@ -124,7 +124,7 @@ Jarvis uses 5 infrastructure services. Postgres and Redis are required; the rest
 
 ### Search Architecture (TriSearch)
 
-Jarvis uses **TriSearch** — a three-engine parallel search with reranking:
+Muldro uses **TriSearch** — a three-engine parallel search with reranking:
 
 ```
 User query
@@ -149,12 +149,12 @@ Redis serves 6 distinct purposes:
 
 | Purpose | Pattern | Example Keys |
 |---------|---------|-------------|
-| Event streaming | Redis Streams + consumer groups | `jarvis:events:{user_id}` |
-| Task queue | Redis Streams | `jarvis:tasks` |
+| Event streaming | Redis Streams + consumer groups | `muldro:events:{user_id}` |
+| Task queue | Redis Streams | `muldro:tasks` |
 | Caching | SET with TTL | `brief:{user_id}:{date}`, `entity:{user_id}:{query}`, `dedup:{key}` |
 | Distributed locks | SET NX EX | `lock:{resource}` |
-| Surface tracking | Hash with TTL | `jarvis:surfaces:{user_id}` |
-| Real-time pubsub | PUB/SUB | `jarvis:run_progress:{run_id}` |
+| Surface tracking | Hash with TTL | `muldro:surfaces:{user_id}` |
+| Real-time pubsub | PUB/SUB | `muldro:run_progress:{run_id}` |
 
 ## Data Flow
 

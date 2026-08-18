@@ -39,7 +39,7 @@ def _agents() -> dict[str, SubAgent]:
     return {"perceiver": _perceiver()}
 
 
-def _step(capability: str, *, actor: str = "jarvis") -> PlanStep:
+def _step(capability: str, *, actor: str = "muldro") -> PlanStep:
     return PlanStep(description=capability, capability=capability, actor=actor)
 
 

@@ -89,7 +89,7 @@ class TriageResult:
 
 
 TRIAGE_SYSTEM_PROMPT = """\
-You are Jarvis's event triage engine. For each event, assign a category and \
+You are Muldro's event triage engine. For each event, assign a category and \
 importance/urgency/confidence scores (floats 0.0-1.0).
 
 Categories (choose exactly one per event):

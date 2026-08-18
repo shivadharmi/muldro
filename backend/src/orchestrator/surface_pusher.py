@@ -1,6 +1,6 @@
 """SurfacePusher — builds and delivers A2UI workspace surfaces.
 
-Extracted from ``JarvisOrchestrator`` (god-object decomposition, 2026-06-19).
+Extracted from ``MuldroOrchestrator`` (god-object decomposition, 2026-06-19).
 Pushes Presenter surfaces, plan-derived workspace surfaces, and proactive insight
 surfaces over Redis pub/sub (via ``EventPublisher``'s event bus) and persists them
 to ``ui_surfaces``. Depends on ``EventPublisher`` and the db-factory provider.
@@ -124,10 +124,10 @@ class SurfacePusher:
 
         redis = event_bus._redis
         if surface_type == "insight":
-            key = f"jarvis:surface_rate:insight:{user_id}"
+            key = f"muldro:surface_rate:insight:{user_id}"
             limit, window = 3, 1800
         else:
-            key = f"jarvis:surface_rate:workspace:{user_id}"
+            key = f"muldro:surface_rate:workspace:{user_id}"
             limit, window = 5, 60
 
         count = await redis.incr(key)
@@ -157,7 +157,7 @@ class SurfacePusher:
         """
         from datetime import datetime, timedelta, timezone
 
-        channel = f"jarvis:a2ui:{user_id}"
+        channel = f"muldro:a2ui:{user_id}"
         ws_msg = json.dumps({"type": "surface", "surface": payload})
         await event_bus.publish_to_channel(channel, ws_msg)
 

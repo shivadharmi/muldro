@@ -1,6 +1,6 @@
 """Golden characterization tests for the chat-pipeline fold (ORCH-P1-1, Phase 0).
 
-These freeze the CURRENT behavior of ``JarvisOrchestrator.process_message`` (batch,
+These freeze the CURRENT behavior of ``MuldroOrchestrator.process_message`` (batch,
 returns a ``result`` dict) and ``process_message_stream`` (SSE, yields event dicts)
 *before* the fold reconciles their drift. Per ``docs/engineering-standards.md`` §5,
 characterization tests come first so that:
@@ -33,7 +33,7 @@ pytestmark = pytest.mark.asyncio
 
 TRACE_ID = "trace_gold"
 ILOG_ID = "ilog_gold"
-_JARVIS = "src.orchestrator.chat_processor"
+_MULDRO = "src.orchestrator.chat_processor"
 
 
 class _Recorder:
@@ -136,7 +136,7 @@ def _make_orch(canned: dict[str, str]) -> tuple[object, _Recorder]:
     return chat, rec
 
 
-def _step(step_id, capability, *, actor="jarvis", risk="none", description="do", user_context=None):
+def _step(step_id, capability, *, actor="muldro", risk="none", description="do", user_context=None):
     return PlanStep(
         step_id=step_id,
         description=description,
@@ -155,13 +155,13 @@ def _patches(plan: PlanOutput, routing, user_steps, *, intent="compose_request",
     """
     return [
         patch(
-            f"{_JARVIS}.classify_intent",
+            f"{_MULDRO}.classify_intent",
             new=AsyncMock(return_value=(intent, confidence, [])),
         ),
-        patch(f"{_JARVIS}.extract_plan", new=MagicMock(return_value=plan)),
-        patch(f"{_JARVIS}.intent_to_plan", new=MagicMock(return_value=plan)),
+        patch(f"{_MULDRO}.extract_plan", new=MagicMock(return_value=plan)),
+        patch(f"{_MULDRO}.intent_to_plan", new=MagicMock(return_value=plan)),
         patch(
-            f"{_JARVIS}.resolve_plan_routing",
+            f"{_MULDRO}.resolve_plan_routing",
             new=AsyncMock(return_value=(routing, user_steps)),
         ),
     ]
@@ -336,7 +336,7 @@ class TestDriftTwoPriorContext:
 
 
 def _scenario_user_action():
-    s1 = _step("s1", "email.send", actor="jarvis", risk="high", description="send email")
+    s1 = _step("s1", "email.send", actor="muldro", risk="high", description="send email")
     s2 = _step(
         "s2",
         "approve.manual",
@@ -461,7 +461,7 @@ class TestErrorContract:
     async def test_batch_failure_dict_shape(self):
         orch, _ = _make_orch({})
         with patch(
-            f"{_JARVIS}.classify_intent",
+            f"{_MULDRO}.classify_intent",
             new=AsyncMock(side_effect=ValueError("boom")),
         ):
             result = await _run_batch(orch)
@@ -480,7 +480,7 @@ class TestErrorContract:
     async def test_stream_failure_emits_error_event(self):
         orch, _ = _make_orch({})
         with patch(
-            f"{_JARVIS}.classify_intent",
+            f"{_MULDRO}.classify_intent",
             new=AsyncMock(side_effect=ValueError("boom")),
         ):
             stream = await _run_stream(orch)

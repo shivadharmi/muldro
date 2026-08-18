@@ -232,7 +232,7 @@ class Verifier:
         )
 
         try:
-            # No assistant-message prefill: Jarvis's adaptive-thinking models reject a
+            # No assistant-message prefill: Muldro's adaptive-thinking models reject a
             # conversation ending in an assistant turn (400). Instead we instruct JSON-only
             # in the system prompt and rely on parse_llm_json to tolerate any stray prose.
             text = await complete_text(

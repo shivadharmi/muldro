@@ -461,7 +461,7 @@ class ResultSummary(BaseModel):
 class SurfaceUpdate(BaseModel):
     """Live execution progress pushed to workspace surfaces.
 
-    Published to Redis channel jarvis:a2ui:{user_id} with
+    Published to Redis channel muldro:a2ui:{user_id} with
     type='surface_update'. The frontend applies incremental
     updates to the matching surface_id.
     """
@@ -503,7 +503,7 @@ class PlanStep(BaseModel):
 
     step_id: str = ""
     description: str
-    actor: Literal["jarvis", "user"] = "jarvis"
+    actor: Literal["muldro", "user"] = "muldro"
     capability: str  # e.g. "email.search", "reason", "respond"
     input: dict[str, Any] = Field(default_factory=dict)
     depends_on: list[str] = Field(default_factory=list)

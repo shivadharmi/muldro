@@ -1,6 +1,6 @@
 """PlanStore — persists plans and lightweight interaction logs to the DB.
 
-Extracted from ``JarvisOrchestrator`` (god-object decomposition, 2026-06-19).
+Extracted from ``MuldroOrchestrator`` (god-object decomposition, 2026-06-19).
 A leaf collaborator: it depends only on the DB session factory. Converts a
 ``PlanOutput`` into DB ``Plan`` + ``PlanTask`` rows (so the Executor/GraphExecutor
 can execute it) and records ``InteractionLog`` audit rows for simple interactions.
@@ -20,7 +20,7 @@ def _build_step_to_task_map(steps: list) -> dict[str, str]:
 
     Pre-builds the full mapping so that forward dependencies (e.g. step s1
     depends on s3, which appears later in the list) resolve correctly.
-    Includes both jarvis and user actor steps since user steps can be
+    Includes both muldro and user actor steps since user steps can be
     dependency targets.
     """
     step_to_task: dict[str, str] = {}
@@ -57,7 +57,7 @@ class PlanStore:
         can evaluate_policy(plan_id) and the Executor can execute via
         GraphExecutor — both require a DB-backed Plan.
 
-        Both ``jarvis`` and ``user`` actor steps become PlanTasks. User-actor
+        Both ``muldro`` and ``user`` actor steps become PlanTasks. User-actor
         steps are persisted with ``task_type="user_action"`` and
         ``status="awaiting_input"`` so they appear as dependency targets and
         in execution surfaces.

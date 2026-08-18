@@ -1,7 +1,7 @@
 """Capability-scope enforcement middleware for deepagents tool calls.
 
 CRITICAL-SECURITY. This is the only safety net on the *ungated* chat path of the
-Jarvis → Deep Agents runtime: even when no TrustEngine approval gate fires, an
+Muldro → Deep Agents runtime: even when no TrustEngine approval gate fires, an
 agent must never be able to call a tool whose capability lies outside its
 ``capability_scope``. This ports the former in-loop check
 (``_capability_in_scope`` / ``_resolve_tool_scope_and_server`` and its denial
@@ -83,7 +83,7 @@ def make_capability_scope_middleware(
     fail-closed) and blocks the call when the capability is out of scope.
 
     Args:
-        agent: The Jarvis sub-agent whose ``capability_scope`` gates tool use.
+        agent: The Muldro sub-agent whose ``capability_scope`` gates tool use.
         workspace_id: Tenant scope for the registry lookup (``"" -> None``).
         db_factory: Async-context-manager factory yielding an ``AsyncSession``.
 
@@ -95,7 +95,7 @@ def make_capability_scope_middleware(
     async def capability_scope_guard(request, handler):
         tool_name = request.tool_call["name"]
         # deepagents built-ins (write_todos, ls, read_file, …) are auto-installed
-        # framework scaffolding that Jarvis cannot drop.  They are NOT Jarvis registry
+        # framework scaffolding that Muldro cannot drop.  They are NOT Muldro registry
         # tools, so skip the capability lookup and let them run their own bodies.
         if tool_name in DEEPAGENTS_BUILTIN_NAMES:
             return await handler(request)

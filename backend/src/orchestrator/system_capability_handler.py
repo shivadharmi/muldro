@@ -1,6 +1,6 @@
 """SystemCapabilityHandler — executes ``system.*`` capability steps.
 
-Extracted from :class:`~src.orchestrator.jarvis.JarvisOrchestrator` (ORCH-P3-3)
+Extracted from :class:`~src.orchestrator.muldro.MuldroOrchestrator` (ORCH-P3-3)
 so the frozen god object no longer carries this business logic. It handles the
 four writable system capabilities (``set_goal``, ``set_instruction``,
 ``schedule_reminder``, ``add_to_brief``), the no-op ``respond``/``acknowledge``
@@ -95,7 +95,7 @@ class SystemCapabilityHandler:
     def _request_services(self, db) -> ServiceContainer:
         """DB-bound services for ``db``; reuse an injected container when present.
 
-        Mirrors ``JarvisOrchestrator._request_services`` — in the API path the
+        Mirrors ``MuldroOrchestrator._request_services`` — in the API path the
         container holds only session-free singletons, so DB-bound services are
         built per request rather than sharing one ``AsyncSession`` (P2 #4).
         """

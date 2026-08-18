@@ -163,7 +163,7 @@ async def test_deep_frames_survive_web_sse_pipeline() -> None:
 
 
 # ── Step 1b: full _process_core integration — SKIPPED ─────────────────────────
-# Driving one turn through JarvisOrchestrator._process_core with
+# Driving one turn through MuldroOrchestrator._process_core with
 # settings.runtime="deep" requires wiring: a real (or faked) DB session via
 # db_factory, AgentInvoker, ContextBuilder, WorldModel, a full Settings object
 # with the deep-runtime flag, and enough of the plan/route machinery to reach the

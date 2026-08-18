@@ -1,9 +1,9 @@
 """Build inert schema-shell LangChain tools for the deep runtime (Step 6A.5).
 
-Jarvis tools execute centrally via the jarvis_tool_dispatcher middleware, not per-tool. But
+Muldro tools execute centrally via the muldro_tool_dispatcher middleware, not per-tool. But
 create_deep_agent still needs BaseTool objects so the model SEES each tool's name + args
-schema. This builds one StructuredTool per Jarvis tool def whose coroutine is a TRIPWIRE
-that raises if ever executed — the dispatcher short-circuits every Jarvis tool call, so the
+schema. This builds one StructuredTool per Muldro tool def whose coroutine is a TRIPWIRE
+that raises if ever executed — the dispatcher short-circuits every Muldro tool call, so the
 shell body must never run. Extra keys on the def (e.g. cache_control) are ignored; only
 name/description/input_schema are used.
 """
@@ -16,7 +16,7 @@ from langchain_core.tools import StructuredTool
 
 
 def build_tool_shells(tool_defs: list[dict]) -> list[StructuredTool]:
-    """One inert StructuredTool shell per Jarvis tool def."""
+    """One inert StructuredTool shell per Muldro tool def."""
     return [_shell(d) for d in tool_defs]
 
 
@@ -25,8 +25,8 @@ def _shell(d: dict) -> StructuredTool:
 
     async def _tripwire(**_kwargs: Any) -> Any:
         raise AssertionError(
-            f"deep-runtime tool shell '{name}' executed — the jarvis_tool_dispatcher "
-            "middleware must intercept every Jarvis tool call before the shell body runs."
+            f"deep-runtime tool shell '{name}' executed — the muldro_tool_dispatcher "
+            "middleware must intercept every Muldro tool call before the shell body runs."
         )
 
     return StructuredTool(

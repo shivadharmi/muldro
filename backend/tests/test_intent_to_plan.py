@@ -104,7 +104,7 @@ class TestIntentToPlan:
     ]
 
     def test_greeting_returns_respond(self):
-        result = intent_to_plan("greeting", "Hey Jarvis!", self.CAPS)
+        result = intent_to_plan("greeting", "Hey Muldro!", self.CAPS)
         assert isinstance(result, PlanOutput)
         assert result.priority == "low"
         assert len(result.steps) == 1

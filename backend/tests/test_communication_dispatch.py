@@ -13,11 +13,11 @@ class TestInternalToolServerMapping:
 
     @pytest.fixture
     def orchestrator(self):
-        from src.orchestrator.jarvis import JarvisOrchestrator
+        from src.orchestrator.muldro import MuldroOrchestrator
 
         settings = make_mock_settings()
         db_factory = MagicMock()
-        return JarvisOrchestrator(
+        return MuldroOrchestrator(
             settings=settings,
             db_factory=db_factory,
             services=ServiceContainer(),

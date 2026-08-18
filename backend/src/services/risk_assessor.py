@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 # ── Risk Assessment ──────────────────────────────────────────────
 
-_RISK_SYSTEM_PROMPT = """You assess the contextual risk of actions Jarvis is about to perform
+_RISK_SYSTEM_PROMPT = """You assess the contextual risk of actions Muldro is about to perform
 on behalf of the user.
 
 Consider:

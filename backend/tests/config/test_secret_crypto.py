@@ -14,5 +14,5 @@ def test_encrypt_decrypt_round_trip(monkeypatch):
 
 def test_missing_key_raises(monkeypatch):
     monkeypatch.setattr(secret_crypto, "_config_key", lambda: "")
-    with pytest.raises(RuntimeError, match="JARVIS_CONFIG_ENCRYPTION_KEY"):
+    with pytest.raises(RuntimeError, match="MULDRO_CONFIG_ENCRYPTION_KEY"):
         secret_crypto.encrypt_secret("x")

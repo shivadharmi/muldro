@@ -75,7 +75,7 @@ def make_idempotency_key(raw: RawEvent) -> str:
 
 
 SCORING_SYSTEM_PROMPT = """\
-You are Jarvis's event scoring engine. Given an event and optional user context, \
+You are Muldro's event scoring engine. Given an event and optional user context, \
 evaluate its importance and urgency for this specific user.
 
 You MUST respond with valid JSON matching this schema:
@@ -252,7 +252,7 @@ class EventProcessor:
         # Evaluate triggers against this event
         await self._evaluate_triggers(event, user_id, workspace_id=workspace_id)
 
-        # Initiative scoring — decide if Jarvis should proactively act
+        # Initiative scoring — decide if Muldro should proactively act
         await self._evaluate_initiative(event, user_id, workspace_id=workspace_id)
 
         return event_id

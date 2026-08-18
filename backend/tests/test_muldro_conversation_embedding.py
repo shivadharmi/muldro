@@ -21,9 +21,9 @@ async def test_summarize_history_returns_summary():
         "src.orchestrator.context_assembler.complete_text",
         AsyncMock(return_value="Summary of conversation."),
     ):
-        from src.orchestrator.jarvis import JarvisOrchestrator
+        from src.orchestrator.muldro import MuldroOrchestrator
 
-        orch = JarvisOrchestrator(
+        orch = MuldroOrchestrator(
             settings=settings, db_factory=MagicMock(), services=ServiceContainer()
         )
 
@@ -42,9 +42,9 @@ async def test_summarize_history_without_conversation_id():
         "src.orchestrator.context_assembler.complete_text",
         AsyncMock(return_value="Summary."),
     ):
-        from src.orchestrator.jarvis import JarvisOrchestrator
+        from src.orchestrator.muldro import MuldroOrchestrator
 
-        orch = JarvisOrchestrator(
+        orch = MuldroOrchestrator(
             settings=settings, db_factory=MagicMock(), services=ServiceContainer()
         )
 

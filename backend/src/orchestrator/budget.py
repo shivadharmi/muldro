@@ -1,4 +1,4 @@
-"""Token budget tracking and cost control for Jarvis sub-agents.
+"""Token budget tracking and cost control for Muldro sub-agents.
 
 Tracks per-agent token usage, enforces daily limits, and triggers
 graceful degradation when budget is approaching limits.
@@ -55,7 +55,7 @@ class BudgetTracker:
     DB remains the source of truth; Redis is a fast approximation.
     """
 
-    _REDIS_KEY_PREFIX = "jarvis:budget"
+    _REDIS_KEY_PREFIX = "muldro:budget"
     _REDIS_TTL = 86_400  # 24 hours
 
     def __init__(self, daily_limit_usd: float = 5.0, redis=None):

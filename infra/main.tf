@@ -10,10 +10,10 @@ terraform {
 
   # Uncomment to use S3 backend for remote state
   # backend "s3" {
-  #   bucket         = "jarvis-terraform-state"
+  #   bucket         = "muldro-terraform-state"
   #   key            = "infra/terraform.tfstate"
   #   region         = "ap-south-1"
-  #   dynamodb_table = "jarvis-terraform-locks"
+  #   dynamodb_table = "muldro-terraform-locks"
   #   encrypt        = true
   # }
 }

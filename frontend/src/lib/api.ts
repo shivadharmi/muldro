@@ -1,4 +1,4 @@
-/** REST client for Jarvis backend API.
+/** REST client for Muldro backend API.
  *
  * All calls use the Next.js rewrite: /api/:path* -> backend /v1/:path*
  */
@@ -250,7 +250,7 @@ export async function streamChat(
   if (conversationId) body.conversation_id = conversationId;
   if (permissionMode) body.permission_mode = permissionMode;
 
-  const res = await fetch("/api/jarvis/chat", {
+  const res = await fetch("/api/muldro/chat", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -312,7 +312,7 @@ async function readSseStream(
 
 /**
  * Resume a chat turn the action-time permission gate PAUSED. Mirrors {@link streamChat} but
- * POSTs the user's decision to `/jarvis/chat/resume` and streams the continuation. The caller
+ * POSTs the user's decision to `/muldro/chat/resume` and streams the continuation. The caller
  * reuses the pre-pause assistant message and SUPPRESSES this stream's `message_id` frame so
  * the continuation stays in the SAME chat bubble (single-bubble continuity).
  */
@@ -332,7 +332,7 @@ export async function streamResume(
   if (reason) body.reason = reason;
   if (conversationId) body.conversation_id = conversationId;
 
-  const res = await fetch("/api/jarvis/chat/resume", {
+  const res = await fetch("/api/muldro/chat/resume", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -792,7 +792,7 @@ export interface UnifiedIntegration {
   install_id: string | null;
   // Stable slug identifier for the integration.
   slug?: string;
-  // Access scopes granted to Jarvis, a subset of read/write.
+  // Access scopes granted to Muldro, a subset of read/write.
   access_scopes?: ("read" | "write")[];
   // OpenConnector providers this installation fans out to when gateway-backed
   // (popup-poll connect flow); empty/absent = native OAuth redirect.

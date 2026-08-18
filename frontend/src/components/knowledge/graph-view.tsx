@@ -35,17 +35,17 @@ function resolveCssVar(varExpr: string): string {
 // ── Entity type colors ────────────────────────────────────────
 
 const ENTITY_TYPE_COLORS: Record<string, string> = {
-  person: "var(--jarvis-primary)",
-  organization: "var(--jarvis-secondary)",
-  project: "var(--jarvis-accent)",
-  document: "var(--jarvis-warning)",
-  repository: "var(--jarvis-error)",
+  person: "var(--muldro-primary)",
+  organization: "var(--muldro-secondary)",
+  project: "var(--muldro-accent)",
+  document: "var(--muldro-warning)",
+  repository: "var(--muldro-error)",
 };
 
-const DEFAULT_NODE_COLOR = "var(--jarvis-text-muted)";
-const SELECTED_GLOW_COLOR_VAR = "var(--jarvis-primary)";
+const DEFAULT_NODE_COLOR = "var(--muldro-text-muted)";
+const SELECTED_GLOW_COLOR_VAR = "var(--muldro-primary)";
 const LINK_DEFAULT_COLOR = "rgba(120, 130, 150, 0.3)";
-const LINK_HIGHLIGHT_COLOR = "var(--jarvis-primary)";
+const LINK_HIGHLIGHT_COLOR = "var(--muldro-primary)";
 const LABEL_COLOR = "rgba(200, 210, 220, 0.9)";
 
 function getNodeColor(type: string): string {
@@ -386,7 +386,7 @@ export function GraphView() {
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
           <EmptyState
             title="No graph data"
-            description="Connect sources and interact with Jarvis to build the knowledge graph"
+            description="Connect sources and interact with Muldro to build the knowledge graph"
           />
         </div>
       )}

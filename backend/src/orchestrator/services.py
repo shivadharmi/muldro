@@ -1,4 +1,4 @@
-"""ServiceContainer — typed container for all Jarvis services."""
+"""ServiceContainer — typed container for all Muldro services."""
 
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ if TYPE_CHECKING:
 
 @dataclass
 class ServiceContainer:
-    """Typed container for all Jarvis services.
+    """Typed container for all Muldro services.
 
     All fields are optional so the orchestrator degrades gracefully
     when a service fails to initialise.

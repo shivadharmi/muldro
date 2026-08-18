@@ -5,17 +5,17 @@ const SCREENSHOT_DIR = path.join(__dirname, "..", "screenshots");
 
 const DEMO_USER = {
   user_id: "usr_01KM2EMPNB8WYN2E2S286DJ52J",
-  email: "founder@jarvis.dev",
+  email: "founder@muldro.dev",
   display_name: "Demo Founder",
 };
-const DEMO_TOKEN = "demo-session-token-for-jarvis-ui-dev";
+const DEMO_TOKEN = "demo-session-token-for-muldro-ui-dev";
 
 async function loginAsDemo(page: Page) {
   await page.goto("/login");
   await page.evaluate(
     ({ token, user }) => {
-      localStorage.setItem("jarvis_auth_token", token);
-      localStorage.setItem("jarvis_auth_user", JSON.stringify(user));
+      localStorage.setItem("muldro_auth_token", token);
+      localStorage.setItem("muldro_auth_user", JSON.stringify(user));
     },
     { token: DEMO_TOKEN, user: DEMO_USER }
   );
@@ -361,7 +361,7 @@ test.describe("authenticated pages", () => {
 
     // Switch to light theme via JS
     await page.evaluate(() => {
-      localStorage.setItem("jarvis_theme", "light");
+      localStorage.setItem("muldro_theme", "light");
       document.documentElement.setAttribute("data-theme", "light");
     });
     await page.waitForTimeout(400);
@@ -369,7 +369,7 @@ test.describe("authenticated pages", () => {
 
     // Switch back to dark
     await page.evaluate(() => {
-      localStorage.setItem("jarvis_theme", "dark");
+      localStorage.setItem("muldro_theme", "dark");
       document.documentElement.setAttribute("data-theme", "dark");
     });
     await page.waitForTimeout(400);

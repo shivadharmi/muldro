@@ -237,8 +237,8 @@ export interface SurfaceUpdate {
   cost_usd?: number | null;
 }
 
-/** WebSocket message types from Jarvis backend */
-export type JarvisMessage =
+/** WebSocket message types from Muldro backend */
+export type MuldroMessage =
   | { type: "surface"; surface: WorkspaceSurfacePush }
   | {
       type: "notification";

@@ -24,7 +24,7 @@ def test_validate_startup_raises_when_anthropic_key_missing():
     )
     with pytest.raises(RuntimeError) as exc:
         s.validate_startup()
-    assert "JARVIS_ANTHROPIC_API_KEY" in str(exc.value)
+    assert "MULDRO_ANTHROPIC_API_KEY" in str(exc.value)
 
 
 def test_validate_startup_raises_when_oauth_key_missing_in_production():
@@ -35,7 +35,7 @@ def test_validate_startup_raises_when_oauth_key_missing_in_production():
     )
     with pytest.raises(RuntimeError) as exc:
         s.validate_startup()
-    assert "JARVIS_OAUTH_ENCRYPTION_KEY" in str(exc.value)
+    assert "MULDRO_OAUTH_ENCRYPTION_KEY" in str(exc.value)
 
 
 def test_validate_startup_passes_in_production_with_all_secrets():
@@ -74,7 +74,7 @@ def test_encrypt_token_raises_in_production_without_key():
     auth = _auth_service(environment="production", oauth_encryption_key="")
     with pytest.raises(RuntimeError) as exc:
         auth._encrypt_token("secret-access-token")
-    assert "JARVIS_OAUTH_ENCRYPTION_KEY" in str(exc.value)
+    assert "MULDRO_OAUTH_ENCRYPTION_KEY" in str(exc.value)
 
 
 def test_encrypt_token_allows_plaintext_in_development_without_key():

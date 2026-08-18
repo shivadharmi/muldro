@@ -1,6 +1,6 @@
 """Env-backed provider credentials count as configured in the model config.
 
-The behavior-preserving deployment seed uses the ``JARVIS_ANTHROPIC_API_KEY``
+The behavior-preserving deployment seed uses the ``MULDRO_ANTHROPIC_API_KEY``
 env var with NO ProviderCredential row. ``_provider_statuses`` must therefore
 treat a provider whose env fallback key is set as ``configured=True`` /
 ``status="valid"`` even when no credential row exists — otherwise the seeded

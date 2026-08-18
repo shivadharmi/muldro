@@ -5,7 +5,7 @@ approval) and its hand-typed input schema are declared -- OpenConnector's
 runtime ``get_action_guide`` exposes no machine-readable schema (see
 infra/gateway/spike-findings-guide.md and spike-findings-multiprovider.md).
 Each ``GatewayProvider`` binds a set of actions to the OC service that executes
-them and the Jarvis installation that serves them.
+them and the Muldro installation that serves them.
 
 Everything downstream DERIVES from this registry and restates nothing:
 adapter enforcement profiles, warm-start tool schemas, catalog seeds, MCP
@@ -106,7 +106,7 @@ def perception_sources_for_provider(provider_id: str) -> tuple[str, ...]:
 
 
 def providers_for_server(server_name: str) -> tuple[str, ...]:
-    """Return the OC provider ids served by a Jarvis installation, in registry order."""
+    """Return the OC provider ids served by a Muldro installation, in registry order."""
     return tuple(p.provider_id for p in _PROVIDERS if p.server_name == server_name)
 
 

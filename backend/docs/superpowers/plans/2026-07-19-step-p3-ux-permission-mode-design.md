@@ -16,10 +16,10 @@ Three read-only scouts mapped P3a/P3b/P3c; every load-bearing claim was re-read 
 (anchors as of the design pass; **re-verify by symbol name at build time**):
 
 1. **`write_todos` todos already stream to the frontend.** `write_todos` is a deepagents builtin
-   (`DEEPAGENTS_BUILTIN_NAMES`, `src/deep_runtime/builtins.py`); Jarvis has **no reader** of the
+   (`DEEPAGENTS_BUILTIN_NAMES`, `src/deep_runtime/builtins.py`); Muldro has **no reader** of the
    deepagents internal `todos` LangGraph state channel. But the todos array already flows through
    `src/deep_runtime/stream_adapter.py` as the `tool_call` frame's `input.todos` (and a matching
-   `tool_result`). `frontend/src/components/jarvis/chat-panel.tsx` already handles `tool_call` /
+   `tool_result`). `frontend/src/components/muldro/chat-panel.tsx` already handles `tool_call` /
    `tool_result` and renders a generic chip. ⟹ surfacing the todos is a **frontend interpretation of
    a frame that already exists**, not new data plumbing.
 
@@ -115,12 +115,12 @@ rewrite (R1), stay at the **Step-10 cutover / merge**, not here. No deep-path ac
 
 ### P3a — inline `write_todos` checklist (frontend-only)
 
-- **`frontend/src/components/jarvis/chat-panel.tsx`** — in the existing SSE `switch`, intercept the
+- **`frontend/src/components/muldro/chat-panel.tsx`** — in the existing SSE `switch`, intercept the
   `tool_call` (~:409) and `tool_result` (~:429) cases when `tool === "write_todos"`: route the
   `input.todos` array to a todos renderer instead of appending a generic tool chip (and suppress the
   matching `write_todos` result chip). Each `write_todos` call replaces the current list (live update
   in place).
-- **New `frontend/src/components/jarvis/chat-todos.tsx`** (small) — a checklist rendering each todo's
+- **New `frontend/src/components/muldro/chat-todos.tsx`** (small) — a checklist rendering each todo's
   content + status, reusing the visual language of `components/a2ui/components/execution-surface.tsx`'s
   `StepList` (status glyphs ○ ◉ ✓). Read-only display (matches Claude Code; not interactive/clickable).
 - **Backend: zero changes.**
@@ -137,7 +137,7 @@ rewrite (R1), stay at the **Step-10 cutover / merge**, not here. No deep-path ac
 - `src/api/routes_chat.py` — **remove `mode` from `ChatRequest`** (:47). The handler (~:433) passes a
   fixed `mode="ask"` into `process_message_events`, preserving today's interactive default. (`ChatRequest`
   also gains the optional `permission_mode` from P3c — sequenced there.)
-- `src/orchestrator/chat_processor.py` / `src/orchestrator/jarvis.py` — the internal `mode` param and
+- `src/orchestrator/chat_processor.py` / `src/orchestrator/muldro.py` — the internal `mode` param and
   the `:472/:540/:649` branches are **UNCHANGED**. Pinned callers (`schedule_dispatch.py`
   `custom_agent_task` `mode="execute"`; `routes_ws.py` surface-action / execute-insight `mode="ask"`)
   are byte-identical.
@@ -151,7 +151,7 @@ rewrite (R1), stay at the **Step-10 cutover / merge**, not here. No deep-path ac
   auto/ask/bypass with honest labels/descriptions; remove the plan/execute options (plan-preview UI
   gone).
 - `lib/api.ts` `streamChat` — send `permission_mode` in the POST body (replacing `mode`).
-- `components/jarvis/chat-panel.tsx` — send `permissionMode` from the store.
+- `components/muldro/chat-panel.tsx` — send `permissionMode` from the store.
 - Frontend `SurfaceKind` mirror (`lib/types/surfaces.ts`) — untouched (P3a adds no kind).
 
 **Live effect:** because `permission_mode` is inert on the legacy path, sending it has no functional
@@ -292,7 +292,7 @@ before the next. NOT pushed/merged. 12 commits `1394fe3`..`097b20b`.
 - **R1** — CLAUDE.md two-execution-paths invariant rewrite → at the merge/cutover (NOT before; doing it
   pre-cutover would describe a dormant path as the live invariant).
 - **Step-10 — the runtime cutover** — the only live/irreversible step: push/merge the whole rebuild to
-  `main`, flip `JARVIS_RUNTIME=deep` + `deep_single_lead` + `JARVIS_CHAT_PLANLESS` live, run deep
+  `main`, flip `MULDRO_RUNTIME=deep` + `deep_single_lead` + `MULDRO_CHAT_PLANLESS` live, run deep
   against prod with shadow-compare + rollback. Needs its own brainstorm → design → plan (plan-per-step
   model) and explicit sign-off at each irreversible gate. This lights up everything P3 built (the
   picker becomes functional, `write_todos` fires, the per-ws default takes effect).

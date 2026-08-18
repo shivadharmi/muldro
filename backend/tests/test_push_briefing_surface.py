@@ -72,7 +72,7 @@ class TestPushBriefingSurface:
         # (4) WS publish to the per-user a2ui channel, structured "surface" frame.
         mock_event_bus.publish_to_channel.assert_awaited_once()
         channel, ws_msg = mock_event_bus.publish_to_channel.call_args.args
-        assert channel == "jarvis:a2ui:usr_01"
+        assert channel == "muldro:a2ui:usr_01"
         payload = json.loads(ws_msg)
         assert payload["type"] == "surface"
         assert payload["surface"]["kind"] == "briefing"

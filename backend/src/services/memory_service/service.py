@@ -23,4 +23,4 @@ class MemoryService(
     MemoryStability,
     MemoryServiceBase,
 ):
-    """Manage Jarvis long-term memory (episodic, semantic, preference, behavioral)."""
+    """Manage Muldro long-term memory (episodic, semantic, preference, behavioral)."""

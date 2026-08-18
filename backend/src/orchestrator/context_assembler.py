@@ -1,6 +1,6 @@
 """ContextAssembler — builds ambient context blocks for agent prompts.
 
-Extracted from ``JarvisOrchestrator`` (god-object decomposition, 2026-06-19).
+Extracted from ``MuldroOrchestrator`` (god-object decomposition, 2026-06-19).
 A leaf collaborator: it loads conversation history (summarizing overflow via
 Haiku through the shared LLM seam), connected-integration identities, and a
 ``ContextPack`` from the ``ContextBuilder``, returning prompt-ready text. Depends

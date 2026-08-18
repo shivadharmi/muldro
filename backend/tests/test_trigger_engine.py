@@ -52,7 +52,7 @@ def _make_bus_event(
 ):
     return BusEvent(
         event_id="be_test",
-        stream=f"jarvis:events:{TEST_USER_ID}",
+        stream=f"muldro:events:{TEST_USER_ID}",
         event_type=event_type,
         user_id=user_id,
         payload={

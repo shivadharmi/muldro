@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock
 from src.api.routes_approvals import _mark_run_failed_after_resume
 from src.models.task_graph import TaskRun
 
-SECRET = "postgres://admin:hunter2@db.internal:5432/jarvis"
+SECRET = "postgres://admin:hunter2@db.internal:5432/muldro"
 
 
 async def test_mark_run_failed_after_resume_does_not_leak_exception():

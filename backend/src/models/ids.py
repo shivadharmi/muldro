@@ -1,4 +1,4 @@
-"""Typed ID generation and validation for Jarvis entities.
+"""Typed ID generation and validation for Muldro entities.
 
 All IDs follow the pattern: {prefix}_{ULID}
 - prefix: 2-5 char type indicator (usr, evt, mem, plan, exec, apr, etc.)

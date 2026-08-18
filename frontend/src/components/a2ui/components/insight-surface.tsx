@@ -7,7 +7,7 @@ import { useSurfaceStore } from "@/stores/surface-store";
 import { useWsActionStore } from "@/stores/ws-action-store";
 import { Tooltip } from "@/components/ui/tooltip";
 import { Modal } from "@/components/ui/modal";
-import { InlineMarkdown } from "@/components/jarvis/markdown-renderer";
+import { InlineMarkdown } from "@/components/muldro/markdown-renderer";
 import { SourceIcon } from "@/components/integrations/source-icon";
 
 interface InsightSurfaceProps {

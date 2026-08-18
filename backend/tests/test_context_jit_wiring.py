@@ -1,7 +1,7 @@
 """Step 8 P2: flag-wiring for the slim JIT context pack + negative controls.
 
 ``deep_context_jit`` is dormant by default (``False``). It only takes effect on the
-deep chat runtime (``JARVIS_RUNTIME=deep``) AND only for agents in
+deep chat runtime (``MULDRO_RUNTIME=deep``) AND only for agents in
 ``JIT_ENABLED_AGENTS`` (the agents that hold the JIT read tools). Presenter/Executor
 lack world-model reads, so they keep the eager pack even when the flag is on.
 
@@ -15,7 +15,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from src.orchestrator.agent_invoker import AgentInvoker
 from src.orchestrator.agents import SubAgent
 from src.orchestrator.context_assembler import JIT_ENABLED_AGENTS
-from src.orchestrator.prompts import JARVIS_SOUL_CORE
+from src.orchestrator.prompts import MULDRO_SOUL_CORE
 from tests.conftest import make_mock_settings
 
 
@@ -83,7 +83,7 @@ async def _drive_deep(invoker: AgentInvoker, agent_name: str) -> None:
         patch("src.orchestrator.agent_invoker.build_deep_agent", new=AsyncMock()),
         patch("src.orchestrator.agent_invoker.build_tool_shells", return_value=["SHELL"]),
         patch(
-            "src.orchestrator.agent_invoker.make_jarvis_tool_dispatcher",
+            "src.orchestrator.agent_invoker.make_muldro_tool_dispatcher",
             return_value=object(),
         ),
         patch(
@@ -147,7 +147,7 @@ def test_build_system_prompt_two_block_cache_layout_survives_slim_context():
 
     assert len(blocks) == 2
     assert blocks[0]["cache_control"] == {"type": "ephemeral"}
-    assert JARVIS_SOUL_CORE in blocks[0]["text"]
+    assert MULDRO_SOUL_CORE in blocks[0]["text"]
     assert "role" in blocks[0]["text"]
     assert blocks[1]["text"] == slim_context
     assert "cache_control" not in blocks[1]

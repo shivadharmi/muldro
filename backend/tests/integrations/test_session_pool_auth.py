@@ -3,7 +3,7 @@ branch must derive each installation's capability set from the gateway_actions
 registry, not a hardcoded Gmail-only list.
 
 The registry (`src.integrations.gateway_actions.capabilities_for_server`) is
-the single source of truth for what capabilities a Jarvis installation
+the single source of truth for what capabilities a Muldro installation
 serves: `google-workspace` -> gmail + googlecalendar (email.* + calendar.*),
 `github` -> github (issue.* + repo.* + search-ish repo capabilities). These
 sets are disjoint. The platform JWT's `capabilities` claim IS the

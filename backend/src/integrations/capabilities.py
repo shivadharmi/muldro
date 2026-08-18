@@ -1,6 +1,6 @@
-"""Canonical capability catalog for Jarvis integrations.
+"""Canonical capability catalog for Muldro integrations.
 
-Every tool Jarvis can invoke maps to a canonical capability string (e.g. "email.send",
+Every tool Muldro can invoke maps to a canonical capability string (e.g. "email.send",
 "calendar.list", "repo.create_pr"). The catalog is the single source of truth for:
 
 1. CapabilityFamily — the 11 top-level capability families
@@ -208,7 +208,7 @@ CAPABILITY_CATALOG: dict[str, CapabilityMeta] = {
     # System meta-tools (Spec 1A)
     "system.discovery": _cap(CapabilityFamily.SYSTEM, True, "none"),
     # System action capabilities (P2.5a) — promoted from Planner-step-strings to internal
-    # MCP tools. Writes into Jarvis's own data layer (the user's memory/goals/schedule);
+    # MCP tools. Writes into Muldro's own data layer (the user's memory/goals/schedule);
     # ALWAYS-ALLOWED on the chat path (exempt from permission_gate + write_lock, D5).
     "system.set_goal": _cap(CapabilityFamily.SYSTEM, False, "low"),
     "system.set_instruction": _cap(CapabilityFamily.SYSTEM, False, "low"),

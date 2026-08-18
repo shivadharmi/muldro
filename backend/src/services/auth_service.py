@@ -246,7 +246,7 @@ class AuthService:
         if not key:
             if is_production:
                 raise RuntimeError(
-                    "JARVIS_OAUTH_ENCRYPTION_KEY is required in production — refusing to "
+                    "MULDRO_OAUTH_ENCRYPTION_KEY is required in production — refusing to "
                     "store an OAuth token as plaintext."
                 )
             logger.warning("No oauth_encryption_key set — storing token as-is")

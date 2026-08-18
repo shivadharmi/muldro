@@ -386,7 +386,7 @@ def _installation_to_config(inst: Any) -> dict:
             raise GatewayNotConfigured(
                 f"Installation '{inst.server_name}' declares auth_provider="
                 "'platform_jwt' but settings.toolhive_vmcp_url is not set (env "
-                "JARVIS_TOOLHIVE_VMCP_URL). There is no native fallback for "
+                "MULDRO_TOOLHIVE_VMCP_URL). There is no native fallback for "
                 "gateway-routed installations -- set the vMCP URL or disable "
                 "the installation."
             )

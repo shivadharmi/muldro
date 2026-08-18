@@ -1,6 +1,6 @@
 """Typed event vocabulary for the unified chat-orchestration core (ORCH-P1-1).
 
-`JarvisOrchestrator._process_core` drives the single intent → plan → route →
+`MuldroOrchestrator._process_core` drives the single intent → plan → route →
 execute → present → surface → learn pipeline and yields these ``CoreEvent``s.
 Two thin adapters consume the same stream:
 

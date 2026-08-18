@@ -25,7 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
 
-intelligence = FastMCP("jarvis-intelligence")
+intelligence = FastMCP("muldro-intelligence")
 
 # Runtime dependencies, set by configure() at orchestrator startup.
 # _db_factory is a TEST-ONLY override; production passes None (see module docstring

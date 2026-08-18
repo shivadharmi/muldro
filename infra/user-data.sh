@@ -1,8 +1,8 @@
 #!/bin/bash
 set -euo pipefail
 
-exec > >(tee /var/log/jarvis-setup.log) 2>&1
-echo "=== Jarvis bootstrap started at $(date -u) ==="
+exec > >(tee /var/log/muldro-setup.log) 2>&1
+echo "=== Muldro bootstrap started at $(date -u) ==="
 
 DOMAIN="${domain}"
 AWS_REGION="${aws_region}"
@@ -177,7 +177,7 @@ POSTGRES_PASSWORD="$POSTGRES_PASSWORD" docker compose -f docker-compose.prod.yml
 # Wait for Postgres to be ready
 echo "Waiting for Postgres..."
 for i in $(seq 1 30); do
-  if docker compose -f docker-compose.prod.yml exec -T postgres pg_isready -U jarvis >/dev/null 2>&1; then
+  if docker compose -f docker-compose.prod.yml exec -T postgres pg_isready -U muldro >/dev/null 2>&1; then
     echo "Postgres is ready"
     break
   fi
@@ -186,25 +186,25 @@ done
 
 # Enable pgvector extension
 docker compose -f docker-compose.prod.yml exec -T postgres \
-  psql -U jarvis -d jarvis -c "CREATE EXTENSION IF NOT EXISTS vector;"
+  psql -U muldro -d muldro -c "CREATE EXTENSION IF NOT EXISTS vector;"
 
 # ============================================================
-# Phase 6: Set up Jarvis backend
+# Phase 6: Set up Muldro backend
 # ============================================================
-echo "=== Phase 6: Setting up Jarvis backend ==="
+echo "=== Phase 6: Setting up Muldro backend ==="
 
 # Create .env file
 cat > "$INSTALL_DIR/backend/.env" <<ENVEOF
-JARVIS_DATABASE_URL=postgresql+asyncpg://jarvis:$POSTGRES_PASSWORD@127.0.0.1:5432/jarvis
-JARVIS_REDIS_URL=redis://127.0.0.1:6379/0
-JARVIS_ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY
-JARVIS_VOYAGE_API_KEY=$VOYAGE_API_KEY
-JARVIS_BACKEND_TOKEN=$BACKEND_TOKEN
-JARVIS_HOST=127.0.0.1
-JARVIS_PORT=8000
-JARVIS_USE_BEDROCK=true
-JARVIS_BEDROCK_REGION=$AWS_REGION
-JARVIS_ANTHROPIC_MODEL=apac.anthropic.claude-sonnet-4-20250514-v1:0
+MULDRO_DATABASE_URL=postgresql+asyncpg://muldro:$POSTGRES_PASSWORD@127.0.0.1:5432/muldro
+MULDRO_REDIS_URL=redis://127.0.0.1:6379/0
+MULDRO_ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY
+MULDRO_VOYAGE_API_KEY=$VOYAGE_API_KEY
+MULDRO_BACKEND_TOKEN=$BACKEND_TOKEN
+MULDRO_HOST=127.0.0.1
+MULDRO_PORT=8000
+MULDRO_USE_BEDROCK=true
+MULDRO_BEDROCK_REGION=$AWS_REGION
+MULDRO_ANTHROPIC_MODEL=apac.anthropic.claude-sonnet-4-20250514-v1:0
 ENVEOF
 chmod 600 "$INSTALL_DIR/backend/.env"
 
@@ -212,7 +212,7 @@ chmod 600 "$INSTALL_DIR/backend/.env"
 sudo -u ubuntu bash -c "curl -LsSf https://astral.sh/uv/install.sh | sh"
 
 # Set up Python environment and run migrations
-DB_URL="postgresql+asyncpg://jarvis:$POSTGRES_PASSWORD@127.0.0.1:5432/jarvis"
+DB_URL="postgresql+asyncpg://muldro:$POSTGRES_PASSWORD@127.0.0.1:5432/muldro"
 sudo -u ubuntu sed -i "s|sqlalchemy.url = .*|sqlalchemy.url = $DB_URL|" "$INSTALL_DIR/backend/alembic.ini"
 
 sudo -u ubuntu bash -c "
@@ -225,9 +225,9 @@ sudo -u ubuntu bash -c "
 "
 
 # Create systemd service for backend
-cat > /etc/systemd/system/jarvis-backend.service <<SVCEOF
+cat > /etc/systemd/system/muldro-backend.service <<SVCEOF
 [Unit]
-Description=Jarvis Backend (FastAPI + Worker)
+Description=Muldro Backend (FastAPI + Worker)
 After=network.target docker.service
 Wants=docker.service
 
@@ -243,15 +243,15 @@ Restart=always
 RestartSec=5
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=jarvis-backend
+SyslogIdentifier=muldro-backend
 
 [Install]
 WantedBy=multi-user.target
 SVCEOF
 
 systemctl daemon-reload
-systemctl enable jarvis-backend
-systemctl start jarvis-backend
+systemctl enable muldro-backend
+systemctl start muldro-backend
 
 # ============================================================
 # Phase 7: Set up Caddy reverse proxy
@@ -262,12 +262,12 @@ mkdir -p /var/log/caddy
 
 cat > /etc/caddy/Caddyfile <<CADDYEOF
 $DOMAIN {
-    # Jarvis backend API
+    # Muldro backend API
     handle /v1/* {
         reverse_proxy localhost:8000
     }
 
-    # Default: Jarvis backend
+    # Default: Muldro backend
     handle {
         reverse_proxy localhost:8000
     }
@@ -305,9 +305,9 @@ cp "$INSTALL_DIR/infra/scripts/backup-postgres.sh" /usr/local/bin/backup-postgre
 chmod +x /usr/local/bin/backup-postgres.sh
 
 # Daily backup cron at 3am
-echo "0 3 * * * root /usr/local/bin/backup-postgres.sh" > /etc/cron.d/jarvis-backup
+echo "0 3 * * * root /usr/local/bin/backup-postgres.sh" > /etc/cron.d/muldro-backup
 
-echo "=== Jarvis bootstrap completed at $(date -u) ==="
-echo "Services: caddy, jarvis-backend"
+echo "=== Muldro bootstrap completed at $(date -u) ==="
+echo "Services: caddy, muldro-backend"
 echo "Logs: journalctl -u <service> -f"
-echo "Bootstrap log: /var/log/jarvis-setup.log"
+echo "Bootstrap log: /var/log/muldro-setup.log"

@@ -1,9 +1,9 @@
 """SPIKE probe (Step 7B2, Phase 0.1/0.2/0.3 — DECISION GATE): prove, fully OFFLINE,
-that a read-only Jarvis delegate registered via ``create_deep_agent(subagents=[...])``:
+that a read-only Muldro delegate registered via ``create_deep_agent(subagents=[...])``:
 
   0.1  runs GATED when invoked through the built-in ``task`` tool — its OWN
        ``capability_scope`` guard denies an out-of-scope read and its OWN
-       ``jarvis_tool_dispatcher`` executes an in-scope read (never the tripwire
+       ``muldro_tool_dispatcher`` executes an in-scope read (never the tripwire
        shell). Tested BOTH build methods (A = ``CompiledSubAgent{runnable}`` from
        ``build_deep_agent``; B = raw ``SubAgent`` dict with ``middleware=[...]``).
 
@@ -57,13 +57,13 @@ from langchain_core.messages.tool import tool_call_chunk
 from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
 from langgraph.checkpoint.memory import MemorySaver
 
-# The seams under test (all REAL Jarvis deep-runtime code).
+# The seams under test (all REAL Muldro deep-runtime code).
 import src.deep_runtime.agent_builder as agent_builder
 import src.deep_runtime.middleware.capability_scope as capability_scope_mod
-from src.deep_runtime.middleware.jarvis_tool_dispatcher import make_jarvis_tool_dispatcher
+from src.deep_runtime.middleware.muldro_tool_dispatcher import make_muldro_tool_dispatcher
 from src.deep_runtime.stream_adapter import stream_deep_agent_events
 from src.deep_runtime.tool_bridge import build_tool_shells
-from src.orchestrator.agents import SubAgent as JarvisSubAgent
+from src.orchestrator.agents import SubAgent as MuldroSubAgent
 from src.orchestrator.agents import create_sub_agents
 
 WS = "ws_spike_7b2"
@@ -308,7 +308,7 @@ _CHILD_SHELLS = build_tool_shells(
 )
 
 
-def _perceiver_cfg() -> JarvisSubAgent:
+def _perceiver_cfg() -> MuldroSubAgent:
     return create_sub_agents()["perceiver"]
 
 
@@ -317,14 +317,14 @@ def _child_dispatcher(recorder: list[tuple[str, dict]]):
         recorder.append((name, args))
         return {"results": ["r1", "r2"], "count": 42}
 
-    return make_jarvis_tool_dispatcher(execute_tool=_execute, user_id=USER, workspace_id=WS)
+    return make_muldro_tool_dispatcher(execute_tool=_execute, user_id=USER, workspace_id=WS)
 
 
 async def _build_child_method_a(recorder: list, *, with_scope: bool = True):
     """Method A: CompiledSubAgent{runnable=build_deep_agent(...)} — gate baked in."""
     cfg = _perceiver_cfg()
     if not with_scope:
-        cfg = JarvisSubAgent(
+        cfg = MuldroSubAgent(
             name=cfg.name, prompt=cfg.prompt, model_tier=cfg.model_tier, capability_scope=set()
         )
     # Inject the child fake as the compiled model; short-circuit the DB write-cap precheck
@@ -360,7 +360,7 @@ def _build_child_method_b(recorder: list, *, with_scope: bool = True):
     """Method B: raw SubAgent dict carrying its own middleware=[capability_scope, dispatcher]."""
     cfg = _perceiver_cfg()
     if not with_scope:
-        cfg = JarvisSubAgent(
+        cfg = MuldroSubAgent(
             name=cfg.name, prompt=cfg.prompt, model_tier=cfg.model_tier, capability_scope=set()
         )
     mw = []

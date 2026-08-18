@@ -2,7 +2,7 @@
 7C ``readback`` middleware mechanism works end-to-end on the deep runtime.
 
 7C will add a NEW ``@wrap_tool_call`` middleware ``readback`` placed INNER of
-``write_lock`` and OUTER of the central ``jarvis_tool_dispatcher`` (so the chain is
+``write_lock`` and OUTER of the central ``muldro_tool_dispatcher`` (so the chain is
 ``... → write_lock → readback → dispatcher``). For an irreversible write it runs the
 tool via ``await handler(request)`` — the dispatcher executes and returns a BARE
 ``ToolMessage`` — then ANNOTATES a ``verification`` key onto the ToolMessage's
@@ -66,7 +66,7 @@ from spikes.deep_delegate.subagent_gated_probe import (  # noqa: E402
     ScriptedModel,
     _usage_chunk,
 )
-from src.deep_runtime.middleware.jarvis_tool_dispatcher import make_jarvis_tool_dispatcher
+from src.deep_runtime.middleware.muldro_tool_dispatcher import make_muldro_tool_dispatcher
 from src.deep_runtime.middleware.write_lock import make_write_lock_middleware
 from src.deep_runtime.stream_adapter import stream_deep_agent_events
 from src.deep_runtime.tool_bridge import build_tool_shells
@@ -79,7 +79,7 @@ DISPATCHER_PAYLOAD = {"message_id": "m1"}  # what execute_tool returns (a bare s
 
 
 # ---------------------------------------------------------------------------
-# Lead: one turn calling the stub Jarvis write tool, then a terminal reply.
+# Lead: one turn calling the stub Muldro write tool, then a terminal reply.
 # ---------------------------------------------------------------------------
 def _lead_write_turns() -> list[list[AIMessageChunk]]:
     return [
@@ -133,7 +133,7 @@ def _dispatcher():
     async def _execute(name: str, args: dict, user_id: str, workspace_id: str) -> dict:  # noqa: ARG001
         return dict(DISPATCHER_PAYLOAD)
 
-    return make_jarvis_tool_dispatcher(execute_tool=_execute, user_id=USER, workspace_id=WS)
+    return make_muldro_tool_dispatcher(execute_tool=_execute, user_id=USER, workspace_id=WS)
 
 
 async def _no_cap(_name: str) -> str | None:

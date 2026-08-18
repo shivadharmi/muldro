@@ -99,7 +99,7 @@ function LoginForm() {
       />
       <div className="w-full max-w-[400px] space-y-8 relative">
         <div className="text-center">
-          <h1 className="text-3xl font-semibold tracking-tight brand-gradient-text inline-block">Jarvis</h1>
+          <h1 className="text-3xl font-semibold tracking-tight brand-gradient-text inline-block">Muldro</h1>
           <p className="mt-1.5 text-sm text-t-tertiary">Personal AI Operating System</p>
         </div>
 
@@ -214,9 +214,9 @@ function LoginForm() {
               <button
                 type="button"
                 onClick={() => {
-                  login("demo-session-token-for-jarvis-ui-dev", {
+                  login("demo-session-token-for-muldro-ui-dev", {
                     user_id: "usr_01KM2EMPNB8WYN2E2S286DJ52J",
-                    email: "founder@jarvis.dev",
+                    email: "founder@muldro.dev",
                     display_name: "Demo Founder",
                   });
                   router.push("/");

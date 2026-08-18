@@ -1,7 +1,7 @@
 """Fernet encryption for UI-entered provider credentials at rest.
 
 Mirrors the Fernet convention in src/services/oauth_manager.py, but keyed by
-JARVIS_CONFIG_ENCRYPTION_KEY so provider-credential secrets rotate independently
+MULDRO_CONFIG_ENCRYPTION_KEY so provider-credential secrets rotate independently
 of the OAuth-token key.
 """
 
@@ -20,7 +20,7 @@ def _fernet() -> Fernet:
     key = _config_key()
     if not key:
         raise RuntimeError(
-            "JARVIS_CONFIG_ENCRYPTION_KEY not set. Generate one: "
+            "MULDRO_CONFIG_ENCRYPTION_KEY not set. Generate one: "
             'python -c "from cryptography.fernet import Fernet; '
             'print(Fernet.generate_key().decode())"'
         )

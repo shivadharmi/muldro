@@ -1,8 +1,8 @@
-"""JarvisOrchestrator — the consciousness of Jarvis.
+"""MuldroOrchestrator — the consciousness of Muldro.
 
 Routes user messages and system events to the right sub-agents,
 manages traces, enforces budgets, and coordinates the intelligence loop.
-This is the main entry point for all Jarvis interactions.
+This is the main entry point for all Muldro interactions.
 """
 
 import asyncio
@@ -64,8 +64,8 @@ AGENT_EVENT_TYPES = {
 # _fetch_thread_contexts now lives in perception_runner.py (its only consumer).
 
 
-class JarvisOrchestrator:
-    """The Jarvis brain — orchestrates sub-agents via Claude API.
+class MuldroOrchestrator:
+    """The Muldro brain — orchestrates sub-agents via Claude API.
 
     Sub-agents run on the LangChain / Deep-Agents runtime (``src/llm`` +
     ``src/deep_runtime``); each routed agent gets its own prompt + tool scope.
@@ -89,7 +89,7 @@ class JarvisOrchestrator:
             redis=getattr(services, "redis", None) if services else None,
         )
         # Start with hardcoded defaults, applying cheap mode (opus→sonnet +
-        # halved thinking budgets) when JARVIS_CHEAP_MODE is set.
+        # halved thinking budgets) when MULDRO_CHEAP_MODE is set.
         self._agents: dict[str, SubAgent] = build_agent_set(AGENTS, settings.cheap_mode)
 
         # Collaborators resolve db_factory through a provider so this orchestrator

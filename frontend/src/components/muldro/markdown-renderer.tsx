@@ -94,14 +94,14 @@ const components: Components = {
       checked={checked}
       disabled={disabled}
       readOnly
-      className="mr-1.5 accent-[var(--jarvis-primary)]"
+      className="mr-1.5 accent-[var(--muldro-primary)]"
     />
   ),
 };
 
 export function MarkdownRenderer({ content }: { content: string }) {
   return (
-    <div className="prose-jarvis">
+    <div className="prose-muldro">
       <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
         {content}
       </ReactMarkdown>

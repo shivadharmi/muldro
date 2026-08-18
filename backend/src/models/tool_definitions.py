@@ -20,7 +20,7 @@ class ToolBackend(StrEnum):
 
     INTERNAL_MCP = "internal_mcp"  # intelligence / communication FastMCP servers
     EXTERNAL_MCP = "external_mcp"  # external MCP connectors (Google, GitHub, ...)
-    COMPOSITE = "composite"  # Jarvis-internal composite tools (e.g. web_search)
+    COMPOSITE = "composite"  # Muldro-internal composite tools (e.g. web_search)
     SPECIAL = "special"  # inline passthrough, no MCP call (report_governor_verdict)
 
 

@@ -84,7 +84,7 @@ async def handle_execute_action(db: AsyncSession, *, token: str, args: dict) -> 
         account_alias=args.get("account_alias"),
     )
     outbound = force_connection_name(args, forced)  # 3. force connectionName
-    outbound.pop("account_alias", None)  # do not forward the Jarvis hint
+    outbound.pop("account_alias", None)  # do not forward the Muldro hint
     result = await call_openconnector("execute_action", outbound)  # 6a. forward
     return strip_secrets(_result_to_dict(result))  # 6b. normalize + strip secrets
 

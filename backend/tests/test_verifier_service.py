@@ -344,7 +344,7 @@ class TestLLMJudgeNonJSONResponse:
 
 class TestLLMJudgeAdaptiveThinkingContract:
     """Regression: adaptive-thinking models (Sonnet 4.6, Opus 4.7/4.8 — every model
-    Jarvis runs) reject a conversation that ends with an assistant message with a
+    Muldro runs) reject a conversation that ends with an assistant message with a
     400 ``does not support assistant message prefill``. The old ``prefill='{'`` path
     produced exactly that, so the judge silently caught the 400 and always returned
     False (verification was 100% broken). Drive the real chain through a model that

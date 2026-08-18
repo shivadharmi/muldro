@@ -44,7 +44,7 @@ test("streamResume POSTs the decision to /chat/resume and parses SSE frames", as
 
   // POST shape: routes to /chat/resume with the decision + reason + conversation.
   const [url, init] = fetchMock.mock.calls[0];
-  expect(url).toBe("/api/jarvis/chat/resume");
+  expect(url).toBe("/api/muldro/chat/resume");
   expect((init as RequestInit).method).toBe("POST");
   const body = JSON.parse((init as RequestInit).body as string);
   expect(body).toMatchObject({

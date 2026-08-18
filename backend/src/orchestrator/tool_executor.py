@@ -1,6 +1,6 @@
 """ToolExecutor — builds tool definitions and dispatches tool calls.
 
-Extracted from ``JarvisOrchestrator`` (god-object decomposition, 2026-06-19).
+Extracted from ``MuldroOrchestrator`` (god-object decomposition, 2026-06-19).
 Owns the registry-driven dispatch (internal FastMCP / external MCP / composite),
 the agent-scoped tool list builder, and the in-process FastMCP client. Depends on
 ``EventPublisher`` (for tool.started/completed/failed events) and resolves the DB
@@ -20,7 +20,7 @@ from src.tools.schemas import build_tool_definitions
 logger = logging.getLogger(__name__)
 
 # Contextual args the dispatcher may inject into internal MCP tools. These are
-# supplied by Jarvis (from auth/turn context), never invented by the LLM, so the
+# supplied by Muldro (from auth/turn context), never invented by the LLM, so the
 # LLM-facing schemas in schemas.py deliberately omit them.
 _CONTEXT_ARGS = ("user_id", "workspace_id")
 
@@ -296,11 +296,11 @@ class ToolExecutor:
         """
         from fastmcp import Client
 
-        from src.tools.server import jarvis_tools
+        from src.tools.server import muldro_tools
 
         # Lazy-init: create and cache the in-process client
         if self._internal_client is None:
-            self._internal_client_ctx = Client(jarvis_tools)
+            self._internal_client_ctx = Client(muldro_tools)
             self._internal_client = await self._internal_client_ctx.__aenter__()
 
         # Map flat name to namespaced name (server-specific prefix)
@@ -420,7 +420,7 @@ class ToolExecutor:
                         workspace_id=workspace_id,
                     )
                 case ToolBackend.COMPOSITE:
-                    # Composite tools are Jarvis-internal, receive workspace_id
+                    # Composite tools are Muldro-internal, receive workspace_id
                     if workspace_id and "workspace_id" not in tool_input:
                         tool_input = {**tool_input, "workspace_id": workspace_id}
                     result = await self.call_composite_tool(

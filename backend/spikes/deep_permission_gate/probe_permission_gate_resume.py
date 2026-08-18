@@ -37,7 +37,7 @@ None of them cover TOGETHER the two P2 unknowns:
   (seeing the tool result) and after a REJECTION ToolMessage, does the lead still compose a
   terminal user-facing reply?
 
-Run (from backend/, needs JARVIS_ANTHROPIC_API_KEY in .env + USE_BEDROCK=false + a reachable
+Run (from backend/, needs MULDRO_ANTHROPIC_API_KEY in .env + USE_BEDROCK=false + a reachable
 Postgres — same infra the durable resume test uses):
     uv run python spikes/deep_permission_gate/probe_permission_gate_resume.py
 
@@ -110,7 +110,7 @@ from src.deep_runtime.stream_adapter import stream_deep_agent_events
 from src.deep_runtime.thread_identity import make_thread_id
 from src.integrations.capabilities import is_read_only_capability
 from src.orchestrator.agents import SubAgent, ThinkingConfig
-from src.orchestrator.prompts import JARVIS_SOUL_CORE, LEAD_PROMPT, PRESENTER_VOICE
+from src.orchestrator.prompts import MULDRO_SOUL_CORE, LEAD_PROMPT, PRESENTER_VOICE
 from src.services.risk_assessor import RiskAssessment
 
 # ---------------------------------------------------------------------------
@@ -133,7 +133,7 @@ def send_email(to: str, subject: str, body: str) -> str:
 CAPABILITY_OF = {"send_email": "email.send"}
 
 WS_ID = "ws_permgate_spike"
-SYSTEM_TEXT = f"{JARVIS_SOUL_CORE}\n\n--- YOUR ROLE ---\n{LEAD_PROMPT}\n\n{PRESENTER_VOICE}"
+SYSTEM_TEXT = f"{MULDRO_SOUL_CORE}\n\n--- YOUR ROLE ---\n{LEAD_PROMPT}\n\n{PRESENTER_VOICE}"
 
 ASK_EMAIL_MSG = (
     "Send an email to alice@example.com with subject 'Meeting confirmed' telling her the "
@@ -466,7 +466,7 @@ async def main() -> int:
         print("SKIP: USE_BEDROCK=true — this probe needs the direct Anthropic API.")
         return 0
     if not settings.anthropic_api_key:
-        print("SKIP: JARVIS_ANTHROPIC_API_KEY not set.")
+        print("SKIP: MULDRO_ANTHROPIC_API_KEY not set.")
         return 0
     if not await _db_reachable():
         print("SKIP: Postgres not reachable (needed for the durable AsyncPostgresSaver proof).")

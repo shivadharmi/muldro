@@ -4,7 +4,7 @@ import { renderHook, act } from "@testing-library/react";
 // Token always present so onopen sends the auth frame.
 vi.mock("@/lib/auth", () => ({ getStoredToken: () => "tok" }));
 
-import { useJarvisWs } from "./use-jarvis-ws";
+import { useMuldroWs } from "./use-muldro-ws";
 
 class MockWebSocket {
   static instances: MockWebSocket[] = [];
@@ -51,7 +51,7 @@ afterEach(() => {
 });
 
 test("auth_error halts the reconnect loop instead of retrying forever", () => {
-  renderHook(() => useJarvisWs({ userId: "u1", enabled: true }));
+  renderHook(() => useMuldroWs({ userId: "u1", enabled: true }));
   expect(MockWebSocket.instances.length).toBe(1);
   const ws = MockWebSocket.instances[0];
 
@@ -73,7 +73,7 @@ test("auth_error halts the reconnect loop instead of retrying forever", () => {
 
 test("auth_error surfaces the failure via onError", () => {
   const onError = vi.fn();
-  renderHook(() => useJarvisWs({ userId: "u1", enabled: true, onError }));
+  renderHook(() => useMuldroWs({ userId: "u1", enabled: true, onError }));
   const ws = MockWebSocket.instances[0];
 
   act(() => {
@@ -86,7 +86,7 @@ test("auth_error surfaces the failure via onError", () => {
 });
 
 test("a transient close (not auth) still reconnects", () => {
-  renderHook(() => useJarvisWs({ userId: "u1", enabled: true }));
+  renderHook(() => useMuldroWs({ userId: "u1", enabled: true }));
   const ws = MockWebSocket.instances[0];
 
   act(() => {

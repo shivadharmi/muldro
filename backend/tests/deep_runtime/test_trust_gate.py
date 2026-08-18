@@ -1,7 +1,7 @@
 """Step 6B: trust_gate middleware — THE ONE approval gate on the deep chat runtime.
 
 The gate is a ``wrap_tool_call`` interceptor placed BETWEEN capability_scope (outer)
-and jarvis_tool_dispatcher (inner). By the time it runs, capability_scope has already
+and muldro_tool_dispatcher (inner). By the time it runs, capability_scope has already
 authorized the tool, so the gate never re-checks scope.
 
 Two flavours of test:
@@ -9,7 +9,7 @@ Two flavours of test:
 * Non-interrupt branches (short-circuit / builtin / read / auto-execute) are driven
   DIRECTLY via ``mw.awrap_tool_call(request, handler)`` — no graph runtime needed
   (``interrupt()`` is never reached on those paths). This mirrors
-  ``test_capability_scope.py`` / ``test_jarvis_tool_dispatcher.py``.
+  ``test_capability_scope.py`` / ``test_muldro_tool_dispatcher.py``.
 
 * Interrupt branches (irreversible-write approve / reject) require the LangGraph
   runtime, so they build a real ``create_deep_agent`` with a fake scripted streaming

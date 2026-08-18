@@ -218,7 +218,7 @@ async def test_capability_scope_exempts_builtin_write_todos(handler):
     The built-in check must short-circuit BEFORE _is_in_scope so ToolRegistry
     is never consulted for names in DEEPAGENTS_BUILTIN_NAMES.
     """
-    # Narrow scope that would deny any real Jarvis tool.
+    # Narrow scope that would deny any real Muldro tool.
     agent = _agent({"calendar.read"})
     mw = make_capability_scope_middleware(
         agent=agent, workspace_id=WORKSPACE_ID, db_factory=_fake_db_factory()
@@ -264,8 +264,8 @@ async def test_capability_scope_exempts_all_builtins(handler):
     registry.get_tool.assert_not_awaited()
 
 
-async def test_capability_scope_still_denies_unknown_out_of_scope_jarvis_tool(handler):
-    """A genuinely out-of-scope Jarvis tool is DENIED even after builtins are exempt.
+async def test_capability_scope_still_denies_unknown_out_of_scope_muldro_tool(handler):
+    """A genuinely out-of-scope Muldro tool is DENIED even after builtins are exempt.
 
     Confirms that adding the built-in exemption did not break the existing
     fail-closed denial path for real (non-builtin) tool names.

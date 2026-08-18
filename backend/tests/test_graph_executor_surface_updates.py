@@ -54,7 +54,7 @@ class TestEmitSurfaceUpdate:
         )
         redis.publish.assert_called_once()
         channel, payload = redis.publish.call_args.args
-        assert channel == "jarvis:a2ui:usr_01"
+        assert channel == "muldro:a2ui:usr_01"
         data = json.loads(payload)
         assert data["type"] == "surface_update"
         assert data["surface_id"] == "surf_abc"
@@ -153,4 +153,4 @@ class TestEmitSurfaceUpdate:
         )
         event_bus.publish_to_channel.assert_called_once()
         channel = event_bus.publish_to_channel.call_args.args[0]
-        assert channel == "jarvis:a2ui:usr_01"
+        assert channel == "muldro:a2ui:usr_01"

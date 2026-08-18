@@ -1,6 +1,6 @@
 """Internal tool catalog — single source of truth for internal tool definitions.
 
-This module defines all internal (Jarvis-owned) MCP tools, their input schemas,
+This module defines all internal (Muldro-owned) MCP tools, their input schemas,
 capabilities, risk levels, and metadata. Serves as a parallel registry during
 the Unified Tool Registry migration (Phase 6).
 

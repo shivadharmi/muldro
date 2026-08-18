@@ -36,7 +36,7 @@ async def set_goal(
     user_id: str = "",
     workspace_id: str = "",
 ) -> dict:
-    """Record a user goal so Jarvis can track and act toward it."""
+    """Record a user goal so Muldro can track and act toward it."""
     async with _get_db() as db:
         try:
             memory_svc = _shared.request_services(db).memory_service

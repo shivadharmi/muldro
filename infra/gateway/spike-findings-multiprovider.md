@@ -4,7 +4,7 @@
 **Date:** 2026-08-17
 **Image:** `ghcr.io/oomol-lab/open-connector:v1.3.5`
 
-Gates Wave 1 of the multi-provider increment (spec item #1): can Jarvis extend the
+Gates Wave 1 of the multi-provider increment (spec item #1): can Muldro extend the
 gateway adapter past Gmail to Google Calendar and GitHub, and what exactly does it
 transcribe into the action registry?
 
@@ -237,7 +237,7 @@ makes them free to copy.
 
 ## googlecalendar
 
-OC service: `googlecalendar` (37 actions total; 6 curated). Jarvis `server_name`:
+OC service: `googlecalendar` (37 actions total; 6 curated). Muldro `server_name`:
 `google-workspace`.
 
 | actionId | capability | risk | requires_approval |
@@ -255,7 +255,7 @@ List the current user's Google Calendar list entries.
 
 - **requiredScopes:** `https://www.googleapis.com/auth/calendar.readonly`
 - **requiredAuthTypes:** `oauth2`
-- **Jarvis capability:** `calendar.list` &nbsp;&nbsp; **risk:** `low` &nbsp;&nbsp; **requires_approval:** `false`
+- **Muldro capability:** `calendar.list` &nbsp;&nbsp; **risk:** `low` &nbsp;&nbsp; **requires_approval:** `false`
 
 **Runtime guide `## Input Parameters` (verbatim):**
 
@@ -331,7 +331,7 @@ List events from a Google Calendar.
 
 - **requiredScopes:** `https://www.googleapis.com/auth/calendar.readonly`
 - **requiredAuthTypes:** `oauth2`
-- **Jarvis capability:** `calendar.list` &nbsp;&nbsp; **risk:** `low` &nbsp;&nbsp; **requires_approval:** `false`
+- **Muldro capability:** `calendar.list` &nbsp;&nbsp; **risk:** `low` &nbsp;&nbsp; **requires_approval:** `false`
 
 **Runtime guide `## Input Parameters` (verbatim):**
 
@@ -550,7 +550,7 @@ Fetch one Google Calendar event.
 
 - **requiredScopes:** `https://www.googleapis.com/auth/calendar.readonly`
 - **requiredAuthTypes:** `oauth2`
-- **Jarvis capability:** `calendar.get` &nbsp;&nbsp; **risk:** `low` &nbsp;&nbsp; **requires_approval:** `false`
+- **Muldro capability:** `calendar.get` &nbsp;&nbsp; **risk:** `low` &nbsp;&nbsp; **requires_approval:** `false`
 
 **Runtime guide `## Input Parameters` (verbatim):**
 
@@ -598,7 +598,7 @@ Query busy intervals for calendars and groups.
 
 - **requiredScopes:** `https://www.googleapis.com/auth/calendar.readonly`
 - **requiredAuthTypes:** `oauth2`
-- **Jarvis capability:** `calendar.get` &nbsp;&nbsp; **risk:** `low` &nbsp;&nbsp; **requires_approval:** `false`
+- **Muldro capability:** `calendar.get` &nbsp;&nbsp; **risk:** `low` &nbsp;&nbsp; **requires_approval:** `false`
 
 **Runtime guide `## Input Parameters` (verbatim):**
 
@@ -709,7 +709,7 @@ Create a Google Calendar event.
 
 - **requiredScopes:** `https://www.googleapis.com/auth/calendar.events`
 - **requiredAuthTypes:** `oauth2`
-- **Jarvis capability:** `calendar.create` &nbsp;&nbsp; **risk:** `medium` &nbsp;&nbsp; **requires_approval:** `true`
+- **Muldro capability:** `calendar.create` &nbsp;&nbsp; **risk:** `medium` &nbsp;&nbsp; **requires_approval:** `true`
 
 **Runtime guide `## Input Parameters` (verbatim):**
 
@@ -945,7 +945,7 @@ Replace writable fields on a Google Calendar event.
 
 - **requiredScopes:** `https://www.googleapis.com/auth/calendar.events`
 - **requiredAuthTypes:** `oauth2`
-- **Jarvis capability:** `calendar.update` &nbsp;&nbsp; **risk:** `medium` &nbsp;&nbsp; **requires_approval:** `true`
+- **Muldro capability:** `calendar.update` &nbsp;&nbsp; **risk:** `medium` &nbsp;&nbsp; **requires_approval:** `true`
 
 **Runtime guide `## Input Parameters` (verbatim):**
 
@@ -1185,7 +1185,7 @@ Replace writable fields on a Google Calendar event.
 
 ## github
 
-OC service: `github` (145 actions total; 8 curated). Jarvis `server_name`: `github`.
+OC service: `github` (145 actions total; 8 curated). Muldro `server_name`: `github`.
 
 | actionId | capability | risk | requires_approval |
 |---|---|---|---|
@@ -1204,7 +1204,7 @@ List issues for a GitHub repository. Pull requests are filtered out of the respo
 
 - **requiredScopes:** `repo`
 - **requiredAuthTypes:** `oauth2`, `api_key`
-- **Jarvis capability:** `issue.list` &nbsp;&nbsp; **risk:** `low` &nbsp;&nbsp; **requires_approval:** `false`
+- **Muldro capability:** `issue.list` &nbsp;&nbsp; **risk:** `low` &nbsp;&nbsp; **requires_approval:** `false`
 
 **Runtime guide `## Input Parameters` (verbatim):**
 
@@ -1303,7 +1303,7 @@ Search GitHub issues and pull requests with raw GitHub search syntax or structur
 
 - **requiredScopes:** _(none declared)_
 - **requiredAuthTypes:** `oauth2`, `api_key`
-- **Jarvis capability:** `issue.search` &nbsp;&nbsp; **risk:** `low` &nbsp;&nbsp; **requires_approval:** `false`
+- **Muldro capability:** `issue.search` &nbsp;&nbsp; **risk:** `low` &nbsp;&nbsp; **requires_approval:** `false`
 
 **Runtime guide `## Input Parameters` (verbatim):**
 
@@ -1444,7 +1444,7 @@ Create an issue in a GitHub repository.
 
 - **requiredScopes:** `repo`
 - **requiredAuthTypes:** `oauth2`, `api_key`
-- **Jarvis capability:** `issue.create` &nbsp;&nbsp; **risk:** `medium` &nbsp;&nbsp; **requires_approval:** `true`
+- **Muldro capability:** `issue.create` &nbsp;&nbsp; **risk:** `medium` &nbsp;&nbsp; **requires_approval:** `true`
 
 **Runtime guide `## Input Parameters` (verbatim):**
 
@@ -1519,7 +1519,7 @@ Create a comment on a GitHub issue.
 
 - **requiredScopes:** `repo`
 - **requiredAuthTypes:** `oauth2`, `api_key`
-- **Jarvis capability:** `issue.comment` &nbsp;&nbsp; **risk:** `medium` &nbsp;&nbsp; **requires_approval:** `true`
+- **Muldro capability:** `issue.comment` &nbsp;&nbsp; **risk:** `medium` &nbsp;&nbsp; **requires_approval:** `true`
 
 **Runtime guide `## Input Parameters` (verbatim):**
 
@@ -1574,7 +1574,7 @@ Search GitHub code with GitHub search syntax.
 
 - **requiredScopes:** _(none declared)_
 - **requiredAuthTypes:** `oauth2`, `api_key`
-- **Jarvis capability:** `repo.search_code` &nbsp;&nbsp; **risk:** `low` &nbsp;&nbsp; **requires_approval:** `false`
+- **Muldro capability:** `repo.search_code` &nbsp;&nbsp; **risk:** `low` &nbsp;&nbsp; **requires_approval:** `false`
 
 **Runtime guide `## Input Parameters` (verbatim):**
 
@@ -1636,7 +1636,7 @@ Search GitHub repositories with GitHub search syntax.
 
 - **requiredScopes:** _(none declared)_
 - **requiredAuthTypes:** `oauth2`, `api_key`
-- **Jarvis capability:** `repo.search_repos` &nbsp;&nbsp; **risk:** `low` &nbsp;&nbsp; **requires_approval:** `false`
+- **Muldro capability:** `repo.search_repos` &nbsp;&nbsp; **risk:** `low` &nbsp;&nbsp; **requires_approval:** `false`
 
 **Runtime guide `## Input Parameters` (verbatim):**
 
@@ -1700,7 +1700,7 @@ List pull requests for a GitHub repository.
 
 - **requiredScopes:** `repo`
 - **requiredAuthTypes:** `oauth2`, `api_key`
-- **Jarvis capability:** `repo.list_prs` &nbsp;&nbsp; **risk:** `low` &nbsp;&nbsp; **requires_approval:** `false`
+- **Muldro capability:** `repo.list_prs` &nbsp;&nbsp; **risk:** `low` &nbsp;&nbsp; **requires_approval:** `false`
 
 **Runtime guide `## Input Parameters` (verbatim):**
 
@@ -1791,7 +1791,7 @@ Create a pull request in a GitHub repository.
 
 - **requiredScopes:** `repo`
 - **requiredAuthTypes:** `oauth2`, `api_key`
-- **Jarvis capability:** `repo.create_pr` &nbsp;&nbsp; **risk:** `high` &nbsp;&nbsp; **requires_approval:** `true`
+- **Muldro capability:** `repo.create_pr` &nbsp;&nbsp; **risk:** `high` &nbsp;&nbsp; **requires_approval:** `true`
 
 **Runtime guide `## Input Parameters` (verbatim):**
 

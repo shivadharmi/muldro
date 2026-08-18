@@ -4,13 +4,13 @@
 Two flavours of test:
 
 * Unit tests drive the interceptor DIRECTLY via ``mw.awrap_tool_call(request, handler)``
-  (same pattern as ``test_jarvis_tool_dispatcher.py`` / ``test_trust_gate.py``) — no graph
+  (same pattern as ``test_muldro_tool_dispatcher.py`` / ``test_trust_gate.py``) — no graph
   runtime, no real DB. The registry lookup is faked via a fake ``db_factory`` async CM whose
   ``ToolRegistry`` is patched at the module boundary.
 
 * A forced-integration guard builds a REAL deep agent via
   ``AgentInvoker._build_deep_agent_for`` with a fake scripted streaming model that calls a
-  DISABLED Jarvis tool, and asserts the streamed ``tool_result`` frame is ``blocked`` and the
+  DISABLED Muldro tool, and asserts the streamed ``tool_result`` frame is ``blocked`` and the
   central dispatcher never really executed it. A permanent negative control patches
   ``make_governor_audit_middleware`` (in the invoker namespace) to a pass-through so the same
   disabled tool reaches the dispatcher — proving the guard has teeth.
@@ -190,7 +190,7 @@ async def test_lookup_failure_falls_through(handler):
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Forced-integration guard: governor_audit is FIRST in the deep chain and blocks a
-# DISABLED Jarvis tool before the central dispatcher ever executes it.
+# DISABLED Muldro tool before the central dispatcher ever executes it.
 # ═══════════════════════════════════════════════════════════════════════════════
 
 DISABLED_TOOL_DEF = {

@@ -107,7 +107,7 @@ class SurfaceEmitter:
     async def publish_progress(self, run_id: str, data: dict) -> None:
         """Publish step progress to Redis pubsub for WebSocket consumers."""
         try:
-            channel = f"jarvis:run_progress:{run_id}"
+            channel = f"muldro:run_progress:{run_id}"
             payload = json.dumps(data)
 
             if self._redis:
@@ -165,7 +165,7 @@ class SurfaceEmitter:
                 cost_usd=cost_usd,
             )
 
-            channel = f"jarvis:a2ui:{user_id}"
+            channel = f"muldro:a2ui:{user_id}"
             payload = json.dumps(
                 {
                     "type": "surface_update",
@@ -325,13 +325,13 @@ class SurfaceEmitter:
 
             # Publish to WebSocket so the workspace feed updates live
             if self._redis:
-                channel = f"jarvis:a2ui:{run.user_id}"
+                channel = f"muldro:a2ui:{run.user_id}"
                 await self._redis.publish(
                     channel,
                     json.dumps({"type": "surface", "surface": surface.model_dump(mode="json")}),
                 )
             elif self._event_bus:
-                channel = f"jarvis:a2ui:{run.user_id}"
+                channel = f"muldro:a2ui:{run.user_id}"
                 await self._event_bus.publish_to_channel(
                     channel,
                     json.dumps({"type": "surface", "surface": surface.model_dump(mode="json")}),

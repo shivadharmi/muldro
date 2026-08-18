@@ -2,7 +2,7 @@
 
 Action ids, parameter names, and input schemas are transcribed verbatim from a
 live OpenConnector v1.3.5 catalog -- see infra/gateway/spike-findings-multiprovider.md.
-GitHub is the cross-vendor case for this increment: its native Jarvis transport
+GitHub is the cross-vendor case for this increment: its native Muldro transport
 was a remote HTTP MCP server rather than a local process, and its OpenConnector
 auth is a real OAuth2 flow (verified in the spike), so the popup-poll connect
 flow applies to it unchanged.

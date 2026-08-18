@@ -14,7 +14,7 @@ class TestWebhookManager:
         db.add = MagicMock()
         db.flush = AsyncMock()
 
-        mgr = WebhookManager(db, TEST_WORKSPACE_ID, "https://api.jarvis.test")
+        mgr = WebhookManager(db, TEST_WORKSPACE_ID, "https://api.muldro.test")
         sub = await mgr.register(
             user_id=TEST_USER_ID,
             provider="github",
@@ -28,7 +28,7 @@ class TestWebhookManager:
         assert sub.resource_id == "owner/repo"
         assert sub.status == "active"
         assert sub.secret is not None
-        assert sub.callback_url.startswith("https://api.jarvis.test/v1/webhooks/github/")
+        assert sub.callback_url.startswith("https://api.muldro.test/v1/webhooks/github/")
         assert sub.expires_at is not None
         db.add.assert_called_once()
         db.flush.assert_called_once()
@@ -39,7 +39,7 @@ class TestWebhookManager:
         db = AsyncMock()
         db.execute = AsyncMock()
 
-        mgr = WebhookManager(db, TEST_WORKSPACE_ID, "https://api.jarvis.test")
+        mgr = WebhookManager(db, TEST_WORKSPACE_ID, "https://api.muldro.test")
         await mgr.deactivate("whsub_123")
 
         db.execute.assert_called_once()
@@ -50,7 +50,7 @@ class TestWebhookManager:
         db = AsyncMock()
         db.execute = AsyncMock()
 
-        mgr = WebhookManager(db, TEST_WORKSPACE_ID, "https://api.jarvis.test")
+        mgr = WebhookManager(db, TEST_WORKSPACE_ID, "https://api.muldro.test")
         await mgr.record_delivery("whsub_123")
 
         db.execute.assert_called_once()
@@ -69,7 +69,7 @@ class TestWebhookManager:
         db = AsyncMock()
         db.execute = AsyncMock(return_value=mock_result)
 
-        mgr = WebhookManager(db, TEST_WORKSPACE_ID, "https://api.jarvis.test")
+        mgr = WebhookManager(db, TEST_WORKSPACE_ID, "https://api.muldro.test")
         await mgr.record_failure("whsub_123", "connection_refused")
 
         assert mock_sub.status == "failed"
@@ -86,7 +86,7 @@ class TestPushReceiver:
         db = AsyncMock()
         db.execute = AsyncMock(return_value=mock_result)
 
-        receiver = PushReceiver(db, TEST_WORKSPACE_ID, "https://api.jarvis.test")
+        receiver = PushReceiver(db, TEST_WORKSPACE_ID, "https://api.muldro.test")
         result = await receiver.handle_delivery(
             provider="github",
             subscription_id="whsub_nonexistent",
@@ -111,7 +111,7 @@ class TestPushReceiver:
         db = AsyncMock()
         db.execute = AsyncMock(return_value=mock_result)
 
-        receiver = PushReceiver(db, TEST_WORKSPACE_ID, "https://api.jarvis.test")
+        receiver = PushReceiver(db, TEST_WORKSPACE_ID, "https://api.muldro.test")
         result = await receiver.handle_delivery(
             provider="github",
             subscription_id="whsub_123",
@@ -182,7 +182,7 @@ class TestWebhookRegisterGating:
         mgr = WebhookManager(
             db,
             TEST_WORKSPACE_ID,
-            "https://api.jarvis.test",
+            "https://api.muldro.test",
             settings=settings,
             oauth_manager=oauth,
         )
@@ -212,7 +212,7 @@ class TestWebhookRegisterGating:
             )
         )
 
-        mgr = WebhookManager(db, TEST_WORKSPACE_ID, "https://api.jarvis.test")
+        mgr = WebhookManager(db, TEST_WORKSPACE_ID, "https://api.muldro.test")
         sub = await mgr.register(
             user_id=TEST_USER_ID,
             provider="github",
@@ -254,7 +254,7 @@ class TestWebhookRegisterGmail:
         mgr = WebhookManager(
             db,
             TEST_WORKSPACE_ID,
-            "https://api.jarvis.test",
+            "https://api.muldro.test",
             settings=settings,
             oauth_manager=oauth,
         )
@@ -296,7 +296,7 @@ class TestWebhookRegisterGmail:
         mgr = WebhookManager(
             AsyncMock(),
             TEST_WORKSPACE_ID,
-            "https://api.jarvis.test",
+            "https://api.muldro.test",
             settings=settings,
             oauth_manager=oauth,
         )
@@ -338,7 +338,7 @@ class TestWebhookRegisterCalendar:
             mgr = WebhookManager(
                 db,
                 TEST_WORKSPACE_ID,
-                "https://api.jarvis.test",
+                "https://api.muldro.test",
                 settings=settings,
                 oauth_manager=oauth,
             )
@@ -354,7 +354,7 @@ class TestWebhookRegisterCalendar:
         assert "calendar/v3" in url and "watch" in url
         body = mock_client.post.call_args.kwargs["json"]
         assert body["type"] == "web_hook"
-        assert body["address"].startswith("https://api.jarvis.test/v1/webhooks/calendar/")
+        assert body["address"].startswith("https://api.muldro.test/v1/webhooks/calendar/")
         assert body["id"] == sub.subscription_id
         assert body["token"] == sub.secret
         # external_id stores the minted channel id (== subscription_id == watch
@@ -392,7 +392,7 @@ class TestWebhookRegisterIdempotency:
         mgr = WebhookManager(
             db,
             TEST_WORKSPACE_ID,
-            "https://api.jarvis.test",
+            "https://api.muldro.test",
             settings=settings,
             oauth_manager=oauth,
         )
@@ -451,7 +451,7 @@ class TestWebhookRenew:
             mgr = WebhookManager(
                 db,
                 TEST_WORKSPACE_ID,
-                "https://api.jarvis.test",
+                "https://api.muldro.test",
                 settings=settings,
                 oauth_manager=oauth,
             )
@@ -473,7 +473,7 @@ class TestWebhookRenew:
         db = AsyncMock()
         db.execute = AsyncMock()
 
-        mgr = WebhookManager(db, TEST_WORKSPACE_ID, "https://api.jarvis.test")
+        mgr = WebhookManager(db, TEST_WORKSPACE_ID, "https://api.muldro.test")
         await mgr.renew("whsub_123")
         db.execute.assert_called_once()
 
@@ -512,7 +512,7 @@ class TestWebhookRegisterVerifyContract:
             mgr = WebhookManager(
                 db,
                 TEST_WORKSPACE_ID,
-                "https://api.jarvis.test",
+                "https://api.muldro.test",
                 settings=settings,
                 oauth_manager=oauth,
             )

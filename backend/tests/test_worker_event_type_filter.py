@@ -1,6 +1,6 @@
 """Regression tests for StreamConsumerManager event-type filtering.
 
-The main events stream (``jarvis:events:{user_id}``) carries several event
+The main events stream (``muldro:events:{user_id}``) carries several event
 types whose payloads include ``event_id`` — ``event_processed``,
 ``trigger.fired``, ``initiative.high_priority``. Before the filter was
 added, the entity and memory extraction handlers fired on all of them,

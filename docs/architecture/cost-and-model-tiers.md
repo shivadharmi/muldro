@@ -1,8 +1,8 @@
 # Cost & Model Tiers
 
-Jarvis routes each of its 6 agents to a model *tier* (`opus` / `sonnet` / `haiku`)
+Muldro routes each of its 6 agents to a model *tier* (`opus` / `sonnet` / `haiku`)
 chosen for that agent's job. Tier → concrete model is resolved via `MODEL_TIERS`
-in `src/config/models.py` (imported by `orchestrator/jarvis.py`). There is a single
+in `src/config/models.py` (imported by `orchestrator/muldro.py`). There is a single
 direct Anthropic API backend — Bedrock is fully removed (no `BEDROCK_MODEL_TIERS`).
 This page documents what that costs and how to lower it.
 
@@ -36,7 +36,7 @@ entirely and cost a fraction of the above.
 
 ## Daily budget
 
-`JARVIS_DAILY_TOKEN_BUDGET_USD` (default **$25**) is the daily spend ceiling
+`MULDRO_DAILY_TOKEN_BUDGET_USD` (default **$25**) is the daily spend ceiling
 before the system degrades. The previous $5 default silently degraded after only
 2–3 Planner-backed messages, so it was raised to $25 — roughly a day of active
 dogfooding at default-mode prices, or ~3× that in cheap mode.
@@ -46,7 +46,7 @@ survives restarts.
 
 ## Cheap mode
 
-Set `JARVIS_CHEAP_MODE=true` to apply a cost-reduced preset to every agent:
+Set `MULDRO_CHEAP_MODE=true` to apply a cost-reduced preset to every agent:
 
 - **No Opus** — the `opus` tier is downgraded to `sonnet` (the ~65% lever).
   Haiku is left as Haiku (it is already cheaper than Sonnet).

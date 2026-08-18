@@ -58,7 +58,7 @@ class TestMessageMetadataUsePlanOutput:
 
 
 # A secret-looking internal string that must never reach an SSE client frame.
-STREAM_SECRET = "postgres://svc:p@ss@db.internal:5432/jarvis"
+STREAM_SECRET = "postgres://svc:p@ss@db.internal:5432/muldro"
 
 
 class TestProcessMessageStreamErrorIsSanitized:

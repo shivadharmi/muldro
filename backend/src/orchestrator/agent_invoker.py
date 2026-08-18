@@ -1,6 +1,6 @@
 """AgentInvoker — the shared sub-agent invocation engine.
 
-Extracted from ``JarvisOrchestrator`` (god-object decomposition, 2026-06-19).
+Extracted from ``MuldroOrchestrator`` (god-object decomposition, 2026-06-19).
 This is the primitive that runs a single sub-agent through the deep runtime, used by
 BOTH the chat path (streaming) and the perception path (non-streaming). Extracting
 it as its own collaborator is what breaks the would-be chat<->perception cycle:
@@ -35,11 +35,11 @@ from src.deep_runtime.middleware.governor_audit import make_governor_audit_middl
 from src.deep_runtime.middleware.governor_delegate_critique import (
     make_governor_delegate_critique_middleware,
 )
-from src.deep_runtime.middleware.jarvis_tool_dispatcher import (
-    ExecuteToolFn,
-    make_jarvis_tool_dispatcher,
-)
 from src.deep_runtime.middleware.librarian_extract import make_librarian_extract_middleware
+from src.deep_runtime.middleware.muldro_tool_dispatcher import (
+    ExecuteToolFn,
+    make_muldro_tool_dispatcher,
+)
 from src.deep_runtime.middleware.permission_gate import make_permission_gate_middleware
 from src.deep_runtime.middleware.readback import make_readback_middleware
 from src.deep_runtime.middleware.trust_gate import _resolve_tool_def, make_trust_gate_middleware
@@ -58,7 +58,7 @@ from src.orchestrator.budget import BudgetTracker
 from src.orchestrator.context_assembler import ContextAssembler
 from src.orchestrator.prompts import (
     DEEP_DELEGATION_INSTRUCTION,
-    JARVIS_SOUL_CORE,
+    MULDRO_SOUL_CORE,
     PRESENTER_VOICE,
 )
 from src.orchestrator.services import ServiceContainer
@@ -153,7 +153,7 @@ def _augment_system_blocks_for_delegation(
 def _parse_tool_result_content(content: Any) -> dict | None:
     """Best-effort parse a deep ``tool_result`` frame's ``result`` into a dict, or None.
 
-    The deep dispatcher (``jarvis_tool_dispatcher``) serializes a tool's dict result via
+    The deep dispatcher (``muldro_tool_dispatcher``) serializes a tool's dict result via
     ``json.dumps`` into the ``ToolMessage`` content, so the frame's ``result`` is usually a
     JSON string; a plain-string / non-JSON / non-dict payload yields None. Used by
     ``run_autonomous_deep_step`` to detect the ``auth_required`` envelope.
@@ -281,9 +281,9 @@ class AgentInvoker:
 
         For the Planner, injects the runtime capability summary into
         PLANNER_PROMPT_V2 (replacing the {capability_summary} placeholder).
-        Other agents get JARVIS_SOUL_CORE + their role prompt unchanged.
+        Other agents get MULDRO_SOUL_CORE + their role prompt unchanged.
         """
-        soul = JARVIS_SOUL_CORE
+        soul = MULDRO_SOUL_CORE
 
         prompt = agent.prompt
         if agent.name == "planner":
@@ -345,13 +345,13 @@ class AgentInvoker:
     ):
         """Build a compiled deep agent WITH the full gated middleware chain:
         capability_scope (installed by ``build_deep_agent`` when ``db_factory`` is given)
-        → governor_audit → trust_gate → write_lock → jarvis_tool_dispatcher. Shared by the
+        → governor_audit → trust_gate → write_lock → muldro_tool_dispatcher. Shared by the
         resume path (Task 4) and the live seam (Task 5) so both rebuild identically.
         governor_audit (Step 7B1) audit-logs every tool call and blocks disabled tools; the
         trust_gate short-circuits ``direct_user_request`` (dormant), a gated
         ``authorization_source`` activates it.
 
-        ``subagents`` (Step 7B2 P4) are read-only Jarvis delegates (CompiledSubAgent dicts)
+        ``subagents`` (Step 7B2 P4) are read-only Muldro delegates (CompiledSubAgent dicts)
         registered on the lead so its built-in ``task`` tool can route to them. Empty by
         default (``()``) → forwarded straight to ``build_deep_agent`` which passes
         ``subagents or None`` to ``create_deep_agent`` — byte-identical to 7B1 when no
@@ -472,7 +472,7 @@ class AgentInvoker:
             )
             permission_gate_chain = (permission_gate,)
 
-        dispatcher = make_jarvis_tool_dispatcher(
+        dispatcher = make_muldro_tool_dispatcher(
             execute_tool=execute_tool or self._tool_executor.execute_tool,
             user_id=user_id,
             workspace_id=workspace_id,
@@ -505,7 +505,7 @@ class AgentInvoker:
         # so it NEVER double-fires with the still-live InteractionLearner (chat_processor's
         # background spawn). The learn closure adapts the existing, tested InteractionLearner
         # (fresh DB session, cooldown, memory + world-model extraction) — nothing re-implemented.
-        # Ctor deps match jarvis.py's live InteractionLearner construction: vector_store from
+        # Ctor deps match muldro.py's live InteractionLearner construction: vector_store from
         # the typed ServiceContainer field; redis/event_bus resolve to None via getattr (they
         # live in services.extras, not typed attrs) — matching the live path's redis=None.
         # Live activation (flip active + skip InteractionLearner on runtime=deep) is a Step-10
@@ -518,7 +518,7 @@ class AgentInvoker:
                 self._db_factory,
                 vector_store=getattr(self._services, "vector_store", None),
                 # INTENTIONALLY getattr → None (NOT services.extras): this mirrors the live
-                # InteractionLearner construction at jarvis.py:172 (redis=None). Keep it in
+                # InteractionLearner construction at muldro.py:172 (redis=None). Keep it in
                 # lock-step with live — do NOT "fix" it to services.extras and diverge.
                 redis=getattr(self._services, "redis", None),
                 event_bus=getattr(self._services, "event_bus", None),
@@ -650,7 +650,7 @@ class AgentInvoker:
 
         The Perceiver config is sourced from the in-memory ``build_agent_set(AGENTS, cheap_mode)``
         singleton — NOT ``self._agents`` — because ``self._agents`` may be overwritten at runtime
-        by ``load_as_sub_agents()`` (jarvis.py), which DROPS per-agent ``thinking``. Sourcing from
+        by ``load_as_sub_agents()`` (muldro.py), which DROPS per-agent ``thinking``. Sourcing from
         the singleton preserves the Perceiver's sonnet/6144 thinking AND applies the SAME cheap-mode
         transform the lead received.
 
@@ -666,7 +666,7 @@ class AgentInvoker:
 
         The delegate carries its OWN role prompt (``perceiver_cfg.prompt``, the default inside
         ``build_read_only_delegate``) — never the lead's Presenter-voice inline-format augmentation.
-        Composing ``JARVIS_SOUL_CORE`` + ambient context into the delegate prompt is a Step-10
+        Composing ``MULDRO_SOUL_CORE`` + ambient context into the delegate prompt is a Step-10
         activation refinement (dormant scaffold; the forced-on e2e uses fake models, so delegate
         prompt content is behavior-neutral there).
         """
@@ -1358,7 +1358,7 @@ class AgentInvoker:
             ),
         )
 
-        # jarvis_tool_dispatcher calls execute_tool(name, args, user_id, workspace_id)
+        # muldro_tool_dispatcher calls execute_tool(name, args, user_id, workspace_id)
         # POSITIONALLY, but make_idempotent_execute_tool_fn returns a fn with KEYWORD-ONLY
         # user_id/workspace_id — bridge the two calling conventions here.
         async def _ledgered_execute_tool(name, args, user_id, workspace_id):
@@ -1524,7 +1524,7 @@ class AgentInvoker:
                 deep_error = frame.get("message") or "unknown error"
         # Parity with the legacy path's error envelope: a deep stream that errors emits
         # an "error" frame and NO "agent_done" (stream_adapter), leaving final_text "".
-        # The briefing facade (jarvis.generate_briefing) feeds this straight into the
+        # The briefing facade (muldro.generate_briefing) feeds this straight into the
         # user notification body, so a silent "" would ship an empty "Daily Briefing" —
         # surface the sanitized error string instead, matching the legacy return shape.
         if not final_text and deep_error is not None:

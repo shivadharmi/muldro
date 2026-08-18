@@ -64,7 +64,7 @@ from src.orchestrator.agents import SubAgent
 # Reuse the REAL cost helper (do NOT re-derive a pricing formula).
 from src.orchestrator.budget import BudgetTracker
 
-SYSTEM_MARKER = "<<JARVIS-SOUL-CORE-CACHE-PREFIX>>"
+SYSTEM_MARKER = "<<MULDRO-SOUL-CORE-CACHE-PREFIX>>"
 MODEL_ID = "claude-sonnet-4-6"
 AGENT_NAME = "presenter"
 
@@ -490,7 +490,7 @@ async def section3_blocked() -> None:
         if writer is not None:
             writer(
                 {
-                    "jarvis_event": "tool_blocked",
+                    "muldro_event": "tool_blocked",
                     "tool": request.tool_call["name"],
                     "blocked": True,
                 }
@@ -513,7 +513,7 @@ async def section3_blocked() -> None:
     saw_custom = False
     async for ev in agent3.astream(_user_input(), config=cfg3, stream_mode="custom"):
         print(f"  custom event: {ev}")
-        if isinstance(ev, dict) and ev.get("jarvis_event") == "tool_blocked":
+        if isinstance(ev, dict) and ev.get("muldro_event") == "tool_blocked":
             saw_custom = True
     print(f"  stream_mode='custom' surfaced the blocked marker? {saw_custom}")
 

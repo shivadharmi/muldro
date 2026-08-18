@@ -15,7 +15,7 @@ They FAIL against the ``getattr`` form (both get None) and PASS once redis is so
 ``services.extras``.
 
 The librarian's ``InteractionLearner(redis=...)`` is DELIBERATELY excluded — it intentionally
-mirrors the live jarvis.py construction (``redis=None``) and is proven separately in
+mirrors the live muldro.py construction (``redis=None``) and is proven separately in
 tests/test_agent_invoker_deep_hardening.py::test_librarian_learn_closure_adapts_interaction_learner.
 """
 
@@ -95,7 +95,7 @@ async def _build_and_capture(invoker) -> dict:
     with (
         patch("src.orchestrator.agent_invoker.build_deep_agent", new=AsyncMock()),
         patch("src.orchestrator.agent_invoker.build_tool_shells", return_value=["SHELL"]),
-        patch("src.orchestrator.agent_invoker.make_jarvis_tool_dispatcher", return_value=object()),
+        patch("src.orchestrator.agent_invoker.make_muldro_tool_dispatcher", return_value=object()),
         patch(
             "src.orchestrator.agent_invoker.make_governor_audit_middleware", return_value=object()
         ),

@@ -2,7 +2,7 @@
 
 ## 1. Hub-and-Spoke Multi-Agent Topology
 
-**Decision:** Route all agent interactions through a central `JarvisOrchestrator` rather than allowing agents to call each other directly.
+**Decision:** Route all agent interactions through a central `MuldroOrchestrator` rather than allowing agents to call each other directly.
 
 **Rationale:**
 - **Isolation** - Each agent has a defined scope; bugs in one agent don't cascade to others
@@ -297,7 +297,7 @@ wrappers over the shared singletons — negligible next to a Claude API call.
 **Decision (2026-07-20):** Generate embeddings and rerank search results **entirely on-host** via [fastembed](https://github.com/qdrant/fastembed) (ONNX runtime, no torch, no external API). Supersedes [#5](#5-bedrock-titan-v2-for-embeddings--superseded-by-21).
 - **Embeddings:** `BAAI/bge-base-en-v1.5` (768-dim, MIT). `EmbeddingService` (`src/services/embedding_service.py`).
 - **Reranking:** `Xenova/ms-marco-MiniLM-L-12-v2` cross-encoder (Apache-2.0). `RerankerService` (`src/services/reranker_service.py`).
-- Both services load the model **lazily once** (thread-safe singleton) and run inference inside `asyncio.to_thread`. Model choices are configurable via `JARVIS_EMBEDDING_MODEL` / `JARVIS_RERANKER_MODEL`.
+- Both services load the model **lazily once** (thread-safe singleton) and run inference inside `asyncio.to_thread`. Model choices are configurable via `MULDRO_EMBEDDING_MODEL` / `MULDRO_RERANKER_MODEL`.
 
 **Rationale:**
 - **No external AI-API dependency** - removes AWS Bedrock (Titan embeddings, `amazon.rerank-v1:0`) and the MongoDB-hosted Voyage endpoint. No API keys, no per-call cost, no outage/deprecation surface (the immediate trigger: MongoDB's Voyage endpoint retired `voyage-3`, and Bedrock Titan was SCP-blocked).

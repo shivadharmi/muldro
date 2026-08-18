@@ -14,12 +14,12 @@ class TestContextAssembly:
     @pytest.mark.asyncio
     async def test_assemble_context_returns_empty_for_non_enriched_agents(self):
         """Test _assemble_context returns empty string for non-enriched agents."""
-        from src.orchestrator.jarvis import JarvisOrchestrator
+        from src.orchestrator.muldro import MuldroOrchestrator
 
         settings = make_mock_settings(daily_token_budget_usd=5.0)
         db_factory = MagicMock()
 
-        orchestrator = JarvisOrchestrator(
+        orchestrator = MuldroOrchestrator(
             settings=settings, db_factory=db_factory, services=ServiceContainer()
         )
 
@@ -32,7 +32,7 @@ class TestContextAssembly:
     @pytest.mark.asyncio
     async def test_assemble_context_returns_context_for_enriched_agents(self):
         """Test _assemble_context returns context for enriched agents with services."""
-        from src.orchestrator.jarvis import JarvisOrchestrator
+        from src.orchestrator.muldro import MuldroOrchestrator
 
         settings = make_mock_settings(daily_token_budget_usd=5.0)
         db_factory = MagicMock()
@@ -58,7 +58,7 @@ class TestContextAssembly:
             ]
         )
 
-        orchestrator = JarvisOrchestrator(
+        orchestrator = MuldroOrchestrator(
             settings=settings,
             db_factory=db_factory,
             services=ServiceContainer(memory_service=mock_memory_svc, world_model=mock_world_model),
@@ -77,7 +77,7 @@ class TestContextAssembly:
     @pytest.mark.asyncio
     async def test_assemble_context_handles_missing_memory_service(self):
         """Test _assemble_context gracefully handles missing memory service."""
-        from src.orchestrator.jarvis import JarvisOrchestrator
+        from src.orchestrator.muldro import MuldroOrchestrator
 
         settings = make_mock_settings(daily_token_budget_usd=5.0)
         db_factory = MagicMock()
@@ -88,7 +88,7 @@ class TestContextAssembly:
             return_value=[{"entity_type": "person", "name": "Bob"}]
         )
 
-        orchestrator = JarvisOrchestrator(
+        orchestrator = MuldroOrchestrator(
             settings=settings,
             db_factory=db_factory,
             services=ServiceContainer(world_model=mock_world_model),
@@ -102,7 +102,7 @@ class TestContextAssembly:
     @pytest.mark.asyncio
     async def test_assemble_context_handles_empty_results(self):
         """Test _assemble_context returns empty when services return no results."""
-        from src.orchestrator.jarvis import JarvisOrchestrator
+        from src.orchestrator.muldro import MuldroOrchestrator
 
         settings = make_mock_settings(daily_token_budget_usd=5.0)
         db_factory = MagicMock()
@@ -114,7 +114,7 @@ class TestContextAssembly:
         mock_world_model = AsyncMock()
         mock_world_model.resolve_entities = AsyncMock(return_value=[])
 
-        orchestrator = JarvisOrchestrator(
+        orchestrator = MuldroOrchestrator(
             settings=settings,
             db_factory=db_factory,
             services=ServiceContainer(memory_service=mock_memory_svc, world_model=mock_world_model),
@@ -130,7 +130,7 @@ class TestContextAssembly:
     @pytest.mark.asyncio
     async def test_assemble_context_handles_service_exceptions(self):
         """Test _assemble_context handles service exceptions gracefully."""
-        from src.orchestrator.jarvis import JarvisOrchestrator
+        from src.orchestrator.muldro import MuldroOrchestrator
 
         settings = make_mock_settings(daily_token_budget_usd=5.0)
         db_factory = MagicMock()
@@ -145,7 +145,7 @@ class TestContextAssembly:
             return_value=[{"entity_type": "person", "name": "Charlie"}]
         )
 
-        orchestrator = JarvisOrchestrator(
+        orchestrator = MuldroOrchestrator(
             settings=settings,
             db_factory=db_factory,
             services=ServiceContainer(memory_service=mock_memory_svc, world_model=mock_world_model),
@@ -164,11 +164,11 @@ class TestSystemPromptBuilding:
     def test_build_system_prompt_returns_list_with_cache_control(self):
         """Test _build_system_prompt returns list with cache_control."""
         from src.orchestrator.agents import AGENTS
-        from src.orchestrator.jarvis import JarvisOrchestrator
+        from src.orchestrator.muldro import MuldroOrchestrator
 
         settings = make_mock_settings(daily_token_budget_usd=5.0)
 
-        orchestrator = JarvisOrchestrator(
+        orchestrator = MuldroOrchestrator(
             settings=settings, db_factory=MagicMock(), services=ServiceContainer()
         )
 
@@ -180,7 +180,7 @@ class TestSystemPromptBuilding:
         assert blocks[0]["type"] == "text"
         assert "cache_control" in blocks[0]
         assert blocks[0]["cache_control"]["type"] == "ephemeral"
-        assert "Jarvis" in blocks[0]["text"]
+        assert "Muldro" in blocks[0]["text"]
         # Planner prompt has {capability_summary} replaced at build time
         expected_prompt = agent.prompt.format(capability_summary="No capabilities connected yet.")
         assert expected_prompt in blocks[0]["text"]
@@ -188,11 +188,11 @@ class TestSystemPromptBuilding:
     def test_build_system_prompt_includes_context_block(self):
         """Test _build_system_prompt adds context block when provided."""
         from src.orchestrator.agents import AGENTS
-        from src.orchestrator.jarvis import JarvisOrchestrator
+        from src.orchestrator.muldro import MuldroOrchestrator
 
         settings = make_mock_settings(daily_token_budget_usd=5.0)
 
-        orchestrator = JarvisOrchestrator(
+        orchestrator = MuldroOrchestrator(
             settings=settings, db_factory=MagicMock(), services=ServiceContainer()
         )
 

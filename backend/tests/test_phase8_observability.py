@@ -287,7 +287,7 @@ class TestMetricsService:
 
         data = MetricsService.generate_metrics()
         assert isinstance(data, bytes)
-        assert b"jarvis_" in data
+        assert b"muldro_" in data
 
     def test_set_active_runs(self):
         from src.services.metrics_service import MetricsService

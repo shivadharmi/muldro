@@ -8,7 +8,7 @@ import { statusTextColor } from "@/lib/design-tokens";
 // render steps: the live execution StepList, the persisted run-detail Steps tab,
 // and the A2UI ExecutionTrace timeline. Owning the status-icon mapping and the
 // duration formatter here keeps those three visually consistent and on the
-// Jarvis design tokens (no hardcoded hex).
+// Muldro design tokens (no hardcoded hex).
 
 export interface StepIcon {
   icon: string;

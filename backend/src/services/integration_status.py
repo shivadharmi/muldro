@@ -269,13 +269,13 @@ async def get_integration_statuses(
             # state. Reported per provider so a partially connected installation
             # (Gmail linked, Calendar declined) stays visible rather than
             # collapsing to "disconnected". `configured` stays True: the gateway
-            # owns the OAuth client, not a Jarvis-side client_id setting.
+            # owns the OAuth client, not a Muldro-side client_id setting.
             active = await active_connection_providers(db, workspace_id, user_id, providers)
             provider_connections = {p: (p in active) for p in providers}
             connected = all(provider_connections.values())
             oc_providers = list(providers)
             # A gateway installation carries no `scopes_granted` (the list was
-            # hand-maintained in Jarvis vocabulary); the registry already knows
+            # hand-maintained in Muldro vocabulary); the registry already knows
             # exactly which capabilities its providers expose, so the badges
             # come from there instead of rendering empty.
             raw_scopes = list(capabilities_for_server(inst.server_name))

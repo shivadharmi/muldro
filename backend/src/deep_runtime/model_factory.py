@@ -1,4 +1,4 @@
-"""Build a LangChain chat model for a Jarvis SubAgent via the ModelResolver."""
+"""Build a LangChain chat model for a Muldro SubAgent via the ModelResolver."""
 
 from __future__ import annotations
 

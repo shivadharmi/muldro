@@ -1,6 +1,6 @@
 """Step 6A.5: DEEPAGENTS_BUILTIN_NAMES must track the tools deepagents auto-installs.
 
-This is a drift-guard test: it compiles a real minimal deep agent (no extra Jarvis
+This is a drift-guard test: it compiles a real minimal deep agent (no extra Muldro
 tools, a fake offline model) and asserts that the constant equals the compiled
 agent's built-in tool names.  A deepagents upgrade that changes those names will
 cause this test to fail loudly instead of silently mis-gating tool calls through
@@ -46,7 +46,7 @@ class _OfflineFakeChatModel(BaseChatModel):
 
 
 def _compiled_builtin_tool_names() -> frozenset[str]:
-    """Compile a real deepagents agent with NO extra Jarvis tools and return the
+    """Compile a real deepagents agent with NO extra Muldro tools and return the
     frozenset of tool names the framework auto-installed.
 
     Introspection path: compiled_graph.nodes['tools'].bound.tools_by_name.keys()
@@ -63,8 +63,8 @@ async def test_builtins_match_a_compiled_agent():
     """DRIFT GUARD — fail loudly if deepagents changes its auto-installed built-ins.
 
     If this test fails after a deepagents upgrade, update DEEPAGENTS_BUILTIN_NAMES
-    to match the new set and audit capability_scope + jarvis_tool_dispatcher to
-    ensure every new built-in is still exempt from Jarvis registry gating.
+    to match the new set and audit capability_scope + muldro_tool_dispatcher to
+    ensure every new built-in is still exempt from Muldro registry gating.
     """
     from src.deep_runtime.builtins import DEEPAGENTS_BUILTIN_NAMES
 

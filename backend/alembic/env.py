@@ -18,7 +18,7 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 # Override sqlalchemy.url from environment if available (.env or systemd)
-env_db_url = os.environ.get("JARVIS_DATABASE_URL")
+env_db_url = os.environ.get("MULDRO_DATABASE_URL")
 if env_db_url:
     config.set_main_option("sqlalchemy.url", env_db_url)
 

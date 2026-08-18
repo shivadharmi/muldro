@@ -18,7 +18,7 @@ STORE_CAP = 200
 
 # path -> line count at adoption (2026-06-12). Files may not exceed this.
 GRANDFATHERED: dict[str, int] = {
-    "backend/src/orchestrator/jarvis.py": 3427,
+    "backend/src/orchestrator/muldro.py": 3427,
     "backend/src/services/graph_executor.py": 2026,
     "backend/src/services/surface_detail_builders.py": 1610,
     "backend/src/services/scheduler.py": 1215,

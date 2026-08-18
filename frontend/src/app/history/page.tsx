@@ -6,7 +6,7 @@ import { fetchHistory, retryRun } from "@/lib/api";
 import { useHistoryStore } from "@/stores/history-store";
 import type { HistoryItem } from "@/stores/history-store";
 import { useAuth } from "@/lib/auth";
-import { useJarvisWs } from "@/hooks/use-jarvis-ws";
+import { useMuldroWs } from "@/hooks/use-muldro-ws";
 import { useWsActionStore } from "@/stores/ws-action-store";
 import { RunRow } from "@/components/history/run-row";
 import { HistoryFilters } from "@/components/history/history-filters";
@@ -62,7 +62,7 @@ export default function HistoryPage() {
     [updateRunLiveState]
   );
 
-  const { sendAction } = useJarvisWs({
+  const { sendAction } = useMuldroWs({
     userId: user?.user_id ?? "",
     onSurfaceUpdate: handleSurfaceUpdate,
     enabled: !!user,

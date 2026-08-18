@@ -15,9 +15,9 @@ from tests.conftest import make_mock_settings
 
 
 def _make_orchestrator(services):
-    from src.orchestrator.jarvis import JarvisOrchestrator
+    from src.orchestrator.muldro import MuldroOrchestrator
 
-    return JarvisOrchestrator(
+    return MuldroOrchestrator(
         settings=make_mock_settings(),
         db_factory=MagicMock(),
         services=services,

@@ -31,7 +31,7 @@ def _compile(stmt) -> str:
     return str(stmt.compile(dialect=postgresql.dialect()))
 
 
-class TestJarvisUpdateCursor:
+class TestMuldroUpdateCursor:
     """``ConnectorPoller.update_cursor`` must upsert atomically."""
 
     @pytest.mark.asyncio

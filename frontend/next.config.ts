@@ -5,7 +5,7 @@ const nextConfig: NextConfig = {
   // In production, Nginx or CloudFront handles compression at the edge.
   compress: false,
   async rewrites() {
-    // Note: /api/jarvis/chat is handled by Route Handler (src/app/api/jarvis/chat/route.ts)
+    // Note: /api/muldro/chat is handled by Route Handler (src/app/api/muldro/chat/route.ts)
     // for unbuffered SSE streaming. Other /api/* paths proxy through rewrites.
     const backend = process.env.BACKEND_URL || "http://localhost:8000";
     return [

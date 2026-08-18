@@ -61,7 +61,7 @@ class TestSSE:
 
             # Publish to the user-specific channel the SSE endpoint subscribes to
             await r.publish(
-                f"jarvis:realtime:{user_id}",
+                f"muldro:realtime:{user_id}",
                 json.dumps({"type": "test", "data": "e2e_redis_test"}),
             )
             await asyncio.wait_for(listener, timeout=8.0)
@@ -140,7 +140,7 @@ class TestWebSocket:
 
                 # Publish to the a2ui channel the WS endpoint subscribes to.
                 payload = json.dumps({"type": "test", "data": "e2e_ws_relay"})
-                await r.publish(f"jarvis:a2ui:{user_id}", payload)
+                await r.publish(f"muldro:a2ui:{user_id}", payload)
 
                 # Read messages until we find ours (skip heartbeats / backfill).
                 try:

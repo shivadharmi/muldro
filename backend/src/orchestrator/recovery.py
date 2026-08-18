@@ -1,4 +1,4 @@
-"""Startup recovery for the Jarvis orchestrator.
+"""Startup recovery for the Muldro orchestrator.
 
 On every boot, reconciles in-flight state:
 - Orphaned plans (planned but never policy-checked)

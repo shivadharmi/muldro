@@ -1,4 +1,4 @@
-"""InitiativeScorer — decides when Jarvis should proactively act.
+"""InitiativeScorer — decides when Muldro should proactively act.
 
 Computes a composite "initiative score" from event importance, urgency,
 goal relevance, and entity context. When the score exceeds the threshold,

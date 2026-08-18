@@ -1,7 +1,7 @@
 """THE ONE approval gate for the deep chat runtime (Step 6B).
 
 A ``wrap_tool_call`` interceptor placed BETWEEN capability_scope (OUTER) and
-jarvis_tool_dispatcher (INNER) — the composed chain is
+muldro_tool_dispatcher (INNER) — the composed chain is
 ``capability_scope → trust_gate → dispatcher``. By the time this gate runs,
 capability_scope has ALREADY authorized that the tool is inside the agent's
 ``capability_scope``, so the gate never re-checks scope; it only decides *approval*.

@@ -30,7 +30,7 @@ class ArtifactStorageService:
 
     @property
     def _bucket(self) -> str:
-        return self._settings.s3_bucket or "jarvis-artifacts"
+        return self._settings.s3_bucket or "muldro-artifacts"
 
     async def upload(
         self,

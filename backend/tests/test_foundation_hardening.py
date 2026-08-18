@@ -215,7 +215,7 @@ class TestWorkerDeadLetter:
         mock_dlq.enqueue = AsyncMock(return_value="dlq_001")
 
         ctx = DeadLetterContext(
-            stream="jarvis:events:usr_1",
+            stream="muldro:events:usr_1",
             group="entity_extractor",
             msg_id="5-0",
             data={"event_id": "be_42", "user_id": "usr_1"},
@@ -723,7 +723,7 @@ class TestMemoryContradictionDeferral:
         )
 
         event_bus = AsyncMock()
-        event_bus.event_stream = MagicMock(return_value="jarvis:events:usr_test")
+        event_bus.event_stream = MagicMock(return_value="muldro:events:usr_test")
         event_bus.publish = AsyncMock()
 
         svc = MemoryService(settings=settings, db=db, event_bus=event_bus)

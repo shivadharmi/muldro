@@ -1,4 +1,4 @@
-"""Sub-agent definitions for the Jarvis orchestrator.
+"""Sub-agent definitions for the Muldro orchestrator.
 
 Defines 6 specialized agents with their prompts, model assignments,
 capability-based access scopes, and per-agent thinking configuration.
@@ -187,7 +187,7 @@ AGENT_THINKING: dict[str, ThinkingConfig] = {
 
 @dataclass
 class SubAgent:
-    """Definition of a Jarvis sub-agent."""
+    """Definition of a Muldro sub-agent."""
 
     name: str
     prompt: str

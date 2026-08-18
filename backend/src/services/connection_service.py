@@ -1,9 +1,9 @@
-"""Connect-account flow — Jarvis owns connection naming.
+"""Connect-account flow — Muldro owns connection naming.
 
-Jarvis mints the namespaced ``connectionName`` up front and passes it into
+Muldro mints the namespaced ``connectionName`` up front and passes it into
 OpenConnector's authorization request, so credentials are stored under exactly
 the name the adapter later forces (deterministic — no discovery/polling drift).
-Completion is poll-based: OpenConnector does NOT redirect back to a Jarvis URL
+Completion is poll-based: OpenConnector does NOT redirect back to a Muldro URL
 (``infra/gateway/spike-findings-connect.md`` §4), so ``confirm_connection``
 polls ``GET /api/connections`` for the connection becoming ``configured`` and
 flips ``connection_map`` ``pending -> active``. The adapter's resolver already

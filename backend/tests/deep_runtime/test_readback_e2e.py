@@ -4,7 +4,7 @@ Phases 1-3 landed the read-back as a DORMANT ``@wrap_tool_call`` middleware
 (``src/deep_runtime/middleware/readback.py``, unit-proven in ``test_readback_middleware.py``),
 a trust-increment helper (``trust_increment.py``), and the chain wiring in
 ``AgentInvoker._build_deep_agent_for`` (read_back flag-gated behind ``deep_readback_enabled``,
-INNER of write_lock, OUTER of the jarvis_tool_dispatcher). This test proves the INTEGRATION —
+INNER of write_lock, OUTER of the muldro_tool_dispatcher). This test proves the INTEGRATION —
 that read_back is actually in the REAL wired chain and annotates its verdict through the REAL
 ``stream_deep_agent_events`` SSE adapter, forced on via ``deep_readback_enabled=True`` — NOT the
 verdict/annotation SEMANTICS (already unit-proven in Phase 1/2; not duplicated here).
@@ -16,7 +16,7 @@ Drives the REAL chain, fully OFFLINE (no Anthropic API, no Postgres, no Redis):
       -> build_deep_agent / create_deep_agent
       -> stream_deep_agent_events         (the frozen SSE adapter)
 
-A scripted-fake LEAD model emits ONE tool call to a stub Jarvis tool (``email_send``) whose
+A scripted-fake LEAD model emits ONE tool call to a stub Muldro tool (``email_send``) whose
 registry capability is ``email.send`` — an IRREVERSIBLE write in ``UNVERIFIABLE_CAPABILITIES``.
 The lead carries ``email.send`` in its capability_scope so the capability_scope guard ADMITS the
 call; ``authorization_source="direct_user_request"`` keeps the trust_gate dormant (short-circuits

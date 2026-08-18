@@ -35,7 +35,7 @@ variable "domain_name" {
 variable "subdomain" {
   description = "Subdomain for the service"
   type        = string
-  default     = "jarvis"
+  default     = "muldro"
 }
 
 variable "anthropic_api_key" {
@@ -82,5 +82,5 @@ variable "github_pat" {
 variable "project_name" {
   description = "Project name used as resource name prefix"
   type        = string
-  default     = "jarvis"
+  default     = "muldro"
 }

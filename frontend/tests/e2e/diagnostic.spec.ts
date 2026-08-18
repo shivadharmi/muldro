@@ -1,7 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
 
 /**
- * Comprehensive diagnostic test suite for Jarvis frontend + backend.
+ * Comprehensive diagnostic test suite for Muldro frontend + backend.
  * Tests every page load, API connectivity, UI rendering, console errors, and key interactions.
  */
 
@@ -11,10 +11,10 @@ test.beforeEach(async ({ page }) => {
   // Pre-set auth token in localStorage before each test
   await page.goto("/login", { waitUntil: "commit" });
   await page.evaluate(() => {
-    localStorage.setItem("jarvis_auth_token", "test-token-123");
+    localStorage.setItem("muldro_auth_token", "test-token-123");
     localStorage.setItem(
-      "jarvis_auth_user",
-      JSON.stringify({ user_id: "usr_01JTEST00000000000000000000", email: "admin@jarvis.local", display_name: "Admin" })
+      "muldro_auth_user",
+      JSON.stringify({ user_id: "usr_01JTEST00000000000000000000", email: "admin@muldro.local", display_name: "Admin" })
     );
   });
 });
@@ -170,10 +170,10 @@ test("[Flow] Chat: input, type, send button visible", async ({ page }) => {
 
   const chatInput = hasTextarea ? textarea : input;
   if (hasTextarea || hasInput) {
-    await chatInput.fill("Hello Jarvis");
+    await chatInput.fill("Hello Muldro");
     const val = await chatInput.inputValue();
     console.log(`  Typed text: "${val}"`);
-    expect(val).toBe("Hello Jarvis");
+    expect(val).toBe("Hello Muldro");
   }
 
   // Check for send button

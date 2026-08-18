@@ -1,4 +1,4 @@
-"""Shared test fixtures for Jarvis backend tests."""
+"""Shared test fixtures for Muldro backend tests."""
 
 import asyncio
 import inspect

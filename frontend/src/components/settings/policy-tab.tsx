@@ -34,8 +34,8 @@ export function PolicyTab({
   return (
     <div className="space-y-6">
       <p className="text-sm text-t-tertiary leading-relaxed">
-        Your overall posture applies to everything Jarvis does. Fine-tune how much
-        Jarvis can do on its own for each kind of action in the Trust tab.
+        Your overall posture applies to everything Muldro does. Fine-tune how much
+        Muldro can do on its own for each kind of action in the Trust tab.
       </p>
 
       <div>

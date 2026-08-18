@@ -32,8 +32,8 @@ Thumbs.db
 htmlcov/
 
 # Reference docs (not part of codebase)
-jarvis_discussion_export/
-jarvis_docs/
+muldro_discussion_export/
+muldro_docs/
 setup_bedrock_for_claude.sh
 Screenshot 2026-03-14 at 5.22.44 AM.png
 server.log

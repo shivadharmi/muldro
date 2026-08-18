@@ -25,7 +25,7 @@ The frontend is Next.js App Router at `frontend/src/`. Pages go in `frontend/src
 5. **Add navigation** in `frontend/src/components/layout/sidebar.tsx`:
    - Add NavItem for the new page
 6. **For real-time data**:
-   - WebSocket: use `frontend/src/hooks/use-jarvis-ws.ts`
+   - WebSocket: use `frontend/src/hooks/use-muldro-ws.ts`
    - SSE: use `frontend/src/hooks/use-sse.ts`
    - Notifications: use `frontend/src/hooks/use-notifications.ts`
 7. **For A2UI surfaces**: use the renderer at `frontend/src/components/a2ui/renderer.tsx`

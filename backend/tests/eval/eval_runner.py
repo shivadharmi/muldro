@@ -1,4 +1,4 @@
-"""Eval runner — measures quality of Jarvis subsystems against datasets.
+"""Eval runner — measures quality of Muldro subsystems against datasets.
 
 Usage:
     python -m tests.eval.eval_runner --suite meeting_prep
@@ -202,7 +202,7 @@ AVAILABLE_SUITES = [
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Jarvis Eval Runner")
+    parser = argparse.ArgumentParser(description="Muldro Eval Runner")
     parser.add_argument(
         "--suite",
         default="all",

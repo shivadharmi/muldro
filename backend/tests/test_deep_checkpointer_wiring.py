@@ -1,4 +1,4 @@
-"""Step 6A.5: JarvisOrchestrator threads a checkpointer_provider to AgentInvoker; it returns
+"""Step 6A.5: MuldroOrchestrator threads a checkpointer_provider to AgentInvoker; it returns
 the injected saver, or None (→ MemorySaver at the seam) by default.
 """
 
@@ -9,16 +9,16 @@ from tests.conftest import make_mock_settings
 
 
 def _make_orchestrator(**kwargs):
-    """Build a JarvisOrchestrator with minimal mocks (mirrors test_jarvis_conversation_embedding).
+    """Build a MuldroOrchestrator with minimal mocks (mirrors test_muldro_conversation_embedding).
 
     Accepts extra kwargs (e.g. checkpointer_provider=...) that are forwarded to the
-    JarvisOrchestrator constructor.
+    MuldroOrchestrator constructor.
     """
     settings = make_mock_settings()
 
-    from src.orchestrator.jarvis import JarvisOrchestrator
+    from src.orchestrator.muldro import MuldroOrchestrator
 
-    return JarvisOrchestrator(
+    return MuldroOrchestrator(
         settings=settings,
         db_factory=MagicMock(),
         services=ServiceContainer(),

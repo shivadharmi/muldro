@@ -196,7 +196,7 @@ export function InlineApprovalCard({ approval, onDecision }: InlineApprovalCardP
 
         {/* Action buttons */}
         <div className="flex items-center gap-2.5 pt-1">
-          <Tooltip text="Jarvis will proceed with this action">
+          <Tooltip text="Muldro will proceed with this action">
             <button
               type="button"
               onClick={handleApprove}

@@ -1,6 +1,6 @@
 """ChatProcessor — the user-facing chat orchestration pipeline.
 
-Extracted from ``JarvisOrchestrator`` (god-object decomposition, 2026-06-19). This
+Extracted from ``MuldroOrchestrator`` (god-object decomposition, 2026-06-19). This
 is the final and most delicate extraction: the chat path. It owns the single
 intent → plan → route → execute → present → surface → learn sequence that drives
 every interactive (chat) turn, in both the batch (``process_message``) and

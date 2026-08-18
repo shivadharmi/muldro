@@ -136,9 +136,9 @@ The Google account email is captured on OAuth connect and persisted to `Integrat
 
 ## Infrastructure (operator, one-time)
 
-A Terraform module in `infra/` provisions exactly three resources, so operator setup is `terraform apply` + the existing `JARVIS_GMAIL_PUBSUB_TOPIC` env var:
+A Terraform module in `infra/` provisions exactly three resources, so operator setup is `terraform apply` + the existing `MULDRO_GMAIL_PUBSUB_TOPIC` env var:
 
-1. `google_pubsub_topic` (e.g. `jarvis-gmail-push`).
+1. `google_pubsub_topic` (e.g. `muldro-gmail-push`).
 2. `google_pubsub_topic_iam_member` — `gmail-api-push@system.gserviceaccount.com` as `roles/pubsub.publisher`.
 3. `google_pubsub_subscription` (push) — `push_endpoint = {callback_base_url}/v1/webhooks/gmail/pubsub`, `oidc_token { service_account_email, audience = push_endpoint }`.
 

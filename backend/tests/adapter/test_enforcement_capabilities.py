@@ -6,7 +6,7 @@ it does NOT prove the *caller* was authorized for it. Without a capability
 check, a read-scoped token (``capabilities=["email.search"]``) could invoke
 ``gmail.send_email`` because ``gmail.send_email`` is in the shared action allowlist.
 
-These tests pin the second gate: each action maps to a required Jarvis
+These tests pin the second gate: each action maps to a required Muldro
 capability, and a call is rejected (fail-closed) unless the principal was
 granted that capability.
 """

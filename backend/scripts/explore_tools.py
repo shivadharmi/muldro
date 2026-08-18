@@ -31,7 +31,7 @@ sys.path.insert(0, str(_backend))
 
 # Prevent DB/Redis connections and MCP subprocess spawning
 os.environ["PYTEST_CURRENT_TEST"] = "explore_tools"
-os.environ["JARVIS_SKIP_MCP_BRIDGE"] = "1"
+os.environ["MULDRO_SKIP_MCP_BRIDGE"] = "1"
 
 logging.basicConfig(level=logging.WARNING, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -122,16 +122,16 @@ async def explore_internal_servers() -> list[ServerReport]:
             )
         )
 
-    # 3. Composed jarvis_tools server (with namespaces)
+    # 3. Composed muldro_tools server (with namespaces)
     try:
-        from src.tools.server import jarvis_tools
+        from src.tools.server import muldro_tools
 
-        report = await _explore_fastmcp_server(jarvis_tools, "jarvis-tools", standalone=False)
+        report = await _explore_fastmcp_server(muldro_tools, "muldro-tools", standalone=False)
         reports.append(report)
     except Exception as e:
         reports.append(
             ServerReport(
-                server_name="jarvis-tools",
+                server_name="muldro-tools",
                 server_type="internal_fastmcp",
                 error=str(e),
             )
@@ -343,7 +343,7 @@ def cross_reference(reports: list[ServerReport]) -> dict:
 
     all_defs, tool_to_capability, internal_names = _load_catalog()
 
-    # The composed jarvis-tools server namespaces tool names
+    # The composed muldro-tools server namespaces tool names
     # (intelligence_/communication_) while the catalog keys are bare, so strip
     # the prefix before any catalog lookup.
     def _bare(name: str) -> str:
@@ -406,7 +406,7 @@ def print_report(reports: list[ServerReport], xref: dict, as_json: bool = False)
     thin = "-" * 80
 
     print(f"\n{sep}")
-    print("  JARVIS MCP TOOL EXPLORATION — LIVE SERVER INTROSPECTION")
+    print("  MULDRO MCP TOOL EXPLORATION — LIVE SERVER INTROSPECTION")
     print(f"{sep}\n")
 
     for report in reports:
@@ -584,7 +584,7 @@ def explore_agent_scopes() -> dict[str, list[str]]:
 
 
 async def main() -> None:
-    parser = argparse.ArgumentParser(description="Explore Jarvis MCP tool inventory")
+    parser = argparse.ArgumentParser(description="Explore Muldro MCP tool inventory")
     parser.add_argument("--internal-only", action="store_true", help="Only internal FastMCP")
     parser.add_argument("--external-only", action="store_true", help="Only external MCP")
     parser.add_argument("--json", action="store_true", help="JSON output")

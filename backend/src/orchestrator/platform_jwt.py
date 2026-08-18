@@ -1,12 +1,12 @@
 """Short-lived platform JWT mint/verify + JWKS for the ToolHive gateway.
 
-Jarvis mints a short-lived (5 minute) RS256 JWT that scopes a single call
+Muldro mints a short-lived (5 minute) RS256 JWT that scopes a single call
 into the ToolHive vMCP gateway to a principal, tenant, workspace, and an
-explicit capability list. ToolHive verifies the token against Jarvis's JWKS
+explicit capability list. ToolHive verifies the token against Muldro's JWKS
 endpoint (`get_jwks()`) rather than a shared secret, so the gateway never
-needs Jarvis's private key.
+needs Muldro's private key.
 
-Key material is split by ROLE. The minting process (the Jarvis API) sets
+Key material is split by ROLE. The minting process (the Muldro API) sets
 `settings.platform_jwt_private_pem`. A verify-only process — notably the
 Connection Context Adapter, which is this design's tenant-isolation boundary —
 sets `settings.platform_jwt_public_pem` instead and never holds the signing key:
@@ -39,9 +39,9 @@ from src.config.settings import get_settings
 
 logger = logging.getLogger(__name__)
 
-ISSUER = "jarvis-auth"
+ISSUER = "muldro-auth"
 DEFAULT_AUDIENCE = "toolhive-vmcp"
-KEY_ID = "jarvis-platform-1"
+KEY_ID = "muldro-platform-1"
 TOKEN_TTL_SECONDS = 300
 
 
@@ -96,7 +96,7 @@ def _load_or_generate_private_key() -> rsa.RSAPrivateKey:
     # loudly; a hard startup guard for non-dev is a GA prerequisite (spec §12).
     logger.warning(
         "platform_jwt_private_pem is not set — using an ephemeral RSA key. Tokens are "
-        "unverifiable across processes/restarts; set JARVIS_PLATFORM_JWT_PRIVATE_PEM before "
+        "unverifiable across processes/restarts; set MULDRO_PLATFORM_JWT_PRIVATE_PEM before "
         "any multi-replica or production deployment."
     )
     return rsa.generate_private_key(public_exponent=65537, key_size=2048)

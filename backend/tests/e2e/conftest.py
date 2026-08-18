@@ -1,6 +1,6 @@
 """Shared E2E test fixtures.
 
-These tests run against a live Jarvis backend at http://localhost:8000.
+These tests run against a live Muldro backend at http://localhost:8000.
 Prerequisites: docker compose up -d && python run.py
 """
 
@@ -30,7 +30,7 @@ async def _get_session_token() -> str:
         # Step 1: Request magic link (dev mode returns the token directly)
         resp = await c.post(
             "/v1/auth/magic-link",
-            json={"email": "e2e-test@jarvis.local"},
+            json={"email": "e2e-test@muldro.local"},
         )
         resp.raise_for_status()
         magic_token = resp.json()["token"]

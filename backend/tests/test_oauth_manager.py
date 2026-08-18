@@ -31,7 +31,7 @@ class TestOAuthManager:
         factory = MagicMock(return_value=ctx)
         return factory, db
 
-    @patch.dict(os.environ, {"JARVIS_OAUTH_ENCRYPTION_KEY": TEST_KEY})
+    @patch.dict(os.environ, {"MULDRO_OAUTH_ENCRYPTION_KEY": TEST_KEY})
     async def test_store_new_token(self):
         factory, db = self._make_mock_db()
 
@@ -56,7 +56,7 @@ class TestOAuthManager:
         db.add.assert_called_once()
         db.commit.assert_awaited_once()
 
-    @patch.dict(os.environ, {"JARVIS_OAUTH_ENCRYPTION_KEY": TEST_KEY})
+    @patch.dict(os.environ, {"MULDRO_OAUTH_ENCRYPTION_KEY": TEST_KEY})
     async def test_store_updates_existing_token(self):
         factory, db = self._make_mock_db()
 
@@ -80,7 +80,7 @@ class TestOAuthManager:
         db.add.assert_not_called()
         db.commit.assert_awaited_once()
 
-    @patch.dict(os.environ, {"JARVIS_OAUTH_ENCRYPTION_KEY": TEST_KEY})
+    @patch.dict(os.environ, {"MULDRO_OAUTH_ENCRYPTION_KEY": TEST_KEY})
     async def test_get_valid_token_not_expired(self):
         factory, db = self._make_mock_db()
         f = Fernet(TEST_KEY.encode())
@@ -100,7 +100,7 @@ class TestOAuthManager:
 
         assert token == "my_access_token"
 
-    @patch.dict(os.environ, {"JARVIS_OAUTH_ENCRYPTION_KEY": TEST_KEY})
+    @patch.dict(os.environ, {"MULDRO_OAUTH_ENCRYPTION_KEY": TEST_KEY})
     async def test_get_token_not_found(self):
         factory, db = self._make_mock_db()
 
@@ -115,7 +115,7 @@ class TestOAuthManager:
 
         assert token is None
 
-    @patch.dict(os.environ, {"JARVIS_OAUTH_ENCRYPTION_KEY": TEST_KEY})
+    @patch.dict(os.environ, {"MULDRO_OAUTH_ENCRYPTION_KEY": TEST_KEY})
     async def test_get_expired_token_no_refresh(self):
         factory, db = self._make_mock_db()
         f = Fernet(TEST_KEY.encode())
@@ -135,7 +135,7 @@ class TestOAuthManager:
 
         assert token is None
 
-    @patch.dict(os.environ, {"JARVIS_OAUTH_ENCRYPTION_KEY": TEST_KEY})
+    @patch.dict(os.environ, {"MULDRO_OAUTH_ENCRYPTION_KEY": TEST_KEY})
     async def test_delete_token(self):
         factory, db = self._make_mock_db()
 
@@ -153,7 +153,7 @@ class TestOAuthManager:
         db.delete.assert_awaited_once_with(existing)
         db.commit.assert_awaited_once()
 
-    @patch.dict(os.environ, {"JARVIS_OAUTH_ENCRYPTION_KEY": TEST_KEY})
+    @patch.dict(os.environ, {"MULDRO_OAUTH_ENCRYPTION_KEY": TEST_KEY})
     async def test_delete_token_not_found(self):
         factory, db = self._make_mock_db()
 
@@ -192,7 +192,7 @@ class TestGetValidTokenWithReason:
         factory = MagicMock(return_value=ctx)
         return factory, db
 
-    @patch.dict(os.environ, {"JARVIS_OAUTH_ENCRYPTION_KEY": TEST_KEY})
+    @patch.dict(os.environ, {"MULDRO_OAUTH_ENCRYPTION_KEY": TEST_KEY})
     async def test_ok_returns_token_and_reason(self):
         factory, db = self._make_mock_db()
         f = Fernet(TEST_KEY.encode())
@@ -214,7 +214,7 @@ class TestGetValidTokenWithReason:
         # Back-compat wrapper still returns the bare token string.
         assert await manager.get_valid_token(TEST_USER_ID, "google") == "live_token"
 
-    @patch.dict(os.environ, {"JARVIS_OAUTH_ENCRYPTION_KEY": TEST_KEY})
+    @patch.dict(os.environ, {"MULDRO_OAUTH_ENCRYPTION_KEY": TEST_KEY})
     async def test_no_token_row_returns_no_token_reason(self):
         factory, db = self._make_mock_db()
         mock_result = MagicMock()
@@ -229,7 +229,7 @@ class TestGetValidTokenWithReason:
         assert res.token is None
         assert res.reason == "no_token"
 
-    @patch.dict(os.environ, {"JARVIS_OAUTH_ENCRYPTION_KEY": TEST_KEY})
+    @patch.dict(os.environ, {"MULDRO_OAUTH_ENCRYPTION_KEY": TEST_KEY})
     async def test_expired_no_refresh_returns_no_refresh_token_reason(self):
         factory, db = self._make_mock_db()
         f = Fernet(TEST_KEY.encode())
@@ -249,7 +249,7 @@ class TestGetValidTokenWithReason:
         assert res.token is None
         assert res.reason == "no_refresh_token"
 
-    @patch.dict(os.environ, {"JARVIS_OAUTH_ENCRYPTION_KEY": TEST_KEY})
+    @patch.dict(os.environ, {"MULDRO_OAUTH_ENCRYPTION_KEY": TEST_KEY})
     async def test_refresh_http_failure_returns_refresh_failed_reason(self):
         factory, db = self._make_mock_db()
         f = Fernet(TEST_KEY.encode())

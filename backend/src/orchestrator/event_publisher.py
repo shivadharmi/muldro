@@ -1,6 +1,6 @@
 """EventPublisher — owns the lazy event bus and runtime-event emission.
 
-Extracted from ``JarvisOrchestrator`` (god-object decomposition, 2026-06-19).
+Extracted from ``MuldroOrchestrator`` (god-object decomposition, 2026-06-19).
 This is a leaf collaborator: it depends only on settings, the service container
 (for the process-wide shared ``EventBus``/Redis), and the DB session factory.
 Surfaces, tools, and perception depend downward on this class.

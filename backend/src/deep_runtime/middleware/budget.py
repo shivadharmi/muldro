@@ -65,7 +65,7 @@ def make_budget_middleware(
         An ``AgentMiddleware`` whose async ``aafter_model`` hook records usage.
     """
 
-    @after_model(name="JarvisBudgetMiddleware")
+    @after_model(name="MuldroBudgetMiddleware")
     async def _record_budget(state: dict[str, Any], runtime: Any) -> None:
         """Record token usage for the most recent model call (side effect only)."""
         try:

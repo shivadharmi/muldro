@@ -125,7 +125,7 @@ async def test_extract_and_store_uses_prompt_addendum(
 
     await svc.extract_and_store(
         user_id=TEST_USER_ID,
-        source_text="User: Check repos\nJarvis: You have 39 repos",
+        source_text="User: Check repos\nMuldro: You have 39 repos",
         source_event_ids=["trace_123"],
         workspace_id=TEST_WORKSPACE_ID,
         prompt_addendum="\nExtra instruction for interaction learning.",
@@ -188,7 +188,7 @@ async def test_extract_auto_checks_contradictions(mock_embed_cls, mock_complete,
     mock_embed_cls.return_value = mock_embedder
 
     event_bus = AsyncMock()
-    event_bus.event_stream = MagicMock(return_value=f"jarvis:events:{TEST_USER_ID}")
+    event_bus.event_stream = MagicMock(return_value=f"muldro:events:{TEST_USER_ID}")
     event_bus.publish = AsyncMock()
 
     service = MemoryService(settings=settings, db=mock_db, event_bus=event_bus)

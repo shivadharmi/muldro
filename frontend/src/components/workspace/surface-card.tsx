@@ -5,7 +5,7 @@ import { StepListCompact } from "@/components/a2ui/components/step-list";
 import { InsightSurface } from "@/components/a2ui/components/insight-surface";
 import { A2UIRenderer } from "@/components/a2ui/renderer";
 import type { InsightData } from "@/lib/a2ui-types";
-import { InlineMarkdown } from "@/components/jarvis/markdown-renderer";
+import { InlineMarkdown } from "@/components/muldro/markdown-renderer";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { riskLevelTextColor, trustLevelColor } from "@/lib/design-tokens";
 

@@ -421,7 +421,7 @@ async def test_build_chat_lead_uses_invoker_agents_and_returns_lead():
     inv = _make_invoker_with_agents(agents, _db_factory, cheap_mode=False)
 
     fake_resolver = SimpleNamespace(capabilities_for_step=AsyncMock(side_effect=lambda c: {c}))
-    step = PlanStep(description="email.send", capability="email.send", actor="jarvis")
+    step = PlanStep(description="email.send", capability="email.send", actor="muldro")
     real_derive = lead_builder.derive_lead_scope
 
     with (
@@ -451,7 +451,7 @@ async def test_build_chat_lead_forwards_invoker_cheap_mode():
     inv = _make_invoker_with_agents(agents, _db_factory, cheap_mode=True)
 
     fake_resolver = SimpleNamespace(capabilities_for_step=AsyncMock(side_effect=lambda c: {c}))
-    step = PlanStep(description="email.send", capability="email.send", actor="jarvis")
+    step = PlanStep(description="email.send", capability="email.send", actor="muldro")
 
     with patch("src.orchestrator.lead_builder.CapabilityResolver", return_value=fake_resolver):
         lead = await inv.build_chat_lead([step], "ws")

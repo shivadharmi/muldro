@@ -1,4 +1,4 @@
-"""Tests for the Jarvis orchestrator module."""
+"""Tests for the Muldro orchestrator module."""
 
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -332,11 +332,11 @@ class TestPrompts:
         }
         assert set(AGENT_PROMPTS.keys()) == expected
 
-    def test_jarvis_soul_core_not_empty(self):
-        from src.orchestrator.prompts import JARVIS_SOUL_CORE
+    def test_muldro_soul_core_not_empty(self):
+        from src.orchestrator.prompts import MULDRO_SOUL_CORE
 
-        assert len(JARVIS_SOUL_CORE) > 100
-        assert "operating system" in JARVIS_SOUL_CORE.lower()
+        assert len(MULDRO_SOUL_CORE) > 100
+        assert "operating system" in MULDRO_SOUL_CORE.lower()
 
     def test_planner_prompt_v2_mentions_json(self):
         from src.orchestrator.prompts import PLANNER_PROMPT_V2
@@ -351,7 +351,7 @@ class TestOrchestrator:
     async def test_process_message_routes_to_planner(self):
         from unittest.mock import AsyncMock
 
-        from src.orchestrator.jarvis import JarvisOrchestrator
+        from src.orchestrator.muldro import MuldroOrchestrator
 
         mock_client = AsyncMock()
 
@@ -383,7 +383,7 @@ class TestOrchestrator:
         db_ctx.__aexit__ = AsyncMock(return_value=False)
         db_factory = MagicMock(return_value=db_ctx)
 
-        orchestrator = JarvisOrchestrator(
+        orchestrator = MuldroOrchestrator(
             settings=settings,
             db_factory=db_factory,
             services=ServiceContainer(),

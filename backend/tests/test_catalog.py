@@ -18,9 +18,9 @@ def test_internal_tools_count():
     assert len(INTERNAL_TOOLS) == 29
 
 
-def test_internal_tool_names_match_jarvis():
-    """Verify catalog tool names match the internal_tools set in jarvis.py."""
-    # The internal_tools set is defined at line 2525 in jarvis.py
+def test_internal_tool_names_match_muldro():
+    """Verify catalog tool names match the internal_tools set in muldro.py."""
+    # The internal_tools set is defined at line 2525 in muldro.py
     # We extract it by reading the source directly to ensure exact match
     expected_names = {
         "ingest_event",

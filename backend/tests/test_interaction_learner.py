@@ -171,7 +171,7 @@ async def test_learn_sets_redis_cooldown(learner, mock_redis):
         )
 
     mock_redis.set.assert_called_once_with(
-        f"jarvis:learn_cooldown:{TEST_USER_ID}", "1", ex=60, nx=True
+        f"muldro:learn_cooldown:{TEST_USER_ID}", "1", ex=60, nx=True
     )
 
 
@@ -232,15 +232,15 @@ async def test_learn_handles_planner_intent(mock_mem_cls, learner):
 
 @pytest.mark.asyncio
 async def test_orchestrator_initializes_learner_when_memory_service_present():
-    """Verify JarvisOrchestrator creates InteractionLearner when memory_service exists."""
-    from src.orchestrator.jarvis import JarvisOrchestrator
+    """Verify MuldroOrchestrator creates InteractionLearner when memory_service exists."""
+    from src.orchestrator.muldro import MuldroOrchestrator
     from src.orchestrator.services import ServiceContainer
 
     services = ServiceContainer(memory_service=MagicMock())
     settings = make_mock_settings()
     db_factory = MagicMock()
 
-    orch = JarvisOrchestrator(
+    orch = MuldroOrchestrator(
         settings=settings,
         db_factory=db_factory,
         services=services,
@@ -258,14 +258,14 @@ async def test_orchestrator_creates_learner_without_container_memory_service():
     work in the API/shared-container path where the container carries no
     DB-bound memory_service. Only an absent db_factory disables it.
     """
-    from src.orchestrator.jarvis import JarvisOrchestrator
+    from src.orchestrator.muldro import MuldroOrchestrator
     from src.orchestrator.services import ServiceContainer
 
     services = ServiceContainer(memory_service=None)  # shared-container shape
     settings = make_mock_settings()
     db_factory = MagicMock()
 
-    orch = JarvisOrchestrator(
+    orch = MuldroOrchestrator(
         settings=settings,
         db_factory=db_factory,
         services=services,

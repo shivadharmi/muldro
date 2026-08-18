@@ -23,7 +23,7 @@ def _format_interaction(i) -> str:
     if i.plan_summary:
         parts.append(f"plan: {i.plan_summary}")
     if i.response_preview:
-        parts.append(f"jarvis: {i.response_preview}")
+        parts.append(f"muldro: {i.response_preview}")
     return " | ".join(parts)
 
 

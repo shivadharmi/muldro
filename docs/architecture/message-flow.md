@@ -7,7 +7,7 @@ When a user sends a message (via the web frontend), it flows through the followi
 ```mermaid
 sequenceDiagram
     participant U as User
-    participant API as FastAPI /v1/jarvis/chat
+    participant API as FastAPI /v1/muldro/chat
     participant O as Orchestrator
     participant IC as IntentClassifier (Haiku)
     participant P as Planner (Opus)
@@ -150,7 +150,7 @@ class PlanOutput(BaseModel):
 class PlanStep(BaseModel):
     step_id: str
     description: str
-    actor: Literal["jarvis", "user"] = "jarvis"   # who performs the step, NOT the agent
+    actor: Literal["muldro", "user"] = "muldro"   # who performs the step, NOT the agent
     capability: str               # e.g., "email.read", "search.web"
     input: dict = {}
     depends_on: list[str] = []    # step_id references
@@ -158,7 +158,7 @@ class PlanStep(BaseModel):
     user_context: str | None = None
 ```
 
-Both `PlanOutput` and `PlanStep` are frozen (`frozen=True`, `extra="ignore"`). The `actor` field distinguishes a step performed by Jarvis from one that must be performed by the user; the **agent** that executes a Jarvis step is assigned by the `CapabilityResolver` from the step's `capability`, not from `actor`.
+Both `PlanOutput` and `PlanStep` are frozen (`frozen=True`, `extra="ignore"`). The `actor` field distinguishes a step performed by Muldro from one that must be performed by the user; the **agent** that executes a Muldro step is assigned by the `CapabilityResolver` from the step's `capability`, not from `actor`.
 
 The Planner uses Claude's `tool_use` structured output with a text fallback parser (`extract_plan`) for resilience. A circular dependency validator ensures step DAGs are acyclic.
 
@@ -205,7 +205,7 @@ The `ContextPack` is converted to a markdown block appended to the agent's syste
 
 The `ContextBuilder` also accepts `graph_engine` (Neo4j) and `vector_store` (Qdrant) for enrichment. Explicit preferences are always injected via `get_user_preferences()` to ensure they influence decisions even when they do not match the current query semantically.
 
-**Prompt architecture:** System prompts are split into `JARVIS_SOUL_CORE` (shared by all 6 agents) and `PLANNER_PROMPT_V2` (Planner-only 7-step decomposition). Perceiver has `PERCEIVER_PROMPT` (7-step read-only). This prevents non-Planner agents from making routing decisions.
+**Prompt architecture:** System prompts are split into `MULDRO_SOUL_CORE` (shared by all 6 agents) and `PLANNER_PROMPT_V2` (Planner-only 7-step decomposition). Perceiver has `PERCEIVER_PROMPT` (7-step read-only). This prevents non-Planner agents from making routing decisions.
 
 ## Streaming Implementation
 
