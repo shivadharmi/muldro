@@ -8,18 +8,14 @@ from dataclasses import dataclass, field, replace
 
 from src.orchestrator.prompts import AGENT_PROMPTS
 
-# Cheap mode: lowest thinking budget allowed after halving, so reasoning-heavy
-# agents keep a usable scratchpad.
-CHEAP_MODE_THINKING_FLOOR = 1024
-
 # Model tier assignments per agent
 AGENT_MODEL_TIERS = {
-    "perceiver": "sonnet",
-    "librarian": "sonnet",
-    "planner": "opus",
-    "executor": "sonnet",
-    "presenter": "sonnet",
-    "persona": "haiku",
+    "perceiver": "balanced",
+    "librarian": "balanced",
+    "planner": "reasoning",
+    "executor": "balanced",
+    "presenter": "balanced",
+    "persona": "fast",
 }
 
 # Capability-based scopes per agent — abstracts over tool names.
@@ -195,7 +191,7 @@ class SubAgent:
 
     name: str
     prompt: str
-    model_tier: str  # opus, sonnet, haiku
+    model_tier: str  # reasoning, balanced, fast
     capability_scope: set[str] = field(default_factory=set)
     max_tokens: int = 4096
     temperature: float = 0.3
@@ -221,7 +217,7 @@ def create_sub_agents() -> dict[str, SubAgent]:
         agents[name] = SubAgent(
             name=name,
             prompt=prompt,
-            model_tier=AGENT_MODEL_TIERS.get(name, "sonnet"),
+            model_tier=AGENT_MODEL_TIERS.get(name, "balanced"),
             capability_scope=set(AGENT_CAPABILITY_SCOPES.get(name, set())),
             max_tokens=8192 if name == "planner" else 4096,
             temperature=0.3,
@@ -233,20 +229,21 @@ def create_sub_agents() -> dict[str, SubAgent]:
 def apply_cheap_mode(agent: SubAgent) -> SubAgent:
     """Return a cost-reduced copy of an agent for cheap mode.
 
-    Two levers (audit: ~65% cheaper, the "all-Sonnet" preset):
-    - Drop the Opus tier (opus→sonnet). Opus is ~5x Sonnet and only the Planner
-      uses it; Sonnet/Haiku tiers are left untouched (Haiku is already cheaper).
-    - Halve thinking budgets (thinking tokens bill as output), floored so
-      reasoning-heavy agents keep a usable scratchpad.
+    Cheap mode drops the reasoning tier to balanced (opus→sonnet): Opus is ~5x Sonnet
+    and only the Planner uses it; balanced/fast tiers are left untouched. The resolver
+    resolves the downgraded ``model_tier`` at build time, so this is the one lever that
+    reaches the model.
+
+    (Historical note: cheap mode also halved each agent's ``thinking.budget_tokens``, but
+    the resolver-backed build path derives the thinking budget from the tier binding's
+    effort — ``thinking.budget_tokens`` no longer reaches model construction — so that
+    lever was inert and has been removed. Cheap-mode thinking reduction now follows from
+    the tier downgrade's lower effort.)
 
     Returns a new SubAgent; the input is never mutated.
     """
-    downgraded_tier = "sonnet" if agent.model_tier == "opus" else agent.model_tier
-    reduced_thinking = ThinkingConfig(
-        enabled=agent.thinking.enabled,
-        budget_tokens=max(CHEAP_MODE_THINKING_FLOOR, agent.thinking.budget_tokens // 2),
-    )
-    return replace(agent, model_tier=downgraded_tier, thinking=reduced_thinking)
+    downgraded_tier = "balanced" if agent.model_tier == "reasoning" else agent.model_tier
+    return replace(agent, model_tier=downgraded_tier)
 
 
 def build_agent_set(base: dict[str, SubAgent], cheap_mode: bool) -> dict[str, SubAgent]:

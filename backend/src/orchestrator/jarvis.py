@@ -15,7 +15,7 @@ if TYPE_CHECKING:
     from src.services.relevance_assessor import PerceptionSignal, RelevanceAssessment
 
 
-from src.config.models import MODEL_TIERS
+from src.config.model_catalog import default_model_id_for_tier
 from src.config.settings import Settings
 from src.contracts import PlanOutput, PlanStep
 from src.errors import (
@@ -54,9 +54,6 @@ AGENT_EVENT_TYPES = {
     "briefing_generated",
     "perception_completed",
 }
-
-# MODEL_TIERS now lives in src.config.models (imported above) so assessor services
-# can depend on it downward instead of importing upward from this orchestrator module.
 
 
 # CONTEXT_ENRICHED_AGENTS now lives in context_assembler.py (its only consumer).
@@ -172,7 +169,7 @@ class JarvisOrchestrator:
                 redis=None,  # Populated lazily when event bus Redis is available
             )
         # Precompute haiku model ID for intent classification
-        self._haiku_model = MODEL_TIERS["haiku"]
+        self._haiku_model = default_model_id_for_tier("fast")
 
         # ChatProcessor owns the user-facing chat pipeline (intent → plan → route
         # → execute → present → surface → learn). Constructed last so all of its
@@ -828,10 +825,6 @@ class JarvisOrchestrator:
         return self._invoker.build_system_prompt(
             agent, context, capability_summary=capability_summary
         )
-
-    def _apply_cache_control_to_tools(self, tools: list[dict]) -> list[dict]:
-        """Delegate to ToolExecutor (facade kept for internal callers)."""
-        return self._tool_executor.apply_cache_control_to_tools(tools)
 
     async def _handle_system_capability(
         self,

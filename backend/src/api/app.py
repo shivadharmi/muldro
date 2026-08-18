@@ -24,6 +24,7 @@ from src.api.routes_mcp import router as mcp_router
 from src.api.routes_meetings import router as meetings_router
 from src.api.routes_memories import router as memories_router
 from src.api.routes_metrics import router as metrics_router
+from src.api.routes_model_config import router as model_config_router
 from src.api.routes_notifications import router as notifications_router
 from src.api.routes_observation import router as observation_router
 from src.api.routes_plans import router as plans_router
@@ -97,6 +98,7 @@ def create_app() -> FastAPI:
         try:
             from src.models.database import get_session_factory
             from src.services.agent_registry import AgentRegistry
+            from src.services.model_config_registry import ModelConfigRegistry
             from src.services.tool_registry import ToolRegistry
 
             async with get_session_factory()() as db:
@@ -118,12 +120,43 @@ def create_app() -> FastAPI:
                 except Exception:
                     logger.warning("Agent seed failed", exc_info=True)
 
+                try:
+                    mc_count = await ModelConfigRegistry(db).seed_defaults()
+                    if mc_count:
+                        needs_commit = True
+                        logger.info("Seeded %d model bindings", mc_count)
+                except Exception:
+                    logger.warning("Model config seed failed", exc_info=True)
+
                 if needs_commit:
                     await db.commit()
         except Exception:
             logger.debug(
                 "Registry seed skipped (DB not ready)",
                 exc_info=True,
+            )
+
+        # §4.3 master-key guard: fail loud at startup if encrypted provider credentials
+        # exist but JARVIS_CONFIG_ENCRYPTION_KEY is unset — otherwise the failure only
+        # surfaces at turn time inside secret_crypto. A genuinely unreachable DB can't be
+        # checked here; the turn-time guard remains the backstop for that case.
+        try:
+            from src.models.database import get_session_factory
+            from src.services.model_config_registry import has_encrypted_provider_credential
+
+            async with get_session_factory()() as db:
+                _has_encrypted_creds = await has_encrypted_provider_credential(db)
+        except Exception:
+            _has_encrypted_creds = False
+            logger.warning(
+                "Could not verify provider-credential encryption key at startup",
+                exc_info=True,
+            )
+        if _has_encrypted_creds and not get_settings().config_encryption_key:
+            raise RuntimeError(
+                "JARVIS_CONFIG_ENCRYPTION_KEY is unset but encrypted provider credentials "
+                "exist in the database. Set the master key so credentials can be decrypted "
+                "at model-build time, or remove the affected provider_credentials rows."
             )
 
         # Re-seed integration installations for all workspaces.
@@ -446,6 +479,9 @@ def create_app() -> FastAPI:
 
     # Trust management
     app.include_router(trust_router, tags=["trust"])
+
+    # Model + provider configuration
+    app.include_router(model_config_router, tags=["model-config"])
 
     # Prometheus metrics
     app.include_router(metrics_router, tags=["metrics"])

@@ -345,9 +345,12 @@ def _child_turns() -> list[list[AIMessageChunk]]:
 
 def _build_chat_model_dispatch(lead_fake: ScriptedModel, child_fake: ScriptedModel):
     """Return a build_chat_model replacement dispatching by agent name: the perceiver
-    delegate gets the child fake, every other agent (the lead) gets the lead fake."""
+    delegate gets the child fake, every other agent (the lead) gets the lead fake.
 
-    def _dispatch(agent: SubAgent) -> ScriptedModel:
+    ``build_chat_model`` is now ``async`` and called with ``workspace_id``/``db_factory``
+    keyword arguments, so the stub is an async, kwarg-tolerant coroutine function."""
+
+    async def _dispatch(agent: SubAgent, **kwargs: Any) -> ScriptedModel:  # noqa: ARG001
         return child_fake if agent.name == "perceiver" else lead_fake
 
     return _dispatch
@@ -668,7 +671,9 @@ async def test_neg_control_flag_off_subagents_empty_is_delegate_free():
 
     # DELIBERATELY do NOT call disable_general_purpose_subagent — the flag-off / no-delegate
     # path never would; the autouse fixture guarantees GP starts enabled for this key.
-    with patch.object(agent_builder, "build_chat_model", lambda a: lead_fake):
+    with patch.object(
+        agent_builder, "build_chat_model", _build_chat_model_dispatch(lead_fake, lead_fake)
+    ):
         frames = await _build_lead_and_stream(invoker, lead, subagents=(), thread_id="e2e-neg-c")
 
     allowed = _allowed_subagent_types(frames)

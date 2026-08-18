@@ -94,6 +94,9 @@ async def test_compiled_write_agent_installs_scope_guard_outermost():
     resolver.is_write_capability = AsyncMock(return_value=True)
     with (
         patch("src.deep_runtime.agent_builder.CapabilityResolver", return_value=resolver),
+        patch.object(
+            agent_builder, "build_chat_model", new=AsyncMock(return_value=SimpleNamespace())
+        ),
         patch.object(agent_builder, "create_deep_agent") as mock_create,
     ):
         await agent_builder.build_deep_agent(

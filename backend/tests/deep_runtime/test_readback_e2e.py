@@ -382,7 +382,7 @@ async def test_forced_on_readback_annotates_unverified_through_real_chain():
     lead = invoker._agents["presenter"]
 
     with (
-        patch.object(agent_builder, "build_chat_model", lambda a: lead_fake),
+        patch.object(agent_builder, "build_chat_model", AsyncMock(return_value=lead_fake)),
         patch(CAP_SCOPE_TOOL_REGISTRY, _FakeRegistry),
         patch(TRUST_GATE_TOOL_REGISTRY, _FakeRegistry),
         patch(GET_OR_ASSESS_RISK, AsyncMock(return_value=_STUB_RISK)),
@@ -433,7 +433,7 @@ async def test_neg_control_flag_off_no_verification_annotation():
     lead = invoker._agents["presenter"]
 
     with (
-        patch.object(agent_builder, "build_chat_model", lambda a: lead_fake),
+        patch.object(agent_builder, "build_chat_model", AsyncMock(return_value=lead_fake)),
         patch(CAP_SCOPE_TOOL_REGISTRY, _FakeRegistry),
         patch(TRUST_GATE_TOOL_REGISTRY, _FakeRegistry),
         patch(GET_OR_ASSESS_RISK, AsyncMock(return_value=_STUB_RISK)),

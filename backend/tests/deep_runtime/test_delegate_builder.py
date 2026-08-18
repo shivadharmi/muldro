@@ -34,6 +34,7 @@ from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResu
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph.state import CompiledStateGraph
 
+from src.config.model_catalog import default_model_id_for_tier
 from src.deep_runtime import agent_builder
 from src.deep_runtime.delegates import (
     DELEGATE_RESPONSE_FORMAT,
@@ -41,7 +42,6 @@ from src.deep_runtime.delegates import (
     build_read_only_delegate,
     disable_general_purpose_subagent,
 )
-from src.deep_runtime.model_factory import build_chat_model
 from src.orchestrator.agents import SubAgent, ThinkingConfig, create_sub_agents
 from src.orchestrator.prompts import PRESENTER_VOICE
 
@@ -119,6 +119,20 @@ def _read_only_resolver() -> AsyncMock:
     resolver = AsyncMock()
     resolver.is_write_capability = AsyncMock(return_value=False)
     return resolver
+
+
+def _async_build(make_model):
+    """Wrap a sync model factory as the now-async, kwarg-tolerant build_chat_model.
+
+    ``build_chat_model`` became ``async def build_chat_model(agent, *, workspace_id,
+    db_factory)``; these offline tests never want the real resolver/DB, so the mock
+    just returns a scripted model and tolerates the new keyword arguments.
+    """
+
+    async def _build(agent, **kwargs):  # noqa: ARG001
+        return make_model(agent)
+
+    return _build
 
 
 # ---------------------------------------------------------------------------
@@ -245,7 +259,16 @@ def test_delegate_summary_contract_mirrors_perceiver():
 async def test_returns_compiled_subagent_dict():
     cfg = _read_only_perceiver()
     rec: list = []
-    with patch.object(agent_builder, "CapabilityResolver", return_value=_read_only_resolver()):
+    with (
+        patch.object(
+            agent_builder,
+            "build_chat_model",
+            _async_build(
+                lambda a: ScriptedModel(_call_then_answer_turns("internal_search", {"query": "X"}))
+            ),
+        ),
+        patch.object(agent_builder, "CapabilityResolver", return_value=_read_only_resolver()),
+    ):
         spec = await build_read_only_delegate(
             cfg,
             _TOOL_DEFS,
@@ -264,19 +287,18 @@ async def test_returns_compiled_subagent_dict():
 # ===========================================================================
 async def test_per_child_model_is_sonnet():
     cfg = _read_only_perceiver()
-    assert cfg.model_tier == "sonnet"
-    assert build_chat_model(cfg).model == "claude-sonnet-4-6"
+    assert cfg.model_tier == "balanced"
+    assert default_model_id_for_tier(cfg.model_tier) == "claude-sonnet-4-6"
 
     recorded: dict = {}
-    real_build = agent_builder.build_chat_model
 
-    def _spy(agent):
+    async def _spy(agent, **kwargs):  # noqa: ARG001
         recorded["agent"] = agent
-        return real_build(agent)
+        return ScriptedModel(_call_then_answer_turns("internal_search", {"query": "X"}))
 
     rec: list = []
     with (
-        patch.object(agent_builder, "build_chat_model", side_effect=_spy),
+        patch.object(agent_builder, "build_chat_model", new=_spy),
         patch.object(agent_builder, "CapabilityResolver", return_value=_read_only_resolver()),
     ):
         await build_read_only_delegate(
@@ -287,9 +309,9 @@ async def test_per_child_model_is_sonnet():
             db_factory=_fake_db_factory(),
             execute_tool=_recorder(rec),
         )
-    # the compiled child model was built from the perceiver config (sonnet tier).
+    # the compiled child model was built from the perceiver config (balanced tier).
     assert recorded["agent"].name == "perceiver"
-    assert recorded["agent"].model_tier == "sonnet"
+    assert recorded["agent"].model_tier == "balanced"
 
 
 # ===========================================================================
@@ -302,7 +324,9 @@ async def test_child_gate_dispatches_in_scope_read():
         patch.object(
             agent_builder,
             "build_chat_model",
-            lambda a: ScriptedModel(_call_then_answer_turns("internal_search", {"query": "X"})),
+            _async_build(
+                lambda a: ScriptedModel(_call_then_answer_turns("internal_search", {"query": "X"}))
+            ),
         ),
         patch.object(agent_builder, "CapabilityResolver", return_value=_read_only_resolver()),
         patch(
@@ -333,8 +357,10 @@ async def test_child_gate_denies_out_of_scope_read():
         patch.object(
             agent_builder,
             "build_chat_model",
-            lambda a: ScriptedModel(
-                _call_then_answer_turns("email_send", {"to": "a@b.com", "body": "hi"})
+            _async_build(
+                lambda a: ScriptedModel(
+                    _call_then_answer_turns("email_send", {"to": "a@b.com", "body": "hi"})
+                )
             ),
         ),
         patch.object(agent_builder, "CapabilityResolver", return_value=_read_only_resolver()),
@@ -376,6 +402,13 @@ async def test_no_trust_gate_write_lock_or_presenter_voice():
         return real_create(**kwargs)
 
     with (
+        patch.object(
+            agent_builder,
+            "build_chat_model",
+            _async_build(
+                lambda a: ScriptedModel(_call_then_answer_turns("internal_search", {"query": "X"}))
+            ),
+        ),
         patch.object(agent_builder, "create_deep_agent", side_effect=_capture),
         patch.object(agent_builder, "CapabilityResolver", return_value=_read_only_resolver()),
     ):
@@ -426,8 +459,10 @@ async def test_negative_control_scope_guard_is_the_gate():
     with patch.object(
         agent_builder,
         "build_chat_model",
-        lambda a: ScriptedModel(
-            _call_then_answer_turns("email_send", {"to": "a@b.com", "body": "hi"})
+        _async_build(
+            lambda a: ScriptedModel(
+                _call_then_answer_turns("email_send", {"to": "a@b.com", "body": "hi"})
+            )
         ),
     ):
         spec_guarded = await build_read_only_delegate(
@@ -450,8 +485,10 @@ async def test_negative_control_scope_guard_is_the_gate():
     with patch.object(
         agent_builder,
         "build_chat_model",
-        lambda a: ScriptedModel(
-            _call_then_answer_turns("email_send", {"to": "a@b.com", "body": "hi"})
+        _async_build(
+            lambda a: ScriptedModel(
+                _call_then_answer_turns("email_send", {"to": "a@b.com", "body": "hi"})
+            )
         ),
     ):
         spec_open = await build_read_only_delegate(
@@ -558,7 +595,9 @@ async def _build_delegate_spec(name: str = "researcher") -> dict:
         patch.object(
             agent_builder,
             "build_chat_model",
-            lambda a: ScriptedModel(_call_then_answer_turns("internal_search", {"query": "X"})),
+            _async_build(
+                lambda a: ScriptedModel(_call_then_answer_turns("internal_search", {"query": "X"}))
+            ),
         ),
         patch.object(agent_builder, "CapabilityResolver", return_value=_read_only_resolver()),
     ):
@@ -580,7 +619,7 @@ async def _allowed_types_for_lead(lead_model_name: str, subagents: list, thread:
     with patch.object(
         agent_builder,
         "build_chat_model",
-        lambda a: ScriptedModel(_list_subagents_turns(), model_name=lead_model_name),
+        _async_build(lambda a: ScriptedModel(_list_subagents_turns(), model_name=lead_model_name)),
     ):
         lead = await agent_builder.build_deep_agent(
             lead_cfg,

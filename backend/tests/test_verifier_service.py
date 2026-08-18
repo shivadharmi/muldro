@@ -352,7 +352,11 @@ class TestLLMJudgeAdaptiveThinkingContract:
 
     @pytest.mark.asyncio
     async def test_llm_judge_sends_user_terminal_conversation(self, verifier):
+        from contextlib import asynccontextmanager
+
         from langchain_core.messages import AIMessage
+
+        from src.services.model_resolver import ResolvedModel
 
         captured: dict = {}
 
@@ -367,8 +371,24 @@ class TestLLMJudgeAdaptiveThinkingContract:
                     )
                 return AIMessage(content='{"passed": true, "reason": "all good"}')
 
+        @asynccontextmanager
+        async def _fake_session():
+            yield object()
+
+        async def _fake_resolve(self, **kwargs):
+            return ResolvedModel(
+                "anthropic", "claude-haiku-4-5-20251001", "sk", None, {"max_tokens": 256}
+            )
+
         condition = {"type": "llm_judge", "criteria": "Did the run succeed?"}
-        with patch("src.llm.utility.build_utility_model", return_value=_ContractModel()):
+        # complete_text now resolves via ModelResolver + build_langchain_model inside a
+        # short-lived DB session; patch that seam (mirrors tests/llm/test_utility.py) so the
+        # judge drives our contract-enforcing model with no DB.
+        with (
+            patch("src.llm.utility.build_langchain_model", return_value=_ContractModel()),
+            patch("src.llm.utility.get_session_factory", lambda: lambda: _fake_session()),
+            patch("src.llm.utility.ModelResolver.resolve", _fake_resolve),
+        ):
             result = await verifier._llm_judge(condition, _make_run(), [_make_step()])
 
         # The judge must produce a real verdict, not swallow a 400 into False.

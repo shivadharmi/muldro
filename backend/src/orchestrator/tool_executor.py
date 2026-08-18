@@ -258,14 +258,6 @@ class ToolExecutor:
 
         return tools
 
-    def apply_cache_control_to_tools(self, tools: list[dict]) -> list[dict]:
-        """Mark the last tool definition with cache_control for tool caching."""
-        if not tools:
-            return tools
-        tools = [dict(t) for t in tools]
-        tools[-1] = {**tools[-1], "cache_control": {"type": "ephemeral"}}
-        return tools
-
     async def call_composite_tool(
         self, tool_name: str, tool_input: dict, user_id: str = "", workspace_id: str = ""
     ) -> dict:

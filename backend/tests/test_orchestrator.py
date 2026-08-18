@@ -206,12 +206,12 @@ class TestAgents:
     def test_planner_uses_opus(self):
         from src.orchestrator.agents import AGENTS
 
-        assert AGENTS["planner"].model_tier == "opus"
+        assert AGENTS["planner"].model_tier == "reasoning"
 
     def test_persona_uses_haiku(self):
         from src.orchestrator.agents import AGENTS
 
-        assert AGENTS["persona"].model_tier == "haiku"
+        assert AGENTS["persona"].model_tier == "fast"
 
     @pytest.mark.asyncio
     async def test_tool_scoping(self):

@@ -8,11 +8,18 @@ OWN ``llm_utils.parse_llm_json`` + domain fallback — this seam only fetches te
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 
-from src.llm.model_factory import build_utility_model
+from src.config.model_catalog import get_model_spec
+from src.llm.model_factory import build_langchain_model
+from src.models.database import get_session_factory
+from src.services.model_resolver import ModelResolver, ResolvedModel
+
+# Legacy utility-tier names -> ModelResolver tiers. Callers still pass the old
+# names ("haiku"/"resolved"/"sonnet"); the resolver speaks fast/balanced/reasoning.
+_UTILITY_TIER_MAP = {"haiku": "fast", "resolved": "balanced", "sonnet": "balanced"}
 
 
 @dataclass(frozen=True)
@@ -55,6 +62,24 @@ def _usage_from_response(response, model_id: str) -> LLMUsage:
     )
 
 
+def _with_utility_params(
+    resolved: ResolvedModel, *, max_tokens: int, temperature: float | None
+) -> ResolvedModel:
+    """Return a new ResolvedModel with utility per-call overrides applied.
+
+    ``max_tokens`` always wins (each caller sizes its own completion). ``temperature``
+    is applied only when the model's catalog spec accepts it — adaptive-thinking models
+    reject a temperature and would 400.
+    """
+    kwargs = dict(resolved.kwargs)
+    kwargs["max_tokens"] = max_tokens
+    if temperature is not None:
+        spec = get_model_spec(resolved.provider, resolved.model_id)
+        if spec and spec.accepts_temperature:
+            kwargs["temperature"] = temperature
+    return replace(resolved, kwargs=kwargs)
+
+
 async def complete_text_with_usage(
     *,
     system: str | list | None,
@@ -62,6 +87,7 @@ async def complete_text_with_usage(
     tier: str,
     max_tokens: int,
     temperature: float | None = None,
+    workspace_id: str | None = None,
 ) -> tuple[str, LLMUsage]:
     """Run one plain completion and return ``(text, usage)``.
 
@@ -69,8 +95,18 @@ async def complete_text_with_usage(
     but also surfaces the call's token usage so perception-path callers can record a
     ``TokenUsage`` span — these direct calls otherwise bypass the deep-runtime budget
     middleware and are invisible in cost accounting.
+
+    The legacy ``tier`` ("haiku"/"resolved"/"sonnet") is mapped onto a ModelResolver
+    tier and resolved inside a short-lived DB session; utility completions never enable
+    thinking.
     """
-    model = build_utility_model(tier, max_tokens=max_tokens, temperature=temperature)
+    mapped_tier = _UTILITY_TIER_MAP.get(tier, tier)
+    async with get_session_factory()() as db:
+        resolved = await ModelResolver(db).resolve(
+            tier=mapped_tier, workspace_id=workspace_id, thinking_enabled=False
+        )
+    resolved = _with_utility_params(resolved, max_tokens=max_tokens, temperature=temperature)
+    model = build_langchain_model(resolved)
     messages: list[BaseMessage] = []
     if system is not None:
         messages.append(SystemMessage(content=system))

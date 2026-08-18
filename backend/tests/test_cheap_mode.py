@@ -1,7 +1,10 @@
 """Tests for cheap-mode cost preset and budget defaults.
 
-Cheap mode trades a little quality for ~65% lower cost by removing the Opus
-tier (opus→sonnet) and halving per-agent thinking budgets.
+Cheap mode trades a little quality for lower cost by removing the reasoning tier
+(reasoning→balanced). It leaves per-agent thinking config untouched: the
+resolver-backed build path derives the thinking budget from the tier binding's
+effort, so ``thinking.budget_tokens`` no longer reaches model construction and the
+old halving lever was inert (dropped).
 """
 
 from src.config.settings import Settings
@@ -22,29 +25,32 @@ def test_cheap_mode_defaults_off():
     assert Settings().cheap_mode is False
 
 
-def test_apply_cheap_mode_downgrades_opus_to_sonnet():
+def test_apply_cheap_mode_downgrades_reasoning_to_balanced():
     planner = AGENTS["planner"]
-    assert planner.model_tier == "opus"  # precondition
+    assert planner.model_tier == "reasoning"  # precondition
     cheap = apply_cheap_mode(planner)
-    assert cheap.model_tier == "sonnet"
+    assert cheap.model_tier == "balanced"
 
 
-def test_apply_cheap_mode_leaves_sonnet_and_haiku_unchanged():
-    assert apply_cheap_mode(AGENTS["perceiver"]).model_tier == "sonnet"
-    assert apply_cheap_mode(AGENTS["persona"]).model_tier == "haiku"
+def test_apply_cheap_mode_leaves_balanced_and_fast_unchanged():
+    assert apply_cheap_mode(AGENTS["perceiver"]).model_tier == "balanced"
+    assert apply_cheap_mode(AGENTS["persona"]).model_tier == "fast"
 
 
-def test_apply_cheap_mode_halves_thinking_budget_with_floor():
+def test_apply_cheap_mode_leaves_thinking_unchanged():
+    # The halving lever was inert (thinking.budget_tokens no longer reaches model
+    # construction) and has been removed — thinking is now passed through verbatim.
     planner = AGENTS["planner"]  # thinking budget 8192
     cheap = apply_cheap_mode(planner)
-    assert cheap.thinking.budget_tokens == 4096
+    assert cheap.thinking == planner.thinking
+    assert cheap.thinking.budget_tokens == 8192
 
 
-def test_apply_cheap_mode_thinking_budget_never_below_floor():
+def test_apply_cheap_mode_preserves_thinking_for_any_agent():
     from dataclasses import replace
 
     tiny = replace(AGENTS["persona"], thinking=ThinkingConfig(enabled=True, budget_tokens=1500))
-    assert apply_cheap_mode(tiny).thinking.budget_tokens == 1024
+    assert apply_cheap_mode(tiny).thinking.budget_tokens == 1500
 
 
 def test_apply_cheap_mode_does_not_mutate_original():
@@ -58,11 +64,11 @@ def test_apply_cheap_mode_does_not_mutate_original():
 
 def test_build_agent_set_noop_when_disabled():
     built = build_agent_set(AGENTS, cheap_mode=False)
-    assert built["planner"].model_tier == "opus"
+    assert built["planner"].model_tier == "reasoning"
     assert built is not AGENTS  # a copy, not the shared singleton
 
 
 def test_build_agent_set_applies_cheap_mode_to_all():
     built = build_agent_set(AGENTS, cheap_mode=True)
-    assert built["planner"].model_tier == "sonnet"
-    assert all(a.model_tier != "opus" for a in built.values())
+    assert built["planner"].model_tier == "balanced"
+    assert all(a.model_tier != "reasoning" for a in built.values())

@@ -357,7 +357,6 @@ class StepRunner:
             run_id=run.run_id,
             step_id=step.step_id,
             pre_approved_capabilities=frozenset({step_capability}),
-            model=self._settings.resolved_model,
             cancel_event=cancel_event,
         )
 

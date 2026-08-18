@@ -23,7 +23,7 @@ class TestPerceiverRegistration:
         assert "researcher" not in AGENT_PROMPTS
 
     def test_perceiver_in_model_tiers(self):
-        assert AGENT_MODEL_TIERS["perceiver"] == "sonnet"
+        assert AGENT_MODEL_TIERS["perceiver"] == "balanced"
 
     def test_observer_not_in_model_tiers(self):
         assert "observer" not in AGENT_MODEL_TIERS
@@ -54,7 +54,7 @@ class TestPerceiverRegistration:
     def test_perceiver_in_agents_dict(self):
         assert "perceiver" in AGENTS
         agent = AGENTS["perceiver"]
-        assert agent.model_tier == "sonnet"
+        assert agent.model_tier == "balanced"
         assert agent.temperature == 0.3
 
     def test_observer_not_in_agents_dict(self):

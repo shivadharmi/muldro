@@ -25,7 +25,7 @@ from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.types import Command
 from sqlalchemy import update
 
-from src.config.models import MODEL_TIERS
+from src.config.model_catalog import default_model_id_for_tier
 from src.config.settings import Settings
 from src.deep_runtime.agent_builder import build_deep_agent
 from src.deep_runtime.authorization import AuthorizationSource
@@ -45,7 +45,6 @@ from src.deep_runtime.middleware.readback import make_readback_middleware
 from src.deep_runtime.middleware.trust_gate import _resolve_tool_def, make_trust_gate_middleware
 from src.deep_runtime.middleware.unavailable_server import make_unavailable_server_middleware
 from src.deep_runtime.middleware.write_lock import make_write_lock_middleware
-from src.deep_runtime.model_factory import MODEL_TIER_IDS
 from src.deep_runtime.prompt_bridge import build_system_message
 from src.deep_runtime.readback_readfn import FreshSessionToolLister, make_readback_read_fn
 from src.deep_runtime.stream_adapter import stream_deep_agent_events
@@ -238,7 +237,28 @@ class AgentInvoker:
 
     def get_model_for_agent(self, agent: SubAgent) -> str:
         """Get the Claude model ID for an agent's tier."""
-        return MODEL_TIERS.get(agent.model_tier, MODEL_TIERS["sonnet"])
+        return default_model_id_for_tier(agent.model_tier) or default_model_id_for_tier("balanced")
+
+    async def _resolved_model_id(self, agent: SubAgent, workspace_id: str) -> str:
+        """The workspace-resolved model id that actually runs for this agent — used for both
+        budget attribution and streaming metadata (``agent_start.model``). Replays §10
+        override-degradation via ModelResolver.resolved_model_id. Falls back to the tier
+        default id when no binding resolves or lookup fails.
+
+        Distinct from ``get_model_for_agent`` (the catalog-default Anthropic id), which stays
+        the key for the general-purpose-subagent disable and other deployment-default uses."""
+        from src.services.model_resolver import ModelResolver
+
+        try:
+            async with self._db_factory() as db:
+                resolved = await ModelResolver(db).resolved_model_id(
+                    agent=agent.name,
+                    agent_tier=agent.model_tier,
+                    workspace_id=workspace_id or None,
+                )
+            return resolved or self.get_model_for_agent(agent)
+        except Exception:
+            return self.get_model_for_agent(agent)
 
     def build_system_prompt(
         self, agent: SubAgent, context: str = "", capability_summary: str = ""
@@ -271,12 +291,11 @@ class AgentInvoker:
     async def _resolve_tools(
         self, agent: SubAgent, workspace_id: str, tools_override: list[dict] | None
     ) -> list[dict]:
-        """Apply cache-control to either the override or the agent-scoped tool list."""
+        """Return the override or the agent-scoped tool list (tool-level cache markers were
+        dead — dropped by tool_bridge — so no cache_control is applied here)."""
         if tools_override is not None:
-            return self._tool_executor.apply_cache_control_to_tools(tools_override)
-        return self._tool_executor.apply_cache_control_to_tools(
-            await self._tool_executor.get_tools_for_agent(agent, workspace_id=workspace_id)
-        )
+            return tools_override
+        return await self._tool_executor.get_tools_for_agent(agent, workspace_id=workspace_id)
 
     async def _maybe_capability_summary(
         self, agent_name: str, capability_summary: str, workspace_id: str
@@ -513,11 +532,13 @@ class AgentInvoker:
             db_factory=self._db_factory,
         )
 
-        # Authoritative cost record (@after_model). model = the direct-Anthropic id
-        # (MODEL_TIER_IDS), matching what the deep runtime actually builds.
+        # Authoritative cost record (@after_model). model = the RESOLVED model id
+        # (workspace binding-aware) so a non-Anthropic model is priced from its own
+        # catalog entry, not silently at the Anthropic tier default.
+        budget_model = await self._resolved_model_id(agent, workspace_id)
         budget_mw = make_budget_middleware(
             agent_name=agent.name,
-            model=MODEL_TIER_IDS.get(agent.model_tier, MODEL_TIER_IDS["sonnet"]),
+            model=budget_model,
             workspace_id=workspace_id,
             db_factory=self._db_factory,
             budget=self._budget,
@@ -618,8 +639,8 @@ class AgentInvoker:
         the singleton preserves the Perceiver's sonnet/6144 thinking AND applies the SAME cheap-mode
         transform the lead received.
 
-        GP-disable keys off ``MODEL_TIER_IDS.get(<tier>, MODEL_TIER_IDS["sonnet"])`` — the
-        direct-Anthropic model id (a malformed tier degrades to the sonnet id, never a tier
+        GP-disable keys off ``get_model_for_agent(<agent>)`` — the resolved Anthropic
+        model id (a malformed tier degrades to the balanced/sonnet id, never a tier
         name) the deep
         runtime always builds via ``build_chat_model`` (deepagents derives the harness-profile
         key from that built model). Disabling GP on BOTH models, BEFORE either is built, stops the
@@ -643,12 +664,8 @@ class AgentInvoker:
         # the lead can otherwise serve alone — degrade to no delegates instead.
         try:
             perceiver_cfg = build_agent_set(AGENTS, self._settings.cheap_mode)["perceiver"]
-            disable_general_purpose_subagent(
-                MODEL_TIER_IDS.get(lead_agent.model_tier, MODEL_TIER_IDS["sonnet"])
-            )
-            disable_general_purpose_subagent(
-                MODEL_TIER_IDS.get(perceiver_cfg.model_tier, MODEL_TIER_IDS["sonnet"])
-            )
+            disable_general_purpose_subagent(self.get_model_for_agent(lead_agent))
+            disable_general_purpose_subagent(self.get_model_for_agent(perceiver_cfg))
             tools = await self._resolve_tools(perceiver_cfg, workspace_id, None)
             delegate = await build_read_only_delegate(
                 perceiver_cfg,
@@ -684,7 +701,9 @@ class AgentInvoker:
             yield {"event": "error", "message": f"Unknown agent: {agent_name}"}
             return
 
-        model = self.get_model_for_agent(agent)
+        # Streaming metadata (agent_start.model) must name the model that actually runs
+        # for this workspace, not the catalog default (workspace overrides / non-Anthropic).
+        model = await self._resolved_model_id(agent, workspace_id)
         tools = await self._resolve_tools(agent, workspace_id, tools_override)
         capability_summary = await self._maybe_capability_summary(
             agent_name, capability_summary, workspace_id
@@ -895,7 +914,7 @@ class AgentInvoker:
         # runtime-call counter with the fixed "deep" label, mirroring ``call_agent_stream``'s
         # per-call increment. Dormant in 5a (no live caller).
         AGENT_RUNTIME_CALLS.labels(runtime="deep").inc()
-        model = self.get_model_for_agent(lead)
+        model = await self._resolved_model_id(lead, workspace_id)
         system_blocks = self.build_system_prompt(lead, context_block)
         # A-5: PRESENTER_VOICE always on the lead — inline_format=True AND is_reply_lead=True
         # force the append regardless of the deep_inline_format flag (single-lead subsumes it).
@@ -1050,7 +1069,7 @@ class AgentInvoker:
             approval.decided_at = now
             approval.approved_by = user_id
 
-        model = self.get_model_for_agent(agent)
+        model = await self._resolved_model_id(agent, workspace_id)
         tools = await self._resolve_tools(agent, workspace_id, None)
         system_blocks = self.build_system_prompt(agent, persisted_context)
         deep_agent = await self._build_deep_agent_for(
@@ -1193,7 +1212,7 @@ class AgentInvoker:
             if decision == "approve":
                 approval.artifact_refs = values["artifact_refs"]
 
-        model = self.get_model_for_agent(lead)
+        model = await self._resolved_model_id(lead, workspace_id)
         tools = await self._resolve_tools(lead, workspace_id, None)
         system_blocks = self.build_system_prompt(lead, persisted_context)
         # PRESENTER_VOICE (parity with stream_deep_lead): the RESUMED lead IS the reply-producing
@@ -1247,7 +1266,6 @@ class AgentInvoker:
         run_id: str,
         step_id: str,
         pre_approved_capabilities: frozenset[str],
-        model: str | None = None,
         cancel_event=None,
     ) -> dict:
         """Execute one approved autonomous step via a durable deep agent (Step 10C).
@@ -1351,6 +1369,11 @@ class AgentInvoker:
         approval_blocked = False
         error_occurred = False
 
+        # Streaming metadata (agent_start.model) names the workspace-resolved model this step
+        # actually runs — resolved here rather than threaded from the deployment-global
+        # settings default, so a workspace override / non-Anthropic model is reported truthfully.
+        model = await self._resolved_model_id(executor, workspace_id)
+
         async for frame in stream_deep_agent_events(
             deep_agent,
             {"messages": [{"role": "user", "content": message}]},
@@ -1424,7 +1447,8 @@ class AgentInvoker:
         if not agent:
             raise ValueError(f"Unknown agent: {agent_name}")
 
-        model = self.get_model_for_agent(agent)
+        # Streaming metadata (agent_start.model) must name the workspace-resolved model.
+        model = await self._resolved_model_id(agent, workspace_id)
         tools = await self._resolve_tools(agent, workspace_id, tools_override)
         capability_summary = await self._maybe_capability_summary(
             agent_name, capability_summary, workspace_id

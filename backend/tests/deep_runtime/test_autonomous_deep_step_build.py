@@ -278,7 +278,7 @@ def _make_offline_invoker() -> AgentInvoker:
     Used by the provenance + output-shape tests — no DB, no LangGraph."""
     tool_executor = MagicMock()
     tool_executor.execute_tool = AsyncMock(return_value={"status": "sent"})
-    return AgentInvoker(
+    inv = AgentInvoker(
         settings=make_mock_settings(runtime="deep"),
         client=MagicMock(),
         services=None,
@@ -290,6 +290,10 @@ def _make_offline_invoker() -> AgentInvoker:
         agents={},
         checkpointer_provider=lambda: None,
     )
+    # Offline: resolve the streaming/budget model id without a real DB (mirror the
+    # catalog default) so tests don't drive ModelResolver against the mock session.
+    inv._resolved_model_id = AsyncMock(side_effect=lambda agent, ws: inv.get_model_for_agent(agent))
+    return inv
 
 
 def _executor_agent() -> SubAgent:
@@ -335,6 +339,28 @@ async def _run_offline(inv: AgentInvoker, *, pre_approved, tools=None) -> dict:
         step_id="s1",
         pre_approved_capabilities=pre_approved,
     )
+
+
+async def test_run_autonomous_deep_step_streams_workspace_resolved_model():
+    """R1 (autonomous path): agent_start.model must be the workspace-resolved model id
+    (via _resolved_model_id), not the deployment-global settings.resolved_model that
+    step_runner used to thread in."""
+    inv = _make_offline_invoker()
+    inv._build_deep_agent_for = AsyncMock(return_value=object())
+    inv._resolved_model_id = AsyncMock(return_value="gpt-5")
+
+    captured: dict[str, object] = {}
+    stream = _done_stream()
+
+    def _capture(*a, **k):
+        captured["model"] = k.get("model")
+        return stream(*a, **k)
+
+    with patch(f"{INVOKER_MODULE}.stream_deep_agent_events", _capture):
+        await _run_offline(inv, pre_approved=frozenset({"email.send"}))
+
+    assert captured["model"] == "gpt-5"
+    inv._resolved_model_id.assert_awaited()
 
 
 async def test_run_autonomous_deep_step_uses_autonomous_provenance():
@@ -585,7 +611,9 @@ async def test_ledger_dedups_write_across_runs():
         async def _run_once() -> dict:
             with patch(
                 "src.deep_runtime.agent_builder.build_chat_model",
-                lambda _a: _FakeModel("send_email", {"to": "f@x.com", "subject": "hi"}),
+                AsyncMock(
+                    return_value=_FakeModel("send_email", {"to": "f@x.com", "subject": "hi"})
+                ),
             ):
                 return await inv.run_autonomous_deep_step(
                     executor=_executor_agent(),
@@ -645,7 +673,7 @@ async def test_read_capability_bypasses_ledger():
         }
         with patch(
             "src.deep_runtime.agent_builder.build_chat_model",
-            lambda _a: _FakeModel("read_email", {"q": "investor"}),
+            AsyncMock(return_value=_FakeModel("read_email", {"q": "investor"})),
         ):
             out = await inv.run_autonomous_deep_step(
                 executor=_executor_agent(),

@@ -123,10 +123,23 @@ async def build_deep_agent(
             "Pass db_factory so the scope guard is installed."
         )
 
+    model = await build_chat_model(agent, workspace_id=workspace_id, db_factory=db_factory)
+    effective_system_prompt = system_prompt or agent.prompt
+    if db_factory is not None and system_prompt is not None:
+        from src.deep_runtime.prompt_bridge import strip_cache_control
+        from src.services.model_resolver import ModelResolver
+
+        async with db_factory() as db:
+            supports_cache = await ModelResolver(db).supports_prompt_cache(
+                agent=agent.name, agent_tier=agent.model_tier, workspace_id=workspace_id or None
+            )
+        if not supports_cache:
+            effective_system_prompt = strip_cache_control(system_prompt)
+
     return create_deep_agent(
-        model=build_chat_model(agent),
+        model=model,
         tools=tools,
-        system_prompt=system_prompt or agent.prompt,
+        system_prompt=effective_system_prompt,
         middleware=middleware,
         subagents=subagents or None,
         name=name or agent.name,
