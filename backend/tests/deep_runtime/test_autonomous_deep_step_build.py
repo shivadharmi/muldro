@@ -47,6 +47,9 @@ from src.services.risk_assessor import RiskAssessment
 from tests.conftest import make_mock_settings
 
 GATE_MODULE = "src.deep_runtime.middleware.trust_gate"
+# ``create_approval`` executes inside the shared ``approval_persistence._get_or_create_approval``
+# helper (A2 dedup), so patch it in its DEFINING module, not ``trust_gate``.
+APPROVAL_PERSISTENCE_MODULE = "src.deep_runtime.middleware.approval_persistence"
 INVOKER_MODULE = "src.orchestrator.agent_invoker"
 USER_ID = "u_test"
 WORKSPACE_ID = "ws_test"
@@ -198,7 +201,7 @@ async def test_branch_c_preapproved_capability_short_circuits():
     with (
         patch(f"{GATE_MODULE}._resolve_capability", AsyncMock(return_value=(True, "email.send"))),
         patch(f"{GATE_MODULE}.TrustEngine", return_value=fake_te),
-        patch(f"{GATE_MODULE}.create_approval", _fake_create_approval()),
+        patch(f"{APPROVAL_PERSISTENCE_MODULE}.create_approval", _fake_create_approval()),
         patch(f"{GATE_MODULE}.interrupt", mock_interrupt),
     ):
         result = await _hook(mw)(_request("send_email", {"to": "x"}, "c1"), handler)
@@ -230,7 +233,7 @@ async def test_branch_c_empty_preapproved_still_gates():
     with (
         patch(f"{GATE_MODULE}._resolve_capability", AsyncMock(return_value=(True, "email.send"))),
         patch(f"{GATE_MODULE}.TrustEngine", return_value=fake_te),
-        patch(f"{GATE_MODULE}.create_approval", _fake_create_approval()),
+        patch(f"{APPROVAL_PERSISTENCE_MODULE}.create_approval", _fake_create_approval()),
         patch(f"{GATE_MODULE}.interrupt", mock_interrupt),
     ):
         result = await _hook(mw)(_request("send_email", {"to": "x"}, "c1"), handler)
@@ -261,7 +264,7 @@ async def test_branch_c_unapproved_capability_still_gates():
     with (
         patch(f"{GATE_MODULE}._resolve_capability", AsyncMock(return_value=(True, "payment.send"))),
         patch(f"{GATE_MODULE}.TrustEngine", return_value=fake_te),
-        patch(f"{GATE_MODULE}.create_approval", _fake_create_approval("apr_y")),
+        patch(f"{APPROVAL_PERSISTENCE_MODULE}.create_approval", _fake_create_approval("apr_y")),
         patch(f"{GATE_MODULE}.interrupt", mock_interrupt),
     ):
         await _hook(mw)(_request("send_payment", {"amount": 100}, "c1"), handler)

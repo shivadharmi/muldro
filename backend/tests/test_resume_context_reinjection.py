@@ -38,10 +38,8 @@ from sqlalchemy.pool import NullPool
 from ulid import ULID
 
 from src.config.settings import get_settings
-from src.deep_runtime.middleware.trust_gate import (
-    _MAX_PERSISTED_CONTEXT_CHARS,
-    _decide_and_maybe_persist,
-)
+from src.deep_runtime.middleware.approval_persistence import _MAX_PERSISTED_CONTEXT_CHARS
+from src.deep_runtime.middleware.trust_gate import _decide_and_maybe_persist
 from src.deep_runtime.thread_identity import make_thread_id
 from src.models.approvals import Approval
 from src.models.trust_state import TrustCeiling, TrustState
@@ -52,6 +50,9 @@ from src.services.risk_assessor import RiskAssessment
 from tests.conftest import make_mock_settings
 
 MODULE = "src.deep_runtime.middleware.trust_gate"
+# ``create_approval`` executes inside the shared ``approval_persistence._get_or_create_approval``
+# helper (A2 dedup), so patch it in its DEFINING module, not ``trust_gate``.
+APPROVAL_PERSISTENCE_MODULE = "src.deep_runtime.middleware.approval_persistence"
 INVOKER_MODULE = "src.orchestrator.agent_invoker"
 USER_ID = "u_test"
 WORKSPACE_ID = "ws_test"
@@ -103,7 +104,7 @@ async def test_persist_stores_context_block_on_approval():
     ctx = "ORIGINAL_TURN_CONTEXT_" + ("z" * 200)
     with (
         patch(f"{MODULE}.TrustEngine", return_value=fake_te),
-        patch(f"{MODULE}.create_approval", side_effect=fake_create_approval),
+        patch(f"{APPROVAL_PERSISTENCE_MODULE}.create_approval", side_effect=fake_create_approval),
     ):
         require_approval, approval_id = await _decide_and_maybe_persist(
             name="echo",
@@ -143,7 +144,7 @@ async def test_persist_truncates_context_block_to_cap():
     ctx = "A" * (_MAX_PERSISTED_CONTEXT_CHARS + 500)
     with (
         patch(f"{MODULE}.TrustEngine", return_value=fake_te),
-        patch(f"{MODULE}.create_approval", side_effect=fake_create_approval),
+        patch(f"{APPROVAL_PERSISTENCE_MODULE}.create_approval", side_effect=fake_create_approval),
     ):
         await _decide_and_maybe_persist(
             name="echo",

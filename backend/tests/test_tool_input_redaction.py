@@ -6,7 +6,7 @@ payload must never bloat the approval row.
 
 import json
 
-from src.deep_runtime.middleware.trust_gate import (
+from src.deep_runtime.middleware.approval_persistence import (
     _MAX_PERSISTED_CONTEXT_CHARS,
     REDACTED,
     redact_tool_input,

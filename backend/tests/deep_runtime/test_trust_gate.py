@@ -38,14 +38,17 @@ from langchain_core.tools import tool
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.types import Command
 
+from src.deep_runtime.middleware.approval_persistence import _find_existing_approval
 from src.deep_runtime.middleware.trust_gate import (
     _decide_and_maybe_persist,
-    _find_existing_approval,
     make_trust_gate_middleware,
 )
 from src.services.risk_assessor import RiskAssessment
 
 MODULE = "src.deep_runtime.middleware.trust_gate"
+# ``create_approval`` executes inside the shared ``approval_persistence._get_or_create_approval``
+# helper (A2 dedup), so patch it in its DEFINING module, not ``trust_gate``.
+APPROVAL_PERSISTENCE_MODULE = "src.deep_runtime.middleware.approval_persistence"
 USER_ID = "u_test"
 WORKSPACE_ID = "ws_test"
 THREAD_ID = "chat_thread_1"
@@ -313,7 +316,7 @@ async def test_gated_irreversible_write_forces_interrupt_then_approve_executes()
     with (
         patch(f"{MODULE}._resolve_capability", AsyncMock(return_value=(True, "email.send"))),
         patch(f"{MODULE}.TrustEngine", return_value=fake_te),
-        patch(f"{MODULE}.create_approval", side_effect=fake_create_approval),
+        patch(f"{APPROVAL_PERSISTENCE_MODULE}.create_approval", side_effect=fake_create_approval),
     ):
         items = await _drive(
             agent,
@@ -389,7 +392,7 @@ async def test_gated_write_reject_blocks():
     with (
         patch(f"{MODULE}._resolve_capability", AsyncMock(return_value=(True, "email.send"))),
         patch(f"{MODULE}.TrustEngine", return_value=fake_te),
-        patch(f"{MODULE}.create_approval", side_effect=fake_create_approval),
+        patch(f"{APPROVAL_PERSISTENCE_MODULE}.create_approval", side_effect=fake_create_approval),
     ):
         items = await _drive(
             agent,
@@ -434,7 +437,7 @@ async def test_auto_execute_when_trusted_and_reversible(handler):
     with (
         patch(f"{MODULE}._resolve_capability", AsyncMock(return_value=(True, "email.draft"))),
         patch(f"{MODULE}.TrustEngine", return_value=fake_te),
-        patch(f"{MODULE}.create_approval", create_approval_mock),
+        patch(f"{APPROVAL_PERSISTENCE_MODULE}.create_approval", create_approval_mock),
     ):
         result = await _hook(mw)(_request("draft_email", {}, "c1"), handler)
 
@@ -463,7 +466,7 @@ async def test_approval_persistence_is_idempotent_reuses_existing():
 
     with (
         patch(f"{MODULE}.TrustEngine", return_value=fake_te),
-        patch(f"{MODULE}.create_approval", create_approval_mock),
+        patch(f"{APPROVAL_PERSISTENCE_MODULE}.create_approval", create_approval_mock),
     ):
         require_approval, approval_id = await _decide_and_maybe_persist(
             name="echo",
@@ -525,7 +528,7 @@ async def test_unexpected_decision_requires_approval_fail_closed():
 
     with (
         patch(f"{MODULE}.TrustEngine", return_value=fake_te),
-        patch(f"{MODULE}.create_approval", create_approval_mock),
+        patch(f"{APPROVAL_PERSISTENCE_MODULE}.create_approval", create_approval_mock),
     ):
         require_approval, approval_id = await _decide_and_maybe_persist(
             name="draft_email",
@@ -577,7 +580,7 @@ async def test_get_or_create_reselects_on_integrity_error():
     create_approval_mock = AsyncMock(return_value=SimpleNamespace(approval_id="apr_loser"))
     with (
         patch(f"{MODULE}.TrustEngine", return_value=fake_te),
-        patch(f"{MODULE}.create_approval", create_approval_mock),
+        patch(f"{APPROVAL_PERSISTENCE_MODULE}.create_approval", create_approval_mock),
     ):
         require_approval, approval_id = await _decide_and_maybe_persist(
             name="echo",

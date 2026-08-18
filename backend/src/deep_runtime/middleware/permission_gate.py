@@ -19,7 +19,7 @@ Mode × risk policy:
     * ``auto``   — assesses risk and interrupts only when the write is NOT reversible, has
                    an EXTERNAL/public blast radius, or is high risk (otherwise auto-executes).
 
-Two hard rules inherited from ``trust_gate`` — do not violate:
+Two hard rules shared with ``trust_gate`` — do not violate:
 
 1. ``interrupt()`` must NOT be called while a DB session/transaction is open, and (in
    ``auto`` mode) risk assessment must run with NO session open. Each DB touch here
@@ -32,10 +32,12 @@ Two hard rules inherited from ``trust_gate`` — do not violate:
    ``uq_approvals_thread_tool_call`` index), and a persisted decision is detected up front
    (the CF-2 replay short-circuit) so the resume replay goes STRAIGHT to ``interrupt()``.
 
-``_find_existing_approval`` / ``_MAX_PERSISTED_CONTEXT_CHARS`` are REUSED from ``trust_gate``
-(the same idempotency key + the same context cap) rather than re-implemented, so the two
-gates can never drift on the shared contract. ``interrupt()`` and ``handler(request)`` are
-intentionally NOT wrapped in try/except so a ``GraphInterrupt`` propagates normally.
+``_find_existing_approval`` / ``_get_or_create_approval`` / ``_MAX_PERSISTED_CONTEXT_CHARS`` /
+``build_legibility_refs`` live in ``approval_persistence`` — a PEER module both this gate and
+``trust_gate`` depend on (the same idempotency key + the same context cap + the same redacted
+payload keys), rather than either gate importing the other's privates. ``interrupt()`` and
+``handler(request)`` are intentionally NOT wrapped in try/except so a ``GraphInterrupt``
+propagates normally.
 """
 
 from __future__ import annotations
@@ -48,11 +50,11 @@ from langchain_core.messages import ToolMessage
 from langgraph.types import interrupt
 
 from src.deep_runtime.builtins import DEEPAGENTS_BUILTIN_NAMES
-from src.deep_runtime.middleware.trust_gate import (
+from src.deep_runtime.middleware.approval_persistence import (
     _MAX_PERSISTED_CONTEXT_CHARS,
     _find_existing_approval,
     _get_or_create_approval,
-    redact_tool_input,
+    build_legibility_refs,
 )
 from src.integrations.capabilities import SYSTEM_ACTION_CAPABILITIES, is_read_only_capability
 from src.services.risk_assessor import RiskAssessment
@@ -137,7 +139,6 @@ async def _persist_permission_approval(
     reversible = assessment.reversible if assessment else True
     blast_radius = assessment.blast_radius if assessment else "self"
     summary = assessment.reasoning if assessment else "User confirmation required (ask mode)."
-    persisted_input, input_truncated = redact_tool_input(tool_input)
 
     async with db_factory() as db:
         return await _get_or_create_approval(
@@ -173,13 +174,12 @@ async def _persist_permission_approval(
                 # A1: the ORIGINAL user message, so an approved resume can fire the
                 # interaction-learner (bounded like context_block to keep the row lean).
                 "user_message": user_message[:_MAX_PERSISTED_CONTEXT_CHARS],
-                "tool_input": persisted_input,
-                "tool_input_truncated": input_truncated,
-                # Trap 2 — snapshot, never re-derive. Written under the neutral key name that
-                # the prepared-action executor reads; ``lead_scope`` above stays as-is because
-                # ``resume_deep_lead`` reads THAT key and must not change.
-                "capability_scope": sorted(lead_scope),
-                "presence": presence,
+                # Legibility (step 1) + Trap 2 (snapshot, never re-derive — written under the
+                # neutral key name the prepared-action executor reads; ``lead_scope`` above
+                # stays as-is because ``resume_deep_lead`` reads THAT key and must not change):
+                # the four keys both gates persist identically, shared via
+                # ``build_legibility_refs`` so they cannot drift.
+                **build_legibility_refs(tool_input, lead_scope, presence),
             },
         )
 

@@ -45,74 +45,21 @@ from typing import Any
 from langchain.agents.middleware import AgentMiddleware, wrap_tool_call
 from langchain_core.messages import ToolMessage
 from langgraph.types import interrupt
-from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
 
 from src.deep_runtime.authorization import is_gated_source
 from src.deep_runtime.builtins import DEEPAGENTS_BUILTIN_NAMES
+from src.deep_runtime.middleware.approval_persistence import (
+    _MAX_PERSISTED_CONTEXT_CHARS,
+    _find_existing_approval,
+    _get_or_create_approval,
+    build_legibility_refs,
+)
 from src.integrations.capabilities import is_read_only_capability
-from src.models.approvals import Approval
-from src.services.approval_service import create_approval
 from src.services.tool_registry import ToolRegistry
 from src.services.trust_engine import TrustEngine
 from src.services.verification.predicate import is_write_verification_required
 
 logger = logging.getLogger(__name__)
-
-# Cap the persisted ContextPack echoed onto the Approval's artifact_refs. artifact_refs is
-# JSONB (unbounded), but the context block is re-injected on resume and kept bounded so a
-# large ambient context can never bloat the approval row.
-_MAX_PERSISTED_CONTEXT_CHARS = 8000
-
-# Invariant 9 (single-lead cutover): the persisted tool_input must never carry a secret and
-# must never bloat the Approval row. Substring match, case-insensitive, on the KEY name — a
-# deny-list of names rather than a value heuristic, so it cannot be fooled by an odd-looking
-# value and cannot silently redact a legitimate field.
-REDACTED = "[redacted]"
-_REDACTED_KEY_SUBSTRINGS = (
-    "token",
-    "secret",
-    "password",
-    "api_key",
-    "authorization",
-    "credential",
-)
-
-
-def _is_secret_key(key: str) -> bool:
-    lowered = key.lower()
-    return any(marker in lowered for marker in _REDACTED_KEY_SUBSTRINGS)
-
-
-def _redact(value):
-    """Recursively replace deny-listed keys' values with ``REDACTED``.
-
-    Recurses into dicts, lists, and TUPLES. Tuples matter because ``json.dumps`` serialises
-    them identically to lists, so a tuple that skipped redaction would be indistinguishable
-    in the persisted payload from a list that did not. A matched key's value is replaced
-    WHOLE rather than recursed into, so a secret nested under a secret-named parent cannot
-    survive via partial recursion.
-    """
-    if isinstance(value, dict):
-        return {k: (REDACTED if _is_secret_key(str(k)) else _redact(v)) for k, v in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_redact(v) for v in value]
-    return value
-
-
-def redact_tool_input(args: dict | None) -> tuple[str, bool]:
-    """Return ``(json_payload, truncated)`` for persistence onto ``artifact_refs``.
-
-    Deny-listed keys are redacted (recursively), the result is JSON-serialised, and the
-    string is capped at the SAME ``_MAX_PERSISTED_CONTEXT_CHARS`` both gates already use for
-    ``context_block`` — one constant, so the two bounds cannot drift. ``truncated`` is
-    returned separately so the queue can SAY the payload was clipped rather than showing a
-    lie. ``default=repr`` keeps a non-JSON-serialisable argument from raising inside a gate.
-    """
-    payload = json.dumps(_redact(args or {}), default=repr)
-    if len(payload) > _MAX_PERSISTED_CONTEXT_CHARS:
-        return payload[:_MAX_PERSISTED_CONTEXT_CHARS], True
-    return payload, False
 
 
 async def _resolve_tool_def(name: str, workspace_id: str, db_factory) -> tuple[bool, Any]:
@@ -165,88 +112,6 @@ async def _resolve_capability(name: str, workspace_id: str, db_factory) -> tuple
     return (ok, getattr(tool, "capability", None) if tool else None)
 
 
-async def _find_existing_approval(workspace_id, thread_id, tool_call_id, db_factory):
-    """Return the Approval already persisted for this (workspace, thread, tool_call) tuple, or
-    None. Used to detect the RESUME REPLAY: the gate body re-runs on resume, and if the approval
-    already exists we skip the redundant risk assessment + trust evaluation and go straight to
-    ``interrupt()`` (which returns the resume value immediately).
-
-    Keyed on the promoted COLUMNS (CF-3) fenced by the partial UNIQUE index
-    ``uq_approvals_thread_tool_call``. NO status filter: the resume path marks the original
-    approved/rejected BEFORE resuming the graph, so a pending-only filter would miss it. The
-    session is opened and CLOSED here, never held across ``interrupt()``.
-    """
-    async with db_factory() as db:
-        stmt = select(Approval).where(
-            Approval.workspace_id == workspace_id,
-            Approval.thread_id == thread_id,
-            Approval.tool_call_id == tool_call_id,
-        )
-        result = await db.execute(stmt)
-        return result.scalars().first()
-
-
-async def _get_or_create_approval(
-    db,
-    *,
-    name: str,
-    capability: str,
-    summary: str | None,
-    risk_level: str,
-    user_id: str,
-    workspace_id: str,
-    thread_id: str,
-    tool_call_id: str,
-    artifact_refs: dict,
-) -> str:
-    """Idempotent get-or-create of the pending Approval on an ALREADY-OPEN session, returning
-    its id. The replay-safe persist shared by the autonomous ``trust_gate`` and the chat
-    ``permission_gate`` (a DELIBERATE TWIN collapsed onto one helper).
-
-    The CALLER owns the session so the autonomous path can keep ``TrustEngine.evaluate`` in the
-    SAME transaction as the create+commit (evaluate may leave an uncommitted first-use
-    ``TrustState`` INSERT that only the trailing commit persists — opening a fresh session here
-    would strand it). Keyed on the promoted COLUMNS ``(workspace_id, thread_id, tool_call_id)``
-    (fenced by the partial UNIQUE index ``uq_approvals_thread_tool_call``) with NO status filter:
-    the gate body replays on resume and the resume path may already have marked the row
-    approved/rejected, so a pending-only filter would miss it and duplicate. On a lost create
-    race the ``IntegrityError`` rolls back and re-selects the winner (fail LOUD if still absent).
-    """
-    stmt = select(Approval).where(
-        Approval.workspace_id == workspace_id,
-        Approval.thread_id == thread_id,
-        Approval.tool_call_id == tool_call_id,
-    )
-    result = await db.execute(stmt)
-    existing = result.scalars().first()
-    if existing is not None:
-        return existing.approval_id
-
-    approval = await create_approval(
-        db,
-        user_id=user_id,
-        workspace_id=workspace_id,
-        approval_type=f"tool:{name}",
-        title=f"Approve: {capability}",
-        summary=summary,
-        risk_level=risk_level,
-        requested_by=user_id,
-        run_id=None,
-        step_id=None,
-        artifact_refs=artifact_refs,
-    )
-    try:
-        await db.commit()
-    except IntegrityError:
-        await db.rollback()
-        result = await db.execute(stmt)
-        existing = result.scalars().first()
-        if existing is None:
-            raise
-        return existing.approval_id
-    return approval.approval_id
-
-
 async def _decide_and_maybe_persist(
     *,
     name: str,
@@ -284,8 +149,6 @@ async def _decide_and_maybe_persist(
         if not require_approval:
             return (False, None)
 
-        persisted_input, input_truncated = redact_tool_input(tool_input)
-
         # Persist on THIS open session so TrustEngine.evaluate (above) and the create+commit
         # stay in ONE transaction — the shared replay-safe get-or-create (see helper docstring).
         approval_id = await _get_or_create_approval(
@@ -309,16 +172,11 @@ async def _decide_and_maybe_persist(
                 # CF-1: echo the assembled ContextPack so the resume path can re-inject the
                 # original turn's ambient context (bounded to keep the approval row small).
                 "context_block": context_block[:_MAX_PERSISTED_CONTEXT_CHARS],
-                # Legibility (step 1): the recorded payload, redacted + bounded, so the
-                # approval card can show WHAT is being approved rather than only its
-                # capability name.
-                "tool_input": persisted_input,
-                "tool_input_truncated": input_truncated,
-                # Trap 2: SNAPSHOT the acting agent's scope. Re-deriving it at confirmation
-                # time would let a since-WIDENED scope authorise an action the founder
-                # reviewed under narrower authority.
-                "capability_scope": sorted(agent_capability_scope),
-                "presence": presence,
+                # Legibility (step 1) + Trap 2 (SNAPSHOT the acting agent's scope — re-deriving
+                # it at confirmation time would let a since-WIDENED scope authorise an action
+                # the founder reviewed under narrower authority): the four keys both gates
+                # persist identically, shared via ``build_legibility_refs`` so they cannot drift.
+                **build_legibility_refs(tool_input, agent_capability_scope, presence),
             },
         )
         return (True, approval_id)

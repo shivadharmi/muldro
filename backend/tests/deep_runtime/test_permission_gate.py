@@ -44,9 +44,9 @@ from src.deep_runtime.middleware.permission_gate import (
 from src.services.risk_assessor import RiskAssessment
 
 MODULE = "src.deep_runtime.middleware.permission_gate"
-# ``create_approval`` executes inside the shared ``trust_gate._get_or_create_approval`` helper
-# (A2 dedup), so patch it in its DEFINING module, not ``permission_gate``.
-TRUST_GATE_MODULE = "src.deep_runtime.middleware.trust_gate"
+# ``create_approval`` executes inside the shared ``approval_persistence._get_or_create_approval``
+# helper (A2 dedup), so patch it in its DEFINING module, not ``permission_gate``.
+APPROVAL_PERSISTENCE_MODULE = "src.deep_runtime.middleware.approval_persistence"
 USER_ID = "u_test"
 WORKSPACE_ID = "ws_test"
 THREAD_ID = "chat_thread_1"
@@ -357,7 +357,7 @@ async def test_auto_safe_write_passthrough_no_interrupt(handler):
         assess_risk=assess_risk,
         db_factory=_persist_db_factory(),
     )
-    with patch(f"{TRUST_GATE_MODULE}.create_approval", create_approval_mock):
+    with patch(f"{APPROVAL_PERSISTENCE_MODULE}.create_approval", create_approval_mock):
         result = await _hook(mw)(_request("draft_email", {}, "c1"), handler)
 
     handler.assert_awaited_once()
@@ -380,7 +380,7 @@ async def test_bypass_passes_through_without_assessing_or_persisting(handler):
         assess_risk=assess_risk,
         db_factory=_persist_db_factory(),
     )
-    with patch(f"{TRUST_GATE_MODULE}.create_approval", create_approval_mock):
+    with patch(f"{APPROVAL_PERSISTENCE_MODULE}.create_approval", create_approval_mock):
         result = await _hook(mw)(_request("send_email", {}, "c1"), handler)
 
     handler.assert_awaited_once()
@@ -409,7 +409,7 @@ async def test_system_capability_never_gates_ask(handler):
         assess_risk=assess_risk,
         db_factory=_persist_db_factory(),
     )
-    with patch(f"{TRUST_GATE_MODULE}.create_approval", create_approval_mock):
+    with patch(f"{APPROVAL_PERSISTENCE_MODULE}.create_approval", create_approval_mock):
         result = await _hook(mw)(_request("set_goal", {}, "c1"), handler)
 
     handler.assert_awaited_once()
@@ -432,7 +432,7 @@ async def test_system_capability_never_gates_auto(handler):
         assess_risk=assess_risk,
         db_factory=_persist_db_factory(),
     )
-    with patch(f"{TRUST_GATE_MODULE}.create_approval", create_approval_mock):
+    with patch(f"{APPROVAL_PERSISTENCE_MODULE}.create_approval", create_approval_mock):
         result = await _hook(mw)(_request("schedule_reminder", {}, "c1"), handler)
 
     handler.assert_awaited_once()
@@ -479,7 +479,7 @@ async def test_ask_interrupts_every_write_without_assessing_risk():
     )
     cfg = {"configurable": {"thread_id": thread_id}}
 
-    with patch(f"{TRUST_GATE_MODULE}.create_approval", side_effect=fake_create_approval):
+    with patch(f"{APPROVAL_PERSISTENCE_MODULE}.create_approval", side_effect=fake_create_approval):
         items = await _drive(
             agent,
             {"messages": [{"role": "user", "content": "go"}]},
@@ -548,7 +548,7 @@ async def test_auto_risky_write_interrupts_then_approve_executes():
     )
     cfg = {"configurable": {"thread_id": thread_id}}
 
-    with patch(f"{TRUST_GATE_MODULE}.create_approval", side_effect=fake_create_approval):
+    with patch(f"{APPROVAL_PERSISTENCE_MODULE}.create_approval", side_effect=fake_create_approval):
         items = await _drive(
             agent,
             {"messages": [{"role": "user", "content": "go"}]},
@@ -598,7 +598,7 @@ async def test_reject_default_reason_blocks_and_quotes_default():
     )
     cfg = {"configurable": {"thread_id": thread_id}}
 
-    with patch(f"{TRUST_GATE_MODULE}.create_approval", side_effect=fake_create_approval):
+    with patch(f"{APPROVAL_PERSISTENCE_MODULE}.create_approval", side_effect=fake_create_approval):
         items = await _drive(
             agent,
             {"messages": [{"role": "user", "content": "go"}]},
@@ -655,7 +655,7 @@ async def test_reject_replay_quotes_persisted_decision_reason():
     )
     cfg = {"configurable": {"thread_id": thread_id}}
 
-    with patch(f"{TRUST_GATE_MODULE}.create_approval", create_approval_mock):
+    with patch(f"{APPROVAL_PERSISTENCE_MODULE}.create_approval", create_approval_mock):
         items = await _drive(
             agent,
             {"messages": [{"role": "user", "content": "go"}]},
@@ -687,7 +687,7 @@ async def test_persist_is_idempotent_reuses_existing():
     create_approval_mock = AsyncMock()
     existing = SimpleNamespace(approval_id="apr_existing")
 
-    with patch(f"{TRUST_GATE_MODULE}.create_approval", create_approval_mock):
+    with patch(f"{APPROVAL_PERSISTENCE_MODULE}.create_approval", create_approval_mock):
         approval_id = await _persist_permission_approval(
             name="echo",
             capability="email.send",
@@ -729,7 +729,7 @@ async def test_persist_reselects_on_integrity_error():
         yield db
 
     create_approval_mock = AsyncMock(return_value=SimpleNamespace(approval_id="apr_loser"))
-    with patch(f"{TRUST_GATE_MODULE}.create_approval", create_approval_mock):
+    with patch(f"{APPROVAL_PERSISTENCE_MODULE}.create_approval", create_approval_mock):
         approval_id = await _persist_permission_approval(
             name="echo",
             capability="email.send",
@@ -759,7 +759,7 @@ async def test_persist_ask_mode_defaults_reversible_and_blast_radius():
         captured.update(kwargs)
         return SimpleNamespace(approval_id="apr_ask")
 
-    with patch(f"{TRUST_GATE_MODULE}.create_approval", side_effect=fake_create_approval):
+    with patch(f"{APPROVAL_PERSISTENCE_MODULE}.create_approval", side_effect=fake_create_approval):
         approval_id = await _persist_permission_approval(
             name="echo",
             capability="email.send",
