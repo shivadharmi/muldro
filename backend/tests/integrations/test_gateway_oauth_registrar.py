@@ -5,7 +5,9 @@ from __future__ import annotations
 import httpx
 import pytest
 
+from src.config.settings import Settings
 from src.integrations.gateway_actions import PROVIDER_REGISTRY
+from src.integrations.gateway_oauth_registrar import register_gateway_oauth_configs
 from src.services.openconnector_admin_client import (
     OpenConnectorAdminClient,
     OpenConnectorAdminError,
@@ -83,3 +85,98 @@ async def test_put_oauth_config_raises_with_oc_message_on_non_2xx(monkeypatch):
     admin = OpenConnectorAdminClient(base_url="http://oc.test", admin_token="admtok")
     with pytest.raises(OpenConnectorAdminError, match="bad_client"):
         await admin.put_oauth_config(service="gmail", client_id="c", client_secret="s")
+
+
+class FakeAdmin:
+    """Records put_oauth_config calls; optionally fails on a chosen service."""
+
+    def __init__(self, fail_on: str | None = None) -> None:
+        self.calls: list[tuple[str, str, str]] = []
+        self._fail_on = fail_on
+
+    async def put_oauth_config(self, *, service: str, client_id: str, client_secret: str) -> dict:
+        self.calls.append((service, client_id, client_secret))
+        if self._fail_on == service:
+            raise OpenConnectorAdminError(f"put_oauth_config({service}) failed: 400 nope")
+        return {
+            "service": service,
+            "configured": True,
+            "clientId": client_id,
+            "expectedRedirectUri": "http://localhost:3001/oauth/callback",
+        }
+
+
+def _settings(**overrides) -> Settings:
+    base = dict(
+        openconnector_admin_url="http://oc.test",
+        openconnector_admin_token="admtok",
+        google_oauth_client_id="g-id",
+        google_oauth_client_secret="g-secret",
+        github_oauth_client_id="gh-id",
+        github_oauth_client_secret="gh-secret",
+        skip_gateway_validation=False,
+    )
+    base.update(overrides)
+    return Settings(_env_file=None, **base)
+
+
+async def test_registers_every_provider_with_the_right_credentials():
+    """google credentials fan out to BOTH gmail and googlecalendar; github gets its own."""
+    admin = FakeAdmin()
+    registered = await register_gateway_oauth_configs(_settings(), admin=admin)
+
+    assert registered == ["gmail", "googlecalendar", "github"]
+    assert admin.calls == [
+        ("gmail", "g-id", "g-secret"),
+        ("googlecalendar", "g-id", "g-secret"),
+        ("github", "gh-id", "gh-secret"),
+    ]
+
+
+async def test_never_registers_non_gateway_providers():
+    """notion/atlassian have OAuth settings but are not gateway providers."""
+    admin = FakeAdmin()
+    await register_gateway_oauth_configs(_settings(), admin=admin)
+    assert {service for service, _, _ in admin.calls} == {"gmail", "googlecalendar", "github"}
+
+
+async def test_skip_flag_makes_it_a_no_op():
+    admin = FakeAdmin()
+    registered = await register_gateway_oauth_configs(
+        _settings(skip_gateway_validation=True), admin=admin
+    )
+    assert registered == []
+    assert admin.calls == []
+
+
+async def test_unconfigured_admin_plane_aborts_before_any_call():
+    admin = FakeAdmin()
+    with pytest.raises(RuntimeError, match="openconnector_admin_url"):
+        await register_gateway_oauth_configs(
+            _settings(openconnector_admin_url="", openconnector_admin_token=""), admin=admin
+        )
+    assert admin.calls == []
+
+
+async def test_missing_credentials_names_the_offending_provider():
+    admin = FakeAdmin()
+    with pytest.raises(RuntimeError, match="github"):
+        await register_gateway_oauth_configs(
+            _settings(github_oauth_client_id="", github_oauth_client_secret=""), admin=admin
+        )
+
+
+async def test_failed_put_propagates_openconnectors_message():
+    admin = FakeAdmin(fail_on="googlecalendar")
+    with pytest.raises(RuntimeError, match="googlecalendar"):
+        await register_gateway_oauth_configs(_settings(), admin=admin)
+
+
+async def test_secrets_never_reach_the_logs(caplog):
+    admin = FakeAdmin()
+    with caplog.at_level("INFO"):
+        await register_gateway_oauth_configs(_settings(), admin=admin)
+    combined = " ".join(r.getMessage() for r in caplog.records)
+    assert "g-secret" not in combined
+    assert "gh-secret" not in combined
+    assert "http://localhost:3001/oauth/callback" in combined
