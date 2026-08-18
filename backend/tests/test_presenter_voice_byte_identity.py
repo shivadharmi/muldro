@@ -16,10 +16,10 @@ longer asserts historical byte-neutrality; it pins the *current* pruned content 
 The companion ``test_presenter_voice_has_no_dead_schema_tokens`` gives that prune teeth so
 a drift re-introducing a dead kind/type fails CI.
 
-It was re-baselined a second time by the Jarvis -> Muldro product rebrand. The guarded diff
-was exclusively the product name inside the ``<role>`` line ("the Presenter agent in Jarvis"
--> "... in Muldro"); ``PRESENTER_VOICE`` itself was byte-identical across the rebrand, so the
-reusable voice fragment carries no rebrand delta.
+It was re-baselined a second time by the Muldro product rebrand, which renamed the product
+throughout. The guarded diff was exclusively that name inside the ``<role>`` line ("the
+Presenter agent in <product>"); ``PRESENTER_VOICE`` itself was byte-identical across the
+rebrand, so the reusable voice fragment carries no rebrand delta.
 
 To re-baseline intentionally, recompute with:
     uv run python -c "from src.orchestrator.prompts import PRESENTER_PROMPT; \\
@@ -31,7 +31,7 @@ import hashlib
 from src.orchestrator.prompts import PRESENTER_PROMPT, PRESENTER_VOICE
 
 # Golden sha256 of PRESENTER_PROMPT. Re-baselined in Step-9 P1 (dead-kind/type prune),
-# then again for the Jarvis -> Muldro product rebrand (name substitution only).
+# then again for the Muldro product rebrand (name substitution only).
 _PRESENTER_PROMPT_GOLDEN_SHA256 = "6330dff8206fd209507b5a0c4c02735fade422d8fe1caae2acbf34cfba28f7b2"
 
 
