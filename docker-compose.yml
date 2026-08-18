@@ -1,3 +1,5 @@
+name: muldro
+
 services:
   postgres:
     image: pgvector/pgvector:pg17
