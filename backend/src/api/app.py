@@ -1,4 +1,4 @@
-"""FastAPI application — Jarvis backend entry point."""
+"""FastAPI application — Muldro backend entry point."""
 
 import logging
 from contextlib import asynccontextmanager
@@ -139,7 +139,7 @@ def create_app() -> FastAPI:
             )
 
         # §4.3 master-key guard: fail loud at startup if encrypted provider credentials
-        # exist but JARVIS_CONFIG_ENCRYPTION_KEY is unset — otherwise the failure only
+        # exist but MULDRO_CONFIG_ENCRYPTION_KEY is unset — otherwise the failure only
         # surfaces at turn time inside secret_crypto. A genuinely unreachable DB can't be
         # checked here; the turn-time guard remains the backstop for that case.
         try:
@@ -156,7 +156,7 @@ def create_app() -> FastAPI:
             )
         if _has_encrypted_creds and not get_settings().config_encryption_key:
             raise RuntimeError(
-                "JARVIS_CONFIG_ENCRYPTION_KEY is unset but encrypted provider credentials "
+                "MULDRO_CONFIG_ENCRYPTION_KEY is unset but encrypted provider credentials "
                 "exist in the database. Set the master key so credentials can be decrypted "
                 "at model-build time, or remove the affected provider_credentials rows."
             )
@@ -202,9 +202,9 @@ def create_app() -> FastAPI:
 
         # Validate tool registry consistency. Fail closed: a malformed (or
         # un-validatable) registry must not serve traffic. Operators can bypass
-        # the whole check with JARVIS_SKIP_REGISTRY_VALIDATION=true in emergencies.
+        # the whole check with MULDRO_SKIP_REGISTRY_VALIDATION=true in emergencies.
         if settings.skip_registry_validation:
-            logger.warning("Registry validation SKIPPED (JARVIS_SKIP_REGISTRY_VALIDATION=true)")
+            logger.warning("Registry validation SKIPPED (MULDRO_SKIP_REGISTRY_VALIDATION=true)")
         else:
             try:
                 from src.tools.validation import validate_registry
@@ -221,7 +221,7 @@ def create_app() -> FastAPI:
                     logger.error("Registry validation: %s", err)
                 raise RuntimeError(
                     f"Registry validation found {len(errors)} error(s) — fix them or set "
-                    "JARVIS_SKIP_REGISTRY_VALIDATION=true to bypass."
+                    "MULDRO_SKIP_REGISTRY_VALIDATION=true to bypass."
                 )
             logger.info("Registry validation passed")
 
@@ -250,7 +250,7 @@ def create_app() -> FastAPI:
                 raise RuntimeError(
                     f"Post-condition coverage found {len(pc_errors)} error(s) — register a "
                     "post-condition or mark UNVERIFIABLE, or set "
-                    "JARVIS_SKIP_REGISTRY_VALIDATION=true to bypass."
+                    "MULDRO_SKIP_REGISTRY_VALIDATION=true to bypass."
                 )
             logger.info("Post-condition coverage passed")
 
@@ -281,7 +281,7 @@ def create_app() -> FastAPI:
                 raise RuntimeError(
                     f"Identity coverage found {len(id_errors)} error(s) — add an IdentitySpec "
                     "or list the capability in POSITIONAL_KEY_ACCEPTED, or set "
-                    "JARVIS_SKIP_REGISTRY_VALIDATION=true to bypass."
+                    "MULDRO_SKIP_REGISTRY_VALIDATION=true to bypass."
                 )
             logger.info("Identity coverage passed")
 
@@ -408,7 +408,7 @@ def create_app() -> FastAPI:
             logger.info("Redis connection closed")
 
     app = FastAPI(
-        title="Jarvis Backend",
+        title="Muldro Backend",
         description="Personal AI Operating System — Backend Services",
         version="0.1.0",
         lifespan=lifespan,

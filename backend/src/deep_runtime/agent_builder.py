@@ -1,4 +1,4 @@
-"""Scaffold wiring a Jarvis ``SubAgent`` onto a deepagents ``CompiledStateGraph``.
+"""Scaffold wiring a Muldro ``SubAgent`` onto a deepagents ``CompiledStateGraph``.
 
 Phase-1 foundation: this wires ``create_deep_agent`` with the agent's model
 (via ``build_chat_model``), tools, system prompt, and the capability-scope guard
@@ -10,7 +10,7 @@ installed), ``build_deep_agent`` raises ``ValueError`` rather than silently
 producing an unguarded agent. This prevents the ungated chat path from ever
 running a write-capable agent without the safety net.
 
-Additional Jarvis policy middlewares (Budget, ModelResilience, ContextPack,
+Additional Muldro policy middlewares (Budget, ModelResilience, ContextPack,
 TurnScope, …) are threaded in via ``extra_middleware`` in later phases.
 """
 
@@ -73,15 +73,15 @@ async def build_deep_agent(
     scope guard would be installed (i.e. ``db_factory`` is None).
 
     Args:
-        agent: The Jarvis sub-agent definition (drives model tier + thinking).
+        agent: The Muldro sub-agent definition (drives model tier + thinking).
         tools: LangChain tools the agent may call (capability-resolved upstream).
         workspace_id: Tenant scope for registry lookups.
         db_factory: Async-context-manager factory yielding an ``AsyncSession``.
             Required for write-capable agents; omitting it causes a ``ValueError``
             when the agent has any write-class capability in scope.
-        extra_middleware: Additional Jarvis policy middlewares to install after
+        extra_middleware: Additional Muldro policy middlewares to install after
             the scope guard (none in Phase 1).
-        subagents: Read-only Jarvis delegates (``SubAgent``/``CompiledSubAgent`` dicts)
+        subagents: Read-only Muldro delegates (``SubAgent``/``CompiledSubAgent`` dicts)
             registered on the lead so its built-in ``task`` tool can route to them.
             Empty by default → forwarded as ``None`` so the call is byte-identical to
             today when no delegates are wired. Note: the fail-closed write guard below

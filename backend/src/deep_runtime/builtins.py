@@ -1,10 +1,10 @@
 """Reserved deepagents built-in tool names (Step 6A.5).
 
 deepagents' create_deep_agent auto-installs a scaffolding toolset (todos, filesystem,
-subagent) via required middleware Jarvis cannot drop.  These are NOT Jarvis registry
+subagent) via required middleware Muldro cannot drop.  These are NOT Muldro registry
 tools: they must run their own bodies and must NOT be capability-gated or routed
 through ToolExecutor.execute_tool.  Both the capability_scope guard and the
-jarvis_tool_dispatcher (to be added in 6B) exempt these names, falling through to
+muldro_tool_dispatcher (to be added in 6B) exempt these names, falling through to
 the real deepagents handler.
 
 Version-pinned to deepagents 0.6.11; ``test_builtins_match_a_compiled_agent`` (in

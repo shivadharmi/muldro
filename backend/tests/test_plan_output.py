@@ -59,18 +59,18 @@ class TestCapabilityGap:
 
 
 class TestPlanStep:
-    def test_valid_jarvis_step(self):
+    def test_valid_muldro_step(self):
         s = PlanStep(
             step_id="s1",
             description="Search recent emails for invoice",
-            actor="jarvis",
+            actor="muldro",
             capability="email.search",
             input={"query": "invoice", "max_results": 10},
             depends_on=[],
             risk="low",
         )
         assert s.step_id == "s1"
-        assert s.actor == "jarvis"
+        assert s.actor == "muldro"
         assert s.capability == "email.search"
         assert s.input["query"] == "invoice"
         assert s.risk == "low"
@@ -89,7 +89,7 @@ class TestPlanStep:
     def test_defaults(self):
         s = PlanStep(description="Think about it", capability="reason")
         assert s.step_id == ""
-        assert s.actor == "jarvis"
+        assert s.actor == "muldro"
         assert s.input == {}
         assert s.depends_on == []
         assert s.risk == "none"
@@ -272,7 +272,7 @@ class TestPlanOutput:
                 {
                     "step_id": "s1",
                     "description": "Do thing",
-                    "actor": "jarvis",
+                    "actor": "muldro",
                     "capability": "reason",
                     "input": {},
                     "depends_on": [],

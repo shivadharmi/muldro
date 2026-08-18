@@ -1,5 +1,5 @@
 """§4.3 master-key startup guard: fail loud if encrypted provider credentials exist
-but JARVIS_CONFIG_ENCRYPTION_KEY is unset.
+but MULDRO_CONFIG_ENCRYPTION_KEY is unset.
 
 Covers the query helper `has_encrypted_provider_credential` (real DB) plus the guard's
 raise/no-raise decision logic (pure).

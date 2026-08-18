@@ -2,15 +2,15 @@ services:
   postgres:
     image: pgvector/pgvector:pg17
     environment:
-      POSTGRES_USER: jarvis
-      POSTGRES_PASSWORD: jarvis
-      POSTGRES_DB: jarvis
+      POSTGRES_USER: muldro
+      POSTGRES_PASSWORD: muldro
+      POSTGRES_DB: muldro
     ports:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U jarvis -d jarvis"]
+      test: ["CMD-SHELL", "pg_isready -U muldro -d muldro"]
       interval: 5s
       timeout: 5s
       retries: 12
@@ -27,8 +27,8 @@ services:
       - "9000:9000"
       - "9001:9001"
     environment:
-      MINIO_ROOT_USER: jarvis
-      MINIO_ROOT_PASSWORD: jarvisdev
+      MINIO_ROOT_USER: muldro
+      MINIO_ROOT_PASSWORD: muldrodev
     volumes:
       - miniodata:/data
 
@@ -43,7 +43,7 @@ services:
   neo4j:
     image: neo4j:5.26-community
     environment:
-      NEO4J_AUTH: neo4j/jarvisdev
+      NEO4J_AUTH: neo4j/muldrodev
     ports:
       - "7474:7474"
       - "7687:7687"
@@ -63,12 +63,12 @@ services:
     environment:
       # Point the app at the compose service hostnames (override any localhost
       # values in .env). The only value the user must supply is the Anthropic key.
-      JARVIS_DATABASE_URL: postgresql+asyncpg://jarvis:jarvis@postgres:5432/jarvis
-      JARVIS_REDIS_URL: redis://redis:6379/0
-      JARVIS_QDRANT_URL: http://qdrant:6333
-      JARVIS_NEO4J_URL: bolt://neo4j:7687
-      JARVIS_NEO4J_USER: neo4j
-      JARVIS_NEO4J_PASSWORD: jarvisdev
+      MULDRO_DATABASE_URL: postgresql+asyncpg://muldro:muldro@postgres:5432/muldro
+      MULDRO_REDIS_URL: redis://redis:6379/0
+      MULDRO_QDRANT_URL: http://qdrant:6333
+      MULDRO_NEO4J_URL: bolt://neo4j:7687
+      MULDRO_NEO4J_USER: neo4j
+      MULDRO_NEO4J_PASSWORD: muldrodev
     depends_on:
       postgres:
         condition: service_healthy

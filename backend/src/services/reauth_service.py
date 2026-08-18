@@ -1,7 +1,7 @@
 """ReauthService — gate work on OAuth providers the user must reconnect.
 
 When a provider's credential becomes permanently unusable (no_token /
-no_refresh_token / revoked), Jarvis must stop hammering it and instead prompt
+no_refresh_token / revoked), Muldro must stop hammering it and instead prompt
 the user to re-authorize. This service is the coordination point:
 
 - ``mark_needs_reauth`` flips the integration to ``needs_reauth``, pauses the
@@ -279,7 +279,7 @@ class ReauthService:
             user_id,
             "critical_alert",
             title=f"Reconnect {display}",
-            body=f"Jarvis lost access to {display}. Re-authorize to resume.",
+            body=f"Muldro lost access to {display}. Re-authorize to resume.",
             data={
                 "kind": "reauth",
                 "provider": provider,
@@ -319,7 +319,7 @@ class ReauthService:
         children = [
             alert(
                 id="reauth_alert",
-                message=f"Jarvis lost access to {display}.",
+                message=f"Muldro lost access to {display}.",
                 severity="error",
                 title="Reconnect required",
             ),

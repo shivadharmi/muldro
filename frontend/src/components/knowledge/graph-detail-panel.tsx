@@ -25,27 +25,27 @@ function resolveCssVar(varExpr: string): string {
 // ── Color mappings ─────────────────────────────────────────────
 
 const ENTITY_TYPE_COLORS: Record<string, string> = {
-  person: "var(--jarvis-primary)",
-  organization: "var(--jarvis-secondary)",
-  project: "var(--jarvis-accent)",
-  document: "var(--jarvis-warning)",
-  repository: "var(--jarvis-error)",
+  person: "var(--muldro-primary)",
+  organization: "var(--muldro-secondary)",
+  project: "var(--muldro-accent)",
+  document: "var(--muldro-warning)",
+  repository: "var(--muldro-error)",
 };
 
 const MEMORY_TYPE_COLORS: Record<string, string> = {
-  semantic: "var(--jarvis-secondary)",
-  episodic: "var(--jarvis-primary)",
-  preference: "var(--jarvis-warning)",
-  goal: "var(--jarvis-accent)",
-  relationship: "var(--jarvis-text-muted)",
+  semantic: "var(--muldro-secondary)",
+  episodic: "var(--muldro-primary)",
+  preference: "var(--muldro-warning)",
+  goal: "var(--muldro-accent)",
+  relationship: "var(--muldro-text-muted)",
 };
 
 function getEntityColor(type: string): string {
-  return resolveCssVar(ENTITY_TYPE_COLORS[type.toLowerCase()] ?? "var(--jarvis-text-muted)");
+  return resolveCssVar(ENTITY_TYPE_COLORS[type.toLowerCase()] ?? "var(--muldro-text-muted)");
 }
 
 function getMemoryColor(type: string): string {
-  return resolveCssVar(MEMORY_TYPE_COLORS[type.toLowerCase()] ?? "var(--jarvis-text-muted)");
+  return resolveCssVar(MEMORY_TYPE_COLORS[type.toLowerCase()] ?? "var(--muldro-text-muted)");
 }
 
 // ── Helpers ────────────────────────────────────────────────────

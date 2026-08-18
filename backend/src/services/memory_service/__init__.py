@@ -1,6 +1,6 @@
 """Memory Service — episodic, semantic, preference, and behavioral memory.
 
-Jarvis's product memory — long-term, structured, searchable, and scored.
+Muldro's product memory — long-term, structured, searchable, and scored.
 
 Responsibilities:
 - Extract candidate memories from interactions and events

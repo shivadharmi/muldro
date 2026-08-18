@@ -168,7 +168,7 @@ def test_put_then_get_model_config():
             assert overrides["planner"]["model_id"] == "claude-opus-4-8"
 
             # Provider statuses cover the whole catalog. Anthropic has no
-            # credential row here, but the deployment env key (JARVIS_ANTHROPIC_API_KEY)
+            # credential row here, but the deployment env key (MULDRO_ANTHROPIC_API_KEY)
             # is set, so it reports as an env-backed working default. A provider with
             # neither a row nor an env key (ollama uses base_url only) is unconfigured.
             providers = {p["provider"]: p for p in body["providers"]}
@@ -426,7 +426,7 @@ def test_test_credential_uses_env_fallback(monkeypatch):
     app = _cred_app(ws, factory)
     try:
         with TestClient(app) as c:
-            # anthropic has no credential row here, but JARVIS_ANTHROPIC_API_KEY is
+            # anthropic has no credential row here, but MULDRO_ANTHROPIC_API_KEY is
             # set in the env — GET reports it configured, so /test must agree.
             got = c.get("/v1/model-config")
             prov = {p["provider"]: p for p in got.json()["providers"]}

@@ -79,7 +79,7 @@ jobs:
           # real app via TestClient). Unit tests mock the LLM and never make a real call, so a
           # non-empty placeholder is enough — no real credential in CI. Not an sk-ant-shaped
           # value, so it does not trip secret scanning.
-          JARVIS_ANTHROPIC_API_KEY: ci-placeholder-not-a-real-key
+          MULDRO_ANTHROPIC_API_KEY: ci-placeholder-not-a-real-key
         run: |
           source .venv/bin/activate
           pytest tests/ -v --ignore=tests/e2e --ignore=tests/eval --ignore=tests/golden -x

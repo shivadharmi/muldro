@@ -6,8 +6,8 @@ import pytest
 
 
 def _make_orchestrator():
-    """Create a JarvisOrchestrator with all deps mocked."""
-    from src.orchestrator.jarvis import JarvisOrchestrator
+    """Create a MuldroOrchestrator with all deps mocked."""
+    from src.orchestrator.muldro import MuldroOrchestrator
 
     settings = MagicMock()
     settings.daily_token_budget_usd = 10.0
@@ -36,7 +36,7 @@ def _make_orchestrator():
     services.reranker = None
     services.notifier = None
 
-    orch = JarvisOrchestrator(settings=settings, db_factory=db_factory, services=services)
+    orch = MuldroOrchestrator(settings=settings, db_factory=db_factory, services=services)
 
     return orch
 
@@ -65,7 +65,7 @@ class TestProcessMessageRouting:
         orch._chat._get_available_capabilities = AsyncMock(return_value=[])
 
         result = await orch.process_message(
-            message="Hey Jarvis",
+            message="Hey Muldro",
             user_id="usr_1",
             workspace_id="ws_1",
         )

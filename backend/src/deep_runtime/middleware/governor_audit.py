@@ -1,7 +1,7 @@
 """Deep-runtime Governor audit middleware (Step 7B1).
 
 Port of the legacy ``governor_pre_tool_hook`` (``src/orchestrator/hooks.py``) to a
-``@wrap_tool_call`` middleware for the deep path: audit-log every Jarvis tool call, BLOCK
+``@wrap_tool_call`` middleware for the deep path: audit-log every Muldro tool call, BLOCK
 disabled tools (→ ``ToolMessage`` error), and fall through for deepagents built-ins. This is
 AUDIT-ONLY — approval gating is the trust_gate's job (Step 6B); the block here mirrors the
 legacy hook's single safety invariant (a disabled tool never runs).
@@ -60,7 +60,7 @@ def make_governor_audit_middleware(
         name = request.tool_call["name"]
 
         # deepagents built-ins (write_todos, ls, task, …) are framework scaffolding — never
-        # a Jarvis registry tool, so skip the lookup and let them run their own bodies.
+        # a Muldro registry tool, so skip the lookup and let them run their own bodies.
         if name in DEEPAGENTS_BUILTIN_NAMES:
             return await handler(request)
 
@@ -83,7 +83,7 @@ def make_governor_audit_middleware(
                 status="error",
             )
 
-        # Audit log — every non-blocked Jarvis tool call.
+        # Audit log — every non-blocked Muldro tool call.
         logger.info(
             "tool_audit",
             extra={

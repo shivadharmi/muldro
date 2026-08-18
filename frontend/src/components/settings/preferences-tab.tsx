@@ -53,7 +53,7 @@ export function PreferencesTab() {
           <CardBody>
             <div className="py-2">
               <p className="text-sm text-t-secondary font-medium mb-1">
-                Jarvis is learning how you like to be talked to
+                Muldro is learning how you like to be talked to
               </p>
               <p className="text-xs text-t-muted leading-relaxed">
                 Tone, brevity, and formatting preferences are inferred from how you
@@ -77,7 +77,7 @@ export function PreferencesTab() {
                 Delivery preferences are managed automatically
               </p>
               <p className="text-xs text-t-muted leading-relaxed">
-                Jarvis rate-limits and prioritizes alerts on its own for now.
+                Muldro rate-limits and prioritizes alerts on its own for now.
                 Per-surface controls will appear here when exposed.
               </p>
             </div>

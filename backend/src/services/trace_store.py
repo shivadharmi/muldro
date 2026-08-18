@@ -1,4 +1,4 @@
-"""TraceStore — persists JarvisTrace objects for search and replay.
+"""TraceStore — persists MuldroTrace objects for search and replay.
 
 Uses PostgreSQL as primary store. Falls back to in-memory ring buffer
 when no DB session factory is available. Optionally indexes to

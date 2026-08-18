@@ -56,7 +56,7 @@ class TestPlanOutputContract:
 
     def test_plan_step_defaults(self):
         step = PlanStep(description="Read", capability="email.read")
-        assert step.actor == "jarvis"
+        assert step.actor == "muldro"
         assert step.risk == "none"
         assert step.depends_on == []
 

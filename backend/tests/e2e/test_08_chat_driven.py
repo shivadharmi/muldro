@@ -30,7 +30,7 @@ async def _chat(client: httpx.AsyncClient, message: str) -> dict:
     last_event: str | None = None
 
     async with client.stream(
-        "POST", "/v1/jarvis/chat", json={"message": message, "surface": "web"}, timeout=120.0
+        "POST", "/v1/muldro/chat", json={"message": message, "surface": "web"}, timeout=120.0
     ) as resp:
         assert resp.status_code == 200
         async for line in resp.aiter_lines():
@@ -57,7 +57,7 @@ class TestChatLoop:
     """The core perceive → plan → respond loop over the live stack."""
 
     async def test_chat_drives_loop_to_response(self, client: httpx.AsyncClient):
-        result = await _chat(client, "Hello Jarvis — reply in one short sentence.")
+        result = await _chat(client, "Hello Muldro — reply in one short sentence.")
         assert result["error"] is None, f"chat surfaced an error: {result['error']}"
         # The orchestrator classifies intent and emits a final response.
         assert "intent" in result["events"]

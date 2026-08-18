@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ActionResult, JarvisMessage, SurfaceUpdate, WorkspaceSurfacePush } from "@/lib/a2ui-types";
+import type { ActionResult, MuldroMessage, SurfaceUpdate, WorkspaceSurfacePush } from "@/lib/a2ui-types";
 import { parseWsError, type ParsedApiError } from "@/lib/api-error";
 import { getStoredToken } from "@/lib/auth";
 
@@ -16,18 +16,18 @@ function getWsUrl(userId: string): string {
   return `${wsBase.protocol}//${wsBase.host}/ws/${userId}`;
 }
 
-interface UseJarvisWsOptions {
+interface UseMuldroWsOptions {
   userId: string;
   onSurfacePush?: (surface: WorkspaceSurfacePush) => void;
   onSurfaceUpdate?: (update: SurfaceUpdate) => void;
   onActionResult?: (result: ActionResult) => void;
-  onNotification?: (msg: JarvisMessage) => void;
+  onNotification?: (msg: MuldroMessage) => void;
   /** Top-level WS error frame: { status:"error", code, message, correlation_id }. */
   onError?: (err: ParsedApiError) => void;
   enabled?: boolean;
 }
 
-export function useJarvisWs({
+export function useMuldroWs({
   userId,
   onSurfacePush,
   onSurfaceUpdate,
@@ -35,7 +35,7 @@ export function useJarvisWs({
   onNotification,
   onError,
   enabled = true,
-}: UseJarvisWsOptions) {
+}: UseMuldroWsOptions) {
   const wsRef = useRef<WebSocket | null>(null);
   const [connected, setConnected] = useState(false);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -93,9 +93,9 @@ export function useJarvisWs({
       };
 
       ws.onmessage = (event) => {
-        let msg: JarvisMessage;
+        let msg: MuldroMessage;
         try {
-          msg = JSON.parse(event.data) as JarvisMessage;
+          msg = JSON.parse(event.data) as MuldroMessage;
         } catch {
           return;
         }

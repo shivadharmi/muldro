@@ -1,6 +1,6 @@
 """World Model — maintains entities and relationships.
 
-The structured representation of everything Jarvis knows about:
+The structured representation of everything Muldro knows about:
 people, projects, tasks, meetings, organizations, goals.
 
 Responsibilities:

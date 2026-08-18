@@ -165,8 +165,8 @@ export function CommandLauncher() {
               onKeyDown={handleKeyDown}
               placeholder={
                 permissionMode === "bypass"
-                  ? "What should Jarvis do?"
-                  : "Ask Jarvis anything…"
+                  ? "What should Muldro do?"
+                  : "Ask Muldro anything…"
               }
               className="w-full bg-transparent text-base sm:text-[15px] text-t-primary placeholder-t-muted focus:outline-none"
               autoFocus

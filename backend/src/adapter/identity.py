@@ -3,7 +3,7 @@
 Turns a platform JWT (minted by `src.orchestrator.platform_jwt`) into a
 verified `AdapterPrincipal`. This is the adapter-side counterpart to the
 platform's mint step: the gateway call arrives carrying a short-lived
-platform JWT, and this module confirms it was signed by Jarvis, scoped to
+platform JWT, and this module confirms it was signed by Muldro, scoped to
 the `toolhive-vmcp` audience, and unexpired before trusting any of its
 claims.
 """

@@ -31,7 +31,7 @@ def bus(mock_redis):
 class TestPublish:
     async def test_publishes_to_stream(self, bus, mock_redis):
         event_id = await bus.publish(
-            "jarvis:events:ws_1",
+            "muldro:events:ws_1",
             "email_received",
             {"subject": "Test"},
             user_id=TEST_USER_ID,
@@ -40,14 +40,14 @@ class TestPublish:
         assert event_id.startswith("be_")
         mock_redis.xadd.assert_called_once()
         call_args = mock_redis.xadd.call_args
-        assert call_args[0][0] == "jarvis:events:ws_1"
+        assert call_args[0][0] == "muldro:events:ws_1"
         data = call_args[0][1]
         assert data["event_type"] == "email_received"
         assert json.loads(data["payload"]) == {"subject": "Test"}
 
     async def test_includes_metadata(self, bus, mock_redis):
         await bus.publish(
-            f"jarvis:events:{TEST_USER_ID}",
+            f"muldro:events:{TEST_USER_ID}",
             "test",
             {},
             metadata={"trace_id": "tr_123"},
@@ -57,7 +57,7 @@ class TestPublish:
 
     async def test_includes_workspace_id_in_xadd_data(self, bus, mock_redis):
         await bus.publish(
-            "jarvis:events:ws_42",
+            "muldro:events:ws_42",
             "event_processed",
             {"event_id": "evt_1"},
             user_id=TEST_USER_ID,
@@ -67,7 +67,7 @@ class TestPublish:
         assert data["workspace_id"] == "ws_42"
 
     async def test_workspace_id_defaults_to_empty(self, bus, mock_redis):
-        await bus.publish("jarvis:events:ws_x", "test", {})
+        await bus.publish("muldro:events:ws_x", "test", {})
         data = mock_redis.xadd.call_args[0][1]
         assert data["workspace_id"] == ""
 
@@ -77,7 +77,7 @@ class TestSubscribe:
         mock_redis.xreadgroup = AsyncMock(
             return_value=[
                 (
-                    f"jarvis:events:{TEST_USER_ID}",
+                    f"muldro:events:{TEST_USER_ID}",
                     [
                         (
                             "1-0",
@@ -97,7 +97,7 @@ class TestSubscribe:
         handler = AsyncMock()
 
         count = await bus.subscribe(
-            f"jarvis:events:{TEST_USER_ID}",
+            f"muldro:events:{TEST_USER_ID}",
             "test_group",
             "consumer-1",
             handler,
@@ -191,10 +191,10 @@ class TestReplay:
 
 class TestStreamNames:
     def test_event_stream(self, bus):
-        assert bus.event_stream("ws_123") == "jarvis:events:ws_123"
+        assert bus.event_stream("ws_123") == "muldro:events:ws_123"
 
     def test_agent_stream(self, bus):
-        assert bus.agent_stream("ws_123") == "jarvis:agent_events:ws_123"
+        assert bus.agent_stream("ws_123") == "muldro:agent_events:ws_123"
 
 
 class TestParseEvent:
@@ -210,7 +210,7 @@ class TestParseEvent:
             "metadata": "{}",
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
-        event = bus._parse_event("jarvis:events:ws_99", data)
+        event = bus._parse_event("muldro:events:ws_99", data)
         assert isinstance(event, BusEvent)
         assert event.workspace_id == "ws_99"
 

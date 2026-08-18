@@ -22,7 +22,7 @@ different bearer tokens**:
 
 - `/openapi.json` is admin-gated (200 with admin token) — the full API map.
 - Both return the same `401 {"error":{"code":"unauthorized",...}}` on a wrong/absent token, so a 401 does not tell you *which* token a path wants.
-- **Implication:** the increment-1 adapter uses the RUNTIME token (`execute_action`). The connect flow needs the **ADMIN token** — a NEW secret Jarvis must hold, distinct from the runtime token. Add `openconnector_admin_token` + `openconnector_admin_url` settings.
+- **Implication:** the increment-1 adapter uses the RUNTIME token (`execute_action`). The connect flow needs the **ADMIN token** — a NEW secret Muldro must hold, distinct from the runtime token. Add `openconnector_admin_token` + `openconnector_admin_url` settings.
 
 ## 2. Authorization-creation API — accepts a caller-supplied connectionName ✓
 
@@ -33,9 +33,9 @@ body: { "service": "<required>", "connectionName": "<optional string>" }   # add
 200 : { "service", "authorizationUrl", "state" }
 ```
 
-Live test with `{"service":"gmail","connectionName":"jarvisws:usr_alice:gmail:work"}`
+Live test with `{"service":"gmail","connectionName":"muldrows:usr_alice:gmail:work"}`
 returned a Google consent URL (200). **This is the gate for decision C
-(Jarvis owns naming) — it passes.** Jarvis mints the namespaced
+(Muldro owns naming) — it passes.** Muldro mints the namespaced
 `connectionName` up front and passes it into the authorization request.
 
 The `authorizationUrl` is the browser-consent URL:
@@ -57,7 +57,7 @@ body: { "clientId": "<required>", "clientSecret", "extra"?, "secretExtra"? }
 
 - `redirect_uri` is OpenConnector's **own** `/oauth/callback` route (confirmed: `GET /oauth/callback` with no args → 400, route exists). There is **NO configurable app-return URL** — the authorization body is `additionalProperties:false` with no `returnUrl`/`redirectUri` param.
 - `state` is a server-generated **UUID**, not the connectionName. OpenConnector maps `state → connectionName` internally.
-- **⇒ Jarvis gets no redirect-back signal.** After the user consents, the browser lands on OpenConnector's own callback/UI, not on Jarvis. Confirmation must be **poll-based**.
+- **⇒ Muldro gets no redirect-back signal.** After the user consents, the browser lands on OpenConnector's own callback/UI, not on Muldro. Confirmation must be **poll-based**.
 
 ## 5. Confirmation model
 

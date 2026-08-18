@@ -93,7 +93,7 @@ class CapabilityHealthService:
                     CapabilityStatus(
                         family=family.value,
                         status="healthy",
-                        provider="jarvis",
+                        provider="muldro",
                         last_activity_at=datetime.now(timezone.utc),
                         capabilities_available=self._count_capabilities(family),
                         capabilities_total=self._count_capabilities(family),

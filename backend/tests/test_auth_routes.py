@@ -15,7 +15,7 @@ class TestOAuthConnectRoutes:
     ``google`` and ``github`` moved behind the OpenConnector gateway, which owns
     their OAuth clients. Their native authorize/callback branches were deleted,
     so both now fall through to the shared "Unknown provider" 400 — even when
-    Jarvis-side client credentials happen to be configured. Minting a token
+    Muldro-side client credentials happen to be configured. Minting a token
     nothing reads was the failure mode this closes.
     """
 

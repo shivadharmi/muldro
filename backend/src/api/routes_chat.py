@@ -1,6 +1,6 @@
 """SSE streaming chat endpoint — routes messages through the full orchestrator.
 
-This is the primary chat entry point. Unlike /v1/jarvis/command (which only
+This is the primary chat entry point. Unlike /v1/muldro/command (which only
 calls the Planner), this endpoint streams through the full multi-agent pipeline:
 Planner → Governor → Presenter → Persona, with real-time visibility into
 agent routing, tool calls, and thinking.
@@ -79,7 +79,7 @@ def _build_orchestrator(settings: Settings, checkpointer_provider=None):
 
     The orchestrator holds only the shared singletons (``build_shared``); every
     DB-bound service is built per request against a fresh ``AsyncSession`` via
-    ``JarvisOrchestrator._request_services``. This avoids sharing one
+    ``MuldroOrchestrator._request_services``. This avoids sharing one
     long-lived session across concurrent chat requests (P2 #4).
 
     ``checkpointer_provider`` is a zero-arg callable that returns the durable
@@ -87,7 +87,7 @@ def _build_orchestrator(settings: Settings, checkpointer_provider=None):
     None (default) falls back to MemorySaver inside AgentInvoker.
     """
     from src.models.database import get_session_factory
-    from src.orchestrator.jarvis import JarvisOrchestrator
+    from src.orchestrator.muldro import MuldroOrchestrator
     from src.runtime import build_shared
     from src.tools import configure_tool_servers
 
@@ -103,7 +103,7 @@ def _build_orchestrator(settings: Settings, checkpointer_provider=None):
     if shared_redis is not None:
         _module_shared_redis.append(shared_redis)
 
-    return JarvisOrchestrator(
+    return MuldroOrchestrator(
         settings=settings,
         db_factory=db_factory,
         services=svc,
@@ -370,7 +370,7 @@ async def _stream_and_persist_chat(
                 logger.warning("Failed to save assistant message", exc_info=True)
 
 
-@router.post("/v1/jarvis/chat")
+@router.post("/v1/muldro/chat")
 async def chat_stream(
     req: ChatRequest,
     request: Request,
@@ -501,7 +501,7 @@ class ChatResumeRequest(BaseModel):
     surface: str = "web"
 
 
-@router.post("/v1/jarvis/chat/resume")
+@router.post("/v1/muldro/chat/resume")
 async def chat_resume(
     req: ChatResumeRequest,
     request: Request,

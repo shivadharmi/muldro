@@ -11,7 +11,7 @@ from collections.abc import Awaitable, Callable
 
 logger = logging.getLogger(__name__)
 
-CONSUMER_GROUP = "jarvis-workers"
+CONSUMER_GROUP = "muldro-workers"
 CONSUMER_NAME = "worker-1"
 
 

@@ -45,8 +45,8 @@ async def main(email: str) -> None:
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Create a test user for Jarvis")
-    parser.add_argument("--email", default="admin@jarvis.local", help="User email")
+    parser = argparse.ArgumentParser(description="Create a test user for Muldro")
+    parser.add_argument("--email", default="admin@muldro.local", help="User email")
     args = parser.parse_args()
 
     try:

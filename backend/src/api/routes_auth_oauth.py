@@ -1,7 +1,7 @@
 """OAuth routes: provider listing, authorize-URL generation, and the
 callback that exchanges codes for tokens and provisions integrations.
 
-Serves the providers Jarvis still authenticates natively (slack/notion/
+Serves the providers Muldro still authenticates natively (slack/notion/
 atlassian). ``google`` and ``github`` were retired here when they moved behind
 the OpenConnector gateway: that gateway owns their OAuth clients and stores
 their credentials, so both hit the "Unknown provider" 400 and are connected
@@ -173,7 +173,7 @@ async def oauth_authorize(
     """Generate OAuth authorization URL for a provider.
 
     ``google`` and ``github`` are deliberately absent: both are served by the
-    OpenConnector gateway, which owns their OAuth clients. Minting a Jarvis-side
+    OpenConnector gateway, which owns their OAuth clients. Minting a Muldro-side
     credential for them would produce a token nothing reads, so they fall
     through to the "Unknown provider" 400 below.
     """

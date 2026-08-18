@@ -117,7 +117,7 @@ score = 0.40 * cosine_similarity   (relevance)
 
 **File:** `src/services/initiative_scorer.py`
 
-**Purpose:** Decides when Jarvis should proactively act without user request.
+**Purpose:** Decides when Muldro should proactively act without user request.
 
 **Constructor:**
 - `db`, `world_model?`, `memory_service?`, `auto_plan_threshold=0.70`, `notify_threshold=0.50`
@@ -670,7 +670,7 @@ Invalid transitions raise `InvalidTransitionError`. All status changes in GraphE
 | `subscribe(stream, group, consumer, handler)` | XREADGROUP + handler + XACK |
 | `replay(stream, handler, start_id, end_id)` | XRANGE for event replay |
 
-**Streams:** `jarvis:events:{user_id}`, `jarvis:agent_events:{user_id}`, `jarvis:system_events`, `jarvis:notifications`
+**Streams:** `muldro:events:{user_id}`, `muldro:agent_events:{user_id}`, `muldro:system_events`, `muldro:notifications`
 
 **Consumer groups:** entity_extractor, memory_extractor, planner, notifier, briefing_collector
 

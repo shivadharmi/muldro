@@ -1,11 +1,11 @@
 ---
-description: Review code changes against Jarvis architecture rules and agent boundaries
+description: Review code changes against Muldro architecture rules and agent boundaries
 user-invocable: true
 ---
 
 # Architecture review
 
-Review recent changes against Jarvis architecture rules. Run `git diff` to see what changed, then check:
+Review recent changes against Muldro architecture rules. Run `git diff` to see what changed, then check:
 
 ## 1. Agent boundaries (from CLAUDE.md)
 - Is the **Planner** the only component deciding intent? (structured task graphs, never free-form text)

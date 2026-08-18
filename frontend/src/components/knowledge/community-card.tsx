@@ -13,14 +13,14 @@ function resolveCssVar(varExpr: string): string {
 }
 
 const SEED_TYPE_COLORS: Record<string, string> = {
-  person: "var(--jarvis-primary)",
-  organization: "var(--jarvis-secondary)",
-  project: "var(--jarvis-accent)",
-  document: "var(--jarvis-warning)",
-  repository: "var(--jarvis-error)",
+  person: "var(--muldro-primary)",
+  organization: "var(--muldro-secondary)",
+  project: "var(--muldro-accent)",
+  document: "var(--muldro-warning)",
+  repository: "var(--muldro-error)",
 };
 
-const DEFAULT_SEED_COLOR = "var(--jarvis-text-muted)";
+const DEFAULT_SEED_COLOR = "var(--muldro-text-muted)";
 
 function getSeedColor(type: string): string {
   return resolveCssVar(SEED_TYPE_COLORS[type.toLowerCase()] ?? DEFAULT_SEED_COLOR);

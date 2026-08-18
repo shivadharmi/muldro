@@ -53,7 +53,7 @@ def _ensure_valid_cron(v: str | None) -> str | None:
 
 
 class IngestEventInput(BaseModel):
-    """Ingest an event into the Jarvis intelligence pipeline."""
+    """Ingest an event into the Muldro intelligence pipeline."""
 
     source: str = Field(description="Event source: gmail, calendar, slack, github, manual")
     event_type: str = Field(description="Type of event: message, meeting, commit, mention, etc.")
@@ -304,7 +304,7 @@ class GetProvenanceInput(BaseModel):
 
 
 class SetGoalInput(BaseModel):
-    """Record a user goal so Jarvis can track and act toward it. Use when the user states an
+    """Record a user goal so Muldro can track and act toward it. Use when the user states an
     objective ("my goal is …", "I want to …", "remember I'm trying to …")."""
 
     title: str = Field(description="The goal statement, e.g. 'Close the seed round by Q3'")

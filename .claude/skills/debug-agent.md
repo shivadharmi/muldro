@@ -13,8 +13,8 @@ Use this when an agent isn't behaving as expected — wrong routing, tool call f
    - GET `/v1/traces` — recent traces
    - GET `/v1/traces/{id}` — specific trace with agent spans
    - GET `/v1/traces/performance` — performance stats
-2. **Check agent routing** in `backend/src/orchestrator/jarvis.py`:
-   - `JarvisOrchestrator.process_message()` / `process_message_stream()` classify intent via Planner, then route via RouteResolver
+2. **Check agent routing** in `backend/src/orchestrator/muldro.py`:
+   - `MuldroOrchestrator.process_message()` / `process_message_stream()` classify intent via Planner, then route via RouteResolver
    - Verify the routing logic matches the user intent
    - Check direct handlers (`set_goal`, `set_instruction`, `schedule_reminder`, `add_to_brief`) which execute before pipeline resolution
 3. **Check tool scopes** in `backend/src/orchestrator/agents.py`:

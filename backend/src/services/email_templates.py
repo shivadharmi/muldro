@@ -1,4 +1,4 @@
-"""Email templates for Jarvis."""
+"""Email templates for Muldro."""
 
 
 def magic_link_email(verify_url: str, ttl_minutes: int = 15) -> tuple[str, str]:
@@ -18,7 +18,7 @@ def magic_link_email(verify_url: str, ttl_minutes: int = 15) -> tuple[str, str]:
         f' style="background-color:{card};'
         f'border-radius:12px;padding:40px;">\n'
         f'<tr><td style="text-align:center;padding-bottom:24px;">\n'
-        f'<h1 style="color:#fff;font-size:24px;margin:0;">Jarvis</h1>\n'
+        f'<h1 style="color:#fff;font-size:24px;margin:0;">Muldro</h1>\n'
         f'<p style="color:#a3a3a3;font-size:14px;margin:8px 0 0;">'
         f"Personal AI Operating System</p>\n"
         f"</td></tr>\n"
@@ -54,7 +54,7 @@ def magic_link_email(verify_url: str, ttl_minutes: int = 15) -> tuple[str, str]:
     )
 
     text = (
-        f"Sign in to Jarvis\n\n"
+        f"Sign in to Muldro\n\n"
         f"Click the link below to sign in (expires in {ttl_minutes} minutes):\n\n"
         f"{verify_url}\n\n"
         f"If you didn't request this email, you can safely ignore it."

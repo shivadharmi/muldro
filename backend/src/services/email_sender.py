@@ -23,9 +23,9 @@ class EmailSender:
     ) -> str:
         """Send an email via SES. Returns the SES MessageId."""
         if not self._enabled:
-            raise RuntimeError("SES is not enabled (set JARVIS_SES_ENABLED=true)")
+            raise RuntimeError("SES is not enabled (set MULDRO_SES_ENABLED=true)")
         if not self._from_address:
-            raise RuntimeError("SES from address not configured (set JARVIS_SES_FROM_ADDRESS)")
+            raise RuntimeError("SES from address not configured (set MULDRO_SES_FROM_ADDRESS)")
 
         import boto3
 

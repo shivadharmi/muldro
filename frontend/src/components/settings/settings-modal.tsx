@@ -122,12 +122,12 @@ const POLICY_MODES = [
   {
     value: "suggest_only",
     label: "Suggest Only",
-    description: "Jarvis suggests, never acts",
+    description: "Muldro suggests, never acts",
   },
   {
     value: "full_auto",
     label: "Full Auto",
-    description: "Jarvis acts autonomously",
+    description: "Muldro acts autonomously",
   },
 ];
 

@@ -2,14 +2,14 @@
 set -euo pipefail
 
 # Post-deploy update script
-# Usage: sudo /opt/jarvis/infra/scripts/deploy.sh [branch]
+# Usage: sudo /opt/muldro/infra/scripts/deploy.sh [branch]
 
-INSTALL_DIR="/opt/jarvis"
+INSTALL_DIR="/opt/muldro"
 BRANCH="${1:-main}"
 GATEWAY_DIR="$INSTALL_DIR/infra/gateway"
 ENV_FILE="$INSTALL_DIR/backend/.env"
 
-echo "=== Deploying Jarvis (branch: $BRANCH) ==="
+echo "=== Deploying Muldro (branch: $BRANCH) ==="
 
 cd "$INSTALL_DIR"
 
@@ -25,19 +25,19 @@ cd "$INSTALL_DIR"
 #
 # Set these in backend/.env (see infra/gateway/README.md §2 and RUNBOOK-gateway.md).
 GATEWAY_REQUIRED_VARS=(
-  JARVIS_TOOLHIVE_VMCP_URL              # backend -> adapter; the ONLY gateway routing switch
-  JARVIS_OPENCONNECTOR_ADMIN_URL        # backend -> OC admin plane (connect/confirm flow)
-  JARVIS_OPENCONNECTOR_ADMIN_TOKEN      # must equal the container's OOMOL_CONNECT_ADMIN_TOKEN
-  JARVIS_PLATFORM_JWT_PRIVATE_PEM       # backend MINTS platform JWTs with this
+  MULDRO_TOOLHIVE_VMCP_URL              # backend -> adapter; the ONLY gateway routing switch
+  MULDRO_OPENCONNECTOR_ADMIN_URL        # backend -> OC admin plane (connect/confirm flow)
+  MULDRO_OPENCONNECTOR_ADMIN_TOKEN      # must equal the container's OOMOL_CONNECT_ADMIN_TOKEN
+  MULDRO_PLATFORM_JWT_PRIVATE_PEM       # backend MINTS platform JWTs with this
   OOMOL_CONNECT_ENCRYPTION_KEY          # OC credential store; losing it orphans every connection
   OOMOL_CONNECT_RUNTIME_TOKEN           # gates OC POST /mcp
   OOMOL_CONNECT_ADMIN_TOKEN             # gates OC /api/* — unset means an OPEN admin plane
-  JARVIS_PLATFORM_JWT_PUBLIC_PEM        # adapter VERIFIES with this (never the private key)
-  JARVIS_DATABASE_URL                   # backend's own DB; also compose's fallback for the adapter
-  JARVIS_GATEWAY_DATABASE_URL           # adapter's DB URL as seen from INSIDE its container
+  MULDRO_PLATFORM_JWT_PUBLIC_PEM        # adapter VERIFIES with this (never the private key)
+  MULDRO_DATABASE_URL                   # backend's own DB; also compose's fallback for the adapter
+  MULDRO_GATEWAY_DATABASE_URL           # adapter's DB URL as seen from INSIDE its container
 )
-# Why JARVIS_GATEWAY_DATABASE_URL is required here and not just in local dev:
-# infra/user-data.sh writes JARVIS_DATABASE_URL=...@127.0.0.1:5432/... because the
+# Why MULDRO_GATEWAY_DATABASE_URL is required here and not just in local dev:
+# infra/user-data.sh writes MULDRO_DATABASE_URL=...@127.0.0.1:5432/... because the
 # backend runs as a host process. The adapter runs in a container, where 127.0.0.1
 # is the container itself — that URL resolves to nothing and every connection
 # lookup fails lazily, long after `--wait` has reported the stack healthy. On this
@@ -49,7 +49,7 @@ if [ ! -f "$ENV_FILE" ]; then
 fi
 
 # Presence check by parsing, NOT by sourcing: sourcing .env would execute whatever is
-# in it, and JARVIS_PLATFORM_JWT_PRIVATE_PEM is a multi-line value whose parse
+# in it, and MULDRO_PLATFORM_JWT_PRIVATE_PEM is a multi-line value whose parse
 # depends on exact quoting. Docker Compose reads the same file via --env-file below,
 # so nothing here needs the values themselves — only whether each key has one.
 #
@@ -57,7 +57,7 @@ fi
 # regex against the whole assignment. The regex form required a non-space
 # character immediately after the optional opening quote, which rejected the
 # canonical multi-line PEM whose opening quote ends the line:
-#     JARVIS_PLATFORM_JWT_PUBLIC_PEM="
+#     MULDRO_PLATFORM_JWT_PUBLIC_PEM="
 #     -----BEGIN PUBLIC KEY-----
 #     ...
 #     "
@@ -166,13 +166,13 @@ docker compose --env-file "$ENV_FILE" up -d --build --wait || {
 
 # Restart services
 echo "Restarting services..."
-systemctl restart jarvis-backend
+systemctl restart muldro-backend
 
 # Wait and check
 sleep 3
 echo ""
 echo "Service status:"
-systemctl is-active jarvis-backend && echo "  jarvis-backend: running" || echo "  jarvis-backend: FAILED"
+systemctl is-active muldro-backend && echo "  muldro-backend: running" || echo "  muldro-backend: FAILED"
 systemctl is-active caddy && echo "  caddy: running" || echo "  caddy: FAILED"
 # `|| echo`, like every status line above it: this is a report, not a gate. The
 # gateway was already gated by `up --wait` failing hard earlier, so a non-zero

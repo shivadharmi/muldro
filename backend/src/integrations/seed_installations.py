@@ -42,7 +42,7 @@ _DEFAULT_INSTALLATIONS: list[dict] = [
     {
         # Gateway-backed: routed to the OpenConnector adapter (gmail +
         # googlecalendar providers). Credentials live in OpenConnector, not
-        # OAuthManager — Jarvis never sees the Google OAuth token directly.
+        # OAuthManager — Muldro never sees the Google OAuth token directly.
         "server_name": "google-workspace",
         "display_name": "Google Workspace",
         "transport": "streamable-http",
@@ -56,7 +56,7 @@ _DEFAULT_INSTALLATIONS: list[dict] = [
     {
         # Gateway-backed: routed to the OpenConnector adapter (github
         # provider). Credentials live in OpenConnector, not OAuthManager —
-        # Jarvis never sees the GitHub OAuth token directly.
+        # Muldro never sees the GitHub OAuth token directly.
         "server_name": "github",
         "display_name": "GitHub",
         "transport": "streamable-http",

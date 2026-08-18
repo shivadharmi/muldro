@@ -9,7 +9,7 @@ Guarantees:
 - A raw, unhandled exception NEVER reaches the client. The catch-all
   ``Exception`` handler logs the full traceback server-side (against the
   request correlation id) and returns a generic message.
-- ``JarvisError`` subclasses expose only their declared client-safe message.
+- ``MuldroError`` subclasses expose only their declared client-safe message.
 - ``HTTPException.detail`` is developer-authored controlled text and is passed
   through as the message (callers must not put ``str(e)`` in it — domain errors
   exist for that).
@@ -26,12 +26,12 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from src.errors import ErrorBody, ErrorResponse, JarvisError, error_body, new_correlation_id
+from src.errors import ErrorBody, ErrorResponse, MuldroError, error_body, new_correlation_id
 from src.middleware.observability import get_correlation_id
 
 logger = logging.getLogger(__name__)
 
-# HTTP status → stable error code for responses that don't carry a JarvisError.
+# HTTP status → stable error code for responses that don't carry a MuldroError.
 _STATUS_CODES: dict[int, str] = {
     400: "bad_request",
     401: "unauthorized",
@@ -61,8 +61,8 @@ def _json(status_code: int, body: ErrorBody, headers: dict | None = None) -> JSO
 def register_exception_handlers(app: FastAPI) -> None:
     """Attach the four handlers that together close the error boundary."""
 
-    @app.exception_handler(JarvisError)
-    async def _handle_jarvis_error(request: Request, exc: JarvisError) -> JSONResponse:
+    @app.exception_handler(MuldroError)
+    async def _handle_muldro_error(request: Request, exc: MuldroError) -> JSONResponse:
         cid = _correlation_id()
         # Full internal detail goes to logs only, tagged with the correlation id.
         logger.warning(

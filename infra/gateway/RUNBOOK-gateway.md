@@ -1,7 +1,7 @@
 # Runbook: connecting real accounts through the gateway
 
 This runbook walks the full multi-provider gateway: **3 OC providers across 2
-Jarvis installations** — `google-workspace` -> (`gmail`, `googlecalendar`),
+Muldro installations** — `google-workspace` -> (`gmail`, `googlecalendar`),
 `github` -> (`github`) — served by one adapter process as 21 named per-action
 MCP tools plus `list_connections` (see
 [`backend/src/integrations/gateway_actions/`](../../backend/src/integrations/gateway_actions/),
@@ -44,7 +44,7 @@ OpenConnector).
 
 ## 1. Prerequisites
 
-- **Jarvis Postgres up and migrated.** From the repo root:
+- **Muldro Postgres up and migrated.** From the repo root:
 
   ```bash
   cd backend
@@ -72,10 +72,10 @@ OpenConnector).
   ```
 
   Then set:
-  1. `JARVIS_PLATFORM_JWT_PRIVATE_PEM="$(cat /tmp/platform-jwt.pem)"` on the
-     Jarvis API process (`python run.py`, or your API container's env) — the
+  1. `MULDRO_PLATFORM_JWT_PRIVATE_PEM="$(cat /tmp/platform-jwt.pem)"` on the
+     Muldro API process (`python run.py`, or your API container's env) — the
      minter, and the only process that ever needs the signing key.
-  2. `JARVIS_PLATFORM_JWT_PUBLIC_PEM="$(cat /tmp/platform-jwt.pub)"` on the
+  2. `MULDRO_PLATFORM_JWT_PUBLIC_PEM="$(cat /tmp/platform-jwt.pub)"` on the
      `connection-adapter` container's env (via `docker-compose.yml`, step 2
      below). **Do not give the adapter the private key.** The adapter is the
      tenant-isolation boundary in this design; anything that compromised it
@@ -90,7 +90,7 @@ OpenConnector).
 Use `infra/gateway/docker-compose.yml` — it brings up `openconnector` +
 `connection-adapter` together. Export the five variables it requires first
 (see [`README.md`](./README.md) §2 and the compose file's header), including
-the `JARVIS_PLATFORM_JWT_PUBLIC_PEM` from §1 above and an
+the `MULDRO_PLATFORM_JWT_PUBLIC_PEM` from §1 above and an
 `OOMOL_CONNECT_ADMIN_TOKEN` (`openssl rand -hex 24`) — without it OpenConnector
 serves its `/api/*` admin plane unauthenticated. From `infra/gateway/`:
 
@@ -106,26 +106,26 @@ the container itself, and the resulting failure is silent because the adapter
 connects lazily, so `up --wait` still reports success:
 
 ```bash
-export JARVIS_GATEWAY_DATABASE_URL=postgresql+asyncpg://jarvis:<password>@host.docker.internal:5432/jarvis
+export MULDRO_GATEWAY_DATABASE_URL=postgresql+asyncpg://muldro:<password>@host.docker.internal:5432/muldro
 ```
 
-It overrides `JARVIS_DATABASE_URL` for `connection-adapter` only (README §2);
-if your `JARVIS_DATABASE_URL` already points at `host.docker.internal`, skip it.
+It overrides `MULDRO_DATABASE_URL` for `connection-adapter` only (README §2);
+if your `MULDRO_DATABASE_URL` already points at `host.docker.internal`, skip it.
 
 Confirm both are healthy — `openconnector` listening on `:3001`,
 `connection-adapter` listening on `:8100/mcp` (per `backend/run_adapter.py`).
 
-On the **Jarvis API process** (not the compose file — same pattern as
+On the **Muldro API process** (not the compose file — same pattern as
 `README.md` §4), set:
 
 ```bash
-export JARVIS_OPENCONNECTOR_ADMIN_URL=http://localhost:3001       # or the container's mapped host:port
-export JARVIS_OPENCONNECTOR_ADMIN_TOKEN=<the container's OOMOL_CONNECT_ADMIN_TOKEN>
-export JARVIS_TOOLHIVE_VMCP_URL=http://localhost:8100/mcp         # see note below
+export MULDRO_OPENCONNECTOR_ADMIN_URL=http://localhost:3001       # or the container's mapped host:port
+export MULDRO_OPENCONNECTOR_ADMIN_TOKEN=<the container's OOMOL_CONNECT_ADMIN_TOKEN>
+export MULDRO_TOOLHIVE_VMCP_URL=http://localhost:8100/mcp         # see note below
 ```
 
-(`JARVIS_OPENCONNECTOR_ADMIN_URL` / `JARVIS_OPENCONNECTOR_ADMIN_TOKEN` /
-`JARVIS_TOOLHIVE_VMCP_URL` map to `settings.openconnector_admin_url` /
+(`MULDRO_OPENCONNECTOR_ADMIN_URL` / `MULDRO_OPENCONNECTOR_ADMIN_TOKEN` /
+`MULDRO_TOOLHIVE_VMCP_URL` map to `settings.openconnector_admin_url` /
 `settings.openconnector_admin_token` / `settings.toolhive_vmcp_url` in
 `backend/src/config/settings.py`.) Restart the API process after setting
 these.
@@ -142,7 +142,7 @@ falling back to a native path — so a missing vMCP URL shows up in the API
 process's logs, not as a silent wrong-path bug at step 8. This runbook does
 not stand up ToolHive itself (that lifecycle is
 environment-specific — see [`README.md`](./README.md) §4/§5); pointing
-`JARVIS_TOOLHIVE_VMCP_URL` straight at the adapter's own `:8100/mcp` endpoint
+`MULDRO_TOOLHIVE_VMCP_URL` straight at the adapter's own `:8100/mcp` endpoint
 is sufficient for this verification, since the adapter is the MCP service
 ToolHive would otherwise front.
 
@@ -159,7 +159,7 @@ below 401s, double-check you used the **admin** token, not the runtime one.
 
 1. In Google Cloud Console, create an OAuth 2.0 Client ID (Web application type).
 2. Register the **authorized redirect URI** as OpenConnector's own callback
-   route — **not** a Jarvis URL (spike §3–§4):
+   route — **not** a Muldro URL (spike §3–§4):
 
    ```
    http://localhost:3001/oauth/callback
@@ -217,18 +217,18 @@ Google Cloud Console in step 3 — a mismatch produces Google's own
 
 ## 5. Begin the connection
 
-`POST /v1/connections/begin` (authenticated as the Jarvis user — normal
-session bearer, **not** the OpenConnector admin token). This is the Jarvis
+`POST /v1/connections/begin` (authenticated as the Muldro user — normal
+session bearer, **not** the OpenConnector admin token). This is the Muldro
 API endpoint that mints the namespaced `connectionName` and calls
 OpenConnector's `POST /api/oauth/authorizations` on your behalf (spike §2,
 "Design implications for the connect flow"):
 
 ```bash
-export JARVIS_API_URL=http://localhost:8000
-export JARVIS_SESSION_TOKEN=<your Jarvis session bearer>
+export MULDRO_API_URL=http://localhost:8000
+export MULDRO_SESSION_TOKEN=<your Muldro session bearer>
 
-curl -sS -X POST "$JARVIS_API_URL/v1/connections/begin" \
-  -H "Authorization: Bearer $JARVIS_SESSION_TOKEN" \
+curl -sS -X POST "$MULDRO_API_URL/v1/connections/begin" \
+  -H "Authorization: Bearer $MULDRO_SESSION_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"provider": "gmail", "alias": "work"}' | jq
 ```
@@ -237,7 +237,7 @@ Expect a response carrying an `authorization_url`. **Open that URL in a
 browser** and complete Google's consent screen for the account you want to
 connect. You will land on OpenConnector's own `/oauth/callback` page (or a
 generic success/error page it renders) — this is expected; there is no
-redirect back to Jarvis (spike §4, KEY FINDING).
+redirect back to Muldro (spike §4, KEY FINDING).
 
 > If `/v1/connections/begin` is not yet available in your checkout (its
 > implementation is a separate task in this increment), you can drive the
@@ -264,8 +264,8 @@ redirect back to Jarvis (spike §4, KEY FINDING).
 `POST /v1/connections/confirm`, same body, same auth:
 
 ```bash
-curl -sS -X POST "$JARVIS_API_URL/v1/connections/confirm" \
-  -H "Authorization: Bearer $JARVIS_SESSION_TOKEN" \
+curl -sS -X POST "$MULDRO_API_URL/v1/connections/confirm" \
+  -H "Authorization: Bearer $MULDRO_SESSION_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"provider": "gmail", "alias": "work"}' | jq
 ```
@@ -277,7 +277,7 @@ Expect:
 ```
 
 **This is poll-based, not push-based** (spike §4–§5): OpenConnector never
-redirects back to Jarvis, and starting an authorization creates **no**
+redirects back to Muldro, and starting an authorization creates **no**
 pending connection row — the connection only materializes after the OAuth
 callback completes server-side on OpenConnector's end. If the browser
 consent in step 5 hasn't finished yet (or failed), you'll get:
@@ -318,7 +318,7 @@ curl -sS "$OC_ADMIN_URL/api/connections" \
 Find the entry whose `id == "gmail:{tenant_id}:{principal_id}:gmail:work"`
 (connection `id = "{service}:{connectionName}"`, spike §6 — note `gmail`
 appears twice: once as the OpenConnector `service`, once inside the
-Jarvis-minted `connectionName`). It should show `configured: true` and a
+Muldro-minted `connectionName`). It should show `configured: true` and a
 `profile` with `accountId`/`displayName`/`grantedScopes` populated from the
 real Google account you consented with (spike §5).
 
@@ -339,7 +339,7 @@ gateway routing → adapter identity/capability checks → OpenConnector →
 Google) worked, without needing to reason about search results or message
 content.
 
-With `JARVIS_TOOLHIVE_VMCP_URL` set on the API process (step 2) and the
+With `MULDRO_TOOLHIVE_VMCP_URL` set on the API process (step 2) and the
 `google-workspace` installation registered with `auth_provider="platform_jwt"`
 (so it routes at the gateway per the note in step 2) and the connection
 `active` (step 7), restart the API process so it picks up the setting, then
@@ -354,7 +354,7 @@ through the normal chat UI or `POST /v1/chat`. Confirm two things:
 1. **The agent's response names the real Google account** you consented
    with in step 5 (not a placeholder, not an error surfaced as prose).
 2. **The call routed through the gateway**, not the direct
-   `google-workspace-mcp` process — check Jarvis server logs / traces for a
+   `google-workspace-mcp` process — check Muldro server logs / traces for a
    tool call named `gmail_get_profile` reaching `connection-adapter:8100`
    (see the "Named tools" subsection below for how the agent sees this tool
    at all).
@@ -412,7 +412,7 @@ than hand-editing it if the registry changes:
 
 ## 9. Known caveat — `google-workspace` fans out to two OC providers
 
-The `google-workspace` Jarvis installation serves **two** OC providers —
+The `google-workspace` Muldro installation serves **two** OC providers —
 `gmail` and `googlecalendar` — as one gateway-routed MCP server: once that
 installation routes at the gateway (step 2), the agent sees **both**
 Gmail's and Calendar's named tools together, since they share one
@@ -420,7 +420,7 @@ installation-level `auth_provider="platform_jwt"` switch. There is no way to
 route only Gmail while leaving Calendar on the native path (or vice versa)
 — it is all-or-nothing per installation. This matters for §12's frontend
 flow: connecting "Google Workspace" through the UI is really two independent
-OC OAuth grants (Gmail, then Calendar) landing under one Jarvis installation
+OC OAuth grants (Gmail, then Calendar) landing under one Muldro installation
 and one `connection_map` per-provider row pair, not one combined grant.
 
 GitHub is unaffected — it is its own installation with a single OC provider.
@@ -435,7 +435,7 @@ you can bypass the agent entirely and call the adapter's `execute_action`
 directly with a hand-minted platform JWT — this is strictly a lower-level
 debug tool, not the primary verification step.
 
-From `backend/`, with the venv active and `JARVIS_PLATFORM_JWT_PRIVATE_PEM`
+From `backend/`, with the venv active and `MULDRO_PLATFORM_JWT_PRIVATE_PEM`
 set to the SAME pem as the adapter container (step 1):
 
 ```bash
@@ -547,7 +547,7 @@ things you already have:
 
 If either check shows a truncated or mismatched name, OpenConnector is not
 round-tripping the multi-colon `connectionName` safely — treat this as a
-blocking finding against decision C (Jarvis owns naming) before relying on
+blocking finding against decision C (Muldro owns naming) before relying on
 this shape in production, per spike §8.
 
 ---
@@ -581,11 +581,11 @@ at Google.
    gateway env from §2 set on the process, plus the platform-JWT PEM from §1:
 
    ```bash
-   export JARVIS_TOOLHIVE_VMCP_URL=http://localhost:8100/mcp
-   export JARVIS_OPENCONNECTOR_ADMIN_URL=http://localhost:3001
-   export JARVIS_OPENCONNECTOR_ADMIN_TOKEN=<OOMOL_CONNECT_ADMIN_TOKEN>
-   export JARVIS_PLATFORM_JWT_PRIVATE_PEM="$(cat /tmp/platform-jwt.pem)"   # minting half, API process only
-   export JARVIS_ANTHROPIC_API_KEY=<your key>
+   export MULDRO_TOOLHIVE_VMCP_URL=http://localhost:8100/mcp
+   export MULDRO_OPENCONNECTOR_ADMIN_URL=http://localhost:3001
+   export MULDRO_OPENCONNECTOR_ADMIN_TOKEN=<OOMOL_CONNECT_ADMIN_TOKEN>
+   export MULDRO_PLATFORM_JWT_PRIVATE_PEM="$(cat /tmp/platform-jwt.pem)"   # minting half, API process only
+   export MULDRO_ANTHROPIC_API_KEY=<your key>
 
    python run.py
    ```
@@ -597,7 +597,7 @@ at Google.
    ```
 
    `:3000` is the only window the user ever sees — the popup opened in
-   step 11.3 below lands on OpenConnector's own callback page, not a Jarvis
+   step 11.3 below lands on OpenConnector's own callback page, not a Muldro
    route.
 
 ### 11.2 Seed the installation
@@ -692,8 +692,8 @@ Confirm all three respond `200` with `configured: true` and the expected
 
 ### 12.2 Connect Google Workspace through the real frontend (two sequential consents)
 
-Bring up the full stack per §11.1 (no `JARVIS_GMAIL_VIA_GATEWAY` — that flag
-no longer exists; only `JARVIS_TOOLHIVE_VMCP_URL` is needed to route the
+Bring up the full stack per §11.1 (no `MULDRO_GMAIL_VIA_GATEWAY` — that flag
+no longer exists; only `MULDRO_TOOLHIVE_VMCP_URL` is needed to route the
 gateway-backed installations), seed the `google-workspace` installation per
 §11.2, then open `/integrations` and click **Connect** on the Google
 Workspace card.

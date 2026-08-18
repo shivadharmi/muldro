@@ -16,7 +16,7 @@ def _settings(**s3):
     """make_mock_settings returns a MagicMock, so S3 fields must be set
     explicitly — otherwise unset attributes are truthy mocks."""
     base = dict(
-        s3_bucket="jarvis-artifacts",
+        s3_bucket="muldro-artifacts",
         s3_endpoint_url="",
         s3_region="ap-south-1",
         s3_access_key_id="",
@@ -31,15 +31,15 @@ class TestClientKwargs:
         store = ArtifactStore(
             _settings(
                 s3_endpoint_url="http://localhost:9000",
-                s3_access_key_id="jarvis",
-                s3_secret_access_key="jarvisdev",
+                s3_access_key_id="muldro",
+                s3_secret_access_key="muldrodev",
             )
         )
         kw = store._client_kwargs()
         assert kw["region_name"] == "ap-south-1"
         assert kw["endpoint_url"] == "http://localhost:9000"
-        assert kw["aws_access_key_id"] == "jarvis"
-        assert kw["aws_secret_access_key"] == "jarvisdev"
+        assert kw["aws_access_key_id"] == "muldro"
+        assert kw["aws_secret_access_key"] == "muldrodev"
 
     def test_omits_endpoint_and_credentials_when_unset(self):
         """Production (IAM role) path: only region, no explicit creds/endpoint."""

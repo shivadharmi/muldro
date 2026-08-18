@@ -23,7 +23,7 @@ from ulid import ULID
 from src.config.settings import get_settings
 from src.models.briefings import Briefing
 from src.models.users import User, Workspace
-from src.orchestrator.jarvis import JarvisOrchestrator
+from src.orchestrator.muldro import MuldroOrchestrator
 from src.orchestrator.services import ServiceContainer
 from src.services.presenter import Presenter
 from tests.conftest import make_mock_settings
@@ -108,7 +108,7 @@ async def _env():
 
 
 def _orchestrator(factory):
-    return JarvisOrchestrator(
+    return MuldroOrchestrator(
         settings=make_mock_settings(),
         db_factory=factory,
         services=ServiceContainer(),

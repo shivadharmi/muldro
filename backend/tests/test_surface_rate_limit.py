@@ -27,8 +27,8 @@ class TestSurfaceRateLimit:
 
         result = await sp.check_surface_rate("user_123", "workspace")
         assert result is True
-        mock_redis.incr.assert_called_once_with("jarvis:surface_rate:workspace:user_123")
-        mock_redis.expire.assert_called_once_with("jarvis:surface_rate:workspace:user_123", 60)
+        mock_redis.incr.assert_called_once_with("muldro:surface_rate:workspace:user_123")
+        mock_redis.expire.assert_called_once_with("muldro:surface_rate:workspace:user_123", 60)
 
     @pytest.mark.asyncio
     async def test_sixth_workspace_push_blocked(self):
@@ -54,7 +54,7 @@ class TestSurfaceRateLimit:
 
         result = await sp.check_surface_rate("user_123", "insight")
         assert result is True
-        mock_redis.expire.assert_called_once_with("jarvis:surface_rate:insight:user_123", 1800)
+        mock_redis.expire.assert_called_once_with("muldro:surface_rate:insight:user_123", 1800)
 
     @pytest.mark.asyncio
     async def test_fourth_insight_push_blocked(self):

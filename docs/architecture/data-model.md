@@ -354,10 +354,10 @@ Each table below defines a nullable `search_vector` (`tsvector`) column in the i
 
 | Pattern | Type | TTL | Purpose |
 |---------|------|-----|---------|
-| `jarvis:events:{user_id}` | Stream | Unbounded | Event streaming + consumer groups |
-| `jarvis:tasks` | Stream | Unbounded | Background task queue |
-| `jarvis:surfaces:{user_id}` | Hash | 120s-86400s | Active connection tracking |
-| `jarvis:run_progress:{run_id}` | PubSub channel | - | Real-time execution progress |
+| `muldro:events:{user_id}` | Stream | Unbounded | Event streaming + consumer groups |
+| `muldro:tasks` | Stream | Unbounded | Background task queue |
+| `muldro:surfaces:{user_id}` | Hash | 120s-86400s | Active connection tracking |
+| `muldro:run_progress:{run_id}` | PubSub channel | - | Real-time execution progress |
 | `brief:{user_id}:{date}` | String (JSON) | 1 hour | Briefing cache |
 | `entity:{user_id}:{query}` | String (JSON) | 5 min | Entity lookup cache |
 | `prefs:{user_id}` | String (JSON) | 10 min | Preferences cache |

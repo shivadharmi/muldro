@@ -60,7 +60,7 @@ class TestHandleDeliveryUnknownSubscription:
         from src.integrations.sync.push_receiver import PushReceiver
 
         db = _make_db_for_sub(None)
-        receiver = PushReceiver(db, TEST_WORKSPACE_ID, "https://api.jarvis.test")
+        receiver = PushReceiver(db, TEST_WORKSPACE_ID, "https://api.muldro.test")
         result = await receiver.handle_delivery(
             provider="github",
             subscription_id="whsub_nonexistent",
@@ -75,7 +75,7 @@ class TestHandleDeliveryUnknownSubscription:
         from src.integrations.sync.push_receiver import PushReceiver
 
         db = _make_db_for_sub(None)
-        receiver = PushReceiver(db, TEST_WORKSPACE_ID, "https://api.jarvis.test")
+        receiver = PushReceiver(db, TEST_WORKSPACE_ID, "https://api.muldro.test")
         await receiver.handle_delivery(
             provider="github",
             subscription_id="whsub_nonexistent",
@@ -96,7 +96,7 @@ class TestHandleDeliveryInactiveSubscription:
         sub.status = "expired"
         db = _make_db_for_sub(sub)
 
-        receiver = PushReceiver(db, TEST_WORKSPACE_ID, "https://api.jarvis.test")
+        receiver = PushReceiver(db, TEST_WORKSPACE_ID, "https://api.muldro.test")
         result = await receiver.handle_delivery(
             provider="github",
             subscription_id="whsub_123",
@@ -114,7 +114,7 @@ class TestHandleDeliveryInactiveSubscription:
         sub.status = "failed"
         db = _make_db_for_sub(sub)
 
-        receiver = PushReceiver(db, TEST_WORKSPACE_ID, "https://api.jarvis.test")
+        receiver = PushReceiver(db, TEST_WORKSPACE_ID, "https://api.muldro.test")
         await receiver.handle_delivery(
             provider="github",
             subscription_id="whsub_123",
@@ -142,7 +142,7 @@ class TestHandleDeliverySignatureMismatch:
         db.add = MagicMock()
         db.execute = AsyncMock(return_value=sub_result)
 
-        receiver = PushReceiver(db, TEST_WORKSPACE_ID, "https://api.jarvis.test")
+        receiver = PushReceiver(db, TEST_WORKSPACE_ID, "https://api.muldro.test")
         # Patch record_failure so WebhookManager doesn't do a real DB re-fetch
         receiver._webhook_manager.record_failure = AsyncMock()
 
@@ -174,7 +174,7 @@ class TestHandleDeliverySignatureMismatch:
         db.add = MagicMock()
         db.execute = AsyncMock(return_value=sub_result)
 
-        receiver = PushReceiver(db, TEST_WORKSPACE_ID, "https://api.jarvis.test")
+        receiver = PushReceiver(db, TEST_WORKSPACE_ID, "https://api.muldro.test")
         # Patch record_failure to avoid real DB calls; also spy to ensure request_run is not called
         receiver._webhook_manager.record_failure = AsyncMock()
 
@@ -201,7 +201,7 @@ class TestHandleDeliverySignatureMismatch:
         db.add = MagicMock()
         db.execute = AsyncMock(return_value=sub_result)
 
-        receiver = PushReceiver(db, TEST_WORKSPACE_ID, "https://api.jarvis.test")
+        receiver = PushReceiver(db, TEST_WORKSPACE_ID, "https://api.muldro.test")
         receiver._webhook_manager.record_failure = AsyncMock()
         await receiver.handle_delivery(
             provider="github",
@@ -253,7 +253,7 @@ class TestHandleDeliveryValidSignedWebhook:
             mock_policy = mock_policy_cls.return_value
             mock_policy.request_run = AsyncMock(return_value=mock_state)
 
-            receiver = PushReceiver(db, TEST_WORKSPACE_ID, "https://api.jarvis.test")
+            receiver = PushReceiver(db, TEST_WORKSPACE_ID, "https://api.muldro.test")
             receiver._webhook_manager.record_delivery = AsyncMock()
             result = await receiver.handle_delivery(
                 provider="github",
@@ -287,7 +287,7 @@ class TestHandleDeliveryValidSignedWebhook:
         with patch(_POLICY_PATCH) as mock_policy_cls:
             mock_policy_cls.return_value.request_run = AsyncMock()
 
-            receiver = PushReceiver(db, TEST_WORKSPACE_ID, "https://api.jarvis.test")
+            receiver = PushReceiver(db, TEST_WORKSPACE_ID, "https://api.muldro.test")
             await receiver.handle_delivery(
                 provider="github",
                 subscription_id="whsub_123",
@@ -313,7 +313,7 @@ class TestHandleDeliveryValidSignedWebhook:
         with patch(_POLICY_PATCH) as mock_policy_cls:
             mock_policy_cls.return_value.request_run = AsyncMock()
 
-            receiver = PushReceiver(db, TEST_WORKSPACE_ID, "https://api.jarvis.test")
+            receiver = PushReceiver(db, TEST_WORKSPACE_ID, "https://api.muldro.test")
             result = await receiver.handle_delivery(
                 provider="github",
                 subscription_id="whsub_123",
@@ -339,7 +339,7 @@ class TestHandleDeliveryValidSignedWebhook:
         with patch(_POLICY_PATCH) as mock_policy_cls:
             mock_policy_cls.return_value.request_run = AsyncMock()
 
-            receiver = PushReceiver(db, TEST_WORKSPACE_ID, "https://api.jarvis.test")
+            receiver = PushReceiver(db, TEST_WORKSPACE_ID, "https://api.muldro.test")
             receiver._webhook_manager.record_failure = AsyncMock()
             result = await receiver.handle_delivery(
                 provider="slack",
@@ -361,7 +361,7 @@ class TestHandleDeliveryValidSignedWebhook:
         with patch(_POLICY_PATCH) as mock_policy_cls:
             mock_policy_cls.return_value.request_run = AsyncMock()
 
-            receiver = PushReceiver(db, TEST_WORKSPACE_ID, "https://api.jarvis.test")
+            receiver = PushReceiver(db, TEST_WORKSPACE_ID, "https://api.muldro.test")
             receiver._webhook_manager.record_failure = AsyncMock()
             result = await receiver.handle_delivery(
                 provider="github",
@@ -410,7 +410,7 @@ class TestHandleDeliveryRequestRunFailure:
                 side_effect=RuntimeError("db connection lost")
             )
 
-            receiver = PushReceiver(db, TEST_WORKSPACE_ID, "https://api.jarvis.test")
+            receiver = PushReceiver(db, TEST_WORKSPACE_ID, "https://api.muldro.test")
             receiver._webhook_manager.record_failure = AsyncMock()
             receiver._webhook_manager.record_delivery = AsyncMock()
             result = await receiver.handle_delivery(
@@ -438,7 +438,7 @@ class TestHandleDeliveryRequestRunFailure:
                 side_effect=RuntimeError("db connection lost")
             )
 
-            receiver = PushReceiver(db, TEST_WORKSPACE_ID, "https://api.jarvis.test")
+            receiver = PushReceiver(db, TEST_WORKSPACE_ID, "https://api.muldro.test")
             receiver._webhook_manager.record_failure = AsyncMock()
 
             await receiver.handle_delivery(
@@ -464,7 +464,7 @@ class TestHandleDeliveryRequestRunFailure:
                 side_effect=RuntimeError("db connection lost")
             )
 
-            receiver = PushReceiver(db, TEST_WORKSPACE_ID, "https://api.jarvis.test")
+            receiver = PushReceiver(db, TEST_WORKSPACE_ID, "https://api.muldro.test")
             receiver._webhook_manager.record_failure = AsyncMock()
             await receiver.handle_delivery(
                 provider="github",
@@ -510,7 +510,7 @@ class TestSlackSignatureScheme:
 
         with patch(_POLICY_PATCH) as mock_policy_cls:
             mock_policy_cls.return_value.request_run = AsyncMock()
-            receiver = PushReceiver(db, TEST_WORKSPACE_ID, "https://api.jarvis.test")
+            receiver = PushReceiver(db, TEST_WORKSPACE_ID, "https://api.muldro.test")
             receiver._webhook_manager.record_delivery = AsyncMock()
             result = await receiver.handle_delivery(
                 provider="slack",
@@ -539,7 +539,7 @@ class TestSlackSignatureScheme:
 
         with patch(_POLICY_PATCH) as mock_policy_cls:
             mock_policy_cls.return_value.request_run = AsyncMock()
-            receiver = PushReceiver(db, TEST_WORKSPACE_ID, "https://api.jarvis.test")
+            receiver = PushReceiver(db, TEST_WORKSPACE_ID, "https://api.muldro.test")
             receiver._webhook_manager.record_failure = AsyncMock()
             result = await receiver.handle_delivery(
                 provider="slack",
@@ -567,7 +567,7 @@ class TestSlackSignatureScheme:
 
         with patch(_POLICY_PATCH) as mock_policy_cls:
             mock_policy_cls.return_value.request_run = AsyncMock()
-            receiver = PushReceiver(db, TEST_WORKSPACE_ID, "https://api.jarvis.test")
+            receiver = PushReceiver(db, TEST_WORKSPACE_ID, "https://api.muldro.test")
             receiver._webhook_manager.record_failure = AsyncMock()
             result = await receiver.handle_delivery(
                 provider="slack",
@@ -595,7 +595,7 @@ class TestSlackSignatureScheme:
 
         with patch(_POLICY_PATCH) as mock_policy_cls:
             mock_policy_cls.return_value.request_run = AsyncMock()
-            receiver = PushReceiver(db, TEST_WORKSPACE_ID, "https://api.jarvis.test")
+            receiver = PushReceiver(db, TEST_WORKSPACE_ID, "https://api.muldro.test")
             receiver._webhook_manager.record_failure = AsyncMock()
             result = await receiver.handle_delivery(
                 provider="slack",
@@ -651,7 +651,7 @@ class TestGitHubReplayDedup:
 
             # First delivery: accepted, wake signal fires.
             db1 = _db_lookup_then_update(sub)
-            r1 = PushReceiver(db1, TEST_WORKSPACE_ID, "https://api.jarvis.test", redis=redis)
+            r1 = PushReceiver(db1, TEST_WORKSPACE_ID, "https://api.muldro.test", redis=redis)
             r1._webhook_manager.record_delivery = AsyncMock()
             res1 = await r1.handle_delivery(
                 provider="github",
@@ -665,7 +665,7 @@ class TestGitHubReplayDedup:
 
             # Second delivery with the SAME delivery id: ignored as replay.
             db2 = _db_lookup_then_update(sub)
-            r2 = PushReceiver(db2, TEST_WORKSPACE_ID, "https://api.jarvis.test", redis=redis)
+            r2 = PushReceiver(db2, TEST_WORKSPACE_ID, "https://api.muldro.test", redis=redis)
             r2._webhook_manager.record_delivery = AsyncMock()
             res2 = await r2.handle_delivery(
                 provider="github",
@@ -697,7 +697,7 @@ class TestGooglePush:
 
         with patch(_POLICY_PATCH) as mock_policy_cls:
             mock_policy_cls.return_value.request_run = AsyncMock()
-            receiver = PushReceiver(db, TEST_WORKSPACE_ID, "https://api.jarvis.test")
+            receiver = PushReceiver(db, TEST_WORKSPACE_ID, "https://api.muldro.test")
             receiver._webhook_manager.record_delivery = AsyncMock()
             result = await receiver.handle_delivery(
                 provider="google",
@@ -723,7 +723,7 @@ class TestGooglePush:
 
         with patch(_POLICY_PATCH) as mock_policy_cls:
             mock_policy_cls.return_value.request_run = AsyncMock()
-            receiver = PushReceiver(db, TEST_WORKSPACE_ID, "https://api.jarvis.test")
+            receiver = PushReceiver(db, TEST_WORKSPACE_ID, "https://api.muldro.test")
             receiver._webhook_manager.record_delivery = AsyncMock()
             result = await receiver.handle_delivery(
                 provider="google",
@@ -749,7 +749,7 @@ class TestGooglePush:
 
         with patch(_POLICY_PATCH) as mock_policy_cls:
             mock_policy_cls.return_value.request_run = AsyncMock()
-            receiver = PushReceiver(db, TEST_WORKSPACE_ID, "https://api.jarvis.test")
+            receiver = PushReceiver(db, TEST_WORKSPACE_ID, "https://api.muldro.test")
             receiver._webhook_manager.record_failure = AsyncMock()
             result = await receiver.handle_delivery(
                 provider="google",
@@ -775,7 +775,7 @@ class TestGooglePush:
 
         with patch(_POLICY_PATCH) as mock_policy_cls:
             mock_policy_cls.return_value.request_run = AsyncMock()
-            receiver = PushReceiver(db, TEST_WORKSPACE_ID, "https://api.jarvis.test")
+            receiver = PushReceiver(db, TEST_WORKSPACE_ID, "https://api.muldro.test")
             receiver._webhook_manager.record_failure = AsyncMock()
             result = await receiver.handle_delivery(
                 provider="google",
@@ -839,7 +839,7 @@ class TestBackpressure:
             receiver = PushReceiver(
                 db,
                 TEST_WORKSPACE_ID,
-                "https://api.jarvis.test",
+                "https://api.muldro.test",
                 redis=redis,
                 lag_threshold=5000,
             )
@@ -855,7 +855,7 @@ class TestBackpressure:
         assert result.accepted is False
         assert result.error == "backpressure"
         # The lag check used the subscription's OWN workspace stream...
-        assert f"jarvis:events:{sub.workspace_id}" in redis.queried
+        assert f"muldro:events:{sub.workspace_id}" in redis.queried
         # ...and the wake-signal was NOT reached.
         mock_policy_cls.return_value.request_run.assert_not_called()
 
@@ -871,7 +871,7 @@ class TestBackpressure:
             receiver = PushReceiver(
                 db,
                 TEST_WORKSPACE_ID,
-                "https://api.jarvis.test",
+                "https://api.muldro.test",
                 redis=redis,
                 lag_threshold=5000,
             )
@@ -906,7 +906,7 @@ class TestBackpressure:
             receiver = PushReceiver(
                 db,
                 TEST_WORKSPACE_ID,
-                "https://api.jarvis.test",
+                "https://api.muldro.test",
                 redis=_BoomRedis(),
                 lag_threshold=5000,
             )

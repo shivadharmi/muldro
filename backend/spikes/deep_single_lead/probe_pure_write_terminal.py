@@ -10,10 +10,10 @@ the turn on the raw tool result / an empty message?
 
 The A-5 design claims ``LEAD_PROMPT``'s always-reply rule + ``PRESENTER_VOICE`` FORCE the
 terminal message. This probe PROVES or REFUTES that with the REAL Anthropic API, using the
-EXACT production prompt composition (JARVIS_SOUL_CORE + LEAD_PROMPT + PRESENTER_VOICE) that
+EXACT production prompt composition (MULDRO_SOUL_CORE + LEAD_PROMPT + PRESENTER_VOICE) that
 ``stream_deep_lead`` will build.
 
-Run (from backend/, needs JARVIS_ANTHROPIC_API_KEY in .env, USE_BEDROCK=false):
+Run (from backend/, needs MULDRO_ANTHROPIC_API_KEY in .env, USE_BEDROCK=false):
     uv run python spikes/deep_single_lead/probe_pure_write_terminal.py
 
 Exit 0 iff the terminal-message rule holds on EVERY main-condition run (pure-write and
@@ -43,7 +43,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from src.config.settings import get_settings
 from src.deep_runtime.model_factory import build_chat_model
 from src.orchestrator.agents import SubAgent, ThinkingConfig
-from src.orchestrator.prompts import JARVIS_SOUL_CORE, PRESENTER_VOICE
+from src.orchestrator.prompts import MULDRO_SOUL_CORE, PRESENTER_VOICE
 
 # ---------------------------------------------------------------------------
 # Draft LEAD_PROMPT under test. If this probe passes, this exact text is promoted
@@ -52,7 +52,7 @@ from src.orchestrator.prompts import JARVIS_SOUL_CORE, PRESENTER_VOICE
 # ---------------------------------------------------------------------------
 LEAD_PROMPT_DRAFT = """\
 <role>
-You are Jarvis handling a user's request from start to finish. Unlike the specialized
+You are Muldro handling a user's request from start to finish. Unlike the specialized
 sub-agents, you own the WHOLE turn: gather whatever information you need using your tools,
 take any actions the request calls for, and then speak to the user yourself. You are the
 only voice the user hears this turn.
@@ -81,7 +81,7 @@ have spoken to the user.
 # load-bearing (does the model still confirm on its own?).
 LEAD_PROMPT_CONTROL = """\
 <role>
-You are Jarvis handling a user's request from start to finish. You own the WHOLE turn:
+You are Muldro handling a user's request from start to finish. You own the WHOLE turn:
 gather whatever information you need using your tools, take any actions the request calls
 for. You are the only voice the user hears this turn.
 </role>
@@ -226,13 +226,13 @@ async def main() -> int:
         print("SKIP: USE_BEDROCK=true — this probe needs the direct Anthropic API.")
         return 0
     if not settings.anthropic_api_key:
-        print("SKIP: JARVIS_ANTHROPIC_API_KEY not set.")
+        print("SKIP: MULDRO_ANTHROPIC_API_KEY not set.")
         return 0
     # ChatAnthropic reads ANTHROPIC_API_KEY from env; bridge it from settings.
     os.environ.setdefault("ANTHROPIC_API_KEY", settings.anthropic_api_key)
 
-    main_system = f"{JARVIS_SOUL_CORE}\n\n--- YOUR ROLE ---\n{LEAD_PROMPT_DRAFT}\n\n{PRESENTER_VOICE}"
-    ctrl_system = f"{JARVIS_SOUL_CORE}\n\n--- YOUR ROLE ---\n{LEAD_PROMPT_CONTROL}\n\n{PRESENTER_VOICE}"
+    main_system = f"{MULDRO_SOUL_CORE}\n\n--- YOUR ROLE ---\n{LEAD_PROMPT_DRAFT}\n\n{PRESENTER_VOICE}"
+    ctrl_system = f"{MULDRO_SOUL_CORE}\n\n--- YOUR ROLE ---\n{LEAD_PROMPT_CONTROL}\n\n{PRESENTER_VOICE}"
 
     print("=" * 78)
     print("SPIKE: pure-write terminal-message reliability (REAL sonnet, deepagents loop)")

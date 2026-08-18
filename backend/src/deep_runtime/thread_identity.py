@@ -18,7 +18,7 @@ _TAG = "c"
 def make_thread_id(workspace_id: str) -> str:
     """Mint a checkpointer thread_id embedding *workspace_id*.
 
-    Assumes a colonless ``workspace_id`` (Jarvis ws ids are ``ws_{ULID}``); a colon in the
+    Assumes a colonless ``workspace_id`` (Muldro ws ids are ``ws_{ULID}``); a colon in the
     workspace would not round-trip through ``workspace_of_thread_id`` — which fails closed
     (refuses), never grants — so it is safe but non-recoverable."""
     return f"{_TAG}:{workspace_id}:{ULID()}"

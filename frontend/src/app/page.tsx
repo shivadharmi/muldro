@@ -9,7 +9,7 @@ import {
 } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { resolveFirstRunState } from "@/lib/first-run-state";
-import { useJarvisWs } from "@/hooks/use-jarvis-ws";
+import { useMuldroWs } from "@/hooks/use-muldro-ws";
 import { useSurfaceStore } from "@/stores/surface-store";
 import type { WorkspaceSurface } from "@/stores/surface-store";
 import { normalizeSurfaceKind } from "@/lib/types/surfaces";
@@ -120,7 +120,7 @@ export default function WorkspacePage() {
     [addSurface]
   );
 
-  const { sendAction } = useJarvisWs({
+  const { sendAction } = useMuldroWs({
     userId: user?.user_id ?? "",
     onSurfacePush: handleSurfacePush,
     onSurfaceUpdate: useCallback(

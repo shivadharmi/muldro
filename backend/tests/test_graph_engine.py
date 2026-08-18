@@ -261,7 +261,7 @@ class TestGraphSyncPassesStrength:
 
         event = BusEvent(
             event_id="bus_001",
-            stream="jarvis:events:usr_1",
+            stream="muldro:events:usr_1",
             event_type="relationship.updated",
             payload={"relation_id": "rel_100"},
             user_id="usr_1",

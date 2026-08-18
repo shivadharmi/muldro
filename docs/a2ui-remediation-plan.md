@@ -9,7 +9,7 @@
 - **P1 (4740678)** approvals actionable: run-surface Approval tab + REST-wired buttons + artifact_refs preview; cross-tenant ownership guard on ephemeral detail.
 - **P2 (12df814)** clean text: event_id/pipeline-jargon stripped from insight titles + briefing memory.
 - **P3 (c3c8c39)** trace: token/cost rollup at pause (accumulated across resume segments) + honest empty-state.
-- **P4 (7acd6f1)** linkage+UI: briefing fallback-to-most-recent fixes "No linked briefing"; run-detail modal on Jarvis design tokens; shared step renderer.
+- **P4 (7acd6f1)** linkage+UI: briefing fallback-to-most-recent fixes "No linked briefing"; run-detail modal on Muldro design tokens; shared step renderer.
 - **P5 (3cdbe0d)** entity quality: financial_transaction/merchant types + paid_to/charged_to; bare-email-as-name PII guard.
 
 ## 1. Symptoms → Root Causes (audited, with file:line)
@@ -41,7 +41,7 @@ Insight cards read `Polled gmail: 1 new event(s). [gmail] email_received: INR 10
 **Root cause:** trace records are persisted with correct tokens but **not linked to the run** the trace view fetches (`run_id` never threaded through on the relevant path).
 
 ### D4 — UI/UX inconsistency & broken data linking
-- Two parallel modal systems: `run-detail-modal.tsx` uses **hardcoded GitHub colors** (`#161b22`, `#8b949e`) vs `surface-detail-modal.tsx` uses Jarvis design tokens.
+- Two parallel modal systems: `run-detail-modal.tsx` uses **hardcoded GitHub colors** (`#161b22`, `#8b949e`) vs `surface-detail-modal.tsx` uses Muldro design tokens.
 - Three different step renderers (`step-list.tsx`, `execution-trace.tsx`, run-detail-modal Steps tab) with divergent styling.
 - "No linked briefing found" — `surface_detail_builders/briefing.py` finds no `Briefing` for (user_id, today); no UNIQUE constraint / lookup is date-fragile.
 - Archived runs get a 2h TTL (`execution_surface_emitter.py`), so run detail lookups fail after 2h.
@@ -81,7 +81,7 @@ Ordering by user impact and blast radius. Each phase ends with `pytest` green + 
 3. Frontend: verify trace tab reads the populated fields; add a clear empty-state when a surface legitimately has no LLM work.
 
 ### Phase 4 — UI/UX unification & data linking (D4)
-1. Frontend: migrate `run-detail-modal.tsx` off hardcoded colors onto Jarvis design tokens; consolidate step rendering into one component.
+1. Frontend: migrate `run-detail-modal.tsx` off hardcoded colors onto Muldro design tokens; consolidate step rendering into one component.
 2. Backend: fix briefing linkage (idempotent lookup / today-or-latest); reconsider 2h archive TTL for run detail.
 
 ### Phase 5 — Entity extraction quality (D5)  (stretch)

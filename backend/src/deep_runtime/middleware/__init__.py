@@ -1,4 +1,4 @@
-"""Jarvis policy middleware for the Deep Agents runtime.
+"""Muldro policy middleware for the Deep Agents runtime.
 
 Each module here re-homes one piece of policy that the legacy ``agent_loop`` welded
 into the loop, onto a LangChain ``@wrap_tool_call`` / ``@after_model`` hook. Each is a
@@ -17,8 +17,8 @@ from src.deep_runtime.middleware.governor_audit import make_governor_audit_middl
 from src.deep_runtime.middleware.governor_delegate_critique import (
     make_governor_delegate_critique_middleware,
 )
-from src.deep_runtime.middleware.jarvis_tool_dispatcher import make_jarvis_tool_dispatcher
 from src.deep_runtime.middleware.librarian_extract import make_librarian_extract_middleware
+from src.deep_runtime.middleware.muldro_tool_dispatcher import make_muldro_tool_dispatcher
 from src.deep_runtime.middleware.readback import make_readback_middleware
 from src.deep_runtime.middleware.unavailable_server import (
     make_unavailable_server_middleware,
@@ -29,7 +29,7 @@ __all__ = [
     "make_capability_scope_middleware",
     "make_governor_audit_middleware",
     "make_governor_delegate_critique_middleware",
-    "make_jarvis_tool_dispatcher",
+    "make_muldro_tool_dispatcher",
     "make_librarian_extract_middleware",
     "make_readback_middleware",
     "make_unavailable_server_middleware",

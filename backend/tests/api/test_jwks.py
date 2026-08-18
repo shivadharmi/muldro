@@ -21,4 +21,4 @@ def test_jwks_endpoint_returns_platform_signing_key():
     resp = _build_client().get("/.well-known/jwks.json")
     assert resp.status_code == 200
     body = resp.json()
-    assert body["keys"][0]["kid"] == "jarvis-platform-1"
+    assert body["keys"][0]["kid"] == "muldro-platform-1"

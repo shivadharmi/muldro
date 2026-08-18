@@ -366,7 +366,7 @@ class TestAuth:
     async def test_logout(self, base_url: str):
         """Test logout with a separate session (don't invalidate shared client)."""
         async with httpx.AsyncClient(base_url=base_url, timeout=10) as c:
-            r = await c.post("/v1/auth/magic-link", json={"email": "logout-test@jarvis.local"})
+            r = await c.post("/v1/auth/magic-link", json={"email": "logout-test@muldro.local"})
             token = r.json()["token"]
             r2 = await c.post("/v1/auth/verify", json={"token": token})
             temp_token = r2.json()["access_token"]

@@ -22,7 +22,7 @@ export function LiveActivityFeed() {
           </svg>
         </div>
         <p className="text-xs text-t-tertiary">Waiting for activity</p>
-        <p className="text-[10px] text-t-tertiary mt-0.5">Events appear here as Jarvis works</p>
+        <p className="text-[10px] text-t-tertiary mt-0.5">Events appear here as Muldro works</p>
       </div>
     );
   }

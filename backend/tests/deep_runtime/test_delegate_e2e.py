@@ -368,7 +368,7 @@ def _make_invoker(*, deep_delegates_enabled: bool, client: MagicMock) -> AgentIn
     tool_executor = MagicMock()
     tool_executor.apply_cache_control_to_tools = lambda tools: tools
     tool_executor.get_tools_for_agent = AsyncMock(return_value=[])
-    tool_executor.execute_tool = _recorder([])  # lead never dispatches a Jarvis tool
+    tool_executor.execute_tool = _recorder([])  # lead never dispatches a Muldro tool
 
     context = MagicMock()
     context.assemble_context = AsyncMock(return_value="")
@@ -398,7 +398,7 @@ async def _build_lead_and_stream(
     """Build the deep lead via the REAL ``_build_deep_agent_for`` and collect adapter frames."""
     deep_agent = await invoker._build_deep_agent_for(
         lead,
-        [],  # the lead carries no Jarvis tools — it only routes via the builtin task tool
+        [],  # the lead carries no Muldro tools — it only routes via the builtin task tool
         user_id=USER,
         workspace_id=WS,
         thread_id=thread_id,
@@ -679,6 +679,6 @@ async def test_neg_control_flag_off_subagents_empty_is_delegate_free():
     allowed = _allowed_subagent_types(frames)
     assert allowed, f"could not read allowed subagent types; frames={frames}"
     # The dormant path: the ambient general-purpose child is PRESENT (never disabled) and NO
-    # Jarvis delegate is registered — byte-identical to the pre-7B2 delegate-free lead.
+    # Muldro delegate is registered — byte-identical to the pre-7B2 delegate-free lead.
     assert "general-purpose" in allowed, f"GP unexpectedly absent (flag-off); allowed={allowed}"
     assert "perceiver" not in allowed, f"a delegate leaked into a flag-off build; allowed={allowed}"

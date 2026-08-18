@@ -18,7 +18,7 @@ from src.services.vector_store import VectorStore
 from tests.conftest import make_mock_settings
 
 # A secret-looking internal string that must never reach a client field.
-SECRET = "postgres://admin:hunter2@db.internal:5432/jarvis"
+SECRET = "postgres://admin:hunter2@db.internal:5432/muldro"
 GENERIC_MESSAGE = "Something went wrong. Please try again."
 
 

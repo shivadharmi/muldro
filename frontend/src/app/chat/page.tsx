@@ -1,13 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { ChatPanel } from "@/components/jarvis/chat-panel";
-import { SessionSidebar } from "@/components/jarvis/session-sidebar";
+import { ChatPanel } from "@/components/muldro/chat-panel";
+import { SessionSidebar } from "@/components/muldro/session-sidebar";
 import { CommandWorkspace } from "@/components/feature/command/command-workspace";
 import { SurfaceCard } from "@/components/workspace/surface-card";
 import { SurfaceDetailModal } from "@/components/workspace/surface-detail-modal";
 import { useAuth } from "@/lib/auth";
-import { useJarvisWs } from "@/hooks/use-jarvis-ws";
+import { useMuldroWs } from "@/hooks/use-muldro-ws";
 import { useSurfaceStore } from "@/stores/surface-store";
 import { useCommandStore } from "@/stores/command-store";
 import { useWsActionStore } from "@/stores/ws-action-store";
@@ -77,7 +77,7 @@ export default function ChatPage() {
   const [initialMessages, setInitialMessages] = useState<ConversationMessage[]>([]);
   const [sidebarRefreshKey, setSidebarRefreshKey] = useState(0);
 
-  const { connected, sendAction } = useJarvisWs({
+  const { connected, sendAction } = useMuldroWs({
     userId,
     onSurfacePush: handleSurfacePush,
     onSurfaceUpdate: useCallback(

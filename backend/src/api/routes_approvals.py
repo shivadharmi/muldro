@@ -113,7 +113,7 @@ def _guard_not_chat_approval(approval) -> None:
     """Reject chat-turn approvals at the TOP of the autonomous decision endpoints (Sec-I2).
 
     A chat single-lead approval (Step 10D P2.4) carries ``artifact_refs["chat"] is True`` and
-    is resumed via ``POST /v1/jarvis/chat/resume`` — NEVER these endpoints. Letting one flow
+    is resumed via ``POST /v1/muldro/chat/resume`` — NEVER these endpoints. Letting one flow
     through here would (a) consume the ``pending`` status, so the paired ``/chat/resume`` turn
     then refuses ``status != pending`` and strands an empty chat bubble, and (b) on reject,
     feed ``record_approval_decision`` a chat decision that would pollute the autonomous
@@ -131,7 +131,7 @@ def _guard_not_chat_approval(approval) -> None:
         raise HTTPException(
             status_code=409,
             detail=(
-                "This approval belongs to a chat turn; resume it via POST /v1/jarvis/chat/resume."
+                "This approval belongs to a chat turn; resume it via POST /v1/muldro/chat/resume."
             ),
         )
 

@@ -25,7 +25,7 @@ def test_mint_verify_roundtrip():
     assert claims["aud"] == "toolhive-vmcp"
     assert claims["capabilities"] == ["email.read", "email.send"]
     assert claims["authorization_source"] == "direct_user_request"
-    assert claims["iss"] == "jarvis-auth"
+    assert claims["iss"] == "muldro-auth"
     assert claims["exp"] == claims["iat"] + 300
 
 
@@ -48,7 +48,7 @@ def test_get_jwks_returns_public_key_with_kid():
     assert len(jwks["keys"]) >= 1
 
     key = jwks["keys"][0]
-    assert key["kid"] == "jarvis-platform-1"
+    assert key["kid"] == "muldro-platform-1"
     assert key["kty"] in ("RSA", "EC")
     assert key["use"] == "sig"
     assert key["alg"] == "RS256"
@@ -105,7 +105,7 @@ def test_verify_only_process_needs_no_private_key(monkeypatch):
     assert claims["sub"] == "user_1"
 
     # JWKS still publishes the right key without the private half.
-    assert pj.get_jwks()["keys"][0]["kid"] == "jarvis-platform-1"
+    assert pj.get_jwks()["keys"][0]["kid"] == "muldro-platform-1"
 
     # And minting from a verify-only process is a loud error, not an ephemeral key.
     with pytest.raises(pj.MissingSigningKeyError):
@@ -236,7 +236,7 @@ def test_public_pem_still_used_when_no_private_key(monkeypatch):
 
     _configure_keys(monkeypatch, pj, None, public_pem)
     assert pj.verify_platform_jwt(token, audience="toolhive-vmcp")["sub"] == "user_2"
-    assert pj.get_jwks()["keys"][0]["kid"] == "jarvis-platform-1"
+    assert pj.get_jwks()["keys"][0]["kid"] == "muldro-platform-1"
 
     with pytest.raises(pj.MissingSigningKeyError):
         pj.mint_platform_jwt(

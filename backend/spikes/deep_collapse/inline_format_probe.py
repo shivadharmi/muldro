@@ -141,7 +141,7 @@ async def main() -> None:
             {
                 "type": "text",
                 "text": (
-                    "You are Jarvis's Presenter. Answer the user in a natural, concise "
+                    "You are Muldro's Presenter. Answer the user in a natural, concise "
                     "voice. When a workspace surface is warranted, append ONE fenced "
                     "```json:surface block with the SurfaceSpec after your reply."
                 ),

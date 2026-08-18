@@ -89,7 +89,7 @@ def test_unservable_set_is_imported_from_step_runner_single_source():
 async def test_read_fn_routes_through_execute_tool_with_resolved_tool_name():
     """The read goes through the dispatcher (execute_tool), keyed on the tool NAME resolved
     from the read_capability — NOT a raw connector call. Positional call convention matches
-    ExecuteToolFn / jarvis_tool_dispatcher exactly."""
+    ExecuteToolFn / muldro_tool_dispatcher exactly."""
     execute_tool = AsyncMock(return_value=[{"id": "evt_1"}])
     registry = _fake_registry([SimpleNamespace(name="get_event", capability="calendar.read")])
     read_fn = make_readback_read_fn(

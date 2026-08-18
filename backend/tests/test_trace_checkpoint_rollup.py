@@ -15,7 +15,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.orchestrator.tracing import JarvisTrace
+from src.orchestrator.tracing import MuldroTrace
 from tests.conftest import TEST_USER_ID, make_mock_settings
 
 
@@ -42,7 +42,7 @@ def _make_executor(settings, mock_db):
 
 def _trace_with_usage(trace_id, *, input_t, output_t, cost):
     """Build a finished-style trace whose totals equal the given numbers."""
-    trace = JarvisTrace(trace_id=trace_id, trigger="execution:test")
+    trace = MuldroTrace(trace_id=trace_id, trigger="execution:test")
     span = trace.start_span("executor")
     trace.end_span(
         span.span_id,

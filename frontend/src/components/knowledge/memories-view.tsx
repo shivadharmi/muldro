@@ -207,7 +207,7 @@ export function MemoriesView() {
               description={
                 searchQuery
                   ? "Try a different search term"
-                  : "Memories will appear as Jarvis learns from interactions"
+                  : "Memories will appear as Muldro learns from interactions"
               }
               action={
                 !searchQuery ? (

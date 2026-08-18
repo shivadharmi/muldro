@@ -8,8 +8,8 @@ from src.contracts import PlanOutput, PlanStep
 
 
 def _make_orchestrator():
-    """Create a minimal JarvisOrchestrator with mocked deps."""
-    from src.orchestrator.jarvis import JarvisOrchestrator
+    """Create a minimal MuldroOrchestrator with mocked deps."""
+    from src.orchestrator.muldro import MuldroOrchestrator
 
     settings = MagicMock()
     settings.daily_token_budget_usd = 10.0
@@ -22,7 +22,7 @@ def _make_orchestrator():
     services.memory_service.store_briefing_memory = AsyncMock(return_value="mem_brief789")
     services.redis = None
 
-    orch = JarvisOrchestrator(settings=settings, db_factory=db_factory, services=services)
+    orch = MuldroOrchestrator(settings=settings, db_factory=db_factory, services=services)
     return orch
 
 
@@ -450,7 +450,7 @@ class TestPublicOrchestratorMethods:
 
 
 class TestPlannerSystemPrompt:
-    """Planner gets capability summary, not JARVIS_DECISION_FRAMEWORK."""
+    """Planner gets capability summary, not MULDRO_DECISION_FRAMEWORK."""
 
     def test_build_system_prompt_planner_with_cap_summary(self):
         orch = _make_orchestrator()
@@ -576,7 +576,7 @@ class TestPlanPersistence:
 
         plans = [o for o in added_objects if isinstance(o, Plan)]
         assert len(plans) == 1
-        # Both jarvis and user-actor steps become PlanTasks (user step is awaiting_input)
+        # Both muldro and user-actor steps become PlanTasks (user step is awaiting_input)
         assert len(plans[0].tasks) == 2
         user_tasks = [t for t in plans[0].tasks if t.task_type == "user_action"]
         assert len(user_tasks) == 1

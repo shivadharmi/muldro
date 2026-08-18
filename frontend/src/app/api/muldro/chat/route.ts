@@ -22,7 +22,7 @@ export async function POST(req: NextRequest) {
   const cookie = req.headers.get("cookie");
   if (cookie) headers["Cookie"] = cookie;
 
-  const backendRes = await fetch(`${backend}/v1/jarvis/chat`, {
+  const backendRes = await fetch(`${backend}/v1/muldro/chat`, {
     method: "POST",
     headers,
     body,

@@ -266,7 +266,7 @@ class Notifier:
                 import json as _json
 
                 await self._redis.publish(
-                    f"jarvis:realtime:{user_id}",
+                    f"muldro:realtime:{user_id}",
                     _json.dumps(
                         {
                             "event": "notification.sent",
@@ -284,7 +284,7 @@ class Notifier:
             try:
                 import json as _json
 
-                sync_key = f"jarvis:pending_sync:{user_id}"
+                sync_key = f"muldro:pending_sync:{user_id}"
                 await self._redis.lpush(
                     sync_key,
                     _json.dumps(
@@ -318,7 +318,7 @@ class Notifier:
                     "resolved_on": surface,
                 }
             )
-            await self._redis.publish(f"jarvis:surface_sync:{user_id}", message)
+            await self._redis.publish(f"muldro:surface_sync:{user_id}", message)
 
         logger.info(
             "notification_resolved",
@@ -345,7 +345,7 @@ class Notifier:
             if result.get("status") not in ("error", "skipped") and self._redis:
                 try:
                     await self._redis.publish(
-                        f"jarvis:realtime:{notification.user_id}",
+                        f"muldro:realtime:{notification.user_id}",
                         json.dumps(
                             {
                                 "event": "notification.delivered",
@@ -387,7 +387,7 @@ class Notifier:
                 tool_name,
                 {
                     "text": text,
-                    "channel": notification.data.get("slack_channel", "#jarvis"),
+                    "channel": notification.data.get("slack_channel", "#muldro"),
                 },
                 user_id=notification.user_id,
                 workspace_id=workspace_id,
@@ -444,7 +444,7 @@ class Notifier:
         """Push notification to web dashboard via WebSocket/Redis pub/sub."""
         if not self._ws_sender:
             if self._redis:
-                channel = f"jarvis:a2ui:{notification.user_id}"
+                channel = f"muldro:a2ui:{notification.user_id}"
 
                 # Publish notification message
                 message = json.dumps(
@@ -473,7 +473,7 @@ class Notifier:
     async def _mark_delivered(self, notification_id: str, surface: str) -> None:
         """Mark a notification as delivered on a surface (for dedup)."""
         if self._redis:
-            key = f"jarvis:notif_delivered:{notification_id}"
+            key = f"muldro:notif_delivered:{notification_id}"
             await self._redis.set(key, surface, ex=86400)  # 24h TTL
         # Evict oldest entries when in-memory cache exceeds limit
         if len(self._delivered) >= 10_000:
@@ -485,6 +485,6 @@ class Notifier:
     async def is_delivered(self, notification_id: str) -> bool:
         """Check if a notification has already been delivered."""
         if self._redis:
-            key = f"jarvis:notif_delivered:{notification_id}"
+            key = f"muldro:notif_delivered:{notification_id}"
             return bool(await self._redis.exists(key))
         return notification_id in self._delivered

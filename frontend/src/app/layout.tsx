@@ -14,13 +14,13 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Jarvis",
+  title: "Muldro",
   description: "Personal AI Operating System",
 };
 
 // Inline script to set theme before paint — prevents FOUC.
 // Content is a hardcoded string literal (no user input), safe for dangerouslySetInnerHTML.
-const THEME_INIT_SCRIPT = `(function(){try{var t=localStorage.getItem('jarvis_theme');var r=t==='light'?'light':t==='dark'?'dark':window.matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';document.documentElement.setAttribute('data-theme',r)}catch(e){}})()`;
+const THEME_INIT_SCRIPT = `(function(){try{var t=localStorage.getItem('muldro_theme');var r=t==='light'?'light':t==='dark'?'dark':window.matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';document.documentElement.setAttribute('data-theme',r)}catch(e){}})()`;
 
 export default function RootLayout({
   children,

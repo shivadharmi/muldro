@@ -23,7 +23,7 @@ class TestCapabilityHealth:
 
         internal = next(f for f in report.families if f.family == "internal")
         assert internal.status == "healthy"
-        assert internal.provider == "jarvis"
+        assert internal.provider == "muldro"
 
     async def test_count_capabilities(self):
         from src.integrations.capabilities import CapabilityFamily

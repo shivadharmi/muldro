@@ -168,9 +168,9 @@ async def test_conversation_summary_embedded():
             return_value=mock_es,
         ) as _mock_es_cls,
     ):
-        from src.orchestrator.jarvis import JarvisOrchestrator
+        from src.orchestrator.muldro import MuldroOrchestrator
 
-        orch = JarvisOrchestrator(settings=settings, db_factory=MagicMock(), services=MagicMock())
+        orch = MuldroOrchestrator(settings=settings, db_factory=MagicMock(), services=MagicMock())
 
         with patch(
             "src.orchestrator.context_assembler.complete_text",
@@ -204,9 +204,9 @@ async def test_conversation_embedding_skipped_without_conversation_id():
         patch("src.services.vector_store.VectorStore", return_value=mock_vs),
         patch("src.services.embedding_service.EmbeddingService"),
     ):
-        from src.orchestrator.jarvis import JarvisOrchestrator
+        from src.orchestrator.muldro import MuldroOrchestrator
 
-        orch = JarvisOrchestrator(settings=settings, db_factory=MagicMock(), services=MagicMock())
+        orch = MuldroOrchestrator(settings=settings, db_factory=MagicMock(), services=MagicMock())
 
         with patch(
             "src.orchestrator.context_assembler.complete_text",

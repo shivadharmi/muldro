@@ -37,13 +37,13 @@ class TestCallCompositeTool:
 
     @pytest.fixture
     def orchestrator(self):
-        """Create a minimal JarvisOrchestrator with mocked dependencies."""
-        from src.orchestrator.jarvis import JarvisOrchestrator
+        """Create a minimal MuldroOrchestrator with mocked dependencies."""
+        from src.orchestrator.muldro import MuldroOrchestrator
         from src.orchestrator.services import ServiceContainer
 
         settings = make_mock_settings()
         db_factory = MagicMock()
-        return JarvisOrchestrator(
+        return MuldroOrchestrator(
             settings=settings,
             db_factory=db_factory,
             services=ServiceContainer(),
@@ -77,12 +77,12 @@ class TestCallInternalToolServerPrefix:
 
     @pytest.fixture
     def orchestrator(self):
-        from src.orchestrator.jarvis import JarvisOrchestrator
+        from src.orchestrator.muldro import MuldroOrchestrator
         from src.orchestrator.services import ServiceContainer
 
         settings = make_mock_settings()
         db_factory = MagicMock()
-        return JarvisOrchestrator(
+        return MuldroOrchestrator(
             settings=settings,
             db_factory=db_factory,
             services=ServiceContainer(),
@@ -128,12 +128,12 @@ class TestExecuteTool:
 
     @pytest.fixture
     def orchestrator(self):
-        from src.orchestrator.jarvis import JarvisOrchestrator
+        from src.orchestrator.muldro import MuldroOrchestrator
         from src.orchestrator.services import ServiceContainer
 
         settings = make_mock_settings()
         db_factory = MagicMock()
-        orch = JarvisOrchestrator(
+        orch = MuldroOrchestrator(
             settings=settings,
             db_factory=db_factory,
             services=ServiceContainer(),

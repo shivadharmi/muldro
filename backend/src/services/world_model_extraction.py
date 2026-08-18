@@ -90,7 +90,7 @@ RELATION_TYPES = frozenset(
 )
 
 ENTITY_EXTRACTION_PROMPT = """\
-You are Jarvis's entity extraction engine. Given an event, extract ALL entities \
+You are Muldro's entity extraction engine. Given an event, extract ALL entities \
 and relationships mentioned.
 
 You MUST respond with valid JSON matching this schema:

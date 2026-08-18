@@ -1,6 +1,6 @@
 """Step 6B Task 6: LOAD-BEARING end-to-end proof of the deep chat approval gate.
 
-Drives the WHOLE machinery — capability_scope -> trust_gate -> jarvis_tool_dispatcher,
+Drives the WHOLE machinery — capability_scope -> trust_gate -> muldro_tool_dispatcher,
 ``AgentInvoker._build_deep_agent_for`` / ``resume_deep_turn``, ``TrustEngine``,
 ``create_approval`` — against a REAL Postgres DB and a fake scripted streaming model
 (no Anthropic API). ``authorization_source`` is FORCED to ``"autonomous"``, provenance

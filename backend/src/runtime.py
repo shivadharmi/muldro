@@ -42,11 +42,11 @@ def _check_oauth_key(settings: Settings) -> None:
         return
     if getattr(settings, "environment", "development") == "production":
         raise RuntimeBuildError(
-            "JARVIS_OAUTH_ENCRYPTION_KEY is required in production. "
+            "MULDRO_OAUTH_ENCRYPTION_KEY is required in production. "
             "OAuth tokens will be stored in PLAINTEXT without it."
         )
     logger.error(
-        "JARVIS_OAUTH_ENCRYPTION_KEY is not set — "
+        "MULDRO_OAUTH_ENCRYPTION_KEY is not set — "
         "OAuth tokens will be stored in PLAINTEXT. "
         "Set this variable to a Fernet-compatible key."
     )
@@ -392,14 +392,14 @@ def validate_tier3_health(settings: Settings, svc: ServiceContainer) -> list[str
 
     if settings.neo4j_url and not svc.graph_engine:
         logger.warning(
-            "DEGRADED: Neo4j configured (JARVIS_NEO4J_URL set) but GraphEngine "
+            "DEGRADED: Neo4j configured (MULDRO_NEO4J_URL set) but GraphEngine "
             "failed to initialize. Entity graph traversal and sync are disabled."
         )
         degraded.append("neo4j")
 
     if settings.qdrant_url and not svc.vector_store:
         logger.warning(
-            "DEGRADED: Qdrant configured (JARVIS_QDRANT_URL set) but VectorStore "
+            "DEGRADED: Qdrant configured (MULDRO_QDRANT_URL set) but VectorStore "
             "failed to initialize. Semantic search and embedding are disabled."
         )
         degraded.append("qdrant")

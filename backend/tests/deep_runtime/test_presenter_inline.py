@@ -171,7 +171,7 @@ async def test_inline_format_on_streams_reply_and_surface():
     """With deep_inline_format=True, a deep agent whose system prompt carries the
     augmentation streams a reply + surface that the existing surface parsers consume."""
     settings = make_mock_settings(runtime="deep", deep_inline_format=True)
-    base_blocks = [{"type": "text", "text": "You are Jarvis's Presenter."}]
+    base_blocks = [{"type": "text", "text": "You are Muldro's Presenter."}]
 
     # is_reply_lead=True (the presenter is the reply-producing lead) → voice appended.
     augmented = _augment_system_blocks_for_inline(
@@ -216,7 +216,7 @@ def test_inline_format_off_negative_control():
     """NEGATIVE CONTROL: with deep_inline_format=False, PRESENTER_VOICE is absent from the
     built deep system prompt — the augmentation is gated by the flag."""
     settings = make_mock_settings(runtime="deep", deep_inline_format=False)
-    base_blocks = [{"type": "text", "text": "You are Jarvis's Presenter."}]
+    base_blocks = [{"type": "text", "text": "You are Muldro's Presenter."}]
 
     off_blocks = _augment_system_blocks_for_inline(base_blocks, settings.deep_inline_format)
     system_off = build_system_message(off_blocks)

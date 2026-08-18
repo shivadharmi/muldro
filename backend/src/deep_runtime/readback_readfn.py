@@ -32,7 +32,7 @@ Fail-safe design (mirrors ``run_readback``):
 
 from __future__ import annotations
 
-from src.deep_runtime.middleware.jarvis_tool_dispatcher import ExecuteToolFn
+from src.deep_runtime.middleware.muldro_tool_dispatcher import ExecuteToolFn
 from src.services.step_runner import _READBACK_UNSERVABLE_CAPABILITIES  # single source
 from src.services.verification.readback import ReadFn
 
@@ -77,7 +77,7 @@ def make_readback_read_fn(
     ``execute_tool`` is the BUILD's resolved dispatcher fn (the real
     ``ToolExecutor.execute_tool`` for chat/autonomous, or the ledger-wrapped variant
     for autonomous turns). It is invoked with the same POSITIONAL convention as
-    ``jarvis_tool_dispatcher`` / ``ExecuteToolFn`` (``name, args, user_id, workspace_id``), so
+    ``muldro_tool_dispatcher`` / ``ExecuteToolFn`` (``name, args, user_id, workspace_id``), so
     every variant honors it. ``tool_registry`` only needs an async
     ``list_tools(enabled_only=True)`` -> records carrying ``.name`` + ``.capability``.
     """
@@ -100,7 +100,7 @@ def make_readback_read_fn(
             raise RuntimeError(f"no tool serves read capability {read_capability}")
 
         # (3) dispatch through the central execute_tool dispatcher. Positional call convention
-        # == jarvis_tool_dispatcher / ExecuteToolFn.
+        # == muldro_tool_dispatcher / ExecuteToolFn.
         result = await execute_tool(tool.name, read_args, user_id, workspace_id)
 
         # (4) fail-safe on the executor's ERROR CONTRACT: execute_tool NEVER raises on a read

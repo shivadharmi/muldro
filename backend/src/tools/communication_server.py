@@ -11,7 +11,7 @@ from fastmcp.server.providers.local_provider.decorators.tools import ToolAnnotat
 
 logger = logging.getLogger(__name__)
 
-communication = FastMCP("jarvis-communication")
+communication = FastMCP("muldro-communication")
 
 _settings = None
 _redis = None
@@ -49,7 +49,7 @@ async def push_ui_update(
 
         parsed = json.loads(payload) if isinstance(payload, str) else payload
 
-        channel = f"jarvis:a2ui:{user_id}"
+        channel = f"muldro:a2ui:{user_id}"
 
         # Check if payload is in new WorkspaceSurfacePush format (has preview + kind)
         if isinstance(parsed, dict) and "preview" in parsed and "kind" in parsed:

@@ -253,7 +253,7 @@ class IntegrationManager:
         """Update the observation cursor.
 
         Uses a single ``INSERT ... ON CONFLICT DO UPDATE`` so this writer and
-        the perception-side writer (``JarvisOrchestrator._update_cursor``)
+        the perception-side writer (``MuldroOrchestrator._update_cursor``)
         cannot race on the ``uq_cursor_ws_user_source`` unique constraint.
         """
         from sqlalchemy.dialects.postgresql import insert as pg_insert

@@ -196,7 +196,7 @@ class TestHasPresenterStep:
         has_presenter_step = any(
             s.capability in ("reason", "respond", "system.respond", "system.acknowledge")
             for s in steps
-            if s.actor == "jarvis"
+            if s.actor == "muldro"
         )
         assert has_presenter_step is True
 
@@ -207,7 +207,7 @@ class TestHasPresenterStep:
         has_presenter_step = any(
             s.capability in ("reason", "respond", "system.respond", "system.acknowledge")
             for s in steps
-            if s.actor == "jarvis"
+            if s.actor == "muldro"
         )
         assert has_presenter_step is True
 
@@ -218,7 +218,7 @@ class TestHasPresenterStep:
         has_presenter_step = any(
             s.capability in ("reason", "respond", "system.respond", "system.acknowledge")
             for s in steps
-            if s.actor == "jarvis"
+            if s.actor == "muldro"
         )
         assert has_presenter_step is False
 

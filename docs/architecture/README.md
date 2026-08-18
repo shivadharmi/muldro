@@ -1,6 +1,6 @@
-# Jarvis Architecture Documentation
+# Muldro Architecture Documentation
 
-Comprehensive architecture reference for the Jarvis Personal AI Operating System.
+Comprehensive architecture reference for the Muldro Personal AI Operating System.
 
 ## Documents
 
@@ -21,5 +21,5 @@ Comprehensive architecture reference for the Jarvis Personal AI Operating System
 
 | Document | Description |
 |----------|-------------|
-| [Soul](../soul.md) | Jarvis's character, interaction philosophy, autonomy boundaries |
+| [Soul](../soul.md) | Muldro's character, interaction philosophy, autonomy boundaries |
 | [Vision](../vision.md) | Product thesis, capability pillars, strategic design principles |

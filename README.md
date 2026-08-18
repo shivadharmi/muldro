@@ -1,4 +1,4 @@
-# Jarvis
+# Muldro
 
 A **Personal AI Operating System** for founders. Not a chatbot — an OS with a core loop:
 
@@ -6,7 +6,7 @@ A **Personal AI Operating System** for founders. Not a chatbot — an OS with a 
 Perceive -> Understand -> Update Model -> Plan -> Act -> Communicate
 ```
 
-Jarvis continuously observes your data sources (Gmail, Calendar, Slack, GitHub), extracts entities and memories, plans actions, seeks approval for external writes, executes approved plans, and communicates results through a Next.js web frontend.
+Muldro continuously observes your data sources (Gmail, Calendar, Slack, GitHub), extracts entities and memories, plans actions, seeks approval for external writes, executes approved plans, and communicates results through a Next.js web frontend.
 
 ## Architecture
 
@@ -21,7 +21,7 @@ graph TB
     end
 
     subgraph ORCH["Orchestrator"]
-        JO[JarvisOrchestrator<br/>Hub-and-spoke routing]
+        JO[MuldroOrchestrator<br/>Hub-and-spoke routing]
         TR[TraceManager] ~~~ BU[BudgetTracker]
     end
 
@@ -94,7 +94,7 @@ Next.js frontend — comes up together in Docker.
 
 # 2. Provide your key
 cp .env.minimal backend/.env
-#    then edit backend/.env and set JARVIS_ANTHROPIC_API_KEY
+#    then edit backend/.env and set MULDRO_ANTHROPIC_API_KEY
 
 # 3. Build and start the whole stack (migrations run automatically on first boot)
 docker compose --profile app up
@@ -127,23 +127,23 @@ cd frontend && npm install && npm run dev
 
 ## Deployment
 
-Infrastructure is managed with Terraform in `infra/`. A single EC2 instance runs Postgres, Redis, the Jarvis backend, and Caddy (reverse proxy with auto-TLS).
+Infrastructure is managed with Terraform in `infra/`. A single EC2 instance runs Postgres, Redis, the Muldro backend, and Caddy (reverse proxy with auto-TLS).
 
 ## Project Structure
 
 ```
-jarvis/
+muldro/
 ├── backend/
 │   ├── src/
 │   │   ├── api/            # REST/SSE routers (/v1/ prefix)
-│   │   ├── config/         # Settings (pydantic-settings, JARVIS_ env prefix)
+│   │   ├── config/         # Settings (pydantic-settings, MULDRO_ env prefix)
 │   │   ├── connectors/     # Perception source pollers
 │   │   ├── contracts/      # Neutral boundary contracts (PlanOutput, PolicyDecision, SurfaceUpdate, ...)
 │   │   ├── deep_runtime/   # The single execution engine (LangGraph deep agent + middleware chain)
 │   │   ├── integrations/   # MCP bridge + external server management (remote HTTP / uvx / npx)
 │   │   ├── llm/            # Model factory + Claude API client helpers
 │   │   ├── models/         # SQLAlchemy models (all workspace-scoped)
-│   │   ├── orchestrator/   # JarvisOrchestrator, agents, hooks, tracing, budget, intent classifier
+│   │   ├── orchestrator/   # MuldroOrchestrator, agents, hooks, tracing, budget, intent classifier
 │   │   ├── services/       # Business logic (planner, executor, trust_engine, tri_search, etc.)
 │   │   ├── tools/          # Tool catalog, schemas, validation, FastMCP servers
 │   │   └── ui/             # A2UI renderer + contracts

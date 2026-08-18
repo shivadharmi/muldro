@@ -1,4 +1,4 @@
-"""Step 6A.5: jarvis_tool_dispatcher routes Jarvis tool calls through execute_tool
+"""Step 6A.5: muldro_tool_dispatcher routes Muldro tool calls through execute_tool
 (short-circuiting the shell), normalizes error/blocked to status="error", and falls through
 for deepagents built-ins.
 
@@ -15,7 +15,7 @@ from unittest.mock import AsyncMock
 import pytest
 from langchain_core.messages import ToolMessage
 
-from src.deep_runtime.middleware.jarvis_tool_dispatcher import make_jarvis_tool_dispatcher
+from src.deep_runtime.middleware.muldro_tool_dispatcher import make_muldro_tool_dispatcher
 
 USER_ID = "u_test"
 WORKSPACE_ID = "ws_test"
@@ -42,19 +42,19 @@ def handler():
 
 
 # ---------------------------------------------------------------------------
-# Test 1: Jarvis tool is dispatched through execute_tool; shell body never runs
+# Test 1: Muldro tool is dispatched through execute_tool; shell body never runs
 # ---------------------------------------------------------------------------
 
 
-async def test_dispatches_jarvis_tool_to_execute_tool(handler):
-    """A Jarvis tool call goes through execute_tool; handler (shell body) is never invoked."""
+async def test_dispatches_muldro_tool_to_execute_tool(handler):
+    """A Muldro tool call goes through execute_tool; handler (shell body) is never invoked."""
     calls: list[tuple[str, dict, str, str]] = []
 
     async def fake_execute_tool(name: str, args: dict, uid: str, ws: str) -> dict:
         calls.append((name, args, uid, ws))
         return {"result": "ok", "data": 42}
 
-    mw = make_jarvis_tool_dispatcher(
+    mw = make_muldro_tool_dispatcher(
         execute_tool=fake_execute_tool, user_id=USER_ID, workspace_id=WORKSPACE_ID
     )
     result = await _hook(mw)(_request("search_memories", {"query": "foo"}, "call_abc"), handler)
@@ -82,7 +82,7 @@ async def test_error_result_maps_to_status_error(handler):
     async def fake_execute_tool(name, args, uid, ws):
         return {"error": "nope, something broke"}
 
-    mw = make_jarvis_tool_dispatcher(
+    mw = make_muldro_tool_dispatcher(
         execute_tool=fake_execute_tool, user_id=USER_ID, workspace_id=WORKSPACE_ID
     )
     result = await _hook(mw)(_request("send_email", {}, "call_err"), handler)
@@ -107,7 +107,7 @@ async def test_blocked_result_maps_to_status_error(handler):
     async def fake_execute_tool(name, args, uid, ws):
         return {"error": "blocked by policy", "blocked": True}
 
-    mw = make_jarvis_tool_dispatcher(
+    mw = make_muldro_tool_dispatcher(
         execute_tool=fake_execute_tool, user_id=USER_ID, workspace_id=WORKSPACE_ID
     )
     result = await _hook(mw)(_request("delete_file", {}, "call_blk"), handler)
@@ -130,7 +130,7 @@ async def test_success_result_maps_to_status_success(handler):
     async def fake_execute_tool(name, args, uid, ws):
         return {"items": [1, 2, 3], "total": 3}
 
-    mw = make_jarvis_tool_dispatcher(
+    mw = make_muldro_tool_dispatcher(
         execute_tool=fake_execute_tool, user_id=USER_ID, workspace_id=WORKSPACE_ID
     )
     result = await _hook(mw)(_request("list_events", {"limit": 10}, "call_suc"), handler)
@@ -157,7 +157,7 @@ async def test_builtin_write_todos_falls_through_to_handler(handler):
         execute_called.append(name)
         return {"error": "should not be called"}
 
-    mw = make_jarvis_tool_dispatcher(
+    mw = make_muldro_tool_dispatcher(
         execute_tool=fake_execute_tool, user_id=USER_ID, workspace_id=WORKSPACE_ID
     )
     result = await _hook(mw)(_request("write_todos", {"todos": []}, "call_todo"), handler)
@@ -186,7 +186,7 @@ async def test_all_builtins_fall_through(handler):
 
     for builtin_name in sorted(DEEPAGENTS_BUILTIN_NAMES):
         handler.reset_mock()
-        mw = make_jarvis_tool_dispatcher(
+        mw = make_muldro_tool_dispatcher(
             execute_tool=fake_execute_tool, user_id=USER_ID, workspace_id=WORKSPACE_ID
         )
         result = await _hook(mw)(_request(builtin_name, {}, "call_bi"), handler)
@@ -208,7 +208,7 @@ async def test_string_result_is_stringified(handler):
     async def fake_execute_tool(name, args, uid, ws):
         return "plain string result"
 
-    mw = make_jarvis_tool_dispatcher(
+    mw = make_muldro_tool_dispatcher(
         execute_tool=fake_execute_tool, user_id=USER_ID, workspace_id=WORKSPACE_ID
     )
     result = await _hook(mw)(_request("some_tool", {}, "call_str"), handler)
@@ -233,7 +233,7 @@ async def test_user_and_workspace_from_closure_not_args(handler):
         return {"ok": True}
 
     # Put fake uid/ws in the args — they must be ignored
-    mw = make_jarvis_tool_dispatcher(
+    mw = make_muldro_tool_dispatcher(
         execute_tool=fake_execute_tool, user_id="real_user", workspace_id="real_ws"
     )
     await _hook(mw)(

@@ -1,21 +1,21 @@
-# Jarvis Vision
+# Muldro Vision
 
 ## Status
 Version: v0.1  
 Purpose: Foundational steering document for product, design, architecture, and agentic implementation.
 
-## What Jarvis Is
+## What Muldro Is
 
-Jarvis is an AI operating system: an always-available, context-aware, action-capable intelligence layer that helps a user observe, understand, decide, and execute across their digital life and work.
+Muldro is an AI operating system: an always-available, context-aware, action-capable intelligence layer that helps a user observe, understand, decide, and execute across their digital life and work.
 
-Jarvis is not a chatbot with tools attached.  
-Jarvis is not a collection of automations.  
-Jarvis is not a thin wrapper over models.  
-Jarvis is a persistent system that can perceive across sources, maintain continuity over time, reason about what matters, take action safely, and generate the right interface for the task at hand.
+Muldro is not a chatbot with tools attached.  
+Muldro is not a collection of automations.  
+Muldro is not a thin wrapper over models.  
+Muldro is a persistent system that can perceive across sources, maintain continuity over time, reason about what matters, take action safely, and generate the right interface for the task at hand.
 
-The long-term ambition is to make Jarvis feel like a true intelligent layer above tools, workflows, devices, and information systems: something that reduces cognitive burden, increases execution capacity, and becomes meaningfully useful every day.
+The long-term ambition is to make Muldro feel like a true intelligent layer above tools, workflows, devices, and information systems: something that reduces cognitive burden, increases execution capacity, and becomes meaningfully useful every day.
 
-## Why Jarvis Must Exist
+## Why Muldro Must Exist
 
 Modern computing is fragmented.
 
@@ -30,9 +30,9 @@ The result is that the user remains the integration layer:
 - the user decides what to do next
 - the user performs or coordinates execution manually
 
-Jarvis exists to remove that burden.
+Muldro exists to remove that burden.
 
-Jarvis should become the operational intelligence layer that sits above fragmented systems and helps the user:
+Muldro should become the operational intelligence layer that sits above fragmented systems and helps the user:
 - stay aware without being overwhelmed
 - retain continuity without constant repetition
 - move from intent to execution with less friction
@@ -51,11 +51,11 @@ We believe:
 6. The winning system will not be the loudest or most theatrical. It will be the most trusted, most useful, and most reliably present.
 7. Personal AI will become an operating layer, not just a destination app.
 
-Jarvis is being built for that future.
+Muldro is being built for that future.
 
 ## Product Thesis
 
-Jarvis is an AI operating system for human leverage.
+Muldro is an AI operating system for human leverage.
 
 Its job is to combine:
 - context continuity
@@ -69,16 +69,16 @@ Its job is to combine:
 
 Into one coherent system that serves the user across time.
 
-Jarvis should help with both cognition and operations:
+Muldro should help with both cognition and operations:
 - cognition: understanding, synthesis, prioritization, planning, reflection, decision support
 - operations: drafting, scheduling, coordinating, searching, monitoring, executing, following through
 
-The value of Jarvis is not just better answers.  
-The value of Jarvis is reduced mental overhead and increased capacity to get the right things done.
+The value of Muldro is not just better answers.  
+The value of Muldro is reduced mental overhead and increased capacity to get the right things done.
 
-## Who Jarvis Is For
+## Who Muldro Is For
 
-Jarvis is for people whose lives and work involve complexity, fragmentation, and recurring coordination.
+Muldro is for people whose lives and work involve complexity, fragmentation, and recurring coordination.
 
 That includes:
 - founders and operators
@@ -89,49 +89,49 @@ That includes:
 - individuals coordinating personal and professional responsibilities
 - eventually, any user who wants a trustworthy intelligent layer across their computing environment
 
-Jarvis is not limited to a founder persona. Its design must generalize across serious users with different workflows, tools, and levels of technical sophistication.
+Muldro is not limited to a founder persona. Its design must generalize across serious users with different workflows, tools, and levels of technical sophistication.
 
 ## Core Capability Pillars
 
 ### 1. Continuous Context
-Jarvis must maintain continuity across conversations, tools, projects, tasks, and time. The user should not need to repeatedly reconstruct their world for the system.
+Muldro must maintain continuity across conversations, tools, projects, tasks, and time. The user should not need to repeatedly reconstruct their world for the system.
 
 ### 2. Multi-Source Perception
-Jarvis must be able to observe relevant signals across connected systems with permission: messages, documents, tasks, events, files, code, browser context, and other sources. Perception should be selective, purposeful, and respectful.
+Muldro must be able to observe relevant signals across connected systems with permission: messages, documents, tasks, events, files, code, browser context, and other sources. Perception should be selective, purposeful, and respectful.
 
 ### 3. Durable Memory
-Jarvis must retain useful context, preferences, relationships, ongoing work, important constraints, and relevant history in a way that improves usefulness without becoming creepy or opaque.
+Muldro must retain useful context, preferences, relationships, ongoing work, important constraints, and relevant history in a way that improves usefulness without becoming creepy or opaque.
 
 ### 4. Reasoning and Planning
-Jarvis must do more than retrieve or summarize. It must connect signals, identify patterns, frame options, reason under uncertainty, and plan actions or workflows.
+Muldro must do more than retrieve or summarize. It must connect signals, identify patterns, frame options, reason under uncertainty, and plan actions or workflows.
 
 ### 5. Safe Action
-Jarvis must be able to take real action across tools and environments: write, create, edit, send, schedule, organize, run, monitor, and follow through. Action must operate within clear trust and permission boundaries.
+Muldro must be able to take real action across tools and environments: write, create, edit, send, schedule, organize, run, monitor, and follow through. Action must operate within clear trust and permission boundaries.
 
 ### 6. Dynamic Interface Generation
-Jarvis should not force every job into chat. It must be able to produce the right interface for the moment: conversational when needed, structured when needed, visual when needed, task-specific when needed.
+Muldro should not force every job into chat. It must be able to produce the right interface for the moment: conversational when needed, structured when needed, visual when needed, task-specific when needed.
 
 ### 7. Long-Running Execution
-Jarvis must support tasks that unfold over time: tracking, monitoring, coordinating, updating, waiting on dependencies, and re-engaging when something meaningful changes.
+Muldro must support tasks that unfold over time: tracking, monitoring, coordinating, updating, waiting on dependencies, and re-engaging when something meaningful changes.
 
 ### 8. Personalization with Integrity
-Jarvis should become more useful as it learns how the user works, but that learning must remain aligned with user control, transparency, and dignity.
+Muldro should become more useful as it learns how the user works, but that learning must remain aligned with user control, transparency, and dignity.
 
-## What Makes Jarvis Different
+## What Makes Muldro Different
 
-Jarvis differs from a chatbot because it is persistent, contextual, and operational.
+Muldro differs from a chatbot because it is persistent, contextual, and operational.
 
-Jarvis differs from workflow automation because it can reason, adapt, and work under ambiguity.
+Muldro differs from workflow automation because it can reason, adapt, and work under ambiguity.
 
-Jarvis differs from point-solution copilots because it spans systems rather than living inside a single app.
+Muldro differs from point-solution copilots because it spans systems rather than living inside a single app.
 
-Jarvis differs from notification systems because it is not just surfacing events; it is interpreting relevance and helping decide or act.
+Muldro differs from notification systems because it is not just surfacing events; it is interpreting relevance and helping decide or act.
 
-Jarvis differs from “AI shell” demos because the goal is not novelty. The goal is dependable leverage.
+Muldro differs from “AI shell” demos because the goal is not novelty. The goal is dependable leverage.
 
 ## Final Form
 
-In its mature form, Jarvis should:
+In its mature form, Muldro should:
 - be available continuously
 - understand the user’s active world well enough to stay useful over time
 - observe connected sources with explicit permission
@@ -161,7 +161,7 @@ The end state is a trusted system the user would not want to work without.
 
 ## Non-Goals
 
-Jarvis must not become:
+Muldro must not become:
 - a gimmicky voice assistant
 - a notification spam engine
 - a dashboard full of disconnected AI widgets
@@ -174,17 +174,17 @@ Jarvis must not become:
 ## Product Decision Filter
 
 When deciding whether to build something, ask:
-1. Does this increase Jarvis’s ability to understand the user’s world with continuity?
+1. Does this increase Muldro’s ability to understand the user’s world with continuity?
 2. Does this reduce cognitive or operational burden in a meaningful way?
 3. Does this improve reasoning, execution, or coordination across systems?
 4. Does this fit the long-term AI operating system thesis?
-5. Would this matter in the mature form of Jarvis, or is it temporary theater?
+5. Would this matter in the mature form of Muldro, or is it temporary theater?
 
 If the answer is mostly no, it is likely not aligned.
 
 ## Definition of Success
 
-Jarvis succeeds when:
+Muldro succeeds when:
 - users rely on it regularly, not occasionally
 - it reduces mental overhead and coordination burden
 - it helps users notice, decide, and execute better than they could alone
@@ -193,7 +193,7 @@ Jarvis succeeds when:
 
 ## Instruction to Agents
 
-Any implementation, specification, workflow, architecture, or interface proposal for Jarvis must align with this document.
+Any implementation, specification, workflow, architecture, or interface proposal for Muldro must align with this document.
 
 When tradeoffs appear:
 - prefer durable system advantage over short-term convenience

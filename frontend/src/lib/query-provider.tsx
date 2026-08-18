@@ -26,8 +26,8 @@ export function QueryProvider({ children }: { children: ReactNode }) {
                 error instanceof Error &&
                 error.message.includes("401")
               ) {
-                localStorage.removeItem("jarvis_auth_token");
-                localStorage.removeItem("jarvis_auth_user");
+                localStorage.removeItem("muldro_auth_token");
+                localStorage.removeItem("muldro_auth_user");
                 window.location.href = "/login";
               }
             },

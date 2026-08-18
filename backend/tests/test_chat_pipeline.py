@@ -1,7 +1,7 @@
 """Characterization tests for the chat orchestration helpers (ORCH-P1-1).
 
 These pin the EXACT behavior of the shared blocks extracted from
-``JarvisOrchestrator.process_message`` and ``process_message_stream`` into
+``MuldroOrchestrator.process_message`` and ``process_message_stream`` into
 ``src.orchestrator.chat_pipeline``. The expected strings are copied from the
 pre-extraction inline code, so any drift in the moved bodies fails here. They
 must stay green across the structural change.

@@ -335,42 +335,42 @@ class TestObserveSourceSkip:
 class TestPerceptionDecisionExtraction:
     def test_extracts_valid_policy(self):
         """Should parse perception_policy JSON from planner text."""
-        from src.orchestrator.jarvis import JarvisOrchestrator
+        from src.orchestrator.muldro import MuldroOrchestrator
 
         text = """Here is my analysis.
 "perception_policy": {"next_check_seconds": 120, "urgency": "high", "reasoning": "active thread"}
 Done."""
-        policy = JarvisOrchestrator._extract_perception_policy(text)
+        policy = MuldroOrchestrator._extract_perception_policy(text)
         assert policy is not None
         assert policy.next_check_seconds == 120
         assert policy.urgency == "high"
 
     def test_returns_none_when_no_policy(self):
         """Should return None when planner doesn't include perception_policy."""
-        from src.orchestrator.jarvis import JarvisOrchestrator
+        from src.orchestrator.muldro import MuldroOrchestrator
 
         text = '{"decision": "acknowledge", "reasoning": "nothing important"}'
-        policy = JarvisOrchestrator._extract_perception_policy(text)
+        policy = MuldroOrchestrator._extract_perception_policy(text)
         assert policy is None
 
     def test_returns_none_on_empty_text(self):
-        from src.orchestrator.jarvis import JarvisOrchestrator
+        from src.orchestrator.muldro import MuldroOrchestrator
 
-        assert JarvisOrchestrator._extract_perception_policy("") is None
-        assert JarvisOrchestrator._extract_perception_policy(None) is None
+        assert MuldroOrchestrator._extract_perception_policy("") is None
+        assert MuldroOrchestrator._extract_perception_policy(None) is None
 
     def test_returns_none_on_invalid_json(self):
-        from src.orchestrator.jarvis import JarvisOrchestrator
+        from src.orchestrator.muldro import MuldroOrchestrator
 
         text = '"perception_policy": {not valid json}'
-        policy = JarvisOrchestrator._extract_perception_policy(text)
+        policy = MuldroOrchestrator._extract_perception_policy(text)
         assert policy is None
 
     def test_extracts_with_watch_entities(self):
-        from src.orchestrator.jarvis import JarvisOrchestrator
+        from src.orchestrator.muldro import MuldroOrchestrator
 
         text = '"perception_policy": {"next_check_seconds": 60, "watch_entities": ["ent_abc"]}'
-        policy = JarvisOrchestrator._extract_perception_policy(text)
+        policy = MuldroOrchestrator._extract_perception_policy(text)
         assert policy is not None
         assert policy.watch_entities == ["ent_abc"]
 
@@ -398,9 +398,9 @@ class TestIntentClassifierSources:
 class TestCrossSynthesisInternalPath:
     def test_run_cross_source_synthesis_exists(self):
         """Verify run_cross_source_synthesis method exists on orchestrator."""
-        from src.orchestrator.jarvis import JarvisOrchestrator
+        from src.orchestrator.muldro import MuldroOrchestrator
 
-        assert hasattr(JarvisOrchestrator, "run_cross_source_synthesis")
+        assert hasattr(MuldroOrchestrator, "run_cross_source_synthesis")
 
     def test_scheduler_uses_internal_synthesis_path(self):
         """Cross-source synthesis should use run_cross_source_synthesis, not process_message."""
@@ -458,7 +458,7 @@ class TestPerceptionRelevanceAssessment:
                 notification_tier="briefing",
             )
 
-            from src.orchestrator.jarvis import JarvisOrchestrator
+            from src.orchestrator.muldro import MuldroOrchestrator
             from src.orchestrator.services import ServiceContainer
 
             mock_db = AsyncMock()
@@ -473,7 +473,7 @@ class TestPerceptionRelevanceAssessment:
             db_ctx.__aexit__ = AsyncMock(return_value=False)
             db_factory = MagicMock(return_value=db_ctx)
 
-            orch = JarvisOrchestrator(
+            orch = MuldroOrchestrator(
                 settings=settings,
                 db_factory=db_factory,
                 services=ServiceContainer(),
@@ -538,7 +538,7 @@ class TestPerceptionRelevanceAssessment:
                 relevance_score=0.5, urgency="today", notification_tier="briefing"
             )
 
-            from src.orchestrator.jarvis import JarvisOrchestrator
+            from src.orchestrator.muldro import MuldroOrchestrator
             from src.orchestrator.services import ServiceContainer
 
             mock_db = AsyncMock()
@@ -552,7 +552,7 @@ class TestPerceptionRelevanceAssessment:
             db_ctx.__aexit__ = AsyncMock(return_value=False)
             db_factory = MagicMock(return_value=db_ctx)
 
-            orch = JarvisOrchestrator(
+            orch = MuldroOrchestrator(
                 settings=settings, db_factory=db_factory, services=ServiceContainer()
             )
             # Perception now lives on PerceptionRunner; connector I/O on its
@@ -616,10 +616,10 @@ class TestNonActionableSynthesisSurfacing:
             db_ctx.__aexit__ = AsyncMock(return_value=False)
             db_factory = MagicMock(return_value=db_ctx)
 
-            from src.orchestrator.jarvis import JarvisOrchestrator
+            from src.orchestrator.muldro import MuldroOrchestrator
             from src.orchestrator.services import ServiceContainer
 
-            orch = JarvisOrchestrator(
+            orch = MuldroOrchestrator(
                 settings=settings, db_factory=db_factory, services=ServiceContainer()
             )
 
@@ -654,10 +654,10 @@ class TestNonActionableSynthesisSurfacing:
             db_ctx.__aexit__ = AsyncMock(return_value=False)
             db_factory = MagicMock(return_value=db_ctx)
 
-            from src.orchestrator.jarvis import JarvisOrchestrator
+            from src.orchestrator.muldro import MuldroOrchestrator
             from src.orchestrator.services import ServiceContainer
 
-            orch = JarvisOrchestrator(
+            orch = MuldroOrchestrator(
                 settings=settings, db_factory=db_factory, services=ServiceContainer()
             )
             await orch._queue_perception_plan(
@@ -695,10 +695,10 @@ class TestCursorNonAdvanceOnPollError:
         db_ctx.__aexit__ = AsyncMock(return_value=False)
         db_factory = MagicMock(return_value=db_ctx)
 
-        from src.orchestrator.jarvis import JarvisOrchestrator
+        from src.orchestrator.muldro import MuldroOrchestrator
         from src.orchestrator.services import ServiceContainer
 
-        orch = JarvisOrchestrator(
+        orch = MuldroOrchestrator(
             settings=settings, db_factory=db_factory, services=ServiceContainer()
         )
 
@@ -751,10 +751,10 @@ class TestCursorNonAdvanceOnPollError:
         db_ctx.__aexit__ = AsyncMock(return_value=False)
         db_factory = MagicMock(return_value=db_ctx)
 
-        from src.orchestrator.jarvis import JarvisOrchestrator
+        from src.orchestrator.muldro import MuldroOrchestrator
         from src.orchestrator.services import ServiceContainer
 
-        orch = JarvisOrchestrator(
+        orch = MuldroOrchestrator(
             settings=settings, db_factory=db_factory, services=ServiceContainer()
         )
 

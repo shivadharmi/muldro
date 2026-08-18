@@ -42,10 +42,10 @@ class TokenResult:
 
 def _get_fernet(key: str = "") -> Fernet:
     if not key:
-        key = os.environ.get("JARVIS_OAUTH_ENCRYPTION_KEY", "")
+        key = os.environ.get("MULDRO_OAUTH_ENCRYPTION_KEY", "")
     if not key:
         raise RuntimeError(
-            "JARVIS_OAUTH_ENCRYPTION_KEY not set. "
+            "MULDRO_OAUTH_ENCRYPTION_KEY not set. "
             "Generate with: python -c "
             "'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'"
         )
@@ -229,8 +229,8 @@ class OAuthManager:
                 return client_id, client_secret
 
         # Fallback: env vars (slack uses bot token, not standard OAuth client)
-        client_id = os.environ.get(f"JARVIS_{provider.upper()}_OAUTH_CLIENT_ID", "")
-        client_secret = os.environ.get(f"JARVIS_{provider.upper()}_OAUTH_CLIENT_SECRET", "")
+        client_id = os.environ.get(f"MULDRO_{provider.upper()}_OAUTH_CLIENT_ID", "")
+        client_secret = os.environ.get(f"MULDRO_{provider.upper()}_OAUTH_CLIENT_SECRET", "")
         return client_id, client_secret
 
     async def _refresh_token(self, provider: str, refresh_token: str) -> dict | None:

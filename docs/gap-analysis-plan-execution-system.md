@@ -27,7 +27,7 @@ The plan lifecycle is **architecturally sound** for happy-path scenarios but has
 **Location:** `backend/src/orchestrator/intent_classifier.py:153-220`
 **Soul principle:** "Always preserve clarity" — steps without IDs cannot be tracked or debugged.
 
-`intent_to_plan()` creates `PlanStep` objects but never sets `step_id`. The default is `""` (contracts.py:356). Downstream in `_persist_plan_record()` (jarvis.py:375), the code checks `if step.step_id:` before mapping dependencies — steps with empty IDs are silently skipped during dependency resolution.
+`intent_to_plan()` creates `PlanStep` objects but never sets `step_id`. The default is `""` (contracts.py:356). Downstream in `_persist_plan_record()` (muldro.py:375), the code checks `if step.step_id:` before mapping dependencies — steps with empty IDs are silently skipped during dependency resolution.
 
 **Impact:** Fast-path plans (greeting, chitchat, simple_question, data_fetch, etc.) produce steps that cannot be referenced by downstream code, break dependency chains, and have no idempotency.
 
@@ -37,7 +37,7 @@ The plan lifecycle is **architecturally sound** for happy-path scenarios but has
 
 ### 1.2 [CRITICAL] Forward Dependencies Silently Dropped
 
-**Location:** `backend/src/orchestrator/jarvis.py:371-382` (`_persist_plan_record`)
+**Location:** `backend/src/orchestrator/muldro.py:371-382` (`_persist_plan_record`)
 
 When persisting PlanOutput steps to PlanTask rows, the code iterates steps sequentially and resolves `depends_on` references against a `step_to_task` dict that's built as it goes. If step s2 declares `depends_on: ["s3"]` where s3 hasn't been processed yet, the dependency is silently dropped because `s3` isn't in `step_to_task` yet.
 
@@ -49,9 +49,9 @@ When persisting PlanOutput steps to PlanTask rows, the code iterates steps seque
 
 ### 1.3 [HIGH] User Actor Steps Never Persisted
 
-**Location:** `backend/src/orchestrator/jarvis.py:371-372`
+**Location:** `backend/src/orchestrator/muldro.py:371-372`
 
-Steps with `actor != "jarvis"` are skipped during persistence. These represent user actions required within a plan (e.g., "user provides additional context", "user reviews draft"). They are returned in the response but never stored in the database.
+Steps with `actor != "muldro"` are skipped during persistence. These represent user actions required within a plan (e.g., "user provides additional context", "user reviews draft"). They are returned in the response but never stored in the database.
 
 **Impact:** No audit trail for what the user was asked to do. Governor cannot see user approval requirements. `_learn_from_outcome()` has no record of user steps. Plan cannot be accurately reconstructed from DB.
 
@@ -85,7 +85,7 @@ When the Planner's response doesn't contain valid JSON, `extract_plan()` silentl
 
 ### 1.6 [MEDIUM] System Capability Steps Not Audited
 
-**Location:** `backend/src/orchestrator/jarvis.py:2861-2904` (`_handle_system_capability`)
+**Location:** `backend/src/orchestrator/muldro.py:2861-2904` (`_handle_system_capability`)
 
 System capabilities (`system.set_goal`, `system.set_instruction`, `system.schedule_reminder`, `system.add_to_brief`) are executed inline without creating PlanTask records. They leave no audit trail and cannot be replayed or undone.
 
@@ -95,7 +95,7 @@ System capabilities (`system.set_goal`, `system.set_instruction`, `system.schedu
 
 ### 1.7 [MEDIUM] Perception Plan Idempotency Returns Misleading Result
 
-**Location:** `backend/src/orchestrator/jarvis.py:2555` (`_queue_perception_plan`)
+**Location:** `backend/src/orchestrator/muldro.py:2555` (`_queue_perception_plan`)
 
 When a perception plan already exists (matched by idempotency key), the function returns early with `plan_id=None`. The caller cannot distinguish between "plan skipped (duplicate)" and "plan creation failed."
 
@@ -107,7 +107,7 @@ When a perception plan already exists (matched by idempotency key), the function
 
 **Location:** `backend/src/orchestrator/contracts.py:366-409` (PlanOutput validator)
 
-PlanOutput validates dependency cycles but does not validate that `step.capability` exists in the available capability registry, that `step.actor` is valid ("jarvis" or "user"), or that step_ids are unique.
+PlanOutput validates dependency cycles but does not validate that `step.capability` exists in the available capability registry, that `step.actor` is valid ("muldro" or "user"), or that step_ids are unique.
 
 **Fix:** Add validators for capability existence, actor values, and step_id uniqueness in the PlanOutput model.
 
@@ -115,7 +115,7 @@ PlanOutput validates dependency cycles but does not validate that `step.capabili
 
 ### 1.9 [LOW] InteractionLog Stores Truncated Plan Summary
 
-**Location:** `backend/src/orchestrator/jarvis.py:434-483`
+**Location:** `backend/src/orchestrator/muldro.py:434-483`
 
 InteractionLog stores only `plan.reasoning[:500]`, losing the full goal, steps structure, and capability information. Cannot reconstruct what plan was executed from the audit log alone.
 
@@ -365,10 +365,10 @@ Step-level resume relies on `resume_run()` recovering surface_id from checkpoint
 
 Users have **no way to list their past plans**. The only way to access a plan is by knowing the `run_id` and following the `plan_id` FK. There is no `GET /v1/plans` endpoint, no plan history page in the frontend, and no way to search or filter past plans.
 
-**Soul violation:** "Always preserve clarity" — the user should be able to understand what Jarvis knows, what it is doing, and what it has done.
+**Soul violation:** "Always preserve clarity" — the user should be able to understand what Muldro knows, what it is doing, and what it has done.
 **Vision violation:** Pillar 7 "Long-Running Execution" — tracking execution over time requires plan history.
 
-**Impact:** Users have zero visibility into what Jarvis has planned and executed on their behalf. This is especially critical for perception-triggered background plans that the user never explicitly requested.
+**Impact:** Users have zero visibility into what Muldro has planned and executed on their behalf. This is especially critical for perception-triggered background plans that the user never explicitly requested.
 
 **Fix:** Create `routes_plans.py` with:
 - `GET /v1/plans` — list plans with status, date range, keyword filters
@@ -491,7 +491,7 @@ If the WebSocket disconnects during execution and reconnects, all SurfaceUpdates
 | 1 | 3.1 WebSocket approval payload key mismatch | XS | routes_ws.py |
 | 2 | 3.2 Resume failure silently swallowed | S | routes_approvals.py |
 | 3 | 1.1 Fast-path steps lack step IDs | S | intent_classifier.py |
-| 4 | 1.2 Forward dependencies silently dropped | S | jarvis.py (_persist_plan_record) |
+| 4 | 1.2 Forward dependencies silently dropped | S | muldro.py (_persist_plan_record) |
 | 5 | 2.1 Orphan recovery on server restart | M | scheduler.py, graph_executor.py |
 | 6 | 2.2 Cancel doesn't stop in-flight steps | M | graph_executor.py, agent_loop.py |
 | 7 | 4.1 No plan list/history endpoint | M | new routes_plans.py |
@@ -523,10 +523,10 @@ If the WebSocket disconnects during execution and reconnects, all SurfaceUpdates
 
 | # | Gap | Effort | Files |
 |---|-----|--------|-------|
-| 21 | 1.3 Persist user actor steps | S | jarvis.py |
-| 22 | 1.4 Store full PlanOutput JSON | S | plans.py, jarvis.py, migration |
+| 21 | 1.3 Persist user actor steps | S | muldro.py |
+| 22 | 1.4 Store full PlanOutput JSON | S | plans.py, muldro.py, migration |
 | 23 | 1.5 Log warning on Planner JSON parse failure | XS | intent_classifier.py |
-| 24 | 1.6 Audit system capability steps | S | jarvis.py |
+| 24 | 1.6 Audit system capability steps | S | muldro.py |
 | 25 | 4.2 Run list endpoint with filtering | M | routes_runs.py |
 | 26 | 4.6 Execution history page in frontend | L | new frontend page |
 | 27 | 4.8 Standardize RuntimeEvent emissions | M | multiple service files |
@@ -538,7 +538,7 @@ If the WebSocket disconnects during execution and reconnects, all SurfaceUpdates
 | 28 | 2.7 Parallel step execution | L | graph_executor.py (architecture change) |
 | 29 | 2.8 Artifact cleanup on failure | M | graph_executor.py, tool layer |
 | 30 | 2.9 Verification state handling | S | graph_executor.py |
-| 31 | 1.7 Perception plan idempotency return | XS | jarvis.py |
+| 31 | 1.7 Perception plan idempotency return | XS | muldro.py |
 | 32 | 1.8 Validate Planner capabilities | S | contracts.py |
 | 33 | 4.9 Surface update replay on reconnect | M | routes_ws.py, frontend |
 
@@ -601,7 +601,7 @@ The following scenarios lack test coverage:
 
 | Component | File | Key Lines |
 |-----------|------|-----------|
-| Orchestrator | `backend/src/orchestrator/jarvis.py` | process_message:667, _persist_plan_record:313 |
+| Orchestrator | `backend/src/orchestrator/muldro.py` | process_message:667, _persist_plan_record:313 |
 | Intent Classifier | `backend/src/orchestrator/intent_classifier.py` | intent_to_plan:153, extract_plan:105 |
 | Contracts | `backend/src/orchestrator/contracts.py` | PlanOutput:366, SurfaceUpdate:317 |
 | GraphExecutor | `backend/src/services/graph_executor.py` | execute_run:309, _execute_dag:509, _execute_step:639, resume_run:412, cancel_run:474 |

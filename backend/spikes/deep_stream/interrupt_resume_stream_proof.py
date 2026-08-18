@@ -1,7 +1,7 @@
 """SPIKE (Step 6B research, Task 0): how does a LangGraph ``interrupt()`` raised
 from inside a ``@wrap_tool_call`` gate surface under
 ``agent.astream(stream_mode=["messages","updates"])`` — the exact streaming path
-the Jarvis deep chat runtime uses — and does ``Command(resume=...)`` re-stream
+the Muldro deep chat runtime uses — and does ``Command(resume=...)`` re-stream
 and run the tool exactly once?
 
 THROWAWAY offline probe. No Anthropic API key, no real LLM. A subclassed fake

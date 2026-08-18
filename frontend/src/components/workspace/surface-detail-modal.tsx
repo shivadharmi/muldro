@@ -12,7 +12,7 @@ import { useToast } from "@/components/ui/toast";
 import { useWsActionStore } from "@/stores/ws-action-store";
 import type { WorkspaceSurface } from "@/stores/surface-store";
 import type { DetailTabResponse, DetailTab } from "@/lib/a2ui-types";
-import { InlineMarkdown } from "@/components/jarvis/markdown-renderer";
+import { InlineMarkdown } from "@/components/muldro/markdown-renderer";
 
 interface Props {
   surface: WorkspaceSurface;

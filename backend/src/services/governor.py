@@ -14,8 +14,8 @@ Responsibilities:
 Policy Modes:
 - lockdown: All actions blocked
 - approval_required: All actions need approval (default)
-- suggest_only: Jarvis suggests, never acts
-- full_auto: Jarvis acts autonomously (still respects trust scores)
+- suggest_only: Muldro suggests, never acts
+- full_auto: Muldro acts autonomously (still respects trust scores)
 """
 
 from __future__ import annotations

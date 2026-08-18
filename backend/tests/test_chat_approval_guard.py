@@ -1,7 +1,7 @@
 """Step 10D P2.4 [Sec-I2]: the autonomous decision endpoints REFUSE chat approvals.
 
 A chat single-lead approval (the action-time ``permission_gate`` persists it with
-``artifact_refs["chat"] is True``) is resumed via ``POST /v1/jarvis/chat/resume`` — NEVER
+``artifact_refs["chat"] is True``) is resumed via ``POST /v1/muldro/chat/resume`` — NEVER
 via ``/v1/approvals/{id}/approve|reject``. If a chat approval reached those handlers it
 would (a) consume the ``pending`` status, so the paired ``/chat/resume`` continuation then
 refuses ``status != pending`` and strands an empty chat bubble, and (b) on reject, feed the
@@ -42,7 +42,7 @@ def test_guard_raises_409_for_chat_approval():
     with pytest.raises(HTTPException) as exc:
         _guard_not_chat_approval(approval)
     assert exc.value.status_code == 409
-    assert "/v1/jarvis/chat/resume" in exc.value.detail
+    assert "/v1/muldro/chat/resume" in exc.value.detail
 
 
 def test_guard_allows_non_chat_approval():
@@ -175,7 +175,7 @@ async def test_decision_endpoint_409s_and_leaves_chat_approval_pending(action):
                         settings=_handler_settings(),
                     )
             assert exc.value.status_code == 409
-            assert "/v1/jarvis/chat/resume" in exc.value.detail
+            assert "/v1/muldro/chat/resume" in exc.value.detail
             # The guard fired before AuditService was constructed (no trust/audit side effects).
             audit_cls.assert_not_called()
 

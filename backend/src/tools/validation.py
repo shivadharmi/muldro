@@ -2,7 +2,7 @@
 
 Runs after seeding, before accepting requests. All errors are collected
 (not fail-on-first) and reported together. Can be skipped via
-JARVIS_SKIP_REGISTRY_VALIDATION=true for emergencies.
+MULDRO_SKIP_REGISTRY_VALIDATION=true for emergencies.
 """
 
 from __future__ import annotations

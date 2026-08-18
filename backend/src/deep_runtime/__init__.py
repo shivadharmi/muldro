@@ -1,7 +1,7 @@
 """Deep Agents runtime (LangChain/LangGraph migration — Phase 1 foundation).
 
 Pure-addition package: the model factory + agent-builder scaffold for running
-Jarvis sub-agents on ``deepagents``/LangGraph. No Jarvis policy middleware yet —
+Muldro sub-agents on ``deepagents``/LangGraph. No Muldro policy middleware yet —
 that lands in the next phase. Nothing under ``src/`` imports this package yet;
 it is wired in incrementally behind a runtime flag in later phases.
 """

@@ -469,7 +469,7 @@ export interface TimePolicyRule {
 export interface PlanStep {
   step_id: string;
   description: string;
-  actor: "jarvis" | "user";
+  actor: "muldro" | "user";
   capability: string;
   input: Record<string, unknown>;
   depends_on: string[];

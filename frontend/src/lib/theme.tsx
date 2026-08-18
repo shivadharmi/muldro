@@ -16,7 +16,7 @@ const ThemeContext = createContext<ThemeContextType>({
   setTheme: () => {},
 });
 
-const STORAGE_KEY = "jarvis_theme";
+const STORAGE_KEY = "muldro_theme";
 
 function getSystemTheme(): "light" | "dark" {
   if (typeof window === "undefined") return "dark";

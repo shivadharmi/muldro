@@ -22,7 +22,7 @@ GENERIC_TOOLS = ("execute_action", "list_connections")
 
 
 def _owned_names(server_name: str) -> set[str]:
-    """Tool names the gateway registry assigns to a Jarvis installation."""
+    """Tool names the gateway registry assigns to a Muldro installation."""
     return {
         action_id_to_tool_name(action.action_id)
         for provider_id in providers_for_server(server_name)

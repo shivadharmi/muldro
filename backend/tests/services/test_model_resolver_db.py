@@ -285,7 +285,7 @@ async def test_identity_helpers_replay_override_degradation(monkeypatch):
     key = Fernet.generate_key().decode()
     monkeypatch.setattr(secret_crypto, "_config_key", lambda: key)
     # Clear BOTH env fallbacks so the anthropic override is genuinely unconfigured
-    # (the test env sets JARVIS_ANTHROPIC_API_KEY, which would otherwise rescue it).
+    # (the test env sets MULDRO_ANTHROPIC_API_KEY, which would otherwise rescue it).
     monkeypatch.setattr(get_settings(), "anthropic_api_key", "", raising=False)
     monkeypatch.setattr(get_settings(), "openai_api_key", "", raising=False)
     async with _session() as db:

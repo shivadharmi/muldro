@@ -25,22 +25,22 @@ function resolveCssVar(varExpr: string): string {
 // ── Entity type → chart color mapping ────────────────────────────
 
 const ENTITY_TYPE_CHART_COLORS: Record<string, string> = {
-  person: "var(--jarvis-chart-1)",
-  organization: "var(--jarvis-chart-2)",
-  project: "var(--jarvis-chart-3)",
-  document: "var(--jarvis-chart-4)",
-  repository: "var(--jarvis-chart-5)",
+  person: "var(--muldro-chart-1)",
+  organization: "var(--muldro-chart-2)",
+  project: "var(--muldro-chart-3)",
+  document: "var(--muldro-chart-4)",
+  repository: "var(--muldro-chart-5)",
 };
 
 const CHART_PALETTE = [
-  "var(--jarvis-chart-1)",
-  "var(--jarvis-chart-2)",
-  "var(--jarvis-chart-3)",
-  "var(--jarvis-chart-4)",
-  "var(--jarvis-chart-5)",
+  "var(--muldro-chart-1)",
+  "var(--muldro-chart-2)",
+  "var(--muldro-chart-3)",
+  "var(--muldro-chart-4)",
+  "var(--muldro-chart-5)",
 ];
 
-const DEFAULT_CHART_COLOR = "var(--jarvis-text-muted)";
+const DEFAULT_CHART_COLOR = "var(--muldro-text-muted)";
 
 function getEntityChartColor(type: string): string {
   return resolveCssVar(ENTITY_TYPE_CHART_COLORS[type.toLowerCase()] ?? DEFAULT_CHART_COLOR);
@@ -185,7 +185,7 @@ export function StatsView() {
   const growthBarData = growthDays.map((day) => ({
     label: formatDayLabel(day.date),
     value: day.entities + day.memories,
-    color: resolveCssVar("var(--jarvis-chart-1)"),
+    color: resolveCssVar("var(--muldro-chart-1)"),
   }));
 
   const topCentralEntities = centralEntities.slice(0, 5);

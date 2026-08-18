@@ -1,5 +1,5 @@
 """Step 6A.5: build_tool_shells produces StructuredTool schema shells (name + JSON args
-schema) whose body RAISES — the jarvis_tool_dispatcher must intercept before it runs."""
+schema) whose body RAISES — the muldro_tool_dispatcher must intercept before it runs."""
 
 import pytest
 from langchain_core.tools import StructuredTool

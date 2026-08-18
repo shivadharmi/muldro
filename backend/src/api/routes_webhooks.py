@@ -125,7 +125,7 @@ async def provider_webhook(
     Backpressure is enforced INSIDE PushReceiver (not as a route dependency):
     the provider route carries no user session, so the workspace is unknown
     until the subscription row resolves. PushReceiver checks the real
-    per-workspace event-stream lag (``jarvis:events:{workspace_id}``) AFTER
+    per-workspace event-stream lag (``muldro:events:{workspace_id}``) AFTER
     verifying origin and BEFORE scheduling a poll, returning ``backpressure``
     (→ 429) when the workspace stream is backlogged. (The previous coarse
     ``_global`` stream check was inert: nothing produces to ``_global``.)

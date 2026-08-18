@@ -70,7 +70,7 @@ from src.config.settings import get_settings
 from src.deep_runtime.agent_builder import build_deep_agent
 from src.deep_runtime.authorization import AuthorizationSource, is_gated_source
 from src.deep_runtime.builtins import DEEPAGENTS_BUILTIN_NAMES
-from src.deep_runtime.middleware.jarvis_tool_dispatcher import make_jarvis_tool_dispatcher
+from src.deep_runtime.middleware.muldro_tool_dispatcher import make_muldro_tool_dispatcher
 from src.deep_runtime.middleware.trust_gate import (
     _decide_and_maybe_persist,
     _find_existing_approval,
@@ -210,7 +210,7 @@ def _build_dispatcher(user_id, workspace_id):
         print(f"  [dispatch] tool EXECUTED name={name}")
         return {"status": "sent", "tool": name}
 
-    return make_jarvis_tool_dispatcher(
+    return make_muldro_tool_dispatcher(
         execute_tool=_execute, user_id=user_id, workspace_id=workspace_id
     )
 

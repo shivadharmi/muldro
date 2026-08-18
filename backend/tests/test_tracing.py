@@ -5,12 +5,12 @@ calculation. Force-closing an abandoned span (via finish()) must not clobber
 that real model back to the "unknown" sentinel.
 """
 
-from src.orchestrator.tracing import JarvisTrace
+from src.orchestrator.tracing import MuldroTrace
 
 
 class TestSpanModelPropagation:
-    def _trace(self) -> JarvisTrace:
-        return JarvisTrace(trace_id="trace_test", trigger="user_message")
+    def _trace(self) -> MuldroTrace:
+        return MuldroTrace(trace_id="trace_test", trigger="user_message")
 
     def test_start_span_carries_model(self):
         trace = self._trace()

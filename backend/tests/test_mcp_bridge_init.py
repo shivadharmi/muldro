@@ -16,7 +16,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 import pytest_asyncio
 
-_SKIP_KEYS = {"PYTEST_CURRENT_TEST", "JARVIS_SKIP_MCP_BRIDGE"}
+_SKIP_KEYS = {"PYTEST_CURRENT_TEST", "MULDRO_SKIP_MCP_BRIDGE"}
 
 
 @pytest.fixture(autouse=True)

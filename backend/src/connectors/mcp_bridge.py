@@ -60,7 +60,7 @@ async def initialize_mcp_bridge(
     """
     global _session_pool
 
-    if os.environ.get("PYTEST_CURRENT_TEST") or os.environ.get("JARVIS_SKIP_MCP_BRIDGE"):
+    if os.environ.get("PYTEST_CURRENT_TEST") or os.environ.get("MULDRO_SKIP_MCP_BRIDGE"):
         logger.debug("MCP bridge skipped (test environment)")
         return None
 
@@ -215,8 +215,8 @@ async def call_mcp_tool(
     if not _session_pool:
         if os.environ.get("PYTEST_CURRENT_TEST"):
             skip_reason = "PYTEST_CURRENT_TEST set (test env)"
-        elif os.environ.get("JARVIS_SKIP_MCP_BRIDGE"):
-            skip_reason = "JARVIS_SKIP_MCP_BRIDGE set"
+        elif os.environ.get("MULDRO_SKIP_MCP_BRIDGE"):
+            skip_reason = "MULDRO_SKIP_MCP_BRIDGE set"
         else:
             skip_reason = "initialize_mcp_bridge() not called or raised"
         logger.warning(

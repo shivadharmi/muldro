@@ -45,7 +45,7 @@ def make_librarian_extract_middleware(
         An ``AgentMiddleware`` exposing an async ``aafter_model`` hook.
     """
 
-    @after_model(name="JarvisLibrarianExtract")
+    @after_model(name="MuldroLibrarianExtract")
     async def _extract(state: dict[str, Any], runtime: Any) -> None:
         if not active:
             return None

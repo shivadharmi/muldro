@@ -33,9 +33,9 @@ const AuthContext = createContext<AuthContextType>({
   logout: () => {},
 });
 
-const TOKEN_KEY = "jarvis_auth_token";
-const USER_KEY = "jarvis_auth_user";
-const EXPIRES_KEY = "jarvis_auth_expires";
+const TOKEN_KEY = "muldro_auth_token";
+const USER_KEY = "muldro_auth_user";
+const EXPIRES_KEY = "muldro_auth_expires";
 
 function isTokenExpired(): boolean {
   if (typeof window === "undefined") return false;

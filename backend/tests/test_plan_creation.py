@@ -100,7 +100,7 @@ class TestDependencyResolution:
     def test_user_steps_included_in_mapping(self):
         """User-actor steps get mapped so they can be dependency targets."""
         steps = [
-            PlanStep(step_id="s1", description="Draft", capability="email.draft", actor="jarvis"),
+            PlanStep(step_id="s1", description="Draft", capability="email.draft", actor="muldro"),
             PlanStep(step_id="s2", description="Review", capability="respond", actor="user"),
         ]
         mapping = _build_step_to_task_map(steps)
@@ -139,7 +139,7 @@ class TestPerceptionIdempotency:
     def test_idempotency_return_preserves_existing_plan_id(self):
         """When idempotency key matches, returned PlanOutput should have plan_id set.
 
-        Persistence lives on PlanStore (extracted from the JarvisOrchestrator god
+        Persistence lives on PlanStore (extracted from the MuldroOrchestrator god
         object); the orchestrator now delegates to it.
         """
         import inspect
@@ -163,7 +163,7 @@ class TestSystemCapabilityAudit:
         """handle_system_capability should contain PlanTask audit logic.
 
         The audit logic lives on SystemCapabilityHandler (extracted from the
-        JarvisOrchestrator god object in ORCH-P3-3); the orchestrator now
+        MuldroOrchestrator god object in ORCH-P3-3); the orchestrator now
         delegates to it.
         """
         import inspect

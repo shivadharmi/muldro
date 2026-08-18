@@ -23,7 +23,7 @@ from src.integrations.turn_scope import turn_scope
 from src.models.ids import ensure_prefix
 from src.models.plans import Plan, PlanTask
 from src.models.task_graph import TaskRun, TaskStep
-from src.orchestrator.tracing import JarvisTrace
+from src.orchestrator.tracing import MuldroTrace
 from src.services.audit import AuditService
 from src.services.dag_runner import DagRunner
 from src.services.execution_state import (
@@ -104,7 +104,7 @@ class GraphExecutor:
         self._redis = redis
         self._trace_store = trace_store
         self._cancel_events: dict[str, asyncio.Event] = {}
-        self._active_traces: dict[str, JarvisTrace] = {}
+        self._active_traces: dict[str, MuldroTrace] = {}
         # Fire-and-forget best-effort work (e.g. entity learning) that must not
         # hold the run's DB connection. Tracked so tasks aren't GC'd mid-flight.
         self._background_tasks: set[asyncio.Task] = set()
@@ -321,13 +321,13 @@ class GraphExecutor:
             if not run:
                 raise ValueError(f"Run not found: {run_id}")
 
-            # Create a live JarvisTrace so the deep runtime can accumulate spans.
+            # Create a live MuldroTrace so the deep runtime can accumulate spans.
             effective_trace_id = trace_id or f"trace_{ULID()}"
             # Always stamp run.trace_id BEFORE step execution so the detail
             # endpoint can resolve token/cost totals on a running or completed
             # run, not only on runs that happened to be passed a trace_id.
             run.trace_id = effective_trace_id
-            trace = JarvisTrace(
+            trace = MuldroTrace(
                 trace_id=effective_trace_id,
                 trigger=f"execution:{run.source or 'background'}",
             )
@@ -567,7 +567,7 @@ class GraphExecutor:
         # stay correlatable via run_id. run.trace_id keeps pointing at the
         # initial trace so routes_history / evidence_bundle consumers that
         # expect a single canonical pointer still work.
-        trace = JarvisTrace(
+        trace = MuldroTrace(
             trace_id=f"trace_{ULID()}",
             trigger="execution:resume",
         )
@@ -779,7 +779,7 @@ class GraphExecutor:
         """Facade → StepRunner.run_step_action."""
         return await self._runner.run_step_action(step, run, cancel_event=cancel_event)
 
-    def _roll_trace_onto_run(self, run: TaskRun, trace: JarvisTrace) -> tuple[int, int, float]:
+    def _roll_trace_onto_run(self, run: TaskRun, trace: MuldroTrace) -> tuple[int, int, float]:
         """Accumulate one segment's trace totals onto the run's rollup columns.
 
         ROLLUP INVARIANT: ``run.{input_tokens,output_tokens,cost_usd}`` always
@@ -828,7 +828,7 @@ class GraphExecutor:
             logger.debug("Failed to roll up token usage onto run %s", run.run_id, exc_info=True)
         return sum_input, sum_output, round(sum_cost, 6)
 
-    async def _persist_trace(self, run: TaskRun, trace: JarvisTrace) -> None:
+    async def _persist_trace(self, run: TaskRun, trace: MuldroTrace) -> None:
         """Persist (upsert) a trace linked to the run. Best-effort."""
         if not self._trace_store:
             return
@@ -854,7 +854,7 @@ class GraphExecutor:
         NOT call ``trace.finish()`` — the segment is still live (the run is only
         paused at an approval gate and may resume in-process). Leaving the entry
         in place means a subsequent ``_finalize_trace`` (terminal) or another
-        ``_checkpoint_trace`` (next pause) sees the same JarvisTrace, and
+        ``_checkpoint_trace`` (next pause) sees the same MuldroTrace, and
         ``_roll_trace_onto_run`` keys on its trace_id so re-rolling is idempotent.
         """
         trace = self._active_traces.get(run.run_id)
@@ -877,7 +877,7 @@ class GraphExecutor:
         await self._persist_trace(run, trace)
 
     async def _finalize_trace(self, run: TaskRun) -> None:
-        """Finalize and persist the JarvisTrace for a completed/failed run.
+        """Finalize and persist the MuldroTrace for a completed/failed run.
 
         Also writes the aggregate token/cost rollup onto the TaskRun row so
         history views can render observability metrics without joining the

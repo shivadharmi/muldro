@@ -2,18 +2,18 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## What is Jarvis
+## What is Muldro
 
-Jarvis is a **Personal AI Operating System** for founders. It is NOT a chatbot — it is an OS with a core loop: Perceive → Understand → Update Model → Plan → Act → Communicate.
+Muldro is a **Personal AI Operating System** for founders. It is NOT a chatbot — it is an OS with a core loop: Perceive → Understand → Update Model → Plan → Act → Communicate.
 
 ## Architecture
 
-Multi-agent hub-and-spoke: a central `JarvisOrchestrator` (`backend/src/orchestrator/jarvis.py`) routes to 6 sub-agents via Claude API. Capability-based routing: Planner produces `PlanOutput` with steps, `CapabilityResolver` maps each step's capability to the appropriate agent. Internal FastMCP servers wrap the intelligence layer; external MCP servers provide connectors — all run **on demand with no Docker dependency**: GitHub and Atlassian as remote HTTP MCP servers, Google Workspace as an on-demand local `uvx` process managed by `LocalMCPProcessManager` (`backend/src/integrations/local_process_manager.py`), and stdio servers (Slack, Notion, Playwright) via `npx`. MCP sessions are **turn-scoped** via `TurnScope` (`backend/src/integrations/turn_scope.py`) and torn down at turn end; the scheduler's `run_health_tick` idle reaper is the safety net.
+Multi-agent hub-and-spoke: a central `MuldroOrchestrator` (`backend/src/orchestrator/muldro.py`) routes to 6 sub-agents via Claude API. Capability-based routing: Planner produces `PlanOutput` with steps, `CapabilityResolver` maps each step's capability to the appropriate agent. Internal FastMCP servers wrap the intelligence layer; external MCP servers provide connectors — all run **on demand with no Docker dependency**: GitHub and Atlassian as remote HTTP MCP servers, Google Workspace as an on-demand local `uvx` process managed by `LocalMCPProcessManager` (`backend/src/integrations/local_process_manager.py`), and stdio servers (Slack, Notion, Playwright) via `npx`. MCP sessions are **turn-scoped** via `TurnScope` (`backend/src/integrations/turn_scope.py`) and torn down at turn end; the scheduler's `run_health_tick` idle reaper is the safety net.
 
 ```
 User <-> Next.js Frontend (A2UI)
               |
-         JarvisOrchestrator (Claude API)
+         MuldroOrchestrator (Claude API)
          Routes to: Perceiver, Librarian, Planner,
                     Executor, Presenter, Persona
               |
@@ -28,7 +28,7 @@ User <-> Next.js Frontend (A2UI)
 ```
 
 **Key paths:**
-- Orchestrator + agents: `backend/src/orchestrator/` (jarvis.py, agents.py, hooks.py, prompts.py, tracing.py, budget.py, perception_runner.py, connector_poller.py, recovery.py, intent_classifier.py, api_circuit_breaker.py, capability_summary.py, services.py)
+- Orchestrator + agents: `backend/src/orchestrator/` (muldro.py, agents.py, hooks.py, prompts.py, tracing.py, budget.py, perception_runner.py, connector_poller.py, recovery.py, intent_classifier.py, api_circuit_breaker.py, capability_summary.py, services.py)
 - Deep runtime (the single execution engine): `backend/src/deep_runtime/` (agent_builder.py, model_factory.py, _thinking.py, stream_adapter.py, middleware/) + the model layer `backend/src/llm/` (model_factory.py, utility.py)
 - Services (business logic): `backend/src/services/` — planner, governor, executor, presenter, memory_service, world_model, event_processor, capability_resolver, risk_assessor, trust_engine, etc.
 - Tool layer: `backend/src/tools/` (catalog.py, schemas.py, validation.py, intelligence_server.py, communication_server.py, server.py)
@@ -82,7 +82,7 @@ npm run lint    # eslint
 
 ## Configuration
 
-All backend settings via env vars with `JARVIS_` prefix (pydantic-settings in `src/config/settings.py`). Key vars: `JARVIS_DATABASE_URL`, `JARVIS_REDIS_URL`, `JARVIS_ANTHROPIC_API_KEY`, `JARVIS_LOG_JSON`, `JARVIS_DAILY_TOKEN_BUDGET_USD`, `JARVIS_EMBEDDING_MODEL`, `JARVIS_RERANKER_MODEL`, `JARVIS_RERANKER_ENABLED`, `JARVIS_SKIP_REGISTRY_VALIDATION`. Embeddings and reranking run locally via fastembed (ONNX, no external API). Uses `.env` file.
+All backend settings via env vars with `MULDRO_` prefix (pydantic-settings in `src/config/settings.py`). Key vars: `MULDRO_DATABASE_URL`, `MULDRO_REDIS_URL`, `MULDRO_ANTHROPIC_API_KEY`, `MULDRO_LOG_JSON`, `MULDRO_DAILY_TOKEN_BUDGET_USD`, `MULDRO_EMBEDDING_MODEL`, `MULDRO_RERANKER_MODEL`, `MULDRO_RERANKER_ENABLED`, `MULDRO_SKIP_REGISTRY_VALIDATION`. Embeddings and reranking run locally via fastembed (ONNX, no external API). Uses `.env` file.
 
 ## Coding Standards
 
@@ -100,7 +100,7 @@ side-effect rule, and OSS hygiene. Read it before structural changes. Summary be
 - **Naming**: snake_case. Prefixed IDs with ULID (e.g., `evt_`, `plan_`, `exec_`, `mem_`, `apr_`).
 - **Imports**: absolute from `src.` prefix. Ruff handles sorting.
 - **Errors**: `HTTPException` for HTTP errors. Always use Pydantic response models, never bare dicts.
-- **Tests**: pytest + pytest-asyncio (asyncio_mode = "auto"). Test files mirror `src/` structure. Use `make_mock_settings()` from `tests/conftest.py`. Mock Anthropic client via `@patch("src.orchestrator.jarvis.get_anthropic_client")`.
+- **Tests**: pytest + pytest-asyncio (asyncio_mode = "auto"). Test files mirror `src/` structure. Use `make_mock_settings()` from `tests/conftest.py`. Mock Anthropic client via `@patch("src.orchestrator.muldro.get_anthropic_client")`.
 
 ### Frontend (React/Next.js)
 
@@ -174,7 +174,7 @@ The `_special` value is a `server` (not a `backend`): tools with `backend="inter
 
 **Approval policy:** Handled by TrustEngine (`src/services/trust_engine.py`) — a deterministic 4×4 matrix (trust_level × risk_level) in GraphExecutor, not Governor. Governor hooks are now audit-only.
 
-**Startup:** `seed_defaults()` reads from `INTERNAL_TOOLS` + `EXTERNAL_TOOL_SEEDS` in catalog.py → upserts into `tool_definitions` table. `validate_registry()` runs startup cross-checks. `JARVIS_SKIP_REGISTRY_VALIDATION=true` disables validation in emergencies. `initialize_mcp_bridge()` registers server configs only — **no eager tool discovery at startup**. Tool schemas are durable in the DB (`ToolDefinition.input_schema`) and lazily (re)discovered per server on first agent build via `discover_and_persist` / `discover_missing_schemas`. A startup preflight (`backend/src/integrations/runtime_preflight.py`) warns if `uvx`/`npx` are missing from the host.
+**Startup:** `seed_defaults()` reads from `INTERNAL_TOOLS` + `EXTERNAL_TOOL_SEEDS` in catalog.py → upserts into `tool_definitions` table. `validate_registry()` runs startup cross-checks. `MULDRO_SKIP_REGISTRY_VALIDATION=true` disables validation in emergencies. `initialize_mcp_bridge()` registers server configs only — **no eager tool discovery at startup**. Tool schemas are durable in the DB (`ToolDefinition.input_schema`) and lazily (re)discovered per server on first agent build via `discover_and_persist` / `discover_missing_schemas`. A startup preflight (`backend/src/integrations/runtime_preflight.py`) warns if `uvx`/`npx` are missing from the host.
 
 **Key files:**
 - Catalog: `src/tools/catalog.py` (InternalToolDef, ExternalToolSeed, INTERNAL_TOOLS, EXTERNAL_TOOL_SEEDS)
@@ -186,12 +186,12 @@ The `_special` value is a `server` (not a `backend`): tools with `backend="inter
 ## Agent Prompt Architecture
 
 System prompts (`src/orchestrator/prompts.py`):
-- `JARVIS_SOUL_CORE` — shared by all 6 agents (role, agent table, rules, TrustEngine gates writes)
+- `MULDRO_SOUL_CORE` — shared by all 6 agents (role, agent table, rules, TrustEngine gates writes)
 - `PLANNER_PROMPT_V2` — 7-step capability-based decomposition engine (replaces decision classification)
 - `PERCEIVER_PROMPT` — 7-step read-only methodology with JSON output (findings, synthesis, gaps, confidence)
 - `LIBRARIAN_PROMPT`, `EXECUTOR_PROMPT`, `PRESENTER_PROMPT`, `PERSONA_PROMPT` — agent-specific roles
 
-Only the Planner sees `PLANNER_PROMPT_V2`. Other agents receive `JARVIS_SOUL_CORE` + their role prompt. The Planner also receives a ~200-token capability summary (via `generate_capability_summary()`) instead of 15-20K raw tool schemas.
+Only the Planner sees `PLANNER_PROMPT_V2`. Other agents receive `MULDRO_SOUL_CORE` + their role prompt. The Planner also receives a ~200-token capability summary (via `generate_capability_summary()`) instead of 15-20K raw tool schemas.
 
 **Thinking budgets** (`src/orchestrator/agents.py`): Planner=8192, Perceiver=6144, Librarian=4096, Presenter=4096, Executor=2048, Persona=2048.
 
@@ -218,17 +218,17 @@ A2UI is the dynamic interface generation layer. Backend agents produce typed com
 
 **Backend pipeline:**
 ```
-SurfaceService (surface_builder.py) or _push_workspace_surface (jarvis.py)
+SurfaceService (surface_builder.py) or _push_workspace_surface (muldro.py)
   → uses renderer.py builders: card(), heading(), text(), badge(), button(), alert(), etc.
   → produces A2UISurface with populated children[]
-  → delivered via: GET /v1/workspace/surfaces (REST) or jarvis:a2ui:{user_id} (Redis → WebSocket)
+  → delivered via: GET /v1/workspace/surfaces (REST) or muldro:a2ui:{user_id} (Redis → WebSocket)
   → persisted to ui_surfaces table (24h TTL)
   → live execution updates via SurfaceUpdate (emission points in graph_executor.py)
 ```
 
 **Frontend pipeline:**
 ```
-fetchWorkspaceSurfaces() or useJarvisWs hook (surface_update message type)
+fetchWorkspaceSurfaces() or useMuldroWs hook (surface_update message type)
   → A2UISurface objects with children[]
   → useSurfaceStore (Zustand) — single store, updateSurface() for live merges
   → A2UIRenderer (renderer.tsx) — switch dispatcher
@@ -241,7 +241,7 @@ fetchWorkspaceSurfaces() or useJarvisWs hook (surface_update message type)
 - Builders: `src/ui/renderer.py` (builder functions: card, text, button, table, metric, etc.)
 - Surface builder: `src/services/surface_builder.py` (SurfaceService — builds workspace surfaces from DB)
 - Surface details: `src/services/surface_detail_builders/` (package — per-kind tab builders + a `(kind, tab_id)` registry)
-- WS surface push: `src/orchestrator/jarvis.py` `_push_workspace_surface()` + `_push_insight_surface()`
+- WS surface push: `src/orchestrator/muldro.py` `_push_workspace_surface()` + `_push_insight_surface()`
 - Notifier: `src/services/notifier.py` (priority-scored delivery with rate limiting + hold-for-briefing)
 - Frontend renderer: `frontend/src/components/a2ui/renderer.tsx`
 - Frontend store: `frontend/src/stores/surface-store.ts` (single Zustand store)
@@ -278,9 +278,9 @@ Single deterministic approval gate via `TrustEngine` (`src/services/trust_engine
 
 **One runtime, gated at action-time — two surfaces, two gate middlewares:**
 
-All surfaces (chat, perception, autonomous) execute on the **single deep runtime** (`src/deep_runtime/` — a LangGraph/Deep-Agents graph built by `build_deep_agent`). This is the *only* runtime; the legacy `agent_loop` engine and its runtime-selection control plane are deleted. Jarvis tools are inert schema shells (**tools-are-schemas / execution-is-central**): a central `jarvis_tool_dispatcher` (`wrap_tool_call`) routes every execution through `ToolExecutor.execute_tool`. Policy is enforced by a fixed middleware chain wrapping that dispatcher (outer→inner): `capability_scope → governor_audit → unavailable_server → trust_gate → [permission_gate] → write_lock → [read_back] → dispatcher`. Treat `src/deep_runtime/` as the source of truth for its internals; the rebuild's step history lives in the local (untracked/gitignored) `docs/superpowers/plans/` planning trail, not here and not in the repo.
+All surfaces (chat, perception, autonomous) execute on the **single deep runtime** (`src/deep_runtime/` — a LangGraph/Deep-Agents graph built by `build_deep_agent`). This is the *only* runtime; the legacy `agent_loop` engine and its runtime-selection control plane are deleted. Muldro tools are inert schema shells (**tools-are-schemas / execution-is-central**): a central `muldro_tool_dispatcher` (`wrap_tool_call`) routes every execution through `ToolExecutor.execute_tool`. Policy is enforced by a fixed middleware chain wrapping that dispatcher (outer→inner): `capability_scope → governor_audit → unavailable_server → trust_gate → [permission_gate] → write_lock → [read_back] → dispatcher`. Treat `src/deep_runtime/` as the source of truth for its internals; the rebuild's step history lives in the local (untracked/gitignored) `docs/superpowers/plans/` planning trail, not here and not in the repo.
 
-- **Chat path** (`jarvis.py` `process_message` / `process_message_stream`): the turn carries `authorization_source = DIRECT_USER_REQUEST`, so `trust_gate` (TrustEngine) stays **dormant** — the user's message *is* the turn's authorization. Writes are held safe by the always-on `capability_scope` + `write_lock` middlewares (see below). Action-time write **confirmation** via **`permission_gate`** (`src/deep_runtime/middleware/permission_gate.py`, per the Claude-Code-style **`permission_mode`**: `bypass` never interrupts, `ask` always confirms a write, `auto` confirms only irreversible / external-or-public / high-risk writes, failing closed when risk is unknown) is the **intended** chat gate — but it is currently **feature-gated behind `settings.deep_single_lead` (default `False`)** plus `can_pause` + a durable checkpointer, and is installed only on the single-lead path (`chat_single_lead.py` `stream_deep_lead`). The default per-step chat path (`call_agent_stream`) runs **without** `permission_gate`. Do **not** "add a TrustEngine gate to the chat path" as a bugfix — TrustEngine is the autonomous-path gate by design; `permission_gate` (once `deep_single_lead` is on) is the chat-path gate.
+- **Chat path** (`muldro.py` `process_message` / `process_message_stream`): the turn carries `authorization_source = DIRECT_USER_REQUEST`, so `trust_gate` (TrustEngine) stays **dormant** — the user's message *is* the turn's authorization. Writes are held safe by the always-on `capability_scope` + `write_lock` middlewares (see below). Action-time write **confirmation** via **`permission_gate`** (`src/deep_runtime/middleware/permission_gate.py`, per the Claude-Code-style **`permission_mode`**: `bypass` never interrupts, `ask` always confirms a write, `auto` confirms only irreversible / external-or-public / high-risk writes, failing closed when risk is unknown) is the **intended** chat gate — but it is currently **feature-gated behind `settings.deep_single_lead` (default `False`)** plus `can_pause` + a durable checkpointer, and is installed only on the single-lead path (`chat_single_lead.py` `stream_deep_lead`). The default per-step chat path (`call_agent_stream`) runs **without** `permission_gate`. Do **not** "add a TrustEngine gate to the chat path" as a bugfix — TrustEngine is the autonomous-path gate by design; `permission_gate` (once `deep_single_lead` is on) is the chat-path gate.
 - **Autonomous path** (`graph_executor.py`; all scheduler/perception-triggered runs): persisted as DB `Plan`s and driven per-step by `GraphExecutor` / `DagRunner`, which run each step *through the deep runtime* with `authorization_source = AUTONOMOUS`. **TrustEngine's 4×4 matrix gates every step**, enforced at two layers — the DAG-step `TrustGate` (`dag_runner.py`) and the deep `trust_gate` middleware (`trust_engine.evaluate`); `pre_approved_capabilities` short-circuits the inner gate so a step approved at the DAG level is not double-prompted.
 - **Capability-scope (the always-on compensating control):** `src/deep_runtime/middleware/capability_scope.py` is the **outermost** guard (installed first by `build_deep_agent`), enforcing each agent's `capability_scope` at tool-execution time via one `ToolRegistry.get_tool` lookup (fail-closed for known capabilities; `build_deep_agent` refuses to compile a write-capable agent without it). This is what keeps the chat path safe even though TrustEngine is dormant there and `permission_gate` is off by default.
 - **Latent enhancement (not yet implemented):** if a chat turn's write was triggered by *perception-sourced* content rather than the user's literal words, forcing `permission_gate` to confirm it regardless of `bypass` would be defensible. Tracked, not built.
@@ -308,8 +308,8 @@ State transitions are enforced by `src/services/execution_state.py` — never mu
 The deep runtime is a LangGraph graph over `langchain-anthropic`, so several behaviors the legacy `agent_loop` hand-rolled are now provided by that stack or deliberately dropped — the notes below reflect the *current* deep runtime, not the retired loop.
 
 - **Run-level timeout**: background runs are capped via `asyncio.wait_for` in `graph_executor.py` (`run.timeout_seconds or 600`s); user-initiated chat runs are uncapped. There is no per-tool timeout on the deep path (the legacy 60s per-tool ceiling was not carried over).
-- **API retry / backoff**: delegated to `langchain-anthropic`'s client — the runtime no longer wraps the Anthropic API in a Jarvis-owned RateLimit backoff loop.
-- **Tool error signaling**: a failed tool returns a `ToolMessage(status="error")` — set in `jarvis_tool_dispatcher.py` when the result carries `error`/`blocked`, and by the `capability_scope` / `permission_gate` / `write_lock` middlewares on refusal. `stream_adapter.py` maps `status="error"` to the frozen `blocked` SSE frame so the client knows the call failed.
+- **API retry / backoff**: delegated to `langchain-anthropic`'s client — the runtime no longer wraps the Anthropic API in a Muldro-owned RateLimit backoff loop.
+- **Tool error signaling**: a failed tool returns a `ToolMessage(status="error")` — set in `muldro_tool_dispatcher.py` when the result carries `error`/`blocked`, and by the `capability_scope` / `permission_gate` / `write_lock` middlewares on refusal. `stream_adapter.py` maps `status="error"` to the frozen `blocked` SSE frame so the client knows the call failed.
 - **Model / thinking params**: built once per agent tier at model construction (`deep_runtime/model_factory.py` + `_thinking.py`) — adaptive-thinking models (e.g. Opus 4.7/4.8) drop `temperature` and the legacy `thinking:{type:"enabled"}` shape. There is no mid-loop "disable thinking and retry" fallback.
 - **Background task tracking**: `_spawn_background()` replaces bare `asyncio.create_task()`. Tasks are tracked in `_background_tasks` set with done-callback cleanup. `shutdown()` awaits pending tasks.
 - **Perception idempotency**: `pending_run=False` is set atomically BEFORE running perception cycles, preventing the next scheduler tick from double-picking the same source.
@@ -370,7 +370,7 @@ See [docs/engineering-standards.md](docs/engineering-standards.md) for the full 
 - Do not reference `PlannerOutput` or its 19 decision types — replaced by `PlanOutput` (capability-based steps, no decision field)
 - Do not reference `RouteResolver`, `DEFAULT_ROUTES`, or `agent_routes` table — deleted. Capability-based routing via `CapabilityResolver` replaced decision-type routing
 - Do not reference `observer` or `researcher` agents — merged into `perceiver`
-- Do not reference `JARVIS_DECISION_FRAMEWORK`, `JARVIS_SOUL`, `OBSERVER_PROMPT`, `RESEARCHER_PROMPT` — deleted. Use `JARVIS_SOUL_CORE` + `PLANNER_PROMPT_V2` / `PERCEIVER_PROMPT`
+- Do not reference `MULDRO_DECISION_FRAMEWORK`, `MULDRO_SOUL`, `OBSERVER_PROMPT`, `RESEARCHER_PROMPT` — deleted. Use `MULDRO_SOUL_CORE` + `PLANNER_PROMPT_V2` / `PERCEIVER_PROMPT`
 - Do not import `intent_to_decision`/`extract_decision` — renamed to `intent_to_plan`/`extract_plan` in `intent_classifier.py`
 
 ### Approval & Trust
@@ -383,7 +383,7 @@ See [docs/engineering-standards.md](docs/engineering-standards.md) for the full 
 ### Execution & State
 - Do not mutate TaskRun/TaskStep status directly — use `transition_run()` / `transition_step()`
 - Do not bypass the deep runtime for step execution — GraphExecutor delegates to the deep runtime (`build_deep_agent`) per step
-- Do not use bare `asyncio.create_task()` in jarvis.py — use `self._spawn_background()` for lifecycle tracking
+- Do not use bare `asyncio.create_task()` in muldro.py — use `self._spawn_background()` for lifecycle tracking
 
 ### Data & Services
 - Do not use bare `db = db_factory()` — always `async with db_factory() as db:` + `await db.commit()`

@@ -9,12 +9,12 @@ key_pair_name    = "your-key-pair-name"
 allowed_ssh_cidr = "x.x.x.x/32"  # Your IP address
 
 domain_name = "brrdcast.in"
-subdomain   = "jarvis"
+subdomain   = "muldro"
 
-github_repo_url = "https://github.com/your-org/jarvis.git"
+github_repo_url = "https://github.com/your-org/muldro.git"
 git_branch      = "main"
 
-project_name = "jarvis"
+project_name = "muldro"
 
 # Secrets — set via environment variables or terraform.tfvars (never commit!)
 # TF_VAR_anthropic_api_key=...

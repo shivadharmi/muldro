@@ -36,15 +36,15 @@ function resolveCssVar(varExpr: string): string {
 }
 
 const ENTITY_TYPE_COLORS: Record<string, string> = {
-  person: "var(--jarvis-primary)",
-  organization: "var(--jarvis-secondary)",
-  project: "var(--jarvis-accent)",
-  document: "var(--jarvis-warning)",
-  repository: "var(--jarvis-error)",
+  person: "var(--muldro-primary)",
+  organization: "var(--muldro-secondary)",
+  project: "var(--muldro-accent)",
+  document: "var(--muldro-warning)",
+  repository: "var(--muldro-error)",
 };
 
 function getEntityColor(type: string): string {
-  return resolveCssVar(ENTITY_TYPE_COLORS[type.toLowerCase()] ?? "var(--jarvis-text-muted)");
+  return resolveCssVar(ENTITY_TYPE_COLORS[type.toLowerCase()] ?? "var(--muldro-text-muted)");
 }
 
 // ── Helpers ───────────────────────────────────────────────────────

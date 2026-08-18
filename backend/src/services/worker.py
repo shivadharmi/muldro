@@ -1,4 +1,4 @@
-"""Background workers for Jarvis.
+"""Background workers for Muldro.
 
 StreamConsumerManager: Processes event bus streams via consumer groups.
 """
@@ -20,7 +20,7 @@ def _get_consumer_name() -> str:
     return f"worker-{socket.gethostname()}-{os.getpid()}"
 
 
-NOTIFICATIONS_STREAM = "jarvis:notifications"
+NOTIFICATIONS_STREAM = "muldro:notifications"
 
 _EXTRACTION_TIERS = {"skip", "light", "full"}
 
@@ -422,7 +422,7 @@ class StreamConsumerManager:
         """Sync entity/relationship changes to Neo4j.
 
         Triggered by entity.created / entity.updated / relationship.created
-        events on the agent events stream (jarvis:agent_events:{workspace_id}).
+        events on the agent events stream (muldro:agent_events:{workspace_id}).
         Skips silently when neo4j_url is not configured.
         """
         if not self._settings.neo4j_url:
@@ -465,7 +465,7 @@ class StreamConsumerManager:
         """Check if a newly stored memory contradicts existing ones.
 
         Triggered by memory.stored events on the main events stream
-        (jarvis:events:{workspace_id}).  Skips silently when:
+        (muldro:events:{workspace_id}).  Skips silently when:
         - memory_id is absent/empty in the payload
         - fact_text is absent/empty in the payload
         """

@@ -37,14 +37,14 @@ export function WorkspaceCanvas({ surfaces, onSurfaceClick }: Props) {
             Nothing needs your attention
           </p>
           <p className="text-sm text-t-tertiary leading-relaxed mb-6">
-            Jarvis is watching your connected sources. Updates, insights, and action items will appear here.
+            Muldro is watching your connected sources. Updates, insights, and action items will appear here.
           </p>
           <div className="flex gap-3">
             <Link
               href="/chat"
               className="px-4 py-2 rounded-[var(--radius-md)] bg-j-primary text-j-primary-fg text-[13px] font-medium hover:bg-j-primary-hover transition-colors shadow-[var(--shadow-sm)]"
             >
-              Talk to Jarvis
+              Talk to Muldro
             </Link>
             <Link
               href="/integrations"

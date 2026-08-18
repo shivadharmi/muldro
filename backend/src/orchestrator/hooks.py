@@ -1,4 +1,4 @@
-"""Hooks for the Jarvis orchestrator.
+"""Hooks for the Muldro orchestrator.
 
 Governor policy hook: Audit-only — approval gating moved to TrustEngine (Spec 2B-i).
 Audit hook: Logs every tool call for observability.

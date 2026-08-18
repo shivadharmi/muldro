@@ -7,14 +7,14 @@
 #   - openconnector       : shared OpenConnector instance — owns every
 #                            provider's OAuth connections + credential
 #                            storage (spec D2).
-#   - connection-adapter  : Jarvis's Connection Context Adapter
+#   - connection-adapter  : Muldro's Connection Context Adapter
 #                            (backend/run_adapter.py) — the sole tenant-
 #                            isolation boundary in front of OpenConnector
 #                            (spec D3/D4, spec section 6).
 #
 # NOT started by this file (bring these up first, from the repo root):
-#   - Jarvis's own docker-compose.yml (postgres, redis, minio, qdrant, neo4j).
-#     The adapter reads Jarvis's EXISTING Postgres via JARVIS_DATABASE_URL —
+#   - Muldro's own docker-compose.yml (postgres, redis, minio, qdrant, neo4j).
+#     The adapter reads Muldro's EXISTING Postgres via MULDRO_DATABASE_URL —
 #     it does not run its own database. Make sure `alembic upgrade head` has
 #     already been applied there (the adapter does not run migrations).
 #   - ToolHive itself. ToolHive is a separate control plane/operator with its
@@ -30,8 +30,8 @@
 #   export OOMOL_CONNECT_ENCRYPTION_KEY=$(openssl rand -hex 32)
 #   export OOMOL_CONNECT_RUNTIME_TOKEN=$(openssl rand -hex 24)
 #   export OOMOL_CONNECT_ADMIN_TOKEN=$(openssl rand -hex 24)
-#   export JARVIS_PLATFORM_JWT_PUBLIC_PEM="$(openssl rsa -in /path/to/platform-jwt-key.pem -pubout)"
-#   export JARVIS_DATABASE_URL=postgresql+asyncpg://jarvis:jarvis@host.docker.internal:5432/jarvis
+#   export MULDRO_PLATFORM_JWT_PUBLIC_PEM="$(openssl rsa -in /path/to/platform-jwt-key.pem -pubout)"
+#   export MULDRO_DATABASE_URL=postgresql+asyncpg://muldro:muldro@host.docker.internal:5432/muldro
 #   docker compose up -d
 # See README.md for the full runbook and what each variable is for.
 
@@ -46,7 +46,7 @@ services:
     ports:
       # Loopback-only, matching docker-compose.prod.yml's binding for postgres/redis.
       # The adapter reaches OC over the compose network by service name, so this publish
-      # exists ONLY so the Jarvis API process (which runs outside compose, on the same
+      # exists ONLY so the Muldro API process (which runs outside compose, on the same
       # host) can reach the admin API. Publishing on 0.0.0.0 put an admin plane that
       # enumerates EVERY tenant's connections on every interface — the adapter is the
       # tenant boundary, and /api/* sits behind it, not in front.
@@ -54,7 +54,7 @@ services:
     environment:
       # MANDATORY. OpenConnector will not start correctly without a stable
       # encryption key (spec §10, mirrors settings.py:256-262's hard-fail
-      # pattern for Jarvis's own secrets). Losing/rotating this key without a
+      # pattern for Muldro's own secrets). Losing/rotating this key without a
       # migration plan orphans every stored connection — see README.md.
       # Generate with: openssl rand -hex 32
       OOMOL_CONNECT_ENCRYPTION_KEY: ${OOMOL_CONNECT_ENCRYPTION_KEY:?Set OOMOL_CONNECT_ENCRYPTION_KEY before starting the stack — see README.md}
@@ -65,8 +65,8 @@ services:
       # (spike-findings-connect.md §1). DISTINCT from the runtime token above, which
       # gates /mcp only. Left unset, OpenConnector logs "local admin authentication is
       # disabled" and serves /api/* unauthenticated: GET /api/connections lists EVERY
-      # connection on the shared instance with no per-tenant filter. Jarvis holds the
-      # same value as JARVIS_OPENCONNECTOR_ADMIN_TOKEN (see RUNBOOK-gateway.md).
+      # connection on the shared instance with no per-tenant filter. Muldro holds the
+      # same value as MULDRO_OPENCONNECTOR_ADMIN_TOKEN (see RUNBOOK-gateway.md).
       # Generate with: openssl rand -hex 24
       OOMOL_CONNECT_ADMIN_TOKEN: ${OOMOL_CONNECT_ADMIN_TOKEN:?Set OOMOL_CONNECT_ADMIN_TOKEN before starting the stack — see README.md}
       # OpenConnector computes its OAuth redirect_uri from this PORT var (it
@@ -81,7 +81,7 @@ services:
   # Connection Context Adapter — the ONLY tenant-isolation boundary in this
   # slice (spec D3/D4, §6). Verifies the inbound platform JWT, resolves
   # (tenant_id, principal_id, provider_id, account_alias) against the
-  # Jarvis-owned `connection_map` table, force-rewrites `connectionName`, and
+  # Muldro-owned `connection_map` table, force-rewrites `connectionName`, and
   # allowlists `actionId` before forwarding to OpenConnector with the static
   # runtime token. Serves every provider in the registry
   # (backend/src/integrations/gateway_actions/ — gmail, googlecalendar,
@@ -105,41 +105,41 @@ services:
     environment:
       # OpenConnector, reached over the compose network by service name —
       # matches spike-findings.md's confirmed POST /mcp endpoint shape.
-      JARVIS_OPENCONNECTOR_MCP_URL: http://openconnector:3001/mcp
-      JARVIS_OPENCONNECTOR_RUNTIME_TOKEN: ${OOMOL_CONNECT_RUNTIME_TOKEN:?Set OOMOL_CONNECT_RUNTIME_TOKEN before starting the stack — see README.md}
+      MULDRO_OPENCONNECTOR_MCP_URL: http://openconnector:3001/mcp
+      MULDRO_OPENCONNECTOR_RUNTIME_TOKEN: ${OOMOL_CONNECT_RUNTIME_TOKEN:?Set OOMOL_CONNECT_RUNTIME_TOKEN before starting the stack — see README.md}
       # RSA PUBLIC key (PEM) used to VERIFY inbound platform JWTs — the public
-      # half of the key Jarvis's API process signs with
+      # half of the key Muldro's API process signs with
       # (src/orchestrator/platform_jwt.py). Verification never needs the private
       # key, and this container is the tenant-isolation boundary: handing it the
       # signing key would let anything that compromised the adapter mint a valid
       # JWT for any tenant. Derive it with:
       #   openssl rsa -in platform-jwt.pem -pubout
       # Required: without it the adapter falls back to an ephemeral per-process
-      # key, which cannot verify tokens minted by the separately-running Jarvis
+      # key, which cannot verify tokens minted by the separately-running Muldro
       # API container.
-      JARVIS_PLATFORM_JWT_PUBLIC_PEM: ${JARVIS_PLATFORM_JWT_PUBLIC_PEM:?Set JARVIS_PLATFORM_JWT_PUBLIC_PEM before starting the stack — see README.md}
-      # Jarvis's existing Postgres (NOT started by this file — see header
+      MULDRO_PLATFORM_JWT_PUBLIC_PEM: ${MULDRO_PLATFORM_JWT_PUBLIC_PEM:?Set MULDRO_PLATFORM_JWT_PUBLIC_PEM before starting the stack — see README.md}
+      # Muldro's existing Postgres (NOT started by this file — see header
       # comment), addressed AS THE CONTAINER SEES IT.
       #
       # Two variables because loopback means two different machines here. The
-      # Jarvis backend is a host process, so its own JARVIS_DATABASE_URL is
+      # Muldro backend is a host process, so its own MULDRO_DATABASE_URL is
       # legitimately `...@127.0.0.1:5432/...` (that is what infra/user-data.sh
       # writes on the production host). Inside this container, 127.0.0.1 is the
       # container itself — the same string points at nothing, and because the
       # adapter's DB connection is lazy the container still starts and still
       # passes `--wait` while every connection lookup fails at request time.
       #
-      # So: JARVIS_GATEWAY_DATABASE_URL wins when set, which is how a host with a
+      # So: MULDRO_GATEWAY_DATABASE_URL wins when set, which is how a host with a
       # loopback backend URL supplies a container-reachable one (see
       # infra/scripts/deploy.sh, which requires it). Local-dev setups that already
-      # point JARVIS_DATABASE_URL at host.docker.internal need no change and keep
+      # point MULDRO_DATABASE_URL at host.docker.internal need no change and keep
       # falling through to it.
       #
-      #   JARVIS_GATEWAY_DATABASE_URL=postgresql+asyncpg://jarvis:...@host.docker.internal:5432/jarvis
+      #   MULDRO_GATEWAY_DATABASE_URL=postgresql+asyncpg://muldro:...@host.docker.internal:5432/muldro
       #
       # `host.docker.internal` is provided automatically on Mac/Windows only; the
       # extra_hosts entry below makes it resolve on Linux too.
-      JARVIS_DATABASE_URL: ${JARVIS_GATEWAY_DATABASE_URL:-${JARVIS_DATABASE_URL:?Set JARVIS_GATEWAY_DATABASE_URL (or a container-reachable JARVIS_DATABASE_URL) before starting the stack — see README.md}}
+      MULDRO_DATABASE_URL: ${MULDRO_GATEWAY_DATABASE_URL:-${MULDRO_DATABASE_URL:?Set MULDRO_GATEWAY_DATABASE_URL (or a container-reachable MULDRO_DATABASE_URL) before starting the stack — see README.md}}
     extra_hosts:
       # Linux does not resolve host.docker.internal on its own (unlike Docker
       # Desktop on Mac/Windows); host-gateway maps it to the bridge gateway so the

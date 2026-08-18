@@ -75,7 +75,7 @@ async def stream_global_events(
     if not redis:
         raise HTTPException(status_code=503, detail="Redis unavailable for realtime streaming")
 
-    channel_name = f"jarvis:realtime:{user_id}"
+    channel_name = f"muldro:realtime:{user_id}"
 
     async def event_generator():
         pubsub = redis.pubsub()
@@ -132,7 +132,7 @@ async def stream_runtime_events(
     if not redis:
         raise HTTPException(status_code=503, detail="Redis unavailable for realtime streaming")
 
-    channel_name = f"jarvis:agent_events:{workspace_id}"
+    channel_name = f"muldro:agent_events:{workspace_id}"
 
     runtime_event_types = {
         "command_received",
@@ -212,7 +212,7 @@ async def stream_run_progress(
     """
     # Authorization gate (runs before any resource access): the requester may
     # only stream progress for runs they own. Without this check, any
-    # authenticated user could subscribe to `jarvis:run:{run_id}` for an
+    # authenticated user could subscribe to `muldro:run:{run_id}` for an
     # arbitrary run_id and observe another user's execution events (IDOR).
     # A 404 (not 403) is returned so the response does not reveal whether the
     # run exists — matching `get_history_detail`'s ownership convention.
@@ -229,7 +229,7 @@ async def stream_run_progress(
     if not redis:
         raise HTTPException(status_code=503, detail="Redis unavailable for realtime streaming")
 
-    channel_name = f"jarvis:run:{run_id}"
+    channel_name = f"muldro:run:{run_id}"
 
     async def event_generator():
         pubsub = redis.pubsub()

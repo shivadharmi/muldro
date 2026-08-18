@@ -98,7 +98,7 @@ class TestAuthProviderLabels:
         return next(s for s in _DEFAULT_INSTALLATIONS if s["server_name"] == server_name)
 
     def test_github_auth_provider_is_platform_jwt(self):
-        # GitHub is gateway-routed: Jarvis authenticates to the OpenConnector
+        # GitHub is gateway-routed: Muldro authenticates to the OpenConnector
         # adapter via platform_jwt; the GitHub OAuth token itself lives in
         # OpenConnector, not OAuthManager.
         seed = self._get_seed("github")

@@ -50,7 +50,7 @@ def new_correlation_id() -> str:
 # ── Domain exception hierarchy ────────────────────────────────────────
 
 
-class JarvisError(Exception):
+class MuldroError(Exception):
     """Base for all domain errors.
 
     Subclasses set class-level ``code``/``http_status``/``safe_message``.
@@ -83,7 +83,7 @@ class JarvisError(Exception):
         super().__init__(self.internal_message)
 
 
-class ValidationError(JarvisError):
+class ValidationError(MuldroError):
     """Caller-supplied input was invalid. safe_message is typically the
     controlled validation text (safe to surface)."""
 
@@ -92,37 +92,37 @@ class ValidationError(JarvisError):
     safe_message = "The request was invalid."
 
 
-class NotFoundError(JarvisError):
+class NotFoundError(MuldroError):
     code = "not_found"
     http_status = 404
     safe_message = "The requested resource was not found."
 
 
-class AuthError(JarvisError):
+class AuthError(MuldroError):
     code = "unauthorized"
     http_status = 401
     safe_message = "Authentication failed."
 
 
-class ForbiddenError(JarvisError):
+class ForbiddenError(MuldroError):
     code = "forbidden"
     http_status = 403
     safe_message = "You don't have permission to perform this action."
 
 
-class ConflictError(JarvisError):
+class ConflictError(MuldroError):
     code = "conflict"
     http_status = 409
     safe_message = "The request conflicts with the current state."
 
 
-class RateLimitedError(JarvisError):
+class RateLimitedError(MuldroError):
     code = "rate_limited"
     http_status = 429
     safe_message = "Too many requests. Please slow down and try again."
 
 
-class ExternalServiceError(JarvisError):
+class ExternalServiceError(MuldroError):
     """An upstream dependency (LLM API, MCP server, DB, vector store) failed."""
 
     code = "upstream_unavailable"
@@ -139,11 +139,11 @@ _GENERIC_MESSAGE = "Something went wrong. Please try again."
 def classify(exc: BaseException) -> tuple[str, str, int]:
     """Map any exception to (code, client-safe message, http_status).
 
-    Known ``JarvisError`` types expose their declared safe message. Everything
+    Known ``MuldroError`` types expose their declared safe message. Everything
     else collapses to the generic internal-error tuple — a raw exception string
     is NEVER used as the client message.
     """
-    if isinstance(exc, JarvisError):
+    if isinstance(exc, MuldroError):
         return exc.code, exc.safe_message, exc.http_status
     return _GENERIC_CODE, _GENERIC_MESSAGE, 500
 

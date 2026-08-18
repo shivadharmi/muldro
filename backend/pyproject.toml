@@ -1,7 +1,7 @@
 [project]
-name = "jarvis-backend"
+name = "muldro-backend"
 version = "0.1.0"
-description = "Jarvis Personal AI OS - Backend Services"
+description = "Muldro Personal AI OS - Backend Services"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.115.0",

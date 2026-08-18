@@ -11,7 +11,7 @@ interface SidebarProps {
   onToggle: () => void;
 }
 
-function JarvisMark({ size = 22 }: { size?: number }) {
+function MuldroMark({ size = 22 }: { size?: number }) {
   return (
     <svg
       width={size}
@@ -23,8 +23,8 @@ function JarvisMark({ size = 22 }: { size?: number }) {
     >
       <defs>
         <linearGradient id="jv-mark" x1="0" y1="0" x2="56" y2="56" gradientUnits="userSpaceOnUse">
-          <stop stopColor="var(--jarvis-primary)" />
-          <stop offset="1" stopColor="var(--jarvis-secondary)" />
+          <stop stopColor="var(--muldro-primary)" />
+          <stop offset="1" stopColor="var(--muldro-secondary)" />
         </linearGradient>
       </defs>
       <circle cx="28" cy="28" r="18" stroke="url(#jv-mark)" strokeWidth="1.5" opacity="0.35" />
@@ -103,11 +103,11 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
             )}
           </svg>
         </button>
-        {!collapsed && <JarvisMark />}
+        {!collapsed && <MuldroMark />}
         {!collapsed && (
           <div className="animate-fade-in flex items-baseline gap-1.5">
             <h1 className="text-[15px] font-semibold tracking-tight brand-gradient-text leading-none">
-              Jarvis
+              Muldro
             </h1>
             <span className="text-[10px] text-t-muted font-medium">OS</span>
           </div>

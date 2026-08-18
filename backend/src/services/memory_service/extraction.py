@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 
 MEMORY_EXTRACTION_PROMPT = """\
-You are Jarvis's memory extraction engine. Given text from an event or \
+You are Muldro's memory extraction engine. Given text from an event or \
 interaction, extract facts worth remembering long-term.
 
 You MUST respond with valid JSON matching this schema:
@@ -41,7 +41,7 @@ Rules:
 """
 
 PREFERENCE_EXTRACTION_PROMPT = """\
-You are Jarvis's preference extraction engine. Given an interaction or \
+You are Muldro's preference extraction engine. Given an interaction or \
 user feedback, extract user preferences and behavioral patterns.
 
 You MUST respond with valid JSON matching this schema:

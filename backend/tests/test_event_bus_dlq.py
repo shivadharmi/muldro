@@ -127,7 +127,7 @@ class TestDeadLetterReclaim:
     async def test_always_failing_message_is_dead_lettered_after_max_deliveries(
         self, bus, fake_redis
     ):
-        stream, group = "jarvis:events:usr_1", "entity_extractor"
+        stream, group = "muldro:events:usr_1", "entity_extractor"
         await bus.create_consumer_group(stream, group)
         await fake_redis.xadd(stream, _entry())
 
@@ -150,7 +150,7 @@ class TestDeadLetterReclaim:
         assert fake_redis.pending_count(stream, group) == 0
 
     async def test_transient_failure_recovers_on_reclaim(self, bus, fake_redis):
-        stream, group = "jarvis:events:usr_1", "memory_extractor"
+        stream, group = "muldro:events:usr_1", "memory_extractor"
         await bus.create_consumer_group(stream, group)
         await fake_redis.xadd(stream, _entry())
 
@@ -173,7 +173,7 @@ class TestDeadLetterReclaim:
         assert fake_redis.pending_count(stream, group) == 0
 
     async def test_dead_letter_context_carries_event_and_error(self, bus, fake_redis):
-        stream, group = "jarvis:events:usr_1", "trigger_evaluator"
+        stream, group = "muldro:events:usr_1", "trigger_evaluator"
         await bus.create_consumer_group(stream, group)
         await fake_redis.xadd(stream, _entry(event_type="email_received", event_id="be_42"))
 

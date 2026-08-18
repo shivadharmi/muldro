@@ -1,9 +1,9 @@
-"""Central Jarvis tool-execution dispatcher for the deep runtime (Step 6A.5).
+"""Central Muldro tool-execution dispatcher for the deep runtime (Step 6A.5).
 
 Mirrors the legacy agent_loop's "tools are schemas, execution is central" model on the deep
-path. Jarvis tools are registered with create_deep_agent as inert schema shells
+path. Muldro tools are registered with create_deep_agent as inert schema shells
 (tool_bridge.build_tool_shells); this ONE wrap_tool_call middleware intercepts every tool
-call and, for a Jarvis tool, dispatches through ToolExecutor.execute_tool WITHOUT invoking
+call and, for a Muldro tool, dispatches through ToolExecutor.execute_tool WITHOUT invoking
 the shell body, then normalizes {"error"|"blocked"} results to ToolMessage(status="error")
 so the frozen blocked<-status=="error" SSE mapping holds. It falls through to the real
 handler for deepagents' own built-in tools (they must run their own bodies). Capability-scope
@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 ExecuteToolFn = Callable[[str, dict, str, str], Awaitable[dict]]
 
 
-def make_jarvis_tool_dispatcher(
+def make_muldro_tool_dispatcher(
     *,
     execute_tool: ExecuteToolFn,
     user_id: str,
@@ -46,12 +46,12 @@ def make_jarvis_tool_dispatcher(
         workspace_id: Tenant workspace ID for this turn; injected, never LLM-supplied.
 
     Returns:
-        An ``AgentMiddleware`` that dispatches Jarvis tool calls through ``execute_tool``
+        An ``AgentMiddleware`` that dispatches Muldro tool calls through ``execute_tool``
         and falls through for deepagents built-ins.
     """
 
     @wrap_tool_call
-    async def jarvis_tool_dispatcher(request, handler):
+    async def muldro_tool_dispatcher(request, handler):
         name = request.tool_call["name"]
 
         if name in DEEPAGENTS_BUILTIN_NAMES:
@@ -60,7 +60,7 @@ def make_jarvis_tool_dispatcher(
             return await handler(request)
 
         args = request.tool_call.get("args") or {}
-        logger.debug("[deep_runtime] dispatching Jarvis tool: %s args=%r", name, args)
+        logger.debug("[deep_runtime] dispatching Muldro tool: %s args=%r", name, args)
 
         # Do NOT wrap in try/except — 6B's GraphInterrupt must propagate through.
         result = await execute_tool(name, args, user_id, workspace_id)
@@ -75,4 +75,4 @@ def make_jarvis_tool_dispatcher(
             status="error" if blocked else "success",
         )
 
-    return jarvis_tool_dispatcher
+    return muldro_tool_dispatcher

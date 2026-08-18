@@ -17,7 +17,7 @@ PollErrorClass = Literal["none", "transient", "permanent", "rate_limited", "auth
 
 # Sentinel error strings that map to PerceptionPolicyService's classify_error patterns.
 # These strings are chosen so that classify_error() returns the right ErrorClass
-# without needing an additional translation layer in jarvis.py.
+# without needing an additional translation layer in muldro.py.
 # "none" is intentionally absent — a successful poll must never be passed to record_failure.
 _ERROR_CLASS_MESSAGES: dict[str, str] = {
     "transient": "transient connector error (503 service unavailable)",

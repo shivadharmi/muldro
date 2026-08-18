@@ -272,7 +272,7 @@ def make_permission_gate_middleware(
             )
             return _blocked_tool_message(name, tool_call_id)
         # system.* internal action tools (set_goal / set_instruction / schedule_reminder /
-        # add_to_brief) write into Jarvis's own data layer — the user's own memory (reversible,
+        # add_to_brief) write into Muldro's own data layer — the user's own memory (reversible,
         # `self` blast-radius). They are ALWAYS-ALLOWED on the chat path (D5): never gated in
         # any mode, mirroring the DEEPAGENTS_BUILTIN_NAMES pass-through above. Matched against
         # the EXPLICIT SYSTEM_ACTION_CAPABILITIES set (not a `system.` prefix) so a future/renamed

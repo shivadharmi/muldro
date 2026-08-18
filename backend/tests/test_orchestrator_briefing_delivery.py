@@ -16,11 +16,11 @@ WS = "ws_test"
 
 
 def _build_orchestrator(notifier, *, briefing_exists: bool):
-    """Construct a JarvisOrchestrator wired so generate_briefing can run without
+    """Construct a MuldroOrchestrator wired so generate_briefing can run without
     real DB/Claude. `briefing_exists` controls whether a briefing row already
     exists for today (the idempotency signal).
     """
-    from src.orchestrator.jarvis import JarvisOrchestrator
+    from src.orchestrator.muldro import MuldroOrchestrator
 
     settings = make_mock_settings()
 
@@ -50,7 +50,7 @@ def _build_orchestrator(notifier, *, briefing_exists: bool):
 
     services = ServiceContainer(notifier=notifier)
 
-    orch = JarvisOrchestrator(
+    orch = MuldroOrchestrator(
         settings=settings,
         db_factory=db_factory,
         services=services,

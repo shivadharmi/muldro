@@ -231,7 +231,7 @@ class TestPublishProgressRedisReuse:
 
         redis.publish.assert_called_once()
         channel = redis.publish.call_args.args[0]
-        assert channel == "jarvis:run_progress:run_01"
+        assert channel == "muldro:run_progress:run_01"
 
     @pytest.mark.asyncio
     async def test_fallback_creates_connection_when_no_redis(self):

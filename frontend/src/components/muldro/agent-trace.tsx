@@ -44,7 +44,7 @@ interface AgentTraceProps {
 }
 
 /**
- * Renders the agent pipeline ("how Jarvis answered") for an assistant message:
+ * Renders the agent pipeline ("how Muldro answered") for an assistant message:
  * per-agent cards with model, cost, thinking and the plan badge. Owns the
  * per-agent expand/collapse state, including auto-expanding running agents
  * while a response is streaming.

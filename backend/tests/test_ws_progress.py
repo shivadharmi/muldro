@@ -30,7 +30,7 @@ class TestPublishProgress:
 
         mock_redis.publish.assert_called_once()
         channel, data = mock_redis.publish.call_args[0]
-        assert channel == "jarvis:run_progress:run_001"
+        assert channel == "muldro:run_progress:run_001"
         parsed = json.loads(data)
         assert parsed["step_id"] == "s1"
         assert parsed["status"] == "completed"

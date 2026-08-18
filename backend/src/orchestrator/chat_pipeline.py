@@ -1,4 +1,4 @@
-"""Shared chat-orchestration helpers for JarvisOrchestrator (ORCH-P1-1).
+"""Shared chat-orchestration helpers for MuldroOrchestrator (ORCH-P1-1).
 
 ``process_message`` (batch) and ``process_message_stream`` (SSE) are two
 public entry points that drive the same intent→plan→route→execute→present

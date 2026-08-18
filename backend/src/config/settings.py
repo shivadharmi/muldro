@@ -5,14 +5,14 @@ from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
     model_config = {
-        "env_prefix": "JARVIS_",
+        "env_prefix": "MULDRO_",
         "env_file": ".env",
         "env_file_encoding": "utf-8",
         "extra": "ignore",
     }
 
     # Database
-    database_url: str = "postgresql+asyncpg://jarvis:jarvis@localhost:5432/jarvis"
+    database_url: str = "postgresql+asyncpg://muldro:muldro@localhost:5432/muldro"
     redis_url: str = "redis://localhost:6379/0"
 
     # Database connection self-protection (asyncpg server_settings, milliseconds).
@@ -115,7 +115,7 @@ class Settings(BaseSettings):
     session_ttl_hours: int = 720  # 30 days
 
     # SES Email
-    ses_from_address: str = ""  # e.g. "jarvis@yourdomain.com"
+    ses_from_address: str = ""  # e.g. "muldro@yourdomain.com"
     ses_region: str = "ap-south-1"
     ses_enabled: bool = False  # Must be explicitly enabled for production
 
@@ -168,38 +168,38 @@ class Settings(BaseSettings):
     neo4j_password: str = ""
 
     # Registry validation
-    skip_registry_validation: bool = False  # JARVIS_SKIP_REGISTRY_VALIDATION
+    skip_registry_validation: bool = False  # MULDRO_SKIP_REGISTRY_VALIDATION
 
     # Deep-only inline-format augmentation (Step 7B1 P4, Fork-1): when True, the deep
     # lead's system prompt is augmented with PRESENTER_VOICE so it formats the
     # user-facing reply inline (chat reply + optional fenced surface spec) instead of
     # delegating to a separate Presenter step. Off by default and legacy-untouched —
     # live activation (dropping the separate presenter step) is a Step-10 gate.
-    deep_inline_format: bool = False  # JARVIS_DEEP_INLINE_FORMAT
+    deep_inline_format: bool = False  # MULDRO_DEEP_INLINE_FORMAT
 
     # Deep delegate layer (Step 7B2): when True, the deep lead is built with
-    # read-only Jarvis sub-agents (e.g. Perceiver) registered via
+    # read-only Muldro sub-agents (e.g. Perceiver) registered via
     # ``create_deep_agent(subagents=)`` so it can route reads through the built-in
     # ``task`` tool. Off by default — the layer stays dormant (no live lead→delegate
     # routing) until explicitly enabled; live wiring is a Step-8/10 gate.
-    deep_delegates_enabled: bool = False  # JARVIS_DEEP_DELEGATES_ENABLED
+    deep_delegates_enabled: bool = False  # MULDRO_DEEP_DELEGATES_ENABLED
 
     # Deep inline read-back verifier (Step 7C): when True, an inner-of-write_lock
     # ``@wrap_tool_call`` middleware reads an irreversible/external write's effect back
     # and ANNOTATES the verdict onto the ToolMessage content (never status, so the SSE
     # frame does not flip to blocked). Off by default — dormant until Phase 3 wires it
     # into the chain; live activation is a Step-10 gate.
-    deep_readback_enabled: bool = False  # JARVIS_DEEP_READBACK_ENABLED
+    deep_readback_enabled: bool = False  # MULDRO_DEEP_READBACK_ENABLED
 
     # Step 8: gate the JIT-hybrid slim context pack. Deep chat path only; when
     # False the deep path builds the full eager pack (byte-identical to legacy).
-    deep_context_jit: bool = False  # JARVIS_DEEP_CONTEXT_JIT
+    deep_context_jit: bool = False  # MULDRO_DEEP_CONTEXT_JIT
 
     # Step 10D A-5: gate the deep-chat single-lead restructure. When True AND mode=="ask",
     # the chat path runs ONE synthetic lead over the whole goal (built in 5a, wired in 5b)
     # instead of the per-step loop + presenter step.
     # Off by default — dormant until the 5b chat wiring lands and this flag is flipped.
-    deep_single_lead: bool = False  # JARVIS_DEEP_SINGLE_LEAD
+    deep_single_lead: bool = False  # MULDRO_DEEP_SINGLE_LEAD
 
     # Step 10D P2.5c: drop the Planner from the deep chat single-lead path. When True (and only
     # when the single-lead path is already active — deep_single_lead + permission_mode), a chat
@@ -207,7 +207,7 @@ class Settings(BaseSettings):
     # resolve_plan_routing entirely and builds ONE lead from the connector-derived scope
     # (resolve_connector_scope). Off by default — dormant; flag-off is byte-identical (Planner
     # still called). Gates ONLY the P2.5c reroute, independently of deep_single_lead.
-    chat_planless: bool = False  # JARVIS_CHAT_PLANLESS
+    chat_planless: bool = False  # MULDRO_CHAT_PLANLESS
 
     # Step-10A A3: opt-in fail-closed write lock. When True, a WRITE tool call is REFUSED
     # (not executed unlocked) if Redis is unreachable — for prod where Redis is expected up.
@@ -215,34 +215,34 @@ class Settings(BaseSettings):
     # capability_scope + trust_gate; autonomous double-fire is still guarded by the
     # idempotency ledger the lock wraps). Applies to BOTH the deep middleware and the
     # autonomous wrapper.
-    write_lock_require_redis: bool = False  # JARVIS_WRITE_LOCK_REQUIRE_REDIS
+    write_lock_require_redis: bool = False  # MULDRO_WRITE_LOCK_REQUIRE_REDIS
 
     # Webhook / push-notification infrastructure (OPTIONAL — empty = poll-only).
     # When unset, webhook registration is a graceful no-op and the system stays
     # poll-only exactly as before. All three must be satisfied (see
     # ``webhooks_configured``) for any provider channel to be created.
-    webhooks_enabled: bool = False  # master switch (JARVIS_WEBHOOKS_ENABLED)
-    # Public HTTPS base, e.g. "https://jarvis.example.com". The full provider
+    webhooks_enabled: bool = False  # master switch (MULDRO_WEBHOOKS_ENABLED)
+    # Public HTTPS base, e.g. "https://muldro.example.com". The full provider
     # callback is "{base}/v1/webhooks/{provider}/{subscription_id}".
-    webhook_callback_base_url: str = ""  # JARVIS_WEBHOOK_CALLBACK_BASE_URL
+    webhook_callback_base_url: str = ""  # MULDRO_WEBHOOK_CALLBACK_BASE_URL
     # Full Pub/Sub topic name "projects/{proj}/topics/{topic}" for Gmail users.watch.
-    gmail_pubsub_topic: str = ""  # JARVIS_GMAIL_PUBSUB_TOPIC
+    gmail_pubsub_topic: str = ""  # MULDRO_GMAIL_PUBSUB_TOPIC
 
     # OpenConnector gateway. Not optional: the migrated installations
     # (google-workspace, github) have no native transport to fall back to, so a
     # deployment without a reachable vMCP simply loses those integrations —
     # loudly, at session-open time. There is deliberately no feature flag.
-    toolhive_vmcp_url: str | None = None  # JARVIS_TOOLHIVE_VMCP_URL
-    openconnector_mcp_url: str | None = None  # JARVIS_OPENCONNECTOR_MCP_URL
-    openconnector_runtime_token: str | None = None  # JARVIS_OPENCONNECTOR_RUNTIME_TOKEN
-    openconnector_admin_url: str | None = None  # JARVIS_OPENCONNECTOR_ADMIN_URL
-    openconnector_admin_token: str | None = None  # JARVIS_OPENCONNECTOR_ADMIN_TOKEN
-    # Split by role: only the MINTER (the Jarvis API process) needs the private half.
+    toolhive_vmcp_url: str | None = None  # MULDRO_TOOLHIVE_VMCP_URL
+    openconnector_mcp_url: str | None = None  # MULDRO_OPENCONNECTOR_MCP_URL
+    openconnector_runtime_token: str | None = None  # MULDRO_OPENCONNECTOR_RUNTIME_TOKEN
+    openconnector_admin_url: str | None = None  # MULDRO_OPENCONNECTOR_ADMIN_URL
+    openconnector_admin_token: str | None = None  # MULDRO_OPENCONNECTOR_ADMIN_TOKEN
+    # Split by role: only the MINTER (the Muldro API process) needs the private half.
     # A verify-only process — notably the Connection Context Adapter, which is the
     # tenant-isolation boundary — gets the public half alone, so compromising it
     # cannot yield the ability to mint a JWT for any tenant.
-    platform_jwt_private_pem: str | None = None  # JARVIS_PLATFORM_JWT_PRIVATE_PEM
-    platform_jwt_public_pem: str | None = None  # JARVIS_PLATFORM_JWT_PUBLIC_PEM
+    platform_jwt_private_pem: str | None = None  # MULDRO_PLATFORM_JWT_PRIVATE_PEM
+    platform_jwt_public_pem: str | None = None  # MULDRO_PLATFORM_JWT_PUBLIC_PEM
 
     @property
     def webhooks_configured(self) -> bool:
@@ -273,13 +273,13 @@ class Settings(BaseSettings):
         """
         if not self.anthropic_api_key:
             raise RuntimeError(
-                "JARVIS_ANTHROPIC_API_KEY is not set. Jarvis cannot talk to any agent "
+                "MULDRO_ANTHROPIC_API_KEY is not set. Muldro cannot talk to any agent "
                 "without it. Set it in your .env (get a key at https://console.anthropic.com)."
             )
 
         if self.is_production and not self.oauth_encryption_key:
             raise RuntimeError(
-                "JARVIS_OAUTH_ENCRYPTION_KEY is required in production — without it, "
+                "MULDRO_OAUTH_ENCRYPTION_KEY is required in production — without it, "
                 "OAuth tokens would be stored as plaintext. Generate one with: "
                 "python -c 'from cryptography.fernet import Fernet; "
                 "print(Fernet.generate_key().decode())'"

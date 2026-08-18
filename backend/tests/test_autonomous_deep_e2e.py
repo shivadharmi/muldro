@@ -6,7 +6,7 @@ This is the capstone that exercises P1–P6 TOGETHER through
 ``AsyncPostgresSaver`` durable checkpointer; the ONLY fake is the react model
 (patched ``build_chat_model``) and the leaf tool executor (records external
 effects). The whole gated middleware chain (capability_scope → governor_audit →
-unavailable_server → trust_gate[AUTONOMOUS] → write_lock → jarvis_tool_dispatcher),
+unavailable_server → trust_gate[AUTONOMOUS] → write_lock → muldro_tool_dispatcher),
 the idempotency ledger, the DAG, the single TrustEngine step gate, the
 runtime_events log, and the durable saver are all REAL. ``_forced_deep_gate`` is
 retained as an honest no-op context manager (diff-stability) now that no gate exists.

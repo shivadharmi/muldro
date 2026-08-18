@@ -4,10 +4,10 @@ Every system event flows through here. Replaces the callback-based
 pattern in EventProcessor with decoupled consumer groups.
 
 Streams:
-  jarvis:events:{workspace_id}       — Normalized events from connectors
-  jarvis:agent_events:{workspace_id} — Agent action events
-  jarvis:system_events               — System-level events (health, budget)
-  jarvis:notifications               — Notification delivery events
+  muldro:events:{workspace_id}       — Normalized events from connectors
+  muldro:agent_events:{workspace_id} — Agent action events
+  muldro:system_events               — System-level events (health, budget)
+  muldro:notifications               — Notification delivery events
 
 Consumer groups per downstream processor:
   entity_extractor, memory_extractor, planner, notifier, briefing_collector
@@ -23,7 +23,7 @@ from ulid import ULID
 
 logger = logging.getLogger(__name__)
 
-CONSUMER_GROUP_PREFIX = "jarvis"
+CONSUMER_GROUP_PREFIX = "muldro"
 
 
 @dataclass
@@ -340,11 +340,11 @@ class EventBus:
 
     def event_stream(self, workspace_id: str) -> str:
         """Get the events stream name for a workspace."""
-        return f"jarvis:events:{workspace_id}"
+        return f"muldro:events:{workspace_id}"
 
     def agent_stream(self, workspace_id: str) -> str:
         """Get the agent events stream name for a workspace."""
-        return f"jarvis:agent_events:{workspace_id}"
+        return f"muldro:agent_events:{workspace_id}"
 
     @staticmethod
     def _parse_event(stream: str, data: dict) -> BusEvent:

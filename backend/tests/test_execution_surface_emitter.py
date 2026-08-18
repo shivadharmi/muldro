@@ -46,7 +46,7 @@ class TestEmitSurfaceUpdate:
 
         redis.publish.assert_called_once()
         channel, raw = redis.publish.call_args.args
-        assert channel == "jarvis:a2ui:usr_01"
+        assert channel == "muldro:a2ui:usr_01"
         payload = json.loads(raw)
         assert payload["type"] == "surface_update"
         assert payload["surface_id"] == "surf_abc"
@@ -77,7 +77,7 @@ class TestEmitSurfaceUpdate:
 
         event_bus.publish_to_channel.assert_called_once()
         channel = event_bus.publish_to_channel.call_args.args[0]
-        assert channel == "jarvis:a2ui:usr_02"
+        assert channel == "muldro:a2ui:usr_02"
 
 
 class TestEmitEventProgress:
@@ -95,7 +95,7 @@ class TestEmitEventProgress:
         # _emit_event publishes progress to the run_progress channel for run events
         redis.publish.assert_called_once()
         channel, raw = redis.publish.call_args.args
-        assert channel == "jarvis:run_progress:run_001"
+        assert channel == "muldro:run_progress:run_001"
         payload = json.loads(raw)
         assert payload["event_type"] == "step.completed"
         assert payload["run_id"] == "run_001"
@@ -152,7 +152,7 @@ class TestEmitSummarySurface:
         # A "surface" message (kind=summary) is published to the a2ui feed.
         assert redis.publish.await_count >= 1
         channel, raw = redis.publish.call_args.args
-        assert channel == "jarvis:a2ui:usr_5"
+        assert channel == "muldro:a2ui:usr_5"
         payload = json.loads(raw)
         assert payload["type"] == "surface"
         assert payload["surface"]["kind"] == "summary"
@@ -187,7 +187,7 @@ class TestPublishProgress:
 
         redis.publish.assert_called_once()
         channel = redis.publish.call_args.args[0]
-        assert channel == "jarvis:run_progress:run_01"
+        assert channel == "muldro:run_progress:run_01"
 
     async def test_tolerates_redis_error(self):
         executor = _make_executor(redis_mock=None)

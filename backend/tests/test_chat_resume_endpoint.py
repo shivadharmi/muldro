@@ -1,4 +1,4 @@
-"""Step 10D P2.4c: the SSE resume endpoint ``POST /v1/jarvis/chat/resume`` + the shared
+"""Step 10D P2.4c: the SSE resume endpoint ``POST /v1/muldro/chat/resume`` + the shared
 ``_stream_and_persist_chat`` fold/persist helper.
 
 Three layers:

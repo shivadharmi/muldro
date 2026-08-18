@@ -1,7 +1,7 @@
-"""Intent classification and decision extraction for the Jarvis orchestrator.
+"""Intent classification and decision extraction for the Muldro orchestrator.
 
 Fast Haiku-based intent classifier and structured decision extractor.
-Extracted from jarvis.py to reduce orchestrator size.
+Extracted from muldro.py to reduce orchestrator size.
 """
 
 import json
@@ -16,21 +16,21 @@ logger = logging.getLogger(__name__)
 # Intent classifier prompt — used with Haiku for fast, cheap classification
 INTENT_CLASSIFIER_PROMPT = """\
 <role>
-You classify user messages for a personal AI assistant called Jarvis.
+You classify user messages for a personal AI assistant called Muldro.
 Output ONLY a JSON object, nothing else.
 </role>
 
 <intents>
 - greeting: Greetings, pleasantries, "hey", "hi", "good morning"
 - chitchat: Casual conversation, "how are you", jokes, small talk
-- simple_question: Factual question answerable from Jarvis's stored memory or context
+- simple_question: Factual question answerable from Muldro's stored memory or context
   (contacts, prior conversations, stored facts)
 - data_fetch: Read from external source (check email, show calendar, read slack)
 - status_query: Asking about goals, plans, briefing, pending items, tasks
 - approval_response: Approving/rejecting a pending action
 - command: Actionable WRITE request needing planning (send email, schedule, create)
 - complex: Multi-step, ambiguous, or high-stakes requests needing deep planning
-- direct_answer: Question answerable from general world knowledge, no Jarvis memory or
+- direct_answer: Question answerable from general world knowledge, no Muldro memory or
   external service needed ("what's the capital of France", "explain async/await")
 - single_read: One read from a specific external service (latest email, today's calendar)
 - memory_operation: Store, recall, or update knowledge ("remember this", "what do you know about X")
@@ -48,7 +48,7 @@ Only include sources the user's intent clearly relates to. Omit if none apply.
 </output_format>
 
 <examples>
-"Hey Jarvis" -> {"intent": "greeting", "confidence": 0.99}
+"Hey Muldro" -> {"intent": "greeting", "confidence": 0.99}
 "What's John's email?" -> {"intent": "simple_question", "confidence": 0.9}
 "Check my gmail" -> {"intent":"data_fetch","confidence":0.95,"sources":["gmail"]}
 "What's the capital of France?" -> {"intent": "direct_answer", "confidence": 0.95}

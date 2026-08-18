@@ -1,7 +1,7 @@
 """Step 7C P1.2: deep-runtime inline read-back verifier middleware.
 
 The middleware is a ``@wrap_tool_call`` interceptor placed INNER of write_lock, OUTER of the
-jarvis_tool_dispatcher. It runs the write via ``handler(request)`` (the dispatcher executes the
+muldro_tool_dispatcher. It runs the write via ``handler(request)`` (the dispatcher executes the
 tool and returns a bare ``ToolMessage``), then — for an irreversible/external write — reads the
 effect back and ANNOTATES the verdict onto a content-JSON key (NEVER ``status``, so the SSE
 frame does not flip to ``blocked``). CONTRADICTED → an escalate-first divergence payload (the

@@ -48,7 +48,7 @@ def _backfill_message_for_surface(surface) -> dict | None:
 
 
 @router.websocket("/ws/{user_id}")
-async def jarvis_ws(websocket: WebSocket, user_id: str):
+async def muldro_ws(websocket: WebSocket, user_id: str):
     """WebSocket endpoint for real-time A2UI surface updates.
 
     Auth via message after connect: client sends { type: "auth", token: "..." }
@@ -167,8 +167,8 @@ async def jarvis_ws(websocket: WebSocket, user_id: str):
             # Subscribe to user's A2UI channel and surface sync channel
             pubsub = redis.pubsub()
             await pubsub.subscribe(
-                f"jarvis:a2ui:{user_id}",
-                f"jarvis:surface_sync:{user_id}",
+                f"muldro:a2ui:{user_id}",
+                f"muldro:surface_sync:{user_id}",
             )
 
             # Task: forward Redis pub/sub messages to WebSocket
@@ -554,7 +554,7 @@ async def _queue_insight_action(
             PlanStep(
                 step_id="s1",
                 description=f"Execute {capability} (insight {surface_id})",
-                actor="jarvis",
+                actor="muldro",
                 capability=capability,
                 input=action_input,
             )

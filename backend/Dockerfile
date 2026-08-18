@@ -1,4 +1,4 @@
-# Jarvis backend — FastAPI API + in-process background worker.
+# Muldro backend — FastAPI API + in-process background worker.
 #
 # The project is run from source (it has no build-system / is not packaged),
 # so we install only the third-party dependencies declared in pyproject.toml
@@ -19,8 +19,8 @@ COPY . ./
 RUN chmod +x docker-entrypoint.sh
 
 ENV PYTHONUNBUFFERED=1 \
-    JARVIS_HOST=0.0.0.0 \
-    JARVIS_PORT=8000
+    MULDRO_HOST=0.0.0.0 \
+    MULDRO_PORT=8000
 
 EXPOSE 8000
 ENTRYPOINT ["./docker-entrypoint.sh"]

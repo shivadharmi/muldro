@@ -1,6 +1,6 @@
 """InteractionLearner — extract durable memories from user interactions.
 
-Runs asynchronously after each non-trivial interaction so that Jarvis
+Runs asynchronously after each non-trivial interaction so that Muldro
 builds continuity over time without slowing the user-facing response.
 """
 
@@ -89,7 +89,7 @@ class InteractionLearner:
             return
 
         # Gate 3: Redis cooldown — prevent burst extraction
-        cooldown_key = f"jarvis:learn_cooldown:{user_id}"
+        cooldown_key = f"muldro:learn_cooldown:{user_id}"
         try:
             acquired = await self._redis.set(cooldown_key, "1", ex=_COOLDOWN_SECONDS, nx=True)
             if not acquired:
@@ -100,7 +100,7 @@ class InteractionLearner:
             logger.debug("Redis cooldown check failed, proceeding", exc_info=True)
 
         # Build combined source text
-        source_text = f"User: {user_message}\nJarvis: {agent_response}"
+        source_text = f"User: {user_message}\nMuldro: {agent_response}"
 
         # Provenance metadata for source tagging
         provenance_extra = {

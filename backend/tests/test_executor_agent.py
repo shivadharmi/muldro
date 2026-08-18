@@ -11,7 +11,7 @@ def test_executor_replaces_operator_in_roster():
 
 
 def test_soul_core_no_longer_names_operator():
-    from src.orchestrator.prompts import JARVIS_SOUL_CORE
+    from src.orchestrator.prompts import MULDRO_SOUL_CORE
 
-    assert "Operator" not in JARVIS_SOUL_CORE
-    assert "Executor" in JARVIS_SOUL_CORE
+    assert "Operator" not in MULDRO_SOUL_CORE
+    assert "Executor" in MULDRO_SOUL_CORE

@@ -16,7 +16,7 @@ class TestEmailSender:
     def enabled_settings(self):
         return make_mock_settings(
             ses_enabled=True,
-            ses_from_address="jarvis@example.com",
+            ses_from_address="muldro@example.com",
             ses_region="ap-south-1",
         )
 
@@ -24,7 +24,7 @@ class TestEmailSender:
     def disabled_settings(self):
         return make_mock_settings(
             ses_enabled=False,
-            ses_from_address="jarvis@example.com",
+            ses_from_address="muldro@example.com",
             ses_region="ap-south-1",
         )
 
@@ -46,7 +46,7 @@ class TestEmailSender:
         assert message_id == "msg-123"
         mock_boto3.client.assert_called_once_with("ses", region_name="ap-south-1")
         call_kwargs = mock_ses.send_email.call_args[1]
-        assert call_kwargs["Source"] == "jarvis@example.com"
+        assert call_kwargs["Source"] == "muldro@example.com"
         assert call_kwargs["Destination"] == {"ToAddresses": ["user@example.com"]}
         assert call_kwargs["Message"]["Subject"]["Data"] == "Test Subject"
 
@@ -82,13 +82,13 @@ class TestMagicLinkTemplate:
     """Tests for magic link email template."""
 
     def test_magic_link_template_contains_url(self):
-        url = "https://app.jarvis.ai/login?token=abc123"
+        url = "https://app.muldro.ai/login?token=abc123"
         html, text = magic_link_email(url, ttl_minutes=15)
         assert url in html
         assert url in text
 
     def test_magic_link_template_html_structure(self):
-        url = "https://app.jarvis.ai/login?token=abc123"
+        url = "https://app.muldro.ai/login?token=abc123"
         html, text = magic_link_email(url)
         assert "<!DOCTYPE html>" in html
         assert "Sign in" in html
@@ -113,9 +113,9 @@ class TestAuthRoutesSES:
         mock_settings = make_mock_settings(
             backend_token="secret-prod-token",
             ses_enabled=True,
-            ses_from_address="jarvis@example.com",
+            ses_from_address="muldro@example.com",
             ses_region="ap-south-1",
-            frontend_url="https://app.jarvis.ai",
+            frontend_url="https://app.muldro.ai",
             magic_link_ttl_minutes=15,
         )
         app.dependency_overrides[get_settings] = lambda: mock_settings
@@ -140,7 +140,7 @@ class TestAuthRoutesSES:
                 mock_send.assert_called_once()
                 call_kwargs = mock_send.call_args[1]
                 assert call_kwargs["to"] == "user@example.com"
-                assert call_kwargs["subject"] == "Sign in to Jarvis"
+                assert call_kwargs["subject"] == "Sign in to Muldro"
                 assert "test-token-xyz" in call_kwargs["body_html"]
 
         app.dependency_overrides.pop(get_settings, None)
@@ -181,9 +181,9 @@ class TestAuthRoutesSES:
         mock_settings = make_mock_settings(
             backend_token="secret-prod-token",
             ses_enabled=True,
-            ses_from_address="jarvis@example.com",
+            ses_from_address="muldro@example.com",
             ses_region="ap-south-1",
-            frontend_url="https://app.jarvis.ai",
+            frontend_url="https://app.muldro.ai",
             magic_link_ttl_minutes=15,
         )
         app.dependency_overrides[get_settings] = lambda: mock_settings

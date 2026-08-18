@@ -1,12 +1,12 @@
 # Deep Agents Migration Assessment & Plan
 
 **Status:** Draft for decision · **Date:** 2026-06-22 · **Author:** architecture audit
-**Question:** Should Jarvis replace its hand-rolled multi-agent runtime with LangChain's
+**Question:** Should Muldro replace its hand-rolled multi-agent runtime with LangChain's
 **Deep Agents** framework (`deepagents`), and if so, how?
 
 > **⚠️ Strategy superseded (2026-06-22):** the team chose a **hard replacement** over the
 > strangler-fig. The gradual strategy below (Part E Option 1, Part F phasing, the
-> `JARVIS_RUNTIME` flag, the `LoopEvent` adapter) is **superseded** by
+> `MULDRO_RUNTIME` flag, the `LoopEvent` adapter) is **superseded** by
 > `docs/superpowers/specs/2026-06-22-deep-agents-hard-replacement-design.md` (a local
 > planning doc — `docs/superpowers/` is untracked/gitignored and not part of the repo).
 > Everything else here remains the source of truth — the audit (Part B), the invariants
@@ -60,7 +60,7 @@
 
 ## 0. TL;DR — Recommendation
 
-**Adopt Deep Agents for the agent *runtime*, re-home Jarvis policy as LangChain
+**Adopt Deep Agents for the agent *runtime*, re-home Muldro policy as LangChain
 middleware, and keep the domain layer. Do it as an incremental strangler-fig, not a
 big-bang rewrite.**
 
@@ -69,7 +69,7 @@ big-bang rewrite.**
   retry/backoff, circuit breaking, mid-loop thinking fallback, conversation
   summarization, sub-agent delegation, planning (todos), durable checkpoint/resume,
   and human-in-the-loop pause/resume.
-- The Jarvis-specific ~40% — **capability-scope enforcement**, the **TrustEngine 4×4
+- The Muldro-specific ~40% — **capability-scope enforcement**, the **TrustEngine 4×4
   approval gate**, **RiskAssessor (fail-closed)**, **per-tool cost attribution +
   budget**, **ContextPack injection**, **turn-scoped MCP**, **A2UI typed surfaces**,
   **capability-based routing**, **workspace isolation**, and **Bedrock + Opus-4.8
@@ -136,12 +136,12 @@ and its way of doing persistence, streaming, and resume.
 A deep agent is a tool-calling loop elevated by four things:
 1. **Planning tool** — `write_todos` / `TodoListMiddleware`. A context-engineering
    no-op that keeps a long task on-track (it does not execute anything; it just
-   maintains a visible todo list in state). *Jarvis equivalent: `PlanOutput`/`PlanStep`
-   + Planner agent — but Jarvis's is a real executable DAG, not a scratchpad.*
+   maintains a visible todo list in state). *Muldro equivalent: `PlanOutput`/`PlanStep`
+   + Planner agent — but Muldro's is a real executable DAG, not a scratchpad.*
 2. **Sub-agents** — `SubAgentMiddleware` / `AsyncSubAgentMiddleware`. First-class
    delegation with **isolated context windows**; each subagent has its own
    name/description/system_prompt/model/tools/middleware/permissions. The parent calls
-   them as tools. *Jarvis equivalent: the 7 SubAgents + CapabilityResolver routing.*
+   them as tools. *Muldro equivalent: the 7 SubAgents + CapabilityResolver routing.*
 3. **Virtual filesystem** — `FilesystemMiddleware` exposing `ls/read_file/write_file/
    edit_file/glob/grep/execute`, backed by a pluggable **backend**:
    - `StateBackend` — "mock" FS in LangGraph state (default; ephemeral per thread)
@@ -158,7 +158,7 @@ A deep agent is a tool-calling loop elevated by four things:
 Everything custom hooks in via **LangChain middleware**. Either subclass
 `AgentMiddleware` or use the decorators:
 
-| Decorator | Fires | Jarvis policy that belongs here |
+| Decorator | Fires | Muldro policy that belongs here |
 |---|---|---|
 | `@before_agent` | once before the run | turn-scope setup, budget hydration, ContextPack assembly start |
 | `@after_agent` | once after the run | **turn-scoped MCP teardown (`TurnScope`)**, final budget commit |
@@ -193,14 +193,14 @@ agent.ainvoke(Command(resume={"decisions": [{"type": "approve"}]}), config={...}
 
 Also: `FilesystemPermission(operations=[...], paths=[...], mode="allow|deny|interrupt")`
 for per-path gating. **Important limitation:** `interrupt_on` is keyed on **tool name**
-with a *static* policy. Jarvis's gate is **dynamic** (a 4×4 `trust_level × risk_level`
+with a *static* policy. Muldro's gate is **dynamic** (a 4×4 `trust_level × risk_level`
 matrix evaluated at runtime by `TrustEngine.evaluate()`, with graduation/demotion). So
 HITL gives you the *pause/resume plumbing* but **not** the decision logic — that stays a
 custom middleware that decides whether to raise an interrupt.
 
 ### A.5 Persistence, streaming, provider, MCP
 
-- **Persistence:** `checkpointer` (e.g. `AsyncPostgresSaver` — Jarvis already runs
+- **Persistence:** `checkpointer` (e.g. `AsyncPostgresSaver` — Muldro already runs
   Postgres) for thread/run durability + resume; `store` (`BaseStore`, Postgres-backed
   available) for long-term cross-thread memory.
 - **Streaming:** LangGraph stream modes (`messages`, `updates`, `values`, `custom`) —
@@ -208,17 +208,17 @@ custom middleware that decides whether to raise an interrupt.
 - **Provider:** model as `"anthropic:claude-…"` string or a `BaseChatModel` instance.
   Bedrock via `langchain-aws` (`ChatBedrockConverse`). Per-subagent model override.
 - **MCP:** via `langchain-mcp-adapters` (`MultiServerMCPClient.get_tools()` → LangChain
-  tools). Jarvis's `mcp_pool` / `turn_scope` could be replaced or wrapped.
-- **Observability:** LangSmith tracing/eval/deploy is the native path (replaces Jarvis's
-  `JarvisTrace`/spans if desired).
+  tools). Muldro's `mcp_pool` / `turn_scope` could be replaced or wrapped.
+- **Observability:** LangSmith tracing/eval/deploy is the native path (replaces Muldro's
+  `MuldroTrace`/spans if desired).
 
 ---
 
-## Part B — Current Jarvis agent architecture (audit)
+## Part B — Current Muldro agent architecture (audit)
 
 ### B.1 Two execution paths (a load-bearing invariant)
 
-1. **Chat path** (`orchestrator/chat_processor.py`, `jarvis.py` `process_message[_stream]`):
+1. **Chat path** (`orchestrator/chat_processor.py`, `muldro.py` `process_message[_stream]`):
    single-step / lightweight plans execute inline via the agent loop with **no
    TrustEngine gate**. This is intentional — the user's message *is* the authorization.
    The compensating control is **tool-time capability-scope enforcement** inside
@@ -254,7 +254,7 @@ the concrete contract a replacement must match:
 | 12 | **Per-tool cost attribution** (`trigger=f"tool:{name}"`) | `TokenUsage` insert | ❌ → `@wrap_tool_call` |
 | 13 | **Budget recording** | `budget.record_usage` | ❌ → `@after_model`/`@after_agent` |
 | 14 | Secret sanitization for trace spans | `_sanitize_for_span` | ❌ → middleware + LangSmith redaction |
-| 15 | Trace spans | `JarvisTrace` | ◐ → LangSmith |
+| 15 | Trace spans | `MuldroTrace` | ◐ → LangSmith |
 | 16 | Cancellation token | `cancel_event` | ◐ → LangGraph cancellation |
 
 Legend: ✅ native · ◐ partial/needs glue · ❌ must be re-homed as middleware · ⚠️ risk.
@@ -268,7 +268,7 @@ Legend: ✅ native · ◐ partial/needs glue · ❌ must be re-homed as middlewa
 - `CapabilityResolver` + `classify_capability_agent` + `route_step`: maps a plan-step
   `capability` → owning agent (presenter/librarian/perceiver/operator) and resolves a
   capability → concrete enabled tools (workspace-scoped). This is **capability-based
-  routing** — Jarvis's distinctive alternative to a supervisor picking subagents by
+  routing** — Muldro's distinctive alternative to a supervisor picking subagents by
   description.
 - Model tiers per agent (Planner=opus, Persona=haiku, rest=sonnet) + per-agent thinking
   budgets + a "cheap mode" that downgrades opus→sonnet and halves thinking.
@@ -360,7 +360,7 @@ most likely to silently break. They are hard requirements on the new runtime:
 4. **TrustEngine stays EXTERNAL to the runtime (Critical-safety).** Do NOT collapse it into
    deepagents' static `interrupt_on` HITL — that forfeits the 4×4 determinism, fail-closed
    risk, graduation ladder, and durable async resume. The runtime *raises* an interrupt;
-   the decision + durable `Approval` + scheduler-driven resume stay in Jarvis.
+   the decision + durable `Approval` + scheduler-driven resume stay in Muldro.
 5. **Sequential DAG execution.** `DagRunner` runs ready steps SEQUENTIALLY because the
    `AsyncSession` is not concurrency-safe. LangGraph parallelizes by default — either
    serialize step execution, or give each step its own DB session.
@@ -377,9 +377,9 @@ most likely to silently break. They are hard requirements on the new runtime:
 
 ---
 
-## Part C — Concept mapping (Jarvis → Deep Agents)
+## Part C — Concept mapping (Muldro → Deep Agents)
 
-| Jarvis concept | Deep Agents equivalent | Difficulty | Notes |
+| Muldro concept | Deep Agents equivalent | Difficulty | Notes |
 |---|---|---|---|
 | `agent_loop()` multi-round loop | `create_deep_agent` graph (LangGraph) | moderate | core swap; deletes lots of plumbing |
 | `SubAgent` + 7 agents | `subagents=[{name,description,system_prompt,model,tools,middleware,permissions}]` | moderate | description-based delegation vs capability routing |
@@ -401,27 +401,27 @@ most likely to silently break. They are hard requirements on the new runtime:
 | MCP tool loading | `langchain-mcp-adapters` OR keep `mcp_pool` + adapter shim | moderate | choose one |
 | A2UI `SurfaceUpdate` SSE | LangGraph stream (`messages`/`custom`) → existing surface pipeline | moderate | re-wire event source |
 | Conversation summarization (`_summarize_history`) | `SummarizationMiddleware` | trivial | delete bespoke |
-| Tracing (`JarvisTrace`/spans) | LangSmith (optional) | optional | can keep both |
+| Tracing (`MuldroTrace`/spans) | LangSmith (optional) | optional | can keep both |
 | Bedrock provider | `langchain-aws` `ChatBedrockConverse` | moderate/⚠️ | validate Opus-4.8 path |
 | Workspace isolation | pass via `context_schema` / config, enforce in middleware + services | moderate | thread through |
 | Perception loop / scheduler | unchanged — becomes a *caller* of the new agent | trivial | domain stays |
 
 ---
 
-## Part D — What Deep Agents does NOT give you (Jarvis-only, must retain)
+## Part D — What Deep Agents does NOT give you (Muldro-only, must retain)
 
 1. **Capability-based routing** — Deep Agents delegates to subagents by *description*
-   (LLM picks). Jarvis routes deterministically by *capability → agent*. Either keep
+   (LLM picks). Muldro routes deterministically by *capability → agent*. Either keep
    `CapabilityResolver` (preferred — it's deterministic and testable) or accept
    description-based delegation (less predictable, simpler).
 2. **TrustEngine 4×4 dynamic gate + graduation/demotion** — HITL is static per-tool;
    the trust *decision* is bespoke domain logic.
 3. **Fail-closed RiskAssessor** — domain.
 4. **Per-tool/per-agent cost attribution + daily USD budget** — `interrupt`-style
-   limits exist (`ModelCallLimitMiddleware`) but not Jarvis's accounting.
+   limits exist (`ModelCallLimitMiddleware`) but not Muldro's accounting.
 5. **Turn-scoped MCP with on-demand `uvx`/`npx` process lifecycle** — Deep Agents'
-   MCP story is `langchain-mcp-adapters`, not Jarvis's `LocalMCPProcessManager`/`TurnScope`.
-6. **A2UI typed surfaces** — Deep Agents has its own frontend story; Jarvis's
+   MCP story is `langchain-mcp-adapters`, not Muldro's `LocalMCPProcessManager`/`TurnScope`.
+6. **A2UI typed surfaces** — Deep Agents has its own frontend story; Muldro's
    `SurfaceUpdate`/renderer pipeline is bespoke and stays.
 7. **World model / 7-type memory / Qdrant+Neo4j TriSearch** — domain intelligence.
 8. **Perception/relevance/notification loop** — autonomous trigger surface.
@@ -435,7 +435,7 @@ most likely to silently break. They are hard requirements on the new runtime:
 ## Part E — Strategic options
 
 ### Option 1 — Full replacement, strangler-fig *(recommended)*
-LangGraph + deepagents replace both the per-step runtime **and** the durable DAG; Jarvis
+LangGraph + deepagents replace both the per-step runtime **and** the durable DAG; Muldro
 policy moves into middleware; domain services stay. Migrate path-by-path behind a feature
 flag, oldest/safest first.
 - **Pros:** deletes the most bespoke code (loop, retry, breaker, summarization, resume,
@@ -518,14 +518,14 @@ Deferred / re-homed:
 - **Exit gate ✅ MET (2026-06-22, subagent-driven, 3 parallel):** 27/27 `deep_runtime`
   tests green (10 foundation + 5 capability_scope + 6 budget + 6 unavailable_server); ruff
   check + format clean (14 files); the middleware package + foundation + existing app
-  (`jarvis`, `graph_executor`) all import together (deps coexist).
+  (`muldro`, `graph_executor`) all import together (deps coexist).
 
 ### Phase 2 — Chat path on Deep Agents, single agent (1–2 weeks)
-- Replace the chat path's per-agent call with a `create_deep_agent` instance per Jarvis
+- Replace the chat path's per-agent call with a `create_deep_agent` instance per Muldro
   agent (system_prompt = existing role prompt; tools = capability-resolved tools; the
   Phase-1 middleware stack; **no HITL** — chat stays ungated by design).
 - Wire LangGraph streaming → existing A2UI `SurfaceUpdate`/SSE.
-- Run behind `JARVIS_RUNTIME=deepagents|legacy` flag; shadow-compare outputs.
+- Run behind `MULDRO_RUNTIME=deepagents|legacy` flag; shadow-compare outputs.
 - **Exit gate:** golden chat runs match legacy on tool selection, capability denials,
   cost accounting, and streamed surfaces; capability-scope still fail-closed.
 
@@ -588,7 +588,7 @@ Deferred / re-homed:
 3. **Appetite/timeline:** ✅ **RESOLVED → Full migration commitment** through Phase 5.
 4. **Routing philosophy:** open — *recommended: keep deterministic capability-based
    routing (`CapabilityResolver`)*, not LLM description-based delegation.
-5. **LangSmith adoption:** open — adopt as tracing/eval backend, or keep `JarvisTrace`?
+5. **LangSmith adoption:** open — adopt as tracing/eval backend, or keep `MuldroTrace`?
    *(Non-blocking; can be decided at Phase 5.)*
 
 ---
@@ -597,7 +597,7 @@ Deferred / re-homed:
 
 - Re-run the `deep-research` **verification** stage (it abstained under the outage) to
   independently confirm the production-readiness/composability claims.
-- Re-run the `jarvis-agent-architecture-audit` workflow (all readers were knocked out) to
+- Re-run the `muldro-agent-architecture-audit` workflow (all readers were knocked out) to
   get the full structured subsystem maps + completeness critique for the appendix.
 - ~~Pull exact pinned versions + confirm the model surface for Opus 4.8.~~ ✅ DONE in
   Phase 0: `deepagents` 0.6.11, `langchain` 1.3.10, `langgraph` 1.2.6,

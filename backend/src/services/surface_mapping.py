@@ -53,7 +53,7 @@ def derive_surface_kind(plan: "PlanOutput") -> tuple[str, str] | None:
     if not plan.steps:
         return None
 
-    caps = {s.capability for s in plan.steps if s.actor == "jarvis"}
+    caps = {s.capability for s in plan.steps if s.actor == "muldro"}
 
     if caps <= {"reason", "respond", "none"}:
         return None
@@ -66,8 +66,8 @@ def derive_surface_kind(plan: "PlanOutput") -> tuple[str, str] | None:
     if any(s.risk in ("medium", "high") for s in plan.steps):
         return ("plan", "New Plan")
 
-    jarvis_steps = [s for s in plan.steps if s.actor == "jarvis"]
-    if len(jarvis_steps) > 2:
+    muldro_steps = [s for s in plan.steps if s.actor == "muldro"]
+    if len(muldro_steps) > 2:
         return ("plan", plan.goal[:80] or "Plan")
 
     return ("summary", "Summary")
@@ -90,7 +90,7 @@ def build_surface_preview_from_plan(
     tags: list[str] = []
 
     if kind == "plan":
-        step_count = len([s for s in plan.steps if s.actor == "jarvis"])
+        step_count = len([s for s in plan.steps if s.actor == "muldro"])
         if step_count:
             metrics.append(SurfaceMetric(label="Steps", value=str(step_count)))
         metrics.append(SurfaceMetric(label="Priority", value=plan.priority))

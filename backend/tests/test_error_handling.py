@@ -12,7 +12,7 @@ from starlette.exceptions import HTTPException
 from src.api.error_handlers import register_exception_handlers
 from src.errors import (
     ExternalServiceError,
-    JarvisError,
+    MuldroError,
     NotFoundError,
     ValidationError,
     safe_error_event,
@@ -20,7 +20,7 @@ from src.errors import (
 from src.middleware.observability import TracingMiddleware
 
 # A secret-looking internal string we must never see in a response body.
-SECRET = "postgres://admin:hunter2@db.internal:5432/jarvis"
+SECRET = "postgres://admin:hunter2@db.internal:5432/muldro"
 
 
 def _make_app() -> FastAPI:
@@ -126,7 +126,7 @@ def test_safe_error_event_ws_shape_and_domain_passthrough():
     assert evt["correlation_id"] == "err_fixed"
 
 
-def test_jarvis_error_internal_message_is_separate_from_safe():
-    exc = JarvisError("dsn leak here", safe_message="oops")
+def test_muldro_error_internal_message_is_separate_from_safe():
+    exc = MuldroError("dsn leak here", safe_message="oops")
     assert exc.internal_message == "dsn leak here"
     assert exc.safe_message == "oops"

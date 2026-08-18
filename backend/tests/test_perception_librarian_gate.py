@@ -32,7 +32,7 @@ def _wire_common_mocks(pr):
 
 
 def _make_orchestrator(settings):
-    from src.orchestrator.jarvis import JarvisOrchestrator
+    from src.orchestrator.muldro import MuldroOrchestrator
     from src.orchestrator.services import ServiceContainer
 
     mock_db = AsyncMock()
@@ -46,7 +46,7 @@ def _make_orchestrator(settings):
     db_ctx.__aexit__ = AsyncMock(return_value=False)
     db_factory = MagicMock(return_value=db_ctx)
 
-    return JarvisOrchestrator(settings=settings, db_factory=db_factory, services=ServiceContainer())
+    return MuldroOrchestrator(settings=settings, db_factory=db_factory, services=ServiceContainer())
 
 
 class TestLibrarianGateOnTriage:

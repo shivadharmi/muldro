@@ -18,7 +18,7 @@ export function BarChart({ data, height = 120 }: BarChartProps) {
     >
       {data.map((item) => {
         const pct = (item.value / maxValue) * 100;
-        const barColor = item.color ?? "var(--jarvis-chart-1)";
+        const barColor = item.color ?? "var(--muldro-chart-1)";
 
         return (
           <div

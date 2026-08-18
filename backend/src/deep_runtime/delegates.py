@@ -1,4 +1,4 @@
-"""Read-only Jarvis research delegate for the deep runtime (Step 7B2 P2).
+"""Read-only Muldro research delegate for the deep runtime (Step 7B2 P2).
 
 DORMANT scaffolding. Builds a Perceiver-as-delegate as a deepagents
 ``CompiledSubAgent`` — a LEAF compiled graph whose OWN capability-scope guard and
@@ -46,9 +46,9 @@ from deepagents import (
 from pydantic import BaseModel
 
 from src.deep_runtime.agent_builder import build_deep_agent
-from src.deep_runtime.middleware.jarvis_tool_dispatcher import (
+from src.deep_runtime.middleware.muldro_tool_dispatcher import (
     ExecuteToolFn,
-    make_jarvis_tool_dispatcher,
+    make_muldro_tool_dispatcher,
 )
 from src.deep_runtime.tool_bridge import build_tool_shells
 from src.orchestrator.agents import SubAgent
@@ -91,26 +91,26 @@ async def build_read_only_delegate(
     name: str | None = None,
     description: str | None = None,
 ) -> dict[str, Any]:
-    """Build a read-only Jarvis delegate as a deepagents ``CompiledSubAgent`` dict.
+    """Build a read-only Muldro delegate as a deepagents ``CompiledSubAgent`` dict.
 
     The returned ``{"name", "description", "runnable"}`` dict is registered on a deep
     lead via ``create_deep_agent(subagents=[...])`` / ``build_deep_agent(subagents=...)``
     so the lead's built-in ``task`` tool can route to it. The gate is baked into the
     child's own compiled graph:
 
-    - ``build_tool_shells`` turns the Jarvis tool defs into inert schema shells (the
+    - ``build_tool_shells`` turns the Muldro tool defs into inert schema shells (the
       model SEES each tool but never runs its body);
-    - ``make_jarvis_tool_dispatcher`` centralizes execution through ``execute_tool``;
+    - ``make_muldro_tool_dispatcher`` centralizes execution through ``execute_tool``;
     - ``build_deep_agent`` installs the ``capability_scope`` guard FIRST (because a
       ``db_factory`` is given) and the per-child model via ``build_chat_model`` (sonnet
       for the Perceiver, thinking preserved). There is NO ``trust_gate`` / ``write_lock``
       middleware — the delegate is read-only.
 
     Args:
-        agent_config: The Jarvis sub-agent driving the delegate (its ``capability_scope``,
+        agent_config: The Muldro sub-agent driving the delegate (its ``capability_scope``,
             model tier + thinking, and default prompt). Use the in-memory Perceiver from
             ``create_sub_agents()`` (thinking preserved), NOT ``load_as_sub_agents``.
-        tools: Jarvis tool defs (dicts with ``name`` / ``description`` / ``input_schema``)
+        tools: Muldro tool defs (dicts with ``name`` / ``description`` / ``input_schema``)
             the delegate may attempt; capability-resolved at runtime by the scope guard.
         workspace_id: Tenant scope; captured in the dispatcher/guard, never LLM-supplied.
         user_id: Authenticated user ID for this turn; captured in the dispatcher closure.
@@ -130,7 +130,7 @@ async def build_read_only_delegate(
         ``runnable`` is a compiled deepagents graph ready for ``.ainvoke()``.
     """
     shells = build_tool_shells(tools)
-    dispatcher = make_jarvis_tool_dispatcher(
+    dispatcher = make_muldro_tool_dispatcher(
         execute_tool=execute_tool,
         user_id=user_id,
         workspace_id=workspace_id,
@@ -154,8 +154,8 @@ def disable_general_purpose_subagent(model_name: str, *, provider: str = "anthro
     """Disable the ambient auto-added general-purpose ``task`` subagent for a deep lead.
 
     ``create_deep_agent`` auto-inserts a stock ``general-purpose`` subagent (backing the
-    built-in ``task`` tool) unless a harness profile disables it. On a Jarvis delegate
-    host we want the lead's only ``task`` targets to be the read-only Jarvis delegates
+    built-in ``task`` tool) unless a harness profile disables it. On a Muldro delegate
+    host we want the lead's only ``task`` targets to be the read-only Muldro delegates
     explicitly registered via ``subagents=[...]`` — never an unscoped general-purpose
     child. This registers a deepagents ``HarnessProfile`` whose
     ``general_purpose_subagent.enabled`` is ``False`` under ``<provider>:<model_name>``,
@@ -181,8 +181,8 @@ def disable_general_purpose_subagent(model_name: str, *, provider: str = "anthro
     and affects EVERY deep lead whose model resolves to ``anthropic:{model_name}``. This
     is ACCEPTABLE and intentional: (a) it is key-scoped to one model id, so opus/haiku
     leads are unaffected; (b) the ONLY effect is dropping the auto-added general-purpose
-    ``task`` child — a Jarvis delegate host wants exactly that (its ``task`` targets are
-    the explicitly registered read-only Jarvis delegates, never an unscoped GP child);
+    ``task`` child — a Muldro delegate host wants exactly that (its ``task`` targets are
+    the explicitly registered read-only Muldro delegates, never an unscoped GP child);
     (c) it is dormant (called only under ``deep_delegates_enabled``) and idempotent. For
     a bounded, reversible scope (tests, or any caller needing to undo), use the
     ``general_purpose_disabled`` context-manager (restore-not-pop) — a naive pop would

@@ -597,9 +597,9 @@ export function ChatPanel({
       <div ref={scrollRef} className="flex-1 overflow-y-auto space-y-4 p-4">
         {messages.length === 0 && (
           <div className="text-t-tertiary text-sm text-center mt-8 space-y-2">
-            <p className="text-lg text-t-secondary">Talk to Jarvis</p>
+            <p className="text-lg text-t-secondary">Talk to Muldro</p>
             <p>
-              Ask anything — Jarvis routes through its multi-agent system to
+              Ask anything — Muldro routes through its multi-agent system to
               observe, plan, decide, and respond.
             </p>
           </div>
@@ -664,7 +664,7 @@ function AssistantMessage({
       onClick={handleFocus}
     >
       <div className="max-w-[95%] w-full space-y-2">
-        {/* Agent pipeline ("how Jarvis answered") */}
+        {/* Agent pipeline ("how Muldro answered") */}
         <AgentTrace agents={msg.agents} plan={msg.plan ?? null} streaming={!!msg.streaming} />
 
         {/* P3a: the lead's live write_todos plan (deep path) */}
@@ -696,7 +696,7 @@ function AssistantMessage({
               }
               return (
                 <span className="inline-flex items-center gap-1">
-                  <span>{msg.agents.length > 0 ? "Thinking" : "Connecting to Jarvis"}</span>
+                  <span>{msg.agents.length > 0 ? "Thinking" : "Connecting to Muldro"}</span>
                   <span className="w-1.5 h-4 bg-j-primary animate-caret rounded-sm" />
                 </span>
               );

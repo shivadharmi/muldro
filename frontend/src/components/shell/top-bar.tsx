@@ -23,7 +23,7 @@ export function TopBar() {
           <circle cx="7" cy="7" r="4" stroke="currentColor" strokeWidth="1.4" />
           <path d="M10 10l3 3" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
         </svg>
-        <span className="flex-1 truncate">Ask Jarvis anything…</span>
+        <span className="flex-1 truncate">Ask Muldro anything…</span>
         <kbd className="text-[10px] text-t-muted font-mono bg-surface-2 px-1.5 py-0.5 rounded hidden sm:inline">
           ⌘K
         </kbd>

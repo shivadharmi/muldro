@@ -144,7 +144,7 @@ async def stream_deep_agent_events(
         graph_input: ``{"messages": [{"role": "user", "content": message}]}`` on a fresh
             turn, or a ``Command(resume=...)`` to re-enter a paused turn (Step 6B).
         config: LangGraph config, e.g. ``{"configurable": {"thread_id": ...}}``.
-        agent_name: The Jarvis agent name stamped onto every frame (``"agent"``).
+        agent_name: The Muldro agent name stamped onto every frame (``"agent"``).
         model: The model id (for the ``agent_start`` frame + cost attribution).
         durability: Forwarded to ``agent.astream(..., durability=...)`` when set (e.g.
             ``"sync"`` on the resume path, per the Task-0 interrupt/resume spike).

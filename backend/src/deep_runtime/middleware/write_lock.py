@@ -1,6 +1,6 @@
 """Deep-runtime write-lock middleware (Step 6C).
 
-Placed BETWEEN trust_gate (OUTER) and jarvis_tool_dispatcher (INNER):
+Placed BETWEEN trust_gate (OUTER) and muldro_tool_dispatcher (INNER):
     capability_scope → trust_gate → write_lock → dispatcher
 So it runs AFTER approval (trust_gate calls handler only post-approve, or immediately on the
 dormant direct path) and IMMEDIATELY BEFORE execute_tool — never across the interrupt wait.

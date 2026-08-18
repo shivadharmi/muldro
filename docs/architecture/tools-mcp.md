@@ -160,7 +160,7 @@ External MCP servers run on demand with no Docker dependency:
 ### Session Lifecycle
 
 - Sessions are per `(workspace_id, server_name, user_id)` and scoped to an agent turn via `TurnScope` (ContextVar + refcounting)
-- Wired into both chokepoints: `JarvisOrchestrator._process_core` (chat path) and `GraphExecutor.execute_run` (autonomous path)
+- Wired into both chokepoints: `MuldroOrchestrator._process_core` (chat path) and `GraphExecutor.execute_run` (autonomous path)
 - Real MCP names stored and dispatched directly — no normalization
 - Circuit breaker per server (consecutive failure tracking, cooldown)
 - Retry with exponential backoff for transient errors

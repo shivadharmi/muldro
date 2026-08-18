@@ -1,6 +1,6 @@
 # Plan & Execution System: End-to-End Deep Dive
 
-This document traces the complete lifecycle of goals, plans, and execution in Jarvis — from the moment a user sends a message to the final frontend update. It covers creation, data flow, execution, status tracking, frontend delivery, resumption, failure handling, and cross-system interactions.
+This document traces the complete lifecycle of goals, plans, and execution in Muldro — from the moment a user sends a message to the final frontend update. It covers creation, data flow, execution, status tracking, frontend delivery, resumption, failure handling, and cross-system interactions.
 
 ---
 
@@ -25,7 +25,7 @@ This document traces the complete lifecycle of goals, plans, and execution in Ja
 
 ## 1. System Overview
 
-The plan-execution pipeline is the central nervous system of Jarvis. Every user request — whether a chat message, a perception-triggered insight, or a scheduled task — flows through the same pipeline:
+The plan-execution pipeline is the central nervous system of Muldro. Every user request — whether a chat message, a perception-triggered insight, or a scheduled task — flows through the same pipeline:
 
 ```mermaid
 flowchart LR
@@ -78,7 +78,7 @@ Plans originate from three distinct sources, each entering the system through a 
 ```mermaid
 flowchart TD
     subgraph "Source 1: User Message"
-        U[User sends chat message] --> API["POST /v1/jarvis/chat"]
+        U[User sends chat message] --> API["POST /v1/muldro/chat"]
         API --> PM["process_message_stream()"]
         PM --> IC["classify_intent() — Haiku"]
         IC -->|"Fast intent<br/>(confidence ≥ 0.7)"| ITP["intent_to_plan()<br/>→ 1-step PlanOutput"]
@@ -107,7 +107,7 @@ flowchart TD
 
 ### 2.1 User Messages (Interactive)
 
-The most common source. The orchestrator receives a message via `process_message()` or `process_message_stream()` in `src/orchestrator/jarvis.py`.
+The most common source. The orchestrator receives a message via `process_message()` or `process_message_stream()` in `src/orchestrator/muldro.py`.
 
 **Fast intent path** (10 intent types, ~200ms):
 
@@ -152,7 +152,7 @@ sequenceDiagram
     participant CR as CapabilityResolver
     participant DB as Postgres
 
-    User->>API: POST /v1/jarvis/chat {message, workspace_id}
+    User->>API: POST /v1/muldro/chat {message, workspace_id}
     API->>API: Create Conversation + Message records
     API->>Orch: process_message_stream(message, user_id, workspace_id)
     Orch->>Orch: start_trace(trigger=user_message)
@@ -474,7 +474,7 @@ flowchart TD
 
     subgraph "Deep Runtime (LangGraph agent loop)"
         BUILD --> GRAPH["Agent discovers scoped tools,<br/>reasons multi-turn, calls tools"]
-        GRAPH --> DISPATCH["jarvis_tool_dispatcher (wrap_tool_call)<br/>→ ToolExecutor.execute_tool"]
+        GRAPH --> DISPATCH["muldro_tool_dispatcher (wrap_tool_call)<br/>→ ToolExecutor.execute_tool"]
         DISPATCH --> MW["Middleware chain (outer→inner):<br/>capability_scope → governor_audit →<br/>unavailable_server → trust_gate →<br/>write_lock → [read_back] → dispatcher"]
         MW --> GRAPH
     end
@@ -489,10 +489,10 @@ The deep runtime is streamed via `stream_adapter.py`, which maps tool/`status="e
 
 The deep runtime is a LangGraph graph over `langchain-anthropic`, so the behaviors the retired `agent_loop` hand-rolled are now provided by that stack or deliberately dropped:
 
-- **API Retry:** delegated to `langchain-anthropic`'s client — there is **no** Jarvis-owned exponential-backoff loop on `RateLimitError`.
+- **API Retry:** delegated to `langchain-anthropic`'s client — there is **no** Muldro-owned exponential-backoff loop on `RateLimitError`.
 - **Thinking params:** built once per agent tier at model construction (`deep_runtime/model_factory.py` + `_thinking.py`). There is **no** mid-loop "disable thinking and retry" fallback.
 - **Step Timeout:** there is **no** per-tool 60s timeout. Background runs are capped per-step by `step.timeout_seconds or 120s`; user-initiated chat runs are uncapped.
-- **Circuit Breaker:** there is **no** Jarvis `AnthropicCircuitBreaker` in the deep path (the perception-side `PerceptionPolicyService` circuit breaker is separate).
+- **Circuit Breaker:** there is **no** Muldro `AnthropicCircuitBreaker` in the deep path (the perception-side `PerceptionPolicyService` circuit breaker is separate).
 - **Tool error signaling:** a failed tool returns a `ToolMessage(status="error")`, mapped by `stream_adapter.py` to the frozen `blocked` SSE frame so the client knows the call failed.
 
 ---
@@ -698,7 +698,7 @@ flowchart TD
     end
 
     subgraph "Transport Layer"
-        REDIS["Redis PubSub<br/>jarvis:a2ui:{user_id}"]
+        REDIS["Redis PubSub<br/>muldro:a2ui:{user_id}"]
         DB_PERSIST["Postgres<br/>ui_surfaces table"]
     end
 
@@ -708,7 +708,7 @@ flowchart TD
     end
 
     subgraph "Frontend"
-        HOOK["useJarvisWs() hook"]
+        HOOK["useMuldroWs() hook"]
         STORE["useSurfaceStore<br/>(Zustand)"]
         EXEC_SURF["ExecutionSurface<br/>component"]
         APPROVAL["InlineApprovalCard<br/>component"]
@@ -1015,7 +1015,7 @@ SchedulerLoop (every 30s)
 
 | Component               | File                                                            | Purpose                                                               |
 | ----------------------- | --------------------------------------------------------------- | --------------------------------------------------------------------- |
-| **Orchestrator**        | `src/orchestrator/jarvis.py`                                    | Entry points, plan creation, surface push                             |
+| **Orchestrator**        | `src/orchestrator/muldro.py`                                    | Entry points, plan creation, surface push                             |
 | **Intent Classifier**   | `src/orchestrator/intent_classifier.py`                         | Fast intents, `classify_intent()`, `extract_plan()`                   |
 | **Planner Prompt**      | `src/orchestrator/prompts.py`                                   | `PLANNER_PROMPT_V2`, all agent prompts                                |
 | **Deep Runtime**        | `src/deep_runtime/` (`build_deep_agent`)                        | Single execution engine (LangGraph agent loop, middleware chain)      |
@@ -1041,7 +1041,7 @@ SchedulerLoop (every 30s)
 | **Approval Routes**     | `src/api/routes_approvals.py`                                   | Approve/reject/list endpoints                                         |
 | **WebSocket Routes**    | `src/api/routes_ws.py`                                          | WS auth, relay, action dispatch                                       |
 | **UI Routes**           | `src/api/routes_ui.py`                                          | GET /v1/workspace/surfaces                                            |
-| **Frontend WS Hook**    | `frontend/src/hooks/use-jarvis-ws.ts`                           | WebSocket connection, message routing                                 |
+| **Frontend WS Hook**    | `frontend/src/hooks/use-muldro-ws.ts`                           | WebSocket connection, message routing                                 |
 | **Surface Store**       | `frontend/src/stores/surface-store.ts`                          | Zustand store for surfaces                                            |
 | **Execution Surface**   | `frontend/src/components/a2ui/components/execution-surface.tsx` | Phase-aware rendering                                                 |
 | **Inline Approval**     | `frontend/src/components/a2ui/components/inline-approval.tsx`   | Approval UI with risk context                                         |

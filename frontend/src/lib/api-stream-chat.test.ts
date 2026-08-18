@@ -17,7 +17,7 @@ test("streamChat puts permission_mode in the POST body, not mode", async () => {
   await streamChat("hi", () => {}, undefined, "conv_1", "bypass");
 
   const [url, init] = fetchMock.mock.calls[0];
-  expect(url).toBe("/api/jarvis/chat");
+  expect(url).toBe("/api/muldro/chat");
   const body = JSON.parse((init as RequestInit).body as string);
   expect(body).toMatchObject({
     message: "hi",

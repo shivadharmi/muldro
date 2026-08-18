@@ -2,7 +2,7 @@
 
 Proves the core 6A.5 guarantee with NO real API / network:
 
-1. A Jarvis tool (ok_tool, err_tool) ACTUALLY EXECUTES through a compiled
+1. A Muldro tool (ok_tool, err_tool) ACTUALLY EXECUTES through a compiled
    ``build_deep_agent`` graph via the REAL central dispatcher.
 2. A deepagents built-in (write_todos) runs its OWN body (fall-through) and
    does NOT appear in the EXECUTED list.
@@ -30,7 +30,7 @@ from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResu
 from langgraph.checkpoint.memory import MemorySaver
 
 from src.deep_runtime.agent_builder import build_deep_agent
-from src.deep_runtime.middleware.jarvis_tool_dispatcher import make_jarvis_tool_dispatcher
+from src.deep_runtime.middleware.muldro_tool_dispatcher import make_muldro_tool_dispatcher
 from src.deep_runtime.stream_adapter import stream_deep_agent_events
 from src.deep_runtime.tool_bridge import build_tool_shells
 from src.orchestrator.agents import SubAgent, ThinkingConfig
@@ -38,7 +38,7 @@ from src.orchestrator.agents import SubAgent, ThinkingConfig
 MODEL_ID = "claude-sonnet-4-6"
 
 # ---------------------------------------------------------------------------
-# Observability: track which Jarvis tools fake_execute_tool was called for.
+# Observability: track which Muldro tools fake_execute_tool was called for.
 # Declared at module level so the test can clear/inspect it easily.
 # ---------------------------------------------------------------------------
 EXECUTED: list[str] = []
@@ -217,7 +217,7 @@ def _make_db_factory():
     return _factory
 
 
-def _jarvis_tool_defs() -> list[dict]:
+def _muldro_tool_defs() -> list[dict]:
     return [
         {
             "name": "ok_tool",
@@ -238,12 +238,12 @@ def _jarvis_tool_defs() -> list[dict]:
 
 
 async def test_deep_path_tool_execution_end_to_end() -> None:
-    """Jarvis tools execute via the central dispatcher; write_todos runs its own body.
+    """Muldro tools execute via the central dispatcher; write_todos runs its own body.
 
     Wiring:
     - capability_scope (OUTER, installed by build_deep_agent because db_factory is given)
       → _is_in_scope is stubbed to allow ok_tool / err_tool; write_todos exempt as built-in.
-    - jarvis_tool_dispatcher (INNER, in extra_middleware)
+    - muldro_tool_dispatcher (INNER, in extra_middleware)
       → intercepts ok_tool / err_tool, calls fake_execute_tool; falls through write_todos.
     - Shell bodies → tripwires that RAISE if ever invoked; they must never fire.
     - stream_deep_agent_events → the REAL SSE adapter.
@@ -252,9 +252,9 @@ async def test_deep_path_tool_execution_end_to_end() -> None:
     EXECUTED.clear()
 
     agent_def = _make_perceiver_agent()
-    shells = build_tool_shells(_jarvis_tool_defs())
+    shells = build_tool_shells(_muldro_tool_defs())
 
-    dispatcher = make_jarvis_tool_dispatcher(
+    dispatcher = make_muldro_tool_dispatcher(
         execute_tool=fake_execute_tool,
         user_id="u",
         workspace_id="ws",
@@ -333,7 +333,7 @@ async def test_deep_path_tool_execution_end_to_end() -> None:
         f"dispatcher should not have dispatched write_todos; EXECUTED={EXECUTED}"
     )
 
-    # 5. Both Jarvis tools were dispatched through fake_execute_tool.
+    # 5. Both Muldro tools were dispatched through fake_execute_tool.
     assert {"ok_tool", "err_tool"} <= set(EXECUTED), (
         f"expected ok_tool and err_tool in EXECUTED; got {EXECUTED}"
     )

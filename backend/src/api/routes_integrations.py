@@ -280,7 +280,7 @@ async def _clear_connection_artifacts(
         # "Disconnect" means all of this user's accounts for this integration.
         # TODO: revoking on the OpenConnector side (deleting the stored
         # credential via the OC admin API) is still outstanding — a later wave.
-        # Flipping the local rows only stops Jarvis resolving/reporting them.
+        # Flipping the local rows only stops Muldro resolving/reporting them.
         await db.execute(
             update(ConnectionMap)
             .where(

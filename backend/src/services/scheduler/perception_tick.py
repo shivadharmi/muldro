@@ -408,7 +408,7 @@ class PerceptionTickMixin:
 
     async def _drop_tokenless_sources(self, db, due_states, marked_out=None):
         """Runnability gate: drop sources whose credential cannot be used, keep
-        the rest. Two branches, because Jarvis now holds credentials two ways.
+        the rest. Two branches, because Muldro now holds credentials two ways.
 
         **Gateway-backed sources** (``gateway_provider_for_source`` resolves —
         gmail, calendar) hold their credential inside OpenConnector, recorded

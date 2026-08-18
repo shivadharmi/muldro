@@ -58,7 +58,7 @@ async def send_magic_link(
         sender = EmailSender(settings)
         await sender.send(
             to=req.email,
-            subject="Sign in to Jarvis",
+            subject="Sign in to Muldro",
             body_html=body_html,
             body_text=body_text,
         )

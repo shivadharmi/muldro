@@ -1,8 +1,8 @@
-"""Intelligence MCP server — wraps existing Jarvis services as MCP tools.
+"""Intelligence MCP server — wraps existing Muldro services as MCP tools.
 
 Built with FastMCP. Provides tools for event ingestion, memory search, entity
 management, planning, policy evaluation, briefings, cursors, and approvals.
-These are the internal tools that Jarvis sub-agents use to interact with the
+These are the internal tools that Muldro sub-agents use to interact with the
 intelligence layer.
 
 Split by domain (TOOL-P2-4): the FastMCP ``intelligence`` instance, runtime

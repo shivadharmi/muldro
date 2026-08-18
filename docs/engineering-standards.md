@@ -11,7 +11,7 @@ wins until changed here first.
   SurfaceUpdate, StepResult, PolicyDecision, ...) that both api and services import downward from.
   Nothing imports back up the chain. If you need an upward call, you need an event or a callback
   injected from above — not an import.
-- **No new code on god objects.** `JarvisOrchestrator` (`orchestrator/jarvis.py`) and
+- **No new code on god objects.** `MuldroOrchestrator` (`orchestrator/muldro.py`) and
   `GraphExecutor` (`services/graph_executor.py`) are frozen: new behavior goes into collaborator
   classes injected via constructor, never new methods on the hub.
 - **Contracts at every boundary.** Anything crossing a process or layer boundary — API response,
@@ -23,7 +23,7 @@ wins until changed here first.
   **400** (React components), **200** (Zustand stores). Hitting a cap is a design signal —
   split by responsibility, not by line count. Enforced by pre-commit (`scripts/check_file_size.py`);
   pre-existing oversized files are grandfathered in the script's exemption list and must not grow —
-  each one carries a standing debt to be split (`jarvis.py`, `graph_executor.py`, etc.).
+  each one carries a standing debt to be split (`muldro.py`, `graph_executor.py`, etc.).
   Function cap: ~50 lines.
 - **State changes only through transition functions.** Never mutate a status field directly;
   use `transition_run()` / `transition_step()` and extend the same pattern to any new state machine.
