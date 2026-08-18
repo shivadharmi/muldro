@@ -50,3 +50,11 @@ docs/superpowers/
 
 # git worktrees for isolated feature work
 .worktrees/
+
+# Private keys / secrets — never commit.
+# infra/gateway/README.md tells you to run `openssl genrsa -out platform-jwt.pem`
+# inside infra/gateway/; that key MINTS tenant-scoped platform JWTs and is the
+# entire tenant-isolation boundary, so it must never be committable.
+*.pem
+*.key
+platform-jwt.pub
