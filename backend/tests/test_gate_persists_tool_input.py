@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, patch
 
 from src.deep_runtime.middleware import permission_gate as pg
 from src.deep_runtime.middleware import trust_gate as tg
+from src.deep_runtime.middleware.trust_gate import _MAX_PERSISTED_CONTEXT_CHARS
 from src.services.risk_assessor import RiskAssessment
 from tests.conftest import TEST_USER_ID, TEST_WORKSPACE_ID
 
@@ -106,3 +107,81 @@ async def test_permission_gate_persists_redacted_tool_input():
     assert refs["capability_scope"] == ["email.send"]
     # A PRESENT-user chat approval still carries the chat flag (it resumes via /chat/resume).
     assert refs["chat"] is True
+
+
+async def test_presence_defaults_to_absent_when_a_caller_omits_it():
+    """The default is the FAIL-SAFE direction and is about to become authority-bearing:
+    a later task makes `absent` mean "prepare this write for review" rather than "interrupt".
+    A caller that forgets to pass presence must land on the safe side, so pin it here."""
+    captured = {}
+
+    async def _fake_get_or_create(db, **kwargs):
+        captured.update(kwargs)
+        return "apr_test_3"
+
+    class _FakeDbCtx:
+        async def __aenter__(self):
+            return AsyncMock()
+
+        async def __aexit__(self, *exc):
+            return False
+
+    with patch.object(pg, "_get_or_create_approval", _fake_get_or_create):
+        await pg._persist_permission_approval(
+            name="gmail_send_email",
+            capability="email.send",
+            assessment=None,
+            risk_level="n/a",
+            workspace_id=TEST_WORKSPACE_ID,
+            user_id=TEST_USER_ID,
+            thread_id="thr_3",
+            tool_call_id="call_3",
+            agent_name="lead",
+            db_factory=lambda: _FakeDbCtx(),
+            context_block="",
+            permission_mode="ask",
+            lead_scope=frozenset({"email.send"}),
+            # presence deliberately NOT passed
+        )
+
+    assert captured["artifact_refs"]["presence"] == "absent"
+
+
+async def test_an_oversized_payload_is_persisted_truncated_and_flagged():
+    """The flag is what a later task keys "refuse to replay this" on, so it has to be
+    written correctly at persist time, not just computed correctly in the helper."""
+    captured = {}
+
+    async def _fake_get_or_create(db, **kwargs):
+        captured.update(kwargs)
+        return "apr_test_4"
+
+    class _FakeDbCtx:
+        async def __aenter__(self):
+            return AsyncMock()
+
+        async def __aexit__(self, *exc):
+            return False
+
+    with patch.object(pg, "_get_or_create_approval", _fake_get_or_create):
+        await pg._persist_permission_approval(
+            name="gmail_send_email",
+            capability="email.send",
+            assessment=None,
+            risk_level="n/a",
+            workspace_id=TEST_WORKSPACE_ID,
+            user_id=TEST_USER_ID,
+            thread_id="thr_4",
+            tool_call_id="call_4",
+            agent_name="lead",
+            db_factory=lambda: _FakeDbCtx(),
+            context_block="",
+            permission_mode="ask",
+            lead_scope=frozenset({"email.send"}),
+            tool_input={"to": "a@b.com", "body": "x" * 9000},
+            presence="present",
+        )
+
+    refs = captured["artifact_refs"]
+    assert refs["tool_input_truncated"] is True
+    assert len(refs["tool_input"]) <= _MAX_PERSISTED_CONTEXT_CHARS

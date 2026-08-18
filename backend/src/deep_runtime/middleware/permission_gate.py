@@ -165,6 +165,10 @@ async def _persist_permission_approval(
                 # autonomous trust_gate's rows; NO migration — artifact_refs is JSONB).
                 "permission_mode": permission_mode,
                 "chat": True,
+                # Read by ``resume_deep_lead`` — do NOT merge with ``capability_scope`` below.
+                # Same value today, different readers and different intent: this one is the
+                # chat-resume authority envelope, that one is prepared-action replay authority.
+                # Deleting either breaks a path the other's tests do not cover.
                 "lead_scope": sorted(lead_scope),
                 # A1: the ORIGINAL user message, so an approved resume can fire the
                 # interaction-learner (bounded like context_block to keep the row lean).

@@ -47,6 +47,10 @@ async def build_approval_request(
         tool_params = apr.artifact_refs.get("tool_params")
         if tool_params:
             children.append(r.code_block("apr_params", str(tool_params), language="json"))
+        # Already a JSON STRING (redact_tool_input serialises before persisting), unlike
+        # ``tool_params`` above which stores a raw dict — so ``str()`` here is a no-op that
+        # documents the type rather than converting it. Do not remove it: it is what keeps
+        # this block correct if the stored shape ever changes.
         tool_input = apr.artifact_refs.get("tool_input")
         if tool_input:
             children.append(r.code_block("apr_input", str(tool_input), language="json"))
