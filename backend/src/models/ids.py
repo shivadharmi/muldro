@@ -53,6 +53,8 @@ ID_PREFIXES = {
     "oal": "org_allowlist",
     "iaud": "integration_audit",
     "pst": "perception_state",
+    "mbind": "Model binding (tier/agent -> provider+model)",
+    "pcred": "Provider credential (encrypted API key)",
 }
 
 

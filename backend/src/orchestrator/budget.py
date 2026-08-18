@@ -12,18 +12,22 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from ulid import ULID
 
+from src.config.model_catalog import get_model_spec_by_id
 from src.models.token_usage import TokenUsage
 
 logger = logging.getLogger(__name__)
 
-# Pricing per million tokens (as of 2026-06)
+# Pricing per million tokens. LEGACY FALLBACK ONLY: calculate_cost() prices from the
+# model catalog (model_catalog.py) first and falls back here only for ids absent from
+# the catalog (the dated legacy ids below). The current-gen entries are catalog-shadowed
+# and kept in sync with the catalog purely as a defensive fallback.
 # cache_write = 1.25x input, cache_read = 0.1x input, thinking = same as output
 MODEL_PRICING = {
-    # Latest
-    "claude-opus-4-8": {"input": 15.0, "output": 75.0},
+    # Current-gen (catalog-shadowed; kept consistent with model_catalog.py)
+    "claude-opus-4-8": {"input": 5.0, "output": 25.0},
     "claude-sonnet-4-6": {"input": 3.0, "output": 15.0},
-    "claude-haiku-4-5-20251001": {"input": 0.80, "output": 4.0},
-    # Legacy direct API
+    "claude-haiku-4-5-20251001": {"input": 1.0, "output": 5.0},
+    # Legacy dated direct-API ids (NOT in the catalog — this is their live pricing source)
     "claude-opus-4-20250514": {"input": 15.0, "output": 75.0},
     "claude-sonnet-4-20250514": {"input": 3.0, "output": 15.0},
     "claude-haiku-4-20250514": {"input": 0.80, "output": 4.0},
@@ -82,14 +86,24 @@ class BudgetTracker:
         if billable_tokens <= 0:
             return 0.0
 
-        pricing = MODEL_PRICING.get(model)
-        if not pricing:
-            logger.warning(
-                "Unknown model %r not in MODEL_PRICING — billing at Sonnet rates; "
-                "Opus would be under-billed. Add it to MODEL_PRICING.",
-                model,
-            )
-            pricing = MODEL_PRICING["claude-sonnet-4-6"]
+        # Catalog is the primary, multi-provider source of truth (per-1k costs).
+        # MODEL_PRICING (per-million) is a legacy fallback for ids not in the catalog
+        # (e.g. dated Anthropic ids). Sonnet is the last-resort fallback.
+        spec = get_model_spec_by_id(model)
+        if spec is not None:
+            pricing = {
+                "input": spec.input_cost_per_1k * 1000,
+                "output": spec.output_cost_per_1k * 1000,
+            }
+        else:
+            pricing = MODEL_PRICING.get(model)
+            if not pricing:
+                logger.warning(
+                    "Unknown model %r not in catalog or MODEL_PRICING — billing at Sonnet "
+                    "rates. Add it to the model catalog.",
+                    model,
+                )
+                pricing = MODEL_PRICING["claude-sonnet-4-6"]
         per_m = 1_000_000
         input_cost = (input_tokens / per_m) * pricing["input"]
         output_cost = (output_tokens / per_m) * pricing["output"]

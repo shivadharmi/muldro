@@ -153,7 +153,9 @@ async def test_run_step_via_deep_agent_delegates_with_step_capability():
     assert kw["user_id"] == TEST_USER_ID
     assert kw["workspace_id"] == TEST_WORKSPACE_ID
     assert kw["executor"].name == "executor" if hasattr(kw["executor"], "name") else True
-    assert kw["model"] == runner._settings.resolved_model
+    # step_runner no longer threads a model id; run_autonomous_deep_step resolves the
+    # workspace-aware model internally (agent_start.model reflects what actually runs).
+    assert "model" not in kw
 
 
 async def test_run_step_via_deep_agent_scopes_to_step_capability_only():

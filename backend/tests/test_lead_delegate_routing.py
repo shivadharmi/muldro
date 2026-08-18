@@ -448,7 +448,9 @@ async def test_fake_task_call_routes_to_perceiver_delegate():
     # + empty scope -> no scope guard, no ValueError; the delegate simply terminal-answers.
     delegate_cfg = _empty_scope_perceiver()
     with patch.object(
-        agent_builder, "build_chat_model", lambda a: _ScriptedModel(_terminal_turns(marker))
+        agent_builder,
+        "build_chat_model",
+        AsyncMock(return_value=_ScriptedModel(_terminal_turns(marker))),
     ):
         delegate = await build_read_only_delegate(
             delegate_cfg,
@@ -465,7 +467,9 @@ async def test_fake_task_call_routes_to_perceiver_delegate():
     with patch.object(
         agent_builder,
         "build_chat_model",
-        lambda a: _ScriptedModel(_task_then_answer("perceiver", "research the thing")),
+        AsyncMock(
+            return_value=_ScriptedModel(_task_then_answer("perceiver", "research the thing"))
+        ),
     ):
         lead = await agent_builder.build_deep_agent(
             lead_cfg, [], subagents=[delegate], checkpointer=MemorySaver()

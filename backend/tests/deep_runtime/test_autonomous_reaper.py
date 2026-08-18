@@ -21,7 +21,7 @@ teardown — all reused from the P2 harness (``test_autonomous_checkpointer``).
 
 from __future__ import annotations
 
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from langgraph.checkpoint.base import empty_checkpoint
@@ -70,7 +70,10 @@ async def test_autonomous_step_reaps_checkpoint_on_completion():
             inv = _make_invoker(factory, checkpointer=saver, effects=effects)
 
             with (
-                patch(BUILD_CHAT_MODEL, lambda _a: _FakeModel(WRITE_TOOL, {"to": "f@x.com"})),
+                patch(
+                    BUILD_CHAT_MODEL,
+                    AsyncMock(return_value=_FakeModel(WRITE_TOOL, {"to": "f@x.com"})),
+                ),
                 patch(f"{INVOKER_MODULE}.make_thread_id", _capture_thread_id(captured)),
             ):
                 out = await inv.run_autonomous_deep_step(
@@ -124,7 +127,9 @@ async def test_autonomous_step_reap_noops_without_durable_saver():
             return result
 
         with (
-            patch(BUILD_CHAT_MODEL, lambda _a: _FakeModel(WRITE_TOOL, {"to": "f@x.com"})),
+            patch(
+                BUILD_CHAT_MODEL, AsyncMock(return_value=_FakeModel(WRITE_TOOL, {"to": "f@x.com"}))
+            ),
             patch(f"{INVOKER_MODULE}.reap_thread", _spy_reap),
         ):
             out = await inv.run_autonomous_deep_step(
@@ -181,7 +186,10 @@ async def test_reap_on_completion_is_single_thread_scoped():
 
             inv = _make_invoker(factory, checkpointer=saver, effects=effects)
             with (
-                patch(BUILD_CHAT_MODEL, lambda _a: _FakeModel(WRITE_TOOL, {"to": "f@x.com"})),
+                patch(
+                    BUILD_CHAT_MODEL,
+                    AsyncMock(return_value=_FakeModel(WRITE_TOOL, {"to": "f@x.com"})),
+                ),
                 patch(f"{INVOKER_MODULE}.make_thread_id", _capture_thread_id(captured)),
             ):
                 out = await inv.run_autonomous_deep_step(

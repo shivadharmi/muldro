@@ -213,10 +213,17 @@ class _FakeModel(BaseChatModel):
 def _fake_model_factory():
     """A ``build_chat_model`` replacement: FRESH ``_FakeModel`` per build (per DAG step /
     per deep agent) so each step captures its own bound tool set. Writes preferred over
-    reads so the write step (scope: send_email + family read) fires the WRITE."""
-    return lambda _agent: _FakeModel(
-        {READ_TOOL: READ_ARGS, WRITE_TOOL: WRITE_ARGS}, prefer=[WRITE_TOOL, READ_TOOL]
-    )
+    reads so the write step (scope: send_email + family read) fires the WRITE.
+
+    ``build_chat_model`` is ``async`` and resolves via ModelResolver, so the stub is an
+    async callable accepting its keyword args (``workspace_id`` / ``db_factory``)."""
+
+    async def _build(_agent, **_kw):
+        return _FakeModel(
+            {READ_TOOL: READ_ARGS, WRITE_TOOL: WRITE_ARGS}, prefer=[WRITE_TOOL, READ_TOOL]
+        )
+
+    return _build
 
 
 # ─────────────────────────── real-DB / real-Redis harness ────────────────────

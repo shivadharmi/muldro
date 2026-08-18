@@ -125,6 +125,45 @@ async def test_stream_deep_lead_always_appends_presenter_voice():
     assert PRESENTER_VOICE in joined
 
 
+async def test_stream_deep_lead_uses_workspace_resolved_model():
+    """R1: the stream's ``model`` (agent_start.model metadata) must be the workspace-resolved
+    model id — not the catalog-default from ``get_model_for_agent``. Fails on the old wiring
+    that passed ``get_model_for_agent(lead)`` (an Anthropic id) for a non-Anthropic binding."""
+    inv = _make_invoker()
+    captured: dict[str, object] = {}
+
+    def _capture_stream(*a, **k):
+        captured["model"] = k.get("model")
+
+        async def _gen():
+            yield {"event": "agent_done", "agent": "lead", "text": "done", "tools_called": []}
+
+        return _gen()
+
+    # The workspace resolves this lead to a non-default (OpenAI) model.
+    inv._resolved_model_id = AsyncMock(return_value="gpt-5")
+
+    with (
+        patch("src.orchestrator.agent_invoker.build_deep_agent", new=AsyncMock()),
+        patch("src.orchestrator.agent_invoker.stream_deep_agent_events", _capture_stream),
+    ):
+        _ = [
+            f
+            async for f in inv.stream_deep_lead(
+                _lead(),
+                [],
+                message="hi",
+                context_block="",
+                user_id="u",
+                workspace_id="ws",
+            )
+        ]
+
+    assert captured["model"] == "gpt-5"
+    # Resolved for both the streaming metadata and the budget middleware (>=1 await).
+    inv._resolved_model_id.assert_awaited()
+
+
 def _paused_stream(*a, **k):
     async def _gen():
         yield {"event": "approval_needed", "agent": "lead"}
@@ -398,8 +437,8 @@ async def test_build_chat_lead_uses_invoker_agents_and_returns_lead():
 
 
 async def test_build_chat_lead_forwards_invoker_cheap_mode():
-    """The wrapper forwards ``self._settings.cheap_mode`` — cheap mode halves the lead's
-    thinking budget (4096 -> 2048) while keeping the sonnet tier."""
+    """The wrapper forwards ``self._settings.cheap_mode`` — cheap mode keeps the balanced
+    tier and leaves the lead's thinking budget (4096) unchanged (halving lever dropped)."""
     agents = {
         "perceiver": SubAgent(
             name="perceiver", prompt="p", model_tier="sonnet", capability_scope=set()
@@ -418,5 +457,5 @@ async def test_build_chat_lead_forwards_invoker_cheap_mode():
         lead = await inv.build_chat_lead([step], "ws")
 
     assert lead.name == "lead"
-    assert lead.model_tier == "sonnet"
-    assert lead.thinking.budget_tokens == 2048
+    assert lead.model_tier == "balanced"
+    assert lead.thinking.budget_tokens == 4096

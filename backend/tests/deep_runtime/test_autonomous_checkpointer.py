@@ -345,7 +345,10 @@ async def test_autonomous_step_persists_checkpoint_to_postgres():
             inv = _make_invoker(factory, checkpointer=saver, effects=effects)
 
             with (
-                patch(BUILD_CHAT_MODEL, lambda _a: _FakeModel(WRITE_TOOL, {"to": "f@x.com"})),
+                patch(
+                    BUILD_CHAT_MODEL,
+                    AsyncMock(return_value=_FakeModel(WRITE_TOOL, {"to": "f@x.com"})),
+                ),
                 patch(f"{INVOKER_MODULE}.make_thread_id", _capture_thread_id(captured)),
                 # Step 10C P5: run_autonomous_deep_step now reaps its per-step thread on
                 # completion (reap-on-completion). That would delete the very checkpoint this
@@ -459,7 +462,9 @@ async def test_same_thread_resume_fires_write_exactly_once():
                     pre_approved_capabilities=frozenset({"email.send"}),
                 )
 
-            with patch(BUILD_CHAT_MODEL, lambda _a: _FakeModel(WRITE_TOOL, {"to": "f@x.com"})):
+            with patch(
+                BUILD_CHAT_MODEL, AsyncMock(return_value=_FakeModel(WRITE_TOOL, {"to": "f@x.com"}))
+            ):
                 # Pass 1: real deep agent, expect the mid-tool-call crash.
                 agent1 = await _build()
                 with pytest.raises(RuntimeError, match="simulated process kill"):

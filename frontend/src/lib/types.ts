@@ -494,3 +494,45 @@ export interface PlanOutput {
   plan_id: string | null;
   requires_user_input: boolean;
 }
+
+// ── Model Configuration ──────────────────────────────────────────
+
+export interface CatalogModel {
+  model_id: string;
+  display_name: string;
+  thinking_style: string;
+  accepts_temperature: boolean;
+  suggested_tier: string;
+}
+
+export interface AgentInfo {
+  name: string;
+  display_name: string;
+  tier: string;
+}
+
+export interface ModelCatalog {
+  providers: Record<string, CatalogModel[]>;
+  agents: AgentInfo[];
+}
+
+export interface TierBinding {
+  tier: string;
+  provider: string;
+  model_id: string;
+  effort: string;
+  max_tokens: number;
+  temperature: number | null;
+}
+
+export interface ProviderStatus {
+  provider: string;
+  configured: boolean;
+  status: string;
+}
+
+export interface ModelConfig {
+  tiers: TierBinding[];
+  agent_overrides: TierBinding[];
+  providers: ProviderStatus[];
+}

@@ -47,8 +47,8 @@ class TestPersonaAgentConfig:
     def test_persona_agent_exists(self):
         assert "persona" in AGENTS
 
-    def test_persona_uses_haiku(self):
-        assert AGENTS["persona"].model_tier == "haiku"
+    def test_persona_uses_fast(self):
+        assert AGENTS["persona"].model_tier == "fast"
 
     @pytest.mark.asyncio
     async def test_persona_has_search_tool(self):

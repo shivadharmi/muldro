@@ -12,9 +12,13 @@ import type {
   BriefingFeedbackSummary,
   MeetingPrep,
   MemoryItem,
+  ModelCatalog,
+  ModelConfig,
   Notification,
   PlanOutput,
+  ProviderStatus,
   SearchResponse,
+  TierBinding,
   SystemDashboard,
   TrustDashboardEntry,
   TrustCapabilityDetail,
@@ -1059,4 +1063,49 @@ export async function retryRun(runId: string) {
     `/history/${runId}/retry`,
     {}
   );
+}
+
+// ── Model Configuration ─────────────────────────────────────────
+
+export async function fetchModelCatalog(): Promise<ModelCatalog> {
+  return api("/model-catalog");
+}
+
+export async function fetchModelConfig(): Promise<ModelConfig> {
+  return api("/model-config");
+}
+
+export async function saveModelConfig(body: {
+  tiers: TierBinding[];
+  agent_overrides: TierBinding[];
+}): Promise<ModelConfig> {
+  return api("/model-config", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+export async function saveProviderKey(
+  provider: string,
+  apiKey: string,
+  baseUrl?: string
+): Promise<{ status: string }> {
+  return api(`/providers/${provider}/credentials`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ api_key: apiKey, base_url: baseUrl }),
+  });
+}
+
+export async function testProviderKey(
+  provider: string
+): Promise<{ status: string }> {
+  return api(`/providers/${provider}/test`, { method: "POST" });
+}
+
+export async function deleteProviderKey(
+  provider: string
+): Promise<ProviderStatus> {
+  return api(`/providers/${provider}/credentials`, { method: "DELETE" });
 }

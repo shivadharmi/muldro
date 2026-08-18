@@ -52,6 +52,14 @@ class Settings(BaseSettings):
     anthropic_api_key: str = ""
     anthropic_model: str = "claude-sonnet-4-6"
 
+    # Model-provider credentials (env fallback; UI-entered keys live encrypted in DB)
+    openai_api_key: str = ""
+    google_api_key: str = ""
+    # Fernet key for encrypting UI-entered provider credentials at rest.
+    # Generate: python -c "from cryptography.fernet import Fernet; \
+    #   print(Fernet.generate_key().decode())"
+    config_encryption_key: str = ""
+
     # Server
     host: str = "0.0.0.0"
     port: int = 8000

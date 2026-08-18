@@ -91,7 +91,7 @@ async def test_seed_defaults_model_tiers(mock_db):
 
     for call in mock_db.add.call_args_list:
         agent = call[0][0]
-        expected_tier = AGENT_MODEL_TIERS.get(agent.name, "sonnet")
+        expected_tier = AGENT_MODEL_TIERS.get(agent.name, "balanced")
         assert agent.model_tier == expected_tier, f"{agent.name} should be {expected_tier}"
 
 
@@ -141,7 +141,7 @@ async def test_load_as_sub_agents(mock_db):
     mock_agent = MagicMock(spec=Agent)
     mock_agent.name = "planner"
     mock_agent.system_prompt = "Plan things"
-    mock_agent.model_tier = "opus"
+    mock_agent.model_tier = "reasoning"
     mock_agent.capability_scope = ["internal.get_plans", "internal.search"]
     mock_agent.max_tokens = 8192
     mock_agent.temperature = 0.3
@@ -156,14 +156,14 @@ async def test_load_as_sub_agents(mock_db):
 
     assert "planner" in agents
     assert isinstance(agents["planner"], SubAgent)
-    assert agents["planner"].model_tier == "opus"
+    assert agents["planner"].model_tier == "reasoning"
     assert agents["planner"].capability_scope == {"internal.get_plans", "internal.search"}
     assert agents["planner"].max_tokens == 8192
 
 
 @pytest.mark.asyncio
-async def test_planner_gets_opus_and_persona_haiku(mock_db):
-    """Planner should get Opus model and Persona the Haiku tier."""
+async def test_planner_gets_reasoning_and_persona_fast(mock_db):
+    """Planner should get the reasoning tier and Persona the fast tier."""
     mock_db.execute = AsyncMock(return_value=FakeResult(rows=[]))
 
     registry = AgentRegistry(mock_db)
@@ -174,6 +174,6 @@ async def test_planner_gets_opus_and_persona_haiku(mock_db):
         agent = call[0][0]
         agents_by_name[agent.name] = agent
 
-    assert agents_by_name["planner"].model_tier == "opus"
+    assert agents_by_name["planner"].model_tier == "reasoning"
     assert agents_by_name["planner"].max_tokens == 8192
-    assert agents_by_name["persona"].model_tier == "haiku"
+    assert agents_by_name["persona"].model_tier == "fast"
