@@ -56,26 +56,30 @@ OpenConnector).
   `connection_map` table this whole flow writes to and reads from
   (`backend/src/models/connection_map.py`).
 
-- **One STABLE platform-JWT RSA PEM, shared by BOTH the Jarvis API process
-  and the adapter container.** `backend/src/orchestrator/platform_jwt.py`
-  mints short-lived (5-minute) RS256 JWTs; if `JARVIS_PLATFORM_JWT_PRIVATE_PEM`
-  is unset, it silently falls back to an **ephemeral per-process key**. Two
-  separate processes (API and adapter) each generating their own ephemeral
-  key means tokens minted by one are **unverifiable** by the other — every
-  gateway call will fail identity verification (`IdentityError` in
+- **One STABLE platform-JWT RSA keypair, split across the two processes.**
+  `backend/src/orchestrator/platform_jwt.py` mints short-lived (5-minute) RS256
+  JWTs. The API process **mints** (needs the private half); the adapter only
+  **verifies** (needs the public half). If neither PEM is set, the module falls
+  back to an **ephemeral per-process key** — two processes each generating their
+  own means tokens minted by one are **unverifiable** by the other, and every
+  gateway call fails identity verification (`IdentityError` in
   `src/adapter/identity.py`) with no obvious "wrong key" message, just a JWT
-  decode failure. Generate ONE key and set it identically on both processes
-  before doing anything else in this runbook:
+  decode failure. Generate ONE keypair before anything else in this runbook:
 
   ```bash
   openssl genrsa -out /tmp/platform-jwt.pem 2048
-  export JARVIS_PLATFORM_JWT_PRIVATE_PEM="$(cat /tmp/platform-jwt.pem)"
+  openssl rsa -in /tmp/platform-jwt.pem -pubout -out /tmp/platform-jwt.pub
   ```
 
-  Set this same value as `JARVIS_PLATFORM_JWT_PRIVATE_PEM` on:
-  1. the Jarvis API process (`python run.py`, or your API container's env), and
-  2. the `connection-adapter` container's env (via `docker-compose.yml`,
-     step 2 below).
+  Then set:
+  1. `JARVIS_PLATFORM_JWT_PRIVATE_PEM="$(cat /tmp/platform-jwt.pem)"` on the
+     Jarvis API process (`python run.py`, or your API container's env) — the
+     minter, and the only process that ever needs the signing key.
+  2. `JARVIS_PLATFORM_JWT_PUBLIC_PEM="$(cat /tmp/platform-jwt.pub)"` on the
+     `connection-adapter` container's env (via `docker-compose.yml`, step 2
+     below). **Do not give the adapter the private key.** The adapter is the
+     tenant-isolation boundary in this design; anything that compromised it
+     while holding the signing key could mint a valid JWT for any tenant.
 
 - **Docker installed** (for OpenConnector + the adapter container).
 
@@ -84,9 +88,11 @@ OpenConnector).
 ## 2. Bring up OpenConnector + the adapter
 
 Use `infra/gateway/docker-compose.yml` — it brings up `openconnector` +
-`connection-adapter` together. Export the four variables it requires first
+`connection-adapter` together. Export the five variables it requires first
 (see [`README.md`](./README.md) §2 and the compose file's header), including
-the `JARVIS_PLATFORM_JWT_PRIVATE_PEM` from §1 above. From `infra/gateway/`:
+the `JARVIS_PLATFORM_JWT_PUBLIC_PEM` from §1 above and an
+`OOMOL_CONNECT_ADMIN_TOKEN` (`openssl rand -hex 24`) — without it OpenConnector
+serves its `/api/*` admin plane unauthenticated. From `infra/gateway/`:
 
 ```bash
 docker compose up -d
@@ -565,7 +571,7 @@ at Google.
    export JARVIS_TOOLHIVE_VMCP_URL=http://localhost:8100/mcp
    export JARVIS_OPENCONNECTOR_ADMIN_URL=http://localhost:3001
    export JARVIS_OPENCONNECTOR_ADMIN_TOKEN=<OOMOL_CONNECT_ADMIN_TOKEN>
-   export JARVIS_PLATFORM_JWT_PRIVATE_PEM="$(cat /tmp/platform-jwt.pem)"   # same PEM as step 1
+   export JARVIS_PLATFORM_JWT_PRIVATE_PEM="$(cat /tmp/platform-jwt.pem)"   # minting half, API process only
    export JARVIS_ANTHROPIC_API_KEY=<your key>
 
    python run.py

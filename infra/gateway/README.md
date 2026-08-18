@@ -41,7 +41,9 @@ Do not change any image reference to `:latest` in `docker-compose.yml`. If you n
 |---|---|---|
 | `OOMOL_CONNECT_ENCRYPTION_KEY` | `openconnector` | `openssl rand -hex 32` — **see the mandatory rule below** |
 | `OOMOL_CONNECT_RUNTIME_TOKEN` | `openconnector`, `connection-adapter` (as `JARVIS_OPENCONNECTOR_RUNTIME_TOKEN`) | `openssl rand -hex 24` — gates `POST /mcp`; confirmed by `spike-findings.md` §3 (401 without it) |
-| `JARVIS_PLATFORM_JWT_PRIVATE_PEM` | `connection-adapter` | An RSA private key PEM — **must be the same key** the Jarvis API process uses to mint platform JWTs (`backend/src/orchestrator/platform_jwt.py`). Generate one: `openssl genrsa -out platform-jwt.pem 2048`, then set both the API process's and the adapter's `JARVIS_PLATFORM_JWT_PRIVATE_PEM` to `$(cat platform-jwt.pem)`. If unset, `platform_jwt.py` falls back to an ephemeral per-process key — tokens minted by the API container would then be **unverifiable** by the adapter container (they're separate processes). |
+| `OOMOL_CONNECT_ADMIN_TOKEN` | `openconnector`, Jarvis API process (as `JARVIS_OPENCONNECTOR_ADMIN_TOKEN`) | `openssl rand -hex 24` — gates the `/api/*` **admin/control plane** (connection + OAuth lifecycle; `spike-findings-connect.md` §1). **Distinct from the runtime token**, which gates `/mcp` only. Left unset, OpenConnector logs `local admin authentication is disabled` and serves `/api/*` unauthenticated — and `GET /api/connections` lists every connection on the shared instance with no per-tenant filter. |
+| `JARVIS_PLATFORM_JWT_PRIVATE_PEM` | Jarvis API process **only** | The RSA private key PEM used to **mint** platform JWTs (`backend/src/orchestrator/platform_jwt.py`). Generate: `openssl genrsa -out platform-jwt.pem 2048`. Never give this to the adapter — the adapter only verifies. |
+| `JARVIS_PLATFORM_JWT_PUBLIC_PEM` | `connection-adapter` | The **public** half of the key above, used to verify inbound platform JWTs: `openssl rsa -in platform-jwt.pem -pubout -out platform-jwt.pub`. Verification needs no private key, and the adapter is the tenant-isolation boundary — handing it the signing key would let anything that compromised it mint tokens for any tenant. If neither PEM is set, `platform_jwt.py` falls back to an ephemeral per-process key and tokens minted by the API process are **unverifiable** by the adapter (separate processes). |
 | `JARVIS_DATABASE_URL` | `connection-adapter` | Point at Jarvis's **existing** Postgres (started by the repo-root `docker-compose.yml`, not by this file). From inside this compose network to a host-run Postgres: `postgresql+asyncpg://jarvis:jarvis@host.docker.internal:5432/jarvis` (Mac/Windows) — Linux users may need the bridge gateway IP instead of `host.docker.internal`. |
 | `JARVIS_OPENCONNECTOR_MCP_URL` | `connection-adapter` | Set automatically by `docker-compose.yml` to `http://openconnector:3001/mcp` — no action needed unless you're running the adapter outside this compose network. |
 | `JARVIS_TOOLHIVE_VMCP_URL` | Jarvis API process (not this compose file) | Point Jarvis's `settings.toolhive_vmcp_url` at wherever ToolHive ends up listening once you bring it up manually (§5). This is the **only** switch that routes an installation at the gateway — there is no per-provider flag; an installation routes at the gateway whenever it declares `auth_provider="platform_jwt"` and this URL is set. |
@@ -73,7 +75,10 @@ cd ../.. && docker compose up -d && cd backend && alembic upgrade head && cd ../
 # 2. Generate secrets (do this once; save them somewhere durable — see §2)
 export OOMOL_CONNECT_ENCRYPTION_KEY=$(openssl rand -hex 32)
 export OOMOL_CONNECT_RUNTIME_TOKEN=$(openssl rand -hex 24)
-export JARVIS_PLATFORM_JWT_PRIVATE_PEM="$(openssl genrsa 2048)"
+export OOMOL_CONNECT_ADMIN_TOKEN=$(openssl rand -hex 24)
+# The adapter verifies; only the Jarvis API process mints. Keep the halves apart.
+openssl genrsa -out platform-jwt.pem 2048
+export JARVIS_PLATFORM_JWT_PUBLIC_PEM="$(openssl rsa -in platform-jwt.pem -pubout)"
 export JARVIS_DATABASE_URL=postgresql+asyncpg://jarvis:jarvis@host.docker.internal:5432/jarvis
 
 # 3. Bring up openconnector + connection-adapter
@@ -84,8 +89,9 @@ docker compose ps
 docker compose logs -f connection-adapter
 ```
 
-At this point `openconnector` is listening on host `:3001` (via `PORT=3001` +
-`-p 3001:3001` — this keeps host `:3000` free for the Next.js frontend; see
+At this point `openconnector` is listening on `127.0.0.1:3001` (via `PORT=3001` +
+`-p 127.0.0.1:3001:3001` — loopback only, because `/api/*` is an admin plane
+that enumerates every tenant; this also keeps host `:3000` free for the Next.js frontend; see
 RUNBOOK-gateway.md) and `connection-adapter`
 (the MCP service ToolHive will front) is listening on `:8100/mcp`. No
 provider is connected yet and ToolHive is not up — see §5.
