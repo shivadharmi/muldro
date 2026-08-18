@@ -239,26 +239,40 @@ class AgentInvoker:
         """Get the Claude model ID for an agent's tier."""
         return default_model_id_for_tier(agent.model_tier) or default_model_id_for_tier("balanced")
 
-    async def _resolved_model_id(self, agent: SubAgent, workspace_id: str) -> str:
-        """The workspace-resolved model id that actually runs for this agent — used for both
-        budget attribution and streaming metadata (``agent_start.model``). Replays §10
-        override-degradation via ModelResolver.resolved_model_id. Falls back to the tier
-        default id when no binding resolves or lookup fails.
+    async def _resolved_model_ref(self, agent: SubAgent, workspace_id: str) -> tuple[str, str]:
+        """The workspace-resolved ``(provider, model_id)`` that actually runs for this agent.
 
-        Distinct from ``get_model_for_agent`` (the catalog-default Anthropic id), which stays
-        the key for the general-purpose-subagent disable and other deployment-default uses."""
+        Replays §10 override-degradation via ``ModelResolver.resolved_model_ref``. Falls
+        back to ``("anthropic", <tier default id>)`` when no binding resolves or lookup
+        fails — ``default_model_id_for_tier`` reads the Anthropic catalog only, so that
+        provider is a fact about the fallback, not an assumption about the workspace.
+
+        Anything keyed on the model that ACTUALLY runs must go through here rather than
+        ``get_model_for_agent``: a workspace can override an agent onto a different model
+        or provider, and the catalog default would then name a model nothing builds.
+        """
         from src.services.model_resolver import ModelResolver
 
         try:
             async with self._db_factory() as db:
-                resolved = await ModelResolver(db).resolved_model_id(
+                ref = await ModelResolver(db).resolved_model_ref(
                     agent=agent.name,
                     agent_tier=agent.model_tier,
                     workspace_id=workspace_id or None,
                 )
-            return resolved or self.get_model_for_agent(agent)
+            return ref or ("anthropic", self.get_model_for_agent(agent))
         except Exception:
-            return self.get_model_for_agent(agent)
+            return ("anthropic", self.get_model_for_agent(agent))
+
+    async def _resolved_model_id(self, agent: SubAgent, workspace_id: str) -> str:
+        """The workspace-resolved model id that actually runs for this agent — used for both
+        budget attribution and streaming metadata (``agent_start.model``). The model-id half
+        of :meth:`_resolved_model_ref`.
+
+        Distinct from ``get_model_for_agent`` (the catalog-default Anthropic id), which stays
+        a deployment-default label — never a key for anything scoped to the running model."""
+        _, model_id = await self._resolved_model_ref(agent, workspace_id)
+        return model_id
 
     def build_system_prompt(
         self, agent: SubAgent, context: str = "", capability_summary: str = ""
@@ -612,6 +626,7 @@ class AgentInvoker:
             critique = make_governor_delegate_critique_middleware(
                 redis=self._services.extras.get("redis") if self._services else None,
                 is_read_only_delegate=True,
+                workspace_id=workspace_id,
             )
             extra_middleware = (critique, *extra_middleware)
 
@@ -639,12 +654,14 @@ class AgentInvoker:
         the singleton preserves the Perceiver's sonnet/6144 thinking AND applies the SAME cheap-mode
         transform the lead received.
 
-        GP-disable keys off ``get_model_for_agent(<agent>)`` — the resolved Anthropic
-        model id (a malformed tier degrades to the balanced/sonnet id, never a tier
-        name) the deep
-        runtime always builds via ``build_chat_model`` (deepagents derives the harness-profile
-        key from that built model). Disabling GP on BOTH models, BEFORE either is built, stops the
-        sonnet delegate — itself a deep lead — from getting its own ungated general-purpose
+        GP-disable keys off ``_resolved_model_ref(<agent>, workspace_id)`` — the
+        ``(provider, model_id)`` that ACTUALLY runs, not the catalog default. deepagents
+        derives the harness-profile key from the built model (``f"{provider}:{identifier}"``),
+        so a workspace that overrides an agent's model or provider would miss a key built
+        from ``get_model_for_agent`` and silently keep its general-purpose child. A
+        malformed tier or a failed lookup degrades to ``("anthropic", <balanced id>)``,
+        never a tier name. Disabling GP on BOTH models, BEFORE either is built, stops the
+        delegate — itself a deep lead — from getting its own ungated general-purpose
         child. Both calls are idempotent + process-global.
 
         The delegate carries its OWN role prompt (``perceiver_cfg.prompt``, the default inside
@@ -664,8 +681,9 @@ class AgentInvoker:
         # the lead can otherwise serve alone — degrade to no delegates instead.
         try:
             perceiver_cfg = build_agent_set(AGENTS, self._settings.cheap_mode)["perceiver"]
-            disable_general_purpose_subagent(self.get_model_for_agent(lead_agent))
-            disable_general_purpose_subagent(self.get_model_for_agent(perceiver_cfg))
+            for cfg in (lead_agent, perceiver_cfg):
+                provider, model_id = await self._resolved_model_ref(cfg, workspace_id)
+                disable_general_purpose_subagent(model_id, provider=provider)
             tools = await self._resolve_tools(perceiver_cfg, workspace_id, None)
             delegate = await build_read_only_delegate(
                 perceiver_cfg,

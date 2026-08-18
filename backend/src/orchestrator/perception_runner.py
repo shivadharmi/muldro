@@ -392,6 +392,7 @@ class PerceptionRunner:
                     user_context,
                     engagement_context=engagement_context,
                     relevance_penalty=relevance_penalty,
+                    workspace_id=workspace_id,
                 )
 
                 # Route by notification tier

@@ -234,6 +234,7 @@ def intent_to_plan(intent: str, message: str, capabilities: list[str]) -> PlanOu
 async def classify_intent(
     message: str,
     history_block: str = "",
+    workspace_id: str = "",
 ) -> tuple[str, float, list[str]]:
     """Classify user message intent using Haiku — fast and cheap.
 
@@ -251,6 +252,7 @@ async def classify_intent(
             tier="haiku",
             max_tokens=150,
             temperature=0,
+            workspace_id=workspace_id,
         )
 
         # Parse via the robust helper (handles code fences + JSON embedded in

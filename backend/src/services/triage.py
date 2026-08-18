@@ -200,6 +200,7 @@ class TriageService:
                 user=user_msg,
                 tier="haiku",
                 max_tokens=128 * len(events),
+                workspace_id=workspace_id,
             )
             await record_token_span(
                 agent_name="triage",

@@ -76,3 +76,31 @@ def test_gemini_thinking_off_omits_budget():
     )
     assert "thinking_budget" not in kw
     assert kw["temperature"] == 0.4  # gemini accepts temperature
+
+
+def test_legacy_thinking_never_emits_a_budget_below_the_api_minimum():
+    """Anthropic legacy thinking requires ``budget_tokens >= 1024`` AND
+    ``budget_tokens < max_tokens``. Both cannot hold when ``max_tokens <= 1024``, so
+    for those sizes thinking must be dropped entirely rather than clamped to an
+    unusable value — the old ``budget = max_tokens - 1`` clamp produced a fatal 400
+    for every caller sizing a small completion (e.g. a 256-token classification).
+    """
+    spec = get_model_spec("anthropic", "claude-sonnet-4-6")
+    for max_tokens in (1, 2, 256, 512, 1023, 1024):
+        kw = build_model_kwargs(
+            spec, effort="high", max_tokens=max_tokens, temperature=0.3, thinking_enabled=True
+        )
+        assert "thinking" not in kw, f"max_tokens={max_tokens} emitted an invalid thinking config"
+        # Falling back to the no-thinking branch means temperature is the caller's
+        # again — the forced temperature=1 only belongs with thinking on.
+        assert kw["temperature"] == 0.3, f"max_tokens={max_tokens} kept the thinking-on temperature"
+
+
+def test_legacy_thinking_budget_stays_at_or_above_the_minimum_when_it_fits():
+    """Just above the boundary the budget must still be >= 1024, not max_tokens - 1."""
+    spec = get_model_spec("anthropic", "claude-sonnet-4-6")
+    kw = build_model_kwargs(
+        spec, effort="high", max_tokens=1025, temperature=None, thinking_enabled=True
+    )
+    assert kw["thinking"]["budget_tokens"] >= 1024
+    assert kw["thinking"]["budget_tokens"] < 1025

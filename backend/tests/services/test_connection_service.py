@@ -473,3 +473,53 @@ async def test_schedule_seeding_failure_never_fails_the_connection():
     finally:
         await _cleanup_schedule_ws(factory, _SCHED_WS)
         await engine.dispose()
+
+
+async def test_confirm_connection_never_resurrects_a_revoked_connection():
+    """Disconnect flips connection_map to ``revoked`` but does NOT delete the
+    OpenConnector-side credential, so OC keeps reporting the connection as
+    ``configured``. A confirm that promotes anything-not-active would therefore
+    re-enable a disconnected integration from a session cookie plus two strings —
+    no OAuth screen, no user intent. Only the pending -> active edge may promote.
+    """
+    factory, engine = make_test_db()
+    pid = f"usr_{ULID()}"
+    alias = "work"
+    try:
+        await seed_user_workspace(factory, pid, TEST_WORKSPACE_ID)
+        name = mint_connection_name(TEST_WORKSPACE_ID, pid, "gmail", alias)
+        async with factory() as db:
+            db.add(
+                ConnectionMap(
+                    tenant_id=TEST_WORKSPACE_ID,
+                    workspace_id=TEST_WORKSPACE_ID,
+                    principal_id=pid,
+                    provider_id="gmail",
+                    connection_id=name,
+                    connection_status="revoked",
+                    account_alias=alias,
+                )
+            )
+            await db.commit()
+
+        # OC still holds the credential — exactly the state Disconnect leaves behind.
+        admin = AsyncMock()
+        admin.list_connections = AsyncMock(
+            return_value=[{"connectionName": name, "configured": True}]
+        )
+        svc = ConnectionService(admin_client=admin)
+        async with factory() as db:
+            active = await svc.confirm_connection(
+                db, workspace_id=TEST_WORKSPACE_ID, principal_id=pid, provider="gmail", alias=alias
+            )
+            await db.commit()
+
+        assert active is False
+        async with factory() as db:
+            row = (
+                await db.execute(select(ConnectionMap).where(ConnectionMap.principal_id == pid))
+            ).scalar_one()
+        assert row.connection_status == "revoked"
+    finally:
+        await _cleanup(factory, pid, alias)
+        await engine.dispose()

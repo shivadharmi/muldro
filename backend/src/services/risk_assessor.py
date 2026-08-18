@@ -75,10 +75,14 @@ async def assess_risk(
     capability: str,
     step_input: dict,
     user_context: dict,
+    workspace_id: str | None = None,
 ) -> RiskAssessment:
     """Call Haiku to assess contextual risk for an action.
 
-    Falls back to medium risk on any failure (API error, invalid JSON, etc.).
+    ``workspace_id`` resolves the assessor model against that workspace's bindings —
+    the same workspace whose cache key and token spend this assessment is attributed to.
+
+    Falls back to high risk on any failure (API error, invalid JSON, etc.).
     """
     user_message = json.dumps(
         {
@@ -95,6 +99,7 @@ async def assess_risk(
             user=user_message,
             tier="haiku",
             max_tokens=256,
+            workspace_id=workspace_id,
         )
         from src.llm_utils import parse_llm_json
 
@@ -135,8 +140,9 @@ async def get_or_assess_risk(
     except Exception:
         logger.debug("Redis cache read failed for %s", full_key, exc_info=True)
 
-    # Cache miss — call LLM
-    assessment = await assess_risk(capability, step_input, user_context)
+    # Cache miss — call LLM. The workspace already scopes the cache key above; it must
+    # scope model resolution too, or a workspace override is ignored on every miss.
+    assessment = await assess_risk(capability, step_input, user_context, workspace_id)
 
     # Store in cache
     try:

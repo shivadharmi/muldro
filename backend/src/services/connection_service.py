@@ -141,11 +141,18 @@ class ConnectionService:
         ).scalar_one_or_none()
         if row is None:
             return False
-        if configured and row.connection_status != "active":
+        # ONLY the pending -> active edge promotes. Two distinct reasons:
+        #   - A repeat confirm (polling, a re-connect of an already-live account)
+        #     must not re-enable schedules the user has since turned off.
+        #   - A `revoked` row must never be promoted here. Disconnect flips the
+        #     local row but leaves the OpenConnector-side credential in place, so
+        #     `configured` stays True indefinitely — promoting on it would let a
+        #     session cookie plus (provider, alias) undo a disconnect with no OAuth
+        #     screen and no user intent. Re-connecting goes through
+        #     `begin_connection`, which starts a real authorization before it moves
+        #     the row back to `pending`.
+        if configured and row.connection_status == "pending":
             row.connection_status = "active"
-            # Only on the pending -> active EDGE: a repeat confirm (polling, a
-            # re-connect of an already-live account) must not re-enable schedules
-            # the user has since turned off.
             await self._enable_perception_schedules(db, workspace_id, provider)
         return row.connection_status == "active"
 

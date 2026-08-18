@@ -101,3 +101,35 @@ def test_context_manager_removes_a_key_it_added():
         assert _KEY_X not in _HARNESS_PROFILES
     finally:
         _HARNESS_PROFILES.pop(_KEY_X, None)  # defensive, in case of assertion failure above
+
+
+def test_disable_key_is_provider_scoped():
+    """The harness key is ``f"{provider}:{model}"`` — deepagents derives it from the
+    BUILT model's provider + identifier. A hardcoded ``anthropic:`` prefix registers a
+    key that a workspace-overridden openai/google_genai/ollama lead never looks up, so
+    that lead silently keeps its general-purpose child."""
+    openai_key = f"openai:{_FAKE_X}"
+    try:
+        disable_general_purpose_subagent(_FAKE_X, provider="openai")
+
+        assert _HARNESS_PROFILES[openai_key].general_purpose_subagent.enabled is False
+        # Same model id under a different provider is a different lead — untouched.
+        assert _KEY_X not in _HARNESS_PROFILES
+    finally:
+        _HARNESS_PROFILES.pop(openai_key, None)
+        _HARNESS_PROFILES.pop(_KEY_X, None)
+
+
+def test_bounded_scope_restores_under_the_same_provider_key():
+    """``general_purpose_disabled`` must build and restore the SAME provider-scoped key
+    it disabled — a teardown that pops ``anthropic:<model>`` after disabling
+    ``openai:<model>`` would leak the openai key into the wider suite."""
+    from src.deep_runtime.delegates import general_purpose_disabled
+
+    openai_key = f"openai:{_FAKE_Y}"
+    try:
+        with general_purpose_disabled(_FAKE_Y, provider="openai"):
+            assert _HARNESS_PROFILES[openai_key].general_purpose_subagent.enabled is False
+        assert openai_key not in _HARNESS_PROFILES  # nothing before -> removed on exit
+    finally:
+        _HARNESS_PROFILES.pop(openai_key, None)

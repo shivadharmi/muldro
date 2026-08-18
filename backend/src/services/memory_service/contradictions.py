@@ -54,7 +54,9 @@ class MemoryContradictions:
 
         # Ask Claude to check for contradictions
         for cand_id, cand_text in candidates:
-            is_contradiction = await self._check_contradiction_pair(new_fact, cand_text)
+            is_contradiction = await self._check_contradiction_pair(
+                new_fact, cand_text, workspace_id=workspace_id
+            )
             if is_contradiction:
                 # Supersede the old memory
                 stmt = (
@@ -95,7 +97,9 @@ class MemoryContradictions:
 
         return superseded
 
-    async def _check_contradiction_pair(self, fact_a: str, fact_b: str) -> bool:
+    async def _check_contradiction_pair(
+        self, fact_a: str, fact_b: str, workspace_id: str = ""
+    ) -> bool:
         """Check if two facts contradict each other using Claude."""
         try:
             text = await complete_text(
@@ -106,6 +110,7 @@ class MemoryContradictions:
                 user=f"Fact A: {fact_a}\nFact B: {fact_b}",
                 tier="resolved",
                 max_tokens=64,
+                workspace_id=workspace_id,
             )
             from src.llm_utils import parse_llm_json
 

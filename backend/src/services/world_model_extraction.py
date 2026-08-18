@@ -210,6 +210,7 @@ class WorldModelExtractionMixin:
                 user=f"Source: user_message\nSummary: {text}",
                 tier="resolved",
                 max_tokens=1024,
+                workspace_id=workspace_id,
             )
             await record_token_span(
                 agent_name="world_model",
@@ -283,6 +284,7 @@ class WorldModelExtractionMixin:
                 user=user_message,
                 tier="resolved",
                 max_tokens=1024,
+                workspace_id=workspace_id,
             )
             await record_token_span(
                 agent_name="world_model",

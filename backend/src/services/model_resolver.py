@@ -132,6 +132,32 @@ class ModelResolver:
         except Exception:
             return True
 
+    async def resolved_model_ref(
+        self,
+        *,
+        tier: str | None = None,
+        agent: str | None = None,
+        agent_tier: str | None = None,
+        workspace_id: str | None = None,
+    ) -> tuple[str, str] | None:
+        """The ``(provider, model_id)`` the (agent/tier) actually resolves to.
+
+        Replays §10 override-degradation so a degraded override reports the tier model
+        that actually runs, not the unusable override. None when no binding is found
+        (caller falls back to the tier default).
+
+        Callers that key a provider-scoped registry off the running model — e.g. the
+        deepagents harness-profile key ``f"{provider}:{model_id}"`` — need BOTH halves:
+        a workspace can override an agent onto a non-Anthropic provider, and a key
+        built from a hardcoded provider would silently miss."""
+        try:
+            binding = await self._effective_binding(
+                tier=tier, agent=agent, agent_tier=agent_tier, workspace_id=workspace_id
+            )
+            return (binding.provider, binding.model_id) if binding is not None else None
+        except Exception:
+            return None
+
     async def resolved_model_id(
         self,
         *,
@@ -142,16 +168,12 @@ class ModelResolver:
     ) -> str | None:
         """The model id the (agent/tier) actually resolves to, for budget attribution.
 
-        Replays §10 override-degradation so a degraded override is priced as the tier
-        model that actually runs, not the unusable override. None when no binding is
-        found (caller falls back to the tier default)."""
-        try:
-            binding = await self._effective_binding(
-                tier=tier, agent=agent, agent_tier=agent_tier, workspace_id=workspace_id
-            )
-            return binding.model_id if binding is not None else None
-        except Exception:
-            return None
+        The model-id half of :meth:`resolved_model_ref` — see there for the
+        override-degradation semantics."""
+        ref = await self.resolved_model_ref(
+            tier=tier, agent=agent, agent_tier=agent_tier, workspace_id=workspace_id
+        )
+        return ref[1] if ref is not None else None
 
     async def _effective_binding(
         self, *, tier, agent, agent_tier, workspace_id

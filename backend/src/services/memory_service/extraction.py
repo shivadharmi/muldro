@@ -268,6 +268,7 @@ class MemoryExtraction:
                 user=source_text,
                 tier="resolved",
                 max_tokens=1024,
+                workspace_id=workspace_id,
             )
             await record_token_span(
                 agent_name="memory",
@@ -293,6 +294,7 @@ class MemoryExtraction:
                 system=PREFERENCE_EXTRACTION_PROMPT,
                 user=source_text,
                 tier="resolved",
+                workspace_id=workspace_id,
                 max_tokens=1024,
             )
             await record_token_span(

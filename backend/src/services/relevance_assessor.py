@@ -138,6 +138,7 @@ async def assess_relevance(
     user_context: UserContext,
     engagement_context: str = "",
     relevance_penalty: float = 0.0,
+    workspace_id: str = "",
 ) -> RelevanceAssessment:
     """Call Haiku to assess signal relevance. Returns silent assessment on failure.
 
@@ -162,6 +163,7 @@ async def assess_relevance(
             user=prompt,
             tier="haiku",
             max_tokens=512,
+            workspace_id=workspace_id,
         )
         data = parse_llm_json(text)
         assessment = RelevanceAssessment.model_validate(data)

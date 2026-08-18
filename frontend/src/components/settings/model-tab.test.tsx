@@ -34,20 +34,41 @@ const config: ModelConfig = {
     },
   ],
   agent_overrides: [],
-  providers: [{ provider: "anthropic", configured: true, status: "valid" }],
+  providers: [
+    {
+      provider: "anthropic",
+      configured: true,
+      status: "valid",
+      source: "workspace",
+    },
+  ],
 };
 
 test("renders tier rows from config", async () => {
   render(
-    <ModelTab open loading={false} catalog={catalog} config={config} onLoad={() => {}} />,
+    <ModelTab
+      open
+      loading={false}
+      catalog={catalog}
+      config={config}
+      onLoad={() => {}}
+    />,
   );
-  await waitFor(() => expect(screen.getByText(/balanced/i)).toBeInTheDocument());
+  await waitFor(() =>
+    expect(screen.getByText(/balanced/i)).toBeInTheDocument(),
+  );
 });
 
 test("calls onLoad on mount", () => {
   const onLoad = vi.fn();
   render(
-    <ModelTab open loading={false} catalog={null} config={null} onLoad={onLoad} />,
+    <ModelTab
+      open
+      loading={false}
+      catalog={null}
+      config={null}
+      onLoad={onLoad}
+    />,
   );
   expect(onLoad).toHaveBeenCalled();
 });
@@ -70,7 +91,13 @@ test("fires onTestProvider when Test is clicked", async () => {
 
 test("shows Configured for a configured provider", () => {
   render(
-    <ModelTab open loading={false} catalog={catalog} config={config} onLoad={() => {}} />,
+    <ModelTab
+      open
+      loading={false}
+      catalog={catalog}
+      config={config}
+      onLoad={() => {}}
+    />,
   );
   expect(screen.getByText(/configured/i)).toBeInTheDocument();
 });
@@ -78,9 +105,17 @@ test("shows Configured for a configured provider", () => {
 test("lists an env-backed configured provider in the tier dropdown", () => {
   // anthropic is reported configured (env-backed) with no explicit credential row.
   render(
-    <ModelTab open loading={false} catalog={catalog} config={config} onLoad={() => {}} />,
+    <ModelTab
+      open
+      loading={false}
+      catalog={catalog}
+      config={config}
+      onLoad={() => {}}
+    />,
   );
-  const select = screen.getByLabelText("balanced provider") as HTMLSelectElement;
+  const select = screen.getByLabelText(
+    "balanced provider",
+  ) as HTMLSelectElement;
   const options = Array.from(select.options).map((o) => o.value);
   expect(options).toContain("anthropic");
   // And its provider card still surfaces the configured badge.
@@ -92,12 +127,27 @@ test("keeps the binding's current provider in options when de-configured", () =>
   // select must still list it so it never renders blank/mismatched.
   const deconfigured: ModelConfig = {
     ...config,
-    providers: [{ provider: "anthropic", configured: false, status: "unconfigured" }],
+    providers: [
+      {
+        provider: "anthropic",
+        configured: false,
+        status: "unconfigured",
+        source: "none",
+      },
+    ],
   };
   render(
-    <ModelTab open loading={false} catalog={catalog} config={deconfigured} onLoad={() => {}} />,
+    <ModelTab
+      open
+      loading={false}
+      catalog={catalog}
+      config={deconfigured}
+      onLoad={() => {}}
+    />,
   );
-  const select = screen.getByLabelText("balanced provider") as HTMLSelectElement;
+  const select = screen.getByLabelText(
+    "balanced provider",
+  ) as HTMLSelectElement;
   const options = Array.from(select.options).map((o) => o.value);
   expect(options).toContain("anthropic");
   expect(select.value).toBe("anthropic");
@@ -123,7 +173,14 @@ test("fires onDeleteProvider when Remove is clicked for a configured provider (R
 test("hides Remove for an unconfigured provider (R2)", () => {
   const deconfigured: ModelConfig = {
     ...config,
-    providers: [{ provider: "anthropic", configured: false, status: "unconfigured" }],
+    providers: [
+      {
+        provider: "anthropic",
+        configured: false,
+        status: "unconfigured",
+        source: "none",
+      },
+    ],
   };
   render(
     <ModelTab
@@ -135,14 +192,24 @@ test("hides Remove for an unconfigured provider (R2)", () => {
       onDeleteProvider={() => {}}
     />,
   );
-  expect(screen.queryByRole("button", { name: /^remove$/i })).not.toBeInTheDocument();
+  expect(
+    screen.queryByRole("button", { name: /^remove$/i }),
+  ).not.toBeInTheDocument();
 });
 
 test("clamps a cleared max_tokens field to at least 1, never 0 (N1)", async () => {
   render(
-    <ModelTab open loading={false} catalog={catalog} config={config} onLoad={() => {}} />,
+    <ModelTab
+      open
+      loading={false}
+      catalog={catalog}
+      config={config}
+      onLoad={() => {}}
+    />,
   );
-  const maxTokens = screen.getByLabelText("balanced max tokens") as HTMLInputElement;
+  const maxTokens = screen.getByLabelText(
+    "balanced max tokens",
+  ) as HTMLInputElement;
   await userEvent.clear(maxTokens);
   // Clearing the field must not yield 0 (which produces a -1 thinking budget server-side).
   expect(maxTokens.value).not.toBe("0");
@@ -164,16 +231,23 @@ test("can add and remove a per-agent override from the UI (F1)", async () => {
 
   // Open the Advanced section, then add a planner override.
   await userEvent.click(screen.getByText(/per-agent overrides/i));
-  await userEvent.selectOptions(screen.getByLabelText("agent to override"), "planner");
+  await userEvent.selectOptions(
+    screen.getByLabelText("agent to override"),
+    "planner",
+  );
   await userEvent.click(screen.getByRole("button", { name: /add override/i }));
 
   // The override row now exists (its provider select is labelled by the agent name),
   // seeded from the reasoning tier's provider.
-  const plannerProvider = screen.getByLabelText("planner provider") as HTMLSelectElement;
+  const plannerProvider = screen.getByLabelText(
+    "planner provider",
+  ) as HTMLSelectElement;
   expect(plannerProvider).toBeInTheDocument();
 
   // Saving sends the override in agent_overrides.
-  await userEvent.click(screen.getByRole("button", { name: /save overrides/i }));
+  await userEvent.click(
+    screen.getByRole("button", { name: /save overrides/i }),
+  );
   expect(onSaveConfig).toHaveBeenCalledWith(
     expect.objectContaining({
       agent_overrides: expect.arrayContaining([
@@ -185,7 +259,9 @@ test("can add and remove a per-agent override from the UI (F1)", async () => {
   // Remove it -> the row disappears and a save sends an empty override list.
   await userEvent.click(screen.getByLabelText("remove planner override"));
   expect(screen.queryByLabelText("planner provider")).not.toBeInTheDocument();
-  await userEvent.click(screen.getByRole("button", { name: /save overrides/i }));
+  await userEvent.click(
+    screen.getByRole("button", { name: /save overrides/i }),
+  );
   expect(onSaveConfig).toHaveBeenLastCalledWith(
     expect.objectContaining({ agent_overrides: [] }),
   );
@@ -209,7 +285,14 @@ test("enables Save for keyless ollama and disables it for keyed providers (F3)",
   const ollamaConfig: ModelConfig = {
     tiers: [],
     agent_overrides: [],
-    providers: [{ provider: "ollama", configured: false, status: "unconfigured" }],
+    providers: [
+      {
+        provider: "ollama",
+        configured: false,
+        status: "unconfigured",
+        source: "none",
+      },
+    ],
   };
   render(
     <ModelTab
@@ -222,5 +305,34 @@ test("enables Save for keyless ollama and disables it for keyed providers (F3)",
   );
   // ollama's Save button is enabled without an API key (base_url-only auth).
   const saveButtons = screen.getAllByRole("button", { name: /^save$/i });
-  expect(saveButtons.some((b) => !(b as HTMLButtonElement).disabled)).toBe(true);
+  expect(saveButtons.some((b) => !(b as HTMLButtonElement).disabled)).toBe(
+    true,
+  );
+});
+
+test("hides Remove for a credential this workspace does not own", () => {
+  // DELETE /providers/{p}/credentials removes THIS workspace's row and nothing else.
+  // A provider configured by the deployment-default row or an env fallback key is
+  // still `configured: true`, so gating Remove on `configured` offered a control that
+  // silently did nothing and then re-rendered as configured on the next refetch.
+  for (const source of ["default", "env"] as const) {
+    const inherited: ModelConfig = {
+      ...config,
+      providers: [
+        { provider: "anthropic", configured: true, status: "valid", source },
+      ],
+    };
+    const { unmount } = render(
+      <ModelTab
+        open
+        loading={false}
+        catalog={catalog}
+        config={inherited}
+        onLoad={() => {}}
+        onDeleteProvider={() => {}}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: /^remove$/i })).toBeNull();
+    unmount();
+  }
 });

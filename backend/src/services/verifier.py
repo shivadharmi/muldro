@@ -244,6 +244,7 @@ class Verifier:
                 user=prompt,
                 tier="resolved",
                 max_tokens=256,
+                workspace_id=run.workspace_id,
             )
             from src.llm_utils import parse_llm_json
 

@@ -101,9 +101,12 @@ async def complete_text_with_usage(
     thinking.
     """
     mapped_tier = _UTILITY_TIER_MAP.get(tier, tier)
+    # Several perception callers default workspace_id to "" rather than None. An empty
+    # string matches no ModelBinding row, so it would silently degrade to the deployment
+    # default instead of erroring — normalize it to None so "no workspace" is stated once.
     async with get_session_factory()() as db:
         resolved = await ModelResolver(db).resolve(
-            tier=mapped_tier, workspace_id=workspace_id, thinking_enabled=False
+            tier=mapped_tier, workspace_id=workspace_id or None, thinking_enabled=False
         )
     resolved = _with_utility_params(resolved, max_tokens=max_tokens, temperature=temperature)
     model = build_langchain_model(resolved)
@@ -123,10 +126,15 @@ async def complete_text(
     tier: str,
     max_tokens: int,
     temperature: float | None = None,
+    workspace_id: str | None = None,
 ) -> str:
     """Run one plain completion and return the assistant's text.
 
     - ``system``: plain string, a list of content blocks, or ``None`` (omitted).
+    - ``workspace_id``: resolve against this workspace's model bindings. Omitting it
+      resolves against the deployment default, so a caller with a workspace in scope
+      MUST pass it — otherwise the workspace's configured model is silently ignored
+      for this call while its tokens are still billed to that workspace.
 
     The conversation always ends with the user message. Assistant-message *prefill*
     (seeding the reply with ``"{"`` to force JSON) is intentionally NOT supported:
@@ -136,6 +144,11 @@ async def complete_text(
     lean on ``llm_utils.parse_llm_json``, which tolerates fences and surrounding prose.
     """
     text, _ = await complete_text_with_usage(
-        system=system, user=user, tier=tier, max_tokens=max_tokens, temperature=temperature
+        system=system,
+        user=user,
+        tier=tier,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        workspace_id=workspace_id,
     )
     return text

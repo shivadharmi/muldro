@@ -8,6 +8,8 @@ response models without importing the routes module.
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -25,10 +27,24 @@ class TierBinding(BaseModel):
 
 
 class ProviderStatus(BaseModel):
+    """A provider's credential state, and WHERE that credential comes from.
+
+    ``configured`` is true for three different sources, only one of which the
+    workspace can delete. ``source`` names which, so a client can offer Remove
+    for a workspace-owned row and not for one inherited from the deployment
+    default row or a process env var — DELETE only ever removes the workspace
+    row, so offering it elsewhere is a control that silently does nothing.
+    """
+
     model_config = ConfigDict(extra="ignore")
     provider: str
     configured: bool
     status: str
+    # "workspace" — this workspace's own ProviderCredential row (deletable)
+    # "default"   — the NULL-workspace deployment-default row (not deletable here)
+    # "env"       — the per-provider env fallback key (not deletable at all)
+    # "none"      — no credential resolves; `configured` is False
+    source: Literal["workspace", "default", "env", "none"] = "none"
 
 
 class ModelConfigResponse(BaseModel):

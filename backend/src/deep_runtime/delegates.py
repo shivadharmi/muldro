@@ -150,7 +150,7 @@ async def build_read_only_delegate(
     }
 
 
-def disable_general_purpose_subagent(model_name: str) -> None:
+def disable_general_purpose_subagent(model_name: str, *, provider: str = "anthropic") -> None:
     """Disable the ambient auto-added general-purpose ``task`` subagent for a deep lead.
 
     ``create_deep_agent`` auto-inserts a stock ``general-purpose`` subagent (backing the
@@ -158,14 +158,19 @@ def disable_general_purpose_subagent(model_name: str) -> None:
     host we want the lead's only ``task`` targets to be the read-only Jarvis delegates
     explicitly registered via ``subagents=[...]`` — never an unscoped general-purpose
     child. This registers a deepagents ``HarnessProfile`` whose
-    ``general_purpose_subagent.enabled`` is ``False`` under ``anthropic:<model_name>``,
+    ``general_purpose_subagent.enabled`` is ``False`` under ``<provider>:<model_name>``,
     so a lead whose model resolves to that key is built without the GP child.
 
-    Model-scoped by design: the key is ``f"anthropic:{model_name}"`` (the direct
-    Anthropic model id, e.g. ``claude-sonnet-4-6``).
-    Verified in the Phase-0 spike as preferred over the provider-wide ``"anthropic"``
-    key — disabling GP for a sonnet lead leaves GP intact for opus/haiku agents built
-    in the same process.
+    Model-scoped by design: the key is ``f"{provider}:{model_name}"``, matching how
+    deepagents derives a profile key from an already-built model
+    (``get_model_provider`` + ``get_model_identifier``). Verified in the Phase-0 spike as
+    preferred over the provider-wide key — disabling GP for a sonnet lead leaves GP
+    intact for opus/haiku agents built in the same process.
+
+    ``provider`` MUST name the provider the model is actually built with. It defaults to
+    ``"anthropic"`` only because that is the deployment default; a workspace that
+    overrides an agent onto openai/google_genai/ollama needs its real provider here, or
+    the registered key never matches and the GP child survives.
 
     Idempotent + quiet: if the key is already GP-disabled this returns early without
     re-registering, so the Phase-4 seam (which calls this on every deep delegate-host
@@ -184,14 +189,15 @@ def disable_general_purpose_subagent(model_name: str) -> None:
     delete a pre-existing profile.
 
     Args:
-        model_name: The direct Anthropic model id of the lead (e.g. ``"claude-sonnet-4-6"``).
-            The harness-profile key is ``f"anthropic:{model_name}"``.
+        model_name: The model id the lead is actually built with (e.g. ``"claude-sonnet-4-6"``).
+        provider: The provider that model is built with. The harness-profile key is
+            ``f"{provider}:{model_name}"``.
     """
     # Private-registry read for the idempotency guard only; the write goes through the
     # public register_harness_profile (which owns lazy built-in bootstrap + merge).
     from deepagents.profiles.harness.harness_profiles import _HARNESS_PROFILES
 
-    key = f"anthropic:{model_name}"
+    key = f"{provider}:{model_name}"
     existing = _HARNESS_PROFILES.get(key)
     if existing is not None:
         gp = existing.general_purpose_subagent
@@ -205,7 +211,7 @@ def disable_general_purpose_subagent(model_name: str) -> None:
 
 
 @contextmanager
-def general_purpose_disabled(model_name: str):
+def general_purpose_disabled(model_name: str, *, provider: str = "anthropic"):
     """Bounded-scope form of ``disable_general_purpose_subagent`` that RESTORES the prior
     harness profile on exit (restore-not-pop): a pre-existing profile for this key — including
     a deepagents built-in bootstrap — survives the block, and a key we newly added is removed.
@@ -219,10 +225,10 @@ def general_purpose_disabled(model_name: str):
     """
     from deepagents.profiles.harness.harness_profiles import _HARNESS_PROFILES
 
-    key = f"anthropic:{model_name}"
+    key = f"{provider}:{model_name}"
     had_prior = key in _HARNESS_PROFILES
     prior = _HARNESS_PROFILES.get(key)
-    disable_general_purpose_subagent(model_name)
+    disable_general_purpose_subagent(model_name, provider=provider)
     try:
         yield
     finally:

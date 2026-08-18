@@ -237,7 +237,12 @@ class Settings(BaseSettings):
     openconnector_runtime_token: str | None = None  # JARVIS_OPENCONNECTOR_RUNTIME_TOKEN
     openconnector_admin_url: str | None = None  # JARVIS_OPENCONNECTOR_ADMIN_URL
     openconnector_admin_token: str | None = None  # JARVIS_OPENCONNECTOR_ADMIN_TOKEN
+    # Split by role: only the MINTER (the Jarvis API process) needs the private half.
+    # A verify-only process — notably the Connection Context Adapter, which is the
+    # tenant-isolation boundary — gets the public half alone, so compromising it
+    # cannot yield the ability to mint a JWT for any tenant.
     platform_jwt_private_pem: str | None = None  # JARVIS_PLATFORM_JWT_PRIVATE_PEM
+    platform_jwt_public_pem: str | None = None  # JARVIS_PLATFORM_JWT_PUBLIC_PEM
 
     @property
     def webhooks_configured(self) -> bool:
