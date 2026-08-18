@@ -52,6 +52,7 @@ from src.deep_runtime.middleware.trust_gate import (
     _MAX_PERSISTED_CONTEXT_CHARS,
     _find_existing_approval,
     _get_or_create_approval,
+    redact_tool_input,
 )
 from src.integrations.capabilities import SYSTEM_ACTION_CAPABILITIES, is_read_only_capability
 from src.services.risk_assessor import RiskAssessment
@@ -117,6 +118,8 @@ async def _persist_permission_approval(
     permission_mode: str,
     lead_scope,
     user_message: str = "",
+    tool_input: dict | None = None,
+    presence: str = "absent",
 ) -> str:
     """Idempotently persist the pending Approval for a paused chat write and return its id.
 
@@ -134,6 +137,7 @@ async def _persist_permission_approval(
     reversible = assessment.reversible if assessment else True
     blast_radius = assessment.blast_radius if assessment else "self"
     summary = assessment.reasoning if assessment else "User confirmation required (ask mode)."
+    persisted_input, input_truncated = redact_tool_input(tool_input)
 
     async with db_factory() as db:
         return await _get_or_create_approval(
@@ -165,6 +169,13 @@ async def _persist_permission_approval(
                 # A1: the ORIGINAL user message, so an approved resume can fire the
                 # interaction-learner (bounded like context_block to keep the row lean).
                 "user_message": user_message[:_MAX_PERSISTED_CONTEXT_CHARS],
+                "tool_input": persisted_input,
+                "tool_input_truncated": input_truncated,
+                # Trap 2 — snapshot, never re-derive. Written under the neutral key name that
+                # the prepared-action executor reads; ``lead_scope`` above stays as-is because
+                # ``resume_deep_lead`` reads THAT key and must not change.
+                "capability_scope": sorted(lead_scope),
+                "presence": presence,
             },
         )
 
@@ -210,6 +221,7 @@ def make_permission_gate_middleware(
     context_block: str = "",
     lead_scope=frozenset(),
     user_message: str = "",
+    presence: str = "absent",
 ) -> AgentMiddleware:
     """Build the action-time permission gate for one chat turn.
 
@@ -236,6 +248,9 @@ def make_permission_gate_middleware(
             the resume path knows the turn's authorized envelope.
         user_message: The turn's ORIGINAL user message — persisted (capped) onto the Approval so
             an approved resume can fire the interaction-learner (parity with the non-paused tail).
+        presence: ``present`` | ``absent`` for this turn. Recorded for audit here; a later
+            task makes it select between interrupting and preparing. Defaults to ``absent``
+            (fail-safe).
 
     Returns:
         An ``AgentMiddleware`` exposing an async ``wrap_tool_call`` hook.
@@ -331,6 +346,8 @@ def make_permission_gate_middleware(
             permission_mode=permission_mode,
             lead_scope=lead_scope,
             user_message=user_message,
+            tool_input=args,
+            presence=presence,
         )
 
         # Suspend for confirmation. Called OUTSIDE any DB session/transaction. On resume the

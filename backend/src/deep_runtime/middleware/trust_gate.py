@@ -259,6 +259,9 @@ async def _decide_and_maybe_persist(
     agent_name: str,
     db_factory,
     context_block: str = "",
+    tool_input: dict | None = None,
+    agent_capability_scope: frozenset[str] = frozenset(),
+    presence: str = "absent",
 ) -> tuple[bool, str | None]:
     """Decide whether *this* tool call needs approval and, if so, persist the Approval.
 
@@ -280,6 +283,8 @@ async def _decide_and_maybe_persist(
         require_approval = matrix_requires or irreversible_override
         if not require_approval:
             return (False, None)
+
+        persisted_input, input_truncated = redact_tool_input(tool_input)
 
         # Persist on THIS open session so TrustEngine.evaluate (above) and the create+commit
         # stay in ONE transaction — the shared replay-safe get-or-create (see helper docstring).
@@ -304,6 +309,16 @@ async def _decide_and_maybe_persist(
                 # CF-1: echo the assembled ContextPack so the resume path can re-inject the
                 # original turn's ambient context (bounded to keep the approval row small).
                 "context_block": context_block[:_MAX_PERSISTED_CONTEXT_CHARS],
+                # Legibility (step 1): the recorded payload, redacted + bounded, so the
+                # approval card can show WHAT is being approved rather than only its
+                # capability name.
+                "tool_input": persisted_input,
+                "tool_input_truncated": input_truncated,
+                # Trap 2: SNAPSHOT the acting agent's scope. Re-deriving it at confirmation
+                # time would let a since-WIDENED scope authorise an action the founder
+                # reviewed under narrower authority.
+                "capability_scope": sorted(agent_capability_scope),
+                "presence": presence,
             },
         )
         return (True, approval_id)
@@ -321,6 +336,8 @@ def make_trust_gate_middleware(
     resolve_capability=None,
     context_block: str = "",
     pre_approved_capabilities: frozenset[str] = frozenset(),
+    agent_capability_scope: frozenset[str] = frozenset(),
+    presence: str = "absent",
 ) -> AgentMiddleware:
     """Build THE approval gate for one turn.
 
@@ -355,6 +372,13 @@ def make_trust_gate_middleware(
             step seam passes ``{step.capability}``); an UN-approved within-step capability still
             falls through to the gate. Defaults to the empty frozenset, so chat/resume callers
             are byte-identical to before this param existed.
+        agent_capability_scope: The acting agent's ``capability_scope``, SNAPSHOTTED onto the
+            Approval (sorted) at persist time. Confirmation checks the recorded capability
+            against THIS, never against a freshly derived scope — a scope that has widened
+            since must not authorise an action reviewed under narrower authority.
+        presence: ``present`` | ``absent`` for this turn. Recorded for audit here; a later
+            task makes it select between interrupting and preparing. Defaults to ``absent``
+            (fail-safe).
 
     Returns:
         An ``AgentMiddleware`` exposing an async ``wrap_tool_call`` hook.
@@ -452,6 +476,9 @@ def make_trust_gate_middleware(
             agent_name=agent_name,
             db_factory=db_factory,
             context_block=context_block,
+            tool_input=args,
+            agent_capability_scope=agent_capability_scope,
+            presence=presence,
         )
 
         # Auto-execute path (both auto_execute_notify and auto_execute_silent land here;

@@ -47,6 +47,16 @@ async def build_approval_request(
         tool_params = apr.artifact_refs.get("tool_params")
         if tool_params:
             children.append(r.code_block("apr_params", str(tool_params), language="json"))
+        tool_input = apr.artifact_refs.get("tool_input")
+        if tool_input:
+            children.append(r.code_block("apr_input", str(tool_input), language="json"))
+            if apr.artifact_refs.get("tool_input_truncated"):
+                children.append(
+                    r.caption(
+                        "apr_input_clipped",
+                        "Payload clipped for storage — showing the start.",
+                    )
+                )
 
     risk_variant = "warning" if apr.risk_level in ("high", "critical") else "default"
     children.append(r.badge("apr_risk", apr.risk_level or "medium", variant=risk_variant))
