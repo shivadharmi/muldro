@@ -407,7 +407,6 @@ class ChatProcessor(_ChatSingleLeadMixin):
         gets the cautious treatment rather than interrupting into a void or reaching ``bypass``.
         """
         trace = self._trace_manager.start_trace("user_message")
-        presence = self._resolve_presence(presence)
 
         async with turn_scope(on_close=close_turn_sessions):
 
@@ -416,6 +415,11 @@ class ChatProcessor(_ChatSingleLeadMixin):
 
             try:
                 yield TraceStarted(trace_id=trace.trace_id)
+
+                # Resolve the turn's EFFECTIVE presence ONCE, inside the guarded region, so both
+                # `_resolve_effective_mode` call sites below share one answer and any failure
+                # here is sanitised into RunFailed and still finishes the trace.
+                presence = self._resolve_presence(presence)
 
                 _fire_event(
                     "command_received",
