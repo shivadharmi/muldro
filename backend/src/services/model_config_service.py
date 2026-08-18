@@ -140,6 +140,13 @@ class ModelConfigService:
             temperature=r.temperature,
         )
 
+    async def provider_statuses(self, workspace_id: str) -> list[ProviderStatus]:
+        """Public: the per-provider credential state for *workspace_id*.
+
+        Exposed so the credentials routes can report the state that actually remains
+        after a write or delete, instead of asserting one."""
+        return await self._provider_statuses(workspace_id, provider_status_cls=ProviderStatus)
+
     async def _provider_statuses(self, workspace_id, *, provider_status_cls) -> list:
         stmt = select(ProviderCredential).where(
             or_(
@@ -160,19 +167,23 @@ class ModelConfigService:
         for provider in MODEL_CATALOG:
             cred = cred_by_provider.get(provider)
             if cred is not None:
-                # A real credential row always wins (its own status).
+                # A real credential row always wins (its own status). Only a row
+                # OWNED by this workspace is deletable through the credentials API —
+                # the NULL-workspace row is the deployment default and shared.
                 configured, status = True, cred.status
+                source = "workspace" if cred.workspace_id is not None else "default"
             elif self._env_key_set(provider):
                 # No row, but the deployment's env fallback key is set: the same
                 # key the resolver uses, so the provider is a working default.
-                configured, status = True, "valid"
+                configured, status, source = True, "valid", "env"
             else:
-                configured, status = False, "unconfigured"
+                configured, status, source = False, "unconfigured", "none"
             statuses.append(
                 provider_status_cls(
                     provider=provider,
                     configured=configured,
                     status=status,
+                    source=source,
                 )
             )
         return statuses

@@ -162,8 +162,9 @@ async def put_provider_credential(
             )
         )
     await db.commit()
-    # Never echo the key — only the write-only status envelope.
-    return ProviderStatus(provider=provider, configured=True, status="untested")
+    # Never echo the key — only the write-only status envelope. The row we just wrote
+    # is this workspace's own, so it is the deletable source by construction.
+    return ProviderStatus(provider=provider, configured=True, status="untested", source="workspace")
 
 
 @router.delete("/v1/providers/{provider}/credentials", response_model=ProviderStatus)
@@ -181,7 +182,15 @@ async def delete_provider_credential(
     if existing is not None:
         await db.delete(existing)
         await db.commit()
-    return ProviderStatus(provider=provider, configured=False, status="unconfigured")
+    # Report the state that ACTUALLY remains, not an assumed "unconfigured". Deleting
+    # the workspace row can leave the provider still configured via the NULL-workspace
+    # default row or the env fallback key — claiming otherwise made the UI show a
+    # provider as removed until the next refetch flipped it back.
+    statuses = await ModelConfigService(db).provider_statuses(workspace_id)
+    return next(
+        (s for s in statuses if s.provider == provider),
+        ProviderStatus(provider=provider, configured=False, status="unconfigured", source="none"),
+    )
 
 
 @router.post("/v1/providers/{provider}/test", response_model=TestResult)

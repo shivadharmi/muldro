@@ -16,8 +16,15 @@ interface ModelTabProps {
   catalog: ModelCatalog | null;
   config: ModelConfig | null;
   onLoad: () => void;
-  onSaveConfig?: (body: { tiers: TierBinding[]; agent_overrides: TierBinding[] }) => void;
-  onSaveProviderKey?: (provider: string, apiKey: string, baseUrl?: string) => void;
+  onSaveConfig?: (body: {
+    tiers: TierBinding[];
+    agent_overrides: TierBinding[];
+  }) => void;
+  onSaveProviderKey?: (
+    provider: string,
+    apiKey: string,
+    baseUrl?: string,
+  ) => void;
   onTestProvider?: (provider: string) => void;
   onDeleteProvider?: (provider: string) => void;
   savingConfig?: boolean;
@@ -68,7 +75,13 @@ interface BindingRowProps {
  * temperature controls only render when the selected model supports them.
  * `onRemove`, when provided, renders a remove control (used for overrides).
  */
-function BindingRow({ binding, catalog, configuredProviders, onChange, onRemove }: BindingRowProps) {
+function BindingRow({
+  binding,
+  catalog,
+  configuredProviders,
+  onChange,
+  onRemove,
+}: BindingRowProps) {
   const providerModels = catalog?.providers[binding.provider] ?? [];
   const selectedModel = findModel(catalog, binding.provider, binding.model_id);
   const showEffort = !!selectedModel && selectedModel.thinking_style !== "none";
@@ -89,7 +102,9 @@ function BindingRow({ binding, catalog, configuredProviders, onChange, onRemove 
       <select
         aria-label={`${binding.tier} provider`}
         value={binding.provider}
-        onChange={(e) => onChange({ ...binding, provider: e.target.value, model_id: "" })}
+        onChange={(e) =>
+          onChange({ ...binding, provider: e.target.value, model_id: "" })
+        }
         className={INPUT_CLASS}
       >
         {providerOptions.map((p) => (
@@ -135,7 +150,10 @@ function BindingRow({ binding, catalog, configuredProviders, onChange, onRemove 
         value={binding.max_tokens}
         onChange={(e) =>
           // Never persist 0 — max_tokens=0 breaks every model call (backend rejects <1).
-          onChange({ ...binding, max_tokens: Math.max(1, Number(e.target.value) || 1) })
+          onChange({
+            ...binding,
+            max_tokens: Math.max(1, Number(e.target.value) || 1),
+          })
         }
         className={`${INPUT_CLASS} w-24`}
       />
@@ -151,7 +169,8 @@ function BindingRow({ binding, catalog, configuredProviders, onChange, onRemove 
           onChange={(e) =>
             onChange({
               ...binding,
-              temperature: e.target.value === "" ? null : Number(e.target.value),
+              temperature:
+                e.target.value === "" ? null : Number(e.target.value),
             })
           }
           className={`${INPUT_CLASS} w-20`}
@@ -182,7 +201,14 @@ interface ProviderRowProps {
 }
 
 /** Write-only credential row: the key input is never pre-filled. */
-function ProviderRow({ provider, status, busy, onSaveKey, onTest, onDelete }: ProviderRowProps) {
+function ProviderRow({
+  provider,
+  status,
+  busy,
+  onSaveKey,
+  onTest,
+  onDelete,
+}: ProviderRowProps) {
   const [apiKey, setApiKey] = useState("");
   const [baseUrl, setBaseUrl] = useState("");
 
@@ -196,10 +222,27 @@ function ProviderRow({ provider, status, busy, onSaveKey, onTest, onDelete }: Pr
             </span>
             <div className="flex items-center gap-2">
               {status?.configured && (
-                <span className="text-xs text-j-success font-medium">Configured ✓</span>
+                <span className="text-xs text-j-success font-medium">
+                  Configured ✓
+                </span>
+              )}
+              {/* An inherited credential is configured but not removable here, so say
+                  where it comes from — otherwise the missing Remove button reads as a
+                  bug rather than as "this isn't yours to delete". */}
+              {status?.source === "default" && (
+                <span className="text-xs text-t-secondary">
+                  deployment default
+                </span>
+              )}
+              {status?.source === "env" && (
+                <span className="text-xs text-t-secondary">
+                  from environment
+                </span>
               )}
               {status?.status && (
-                <span className={`text-xs font-medium ${statusTone(status.status)}`}>
+                <span
+                  className={`text-xs font-medium ${statusTone(status.status)}`}
+                >
                   {status.status}
                 </span>
               )}
@@ -228,7 +271,9 @@ function ProviderRow({ provider, status, busy, onSaveKey, onTest, onDelete }: Pr
               type="button"
               // ollama authenticates with a base URL alone — no key required.
               disabled={busy || (provider !== "ollama" && !apiKey)}
-              onClick={() => onSaveKey?.(provider, apiKey, baseUrl || undefined)}
+              onClick={() =>
+                onSaveKey?.(provider, apiKey, baseUrl || undefined)
+              }
               className={PRIMARY_BTN_CLASS}
             >
               {busy ? "Saving…" : "Save"}
@@ -241,9 +286,11 @@ function ProviderRow({ provider, status, busy, onSaveKey, onTest, onDelete }: Pr
             >
               Test
             </button>
-            {/* Revoke a stored credential (e.g. a compromised key). Hidden until
-                the provider is configured; an env-backed default has no row to remove. */}
-            {status?.configured && onDelete && (
+            {/* Revoke a stored credential (e.g. a compromised key). Shown ONLY for a
+                credential this workspace owns: DELETE removes the workspace row and
+                nothing else, so offering it for a deployment-default row or an
+                env-backed key is a button that appears to work and changes nothing. */}
+            {status?.source === "workspace" && onDelete && (
               <button
                 type="button"
                 disabled={busy}

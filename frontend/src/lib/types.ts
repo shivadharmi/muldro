@@ -529,6 +529,10 @@ export interface ProviderStatus {
   provider: string;
   configured: boolean;
   status: string;
+  // Where the credential comes from. `configured` is true for three different
+  // sources but only "workspace" is deletable through the credentials API —
+  // DELETE removes this workspace's own row and nothing else.
+  source: "workspace" | "default" | "env" | "none";
 }
 
 export interface ModelConfig {
