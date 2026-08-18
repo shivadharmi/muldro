@@ -70,3 +70,19 @@ def test_unserialisable_values_degrade_to_repr_rather_than_raising():
     payload, truncated = redact_tool_input({"thing": Opaque()})
     assert truncated is False
     assert "<Opaque>" in payload
+
+
+def test_redaction_recurses_into_tuples_not_just_lists():
+    """A tuple serialises to a JSON array exactly like a list, so a tuple that skipped
+    redaction would be INDISTINGUISHABLE in the persisted payload from a safe list."""
+    payload, _ = redact_tool_input({"items": ({"token": "SECRET"},)})
+    obj = json.loads(payload)
+    assert obj["items"][0]["token"] == REDACTED
+
+
+def test_a_matched_key_redacts_its_whole_value_including_nested_secrets():
+    """A deny-listed key's value is replaced WHOLE — never partially recursed into, which
+    would leave sibling secrets under a secret-named parent exposed."""
+    payload, _ = redact_tool_input({"credentials": {"access_key": "AKIA1", "region": "us-1"}})
+    obj = json.loads(payload)
+    assert obj["credentials"] == REDACTED

@@ -85,10 +85,17 @@ def _is_secret_key(key: str) -> bool:
 
 
 def _redact(value):
-    """Recursively replace deny-listed keys' values with ``REDACTED``."""
+    """Recursively replace deny-listed keys' values with ``REDACTED``.
+
+    Recurses into dicts, lists, and TUPLES. Tuples matter because ``json.dumps`` serialises
+    them identically to lists, so a tuple that skipped redaction would be indistinguishable
+    in the persisted payload from a list that did not. A matched key's value is replaced
+    WHOLE rather than recursed into, so a secret nested under a secret-named parent cannot
+    survive via partial recursion.
+    """
     if isinstance(value, dict):
         return {k: (REDACTED if _is_secret_key(str(k)) else _redact(v)) for k, v in value.items()}
-    if isinstance(value, list):
+    if isinstance(value, (list, tuple)):
         return [_redact(v) for v in value]
     return value
 
