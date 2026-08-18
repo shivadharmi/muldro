@@ -11,6 +11,11 @@ from src.config.model_catalog import ModelSpec
 
 _EFFORT_LEVELS = {"none", "low", "medium", "high"}
 
+# Anthropic's floor for legacy `thinking.budget_tokens`. The API also requires the
+# budget to be strictly below max_tokens, so a completion sized at or under this
+# floor cannot carry legacy thinking at all.
+_MIN_LEGACY_THINKING_BUDGET = 1024
+
 
 def build_model_kwargs(
     spec: ModelSpec,
@@ -34,7 +39,11 @@ def build_model_kwargs(
         return kwargs
 
     if style == "anthropic_legacy":
-        if thinking_on:
+        # Legacy thinking is only representable when BOTH Anthropic constraints can
+        # hold: budget_tokens >= _MIN_LEGACY_THINKING_BUDGET and budget_tokens <
+        # max_tokens. That needs max_tokens > _MIN_LEGACY_THINKING_BUDGET; at or below
+        # it, drop thinking rather than clamp to a budget the API rejects with a 400.
+        if thinking_on and max_tokens > _MIN_LEGACY_THINKING_BUDGET:
             budget = _effort_to_budget(effort)
             if budget >= max_tokens:
                 budget = max_tokens - 1
