@@ -200,6 +200,24 @@ def create_app() -> FastAPI:
             )
             traceback.print_exc(file=sys.stderr)
 
+        # Gateway OAuth client configs. Deliberately NOT wrapped in a best-effort
+        # try/except like the re-seed above: without a registered client every
+        # gateway connect dies at connect time with oauth_client_config_required,
+        # and gateway-routed installations declare auth_provider="platform_jwt"
+        # with no native fallback. Fail at boot rather than at first tool call.
+        # MULDRO_SKIP_GATEWAY_VALIDATION=true opts out (tests/CI set it).
+        from src.integrations.gateway_oauth_registrar import register_gateway_oauth_configs
+
+        registered_services = await register_gateway_oauth_configs(settings)
+        if registered_services:
+            import sys
+
+            print(
+                f"[STARTUP] Gateway OAuth configs registered: {', '.join(registered_services)}",
+                file=sys.stderr,
+                flush=True,
+            )
+
         # Validate tool registry consistency. Fail closed: a malformed (or
         # un-validatable) registry must not serve traffic. Operators can bypass
         # the whole check with MULDRO_SKIP_REGISTRY_VALIDATION=true in emergencies.

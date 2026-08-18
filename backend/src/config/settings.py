@@ -169,6 +169,12 @@ class Settings(BaseSettings):
 
     # Registry validation
     skip_registry_validation: bool = False  # MULDRO_SKIP_REGISTRY_VALIDATION
+    # Gateway OAuth-config registration at startup. Default False: an unconfigured
+    # gateway or a failed registration ABORTS startup, because gateway-routed
+    # installations declare auth_provider="platform_jwt" and have no native
+    # fallback -- a Muldro that boots without them is already broken, just later
+    # and less visibly. Set true for tests/CI or a deliberate gateway-less run.
+    skip_gateway_validation: bool = False  # MULDRO_SKIP_GATEWAY_VALIDATION
 
     # Deep-only inline-format augmentation (Step 7B1 P4, Fork-1): when True, the deep
     # lead's system prompt is augmented with PRESENTER_VOICE so it formats the

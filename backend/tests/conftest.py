@@ -1,5 +1,13 @@
 """Shared test fixtures for Muldro backend tests."""
 
+import os
+
+# The API lifespan registers gateway OAuth configs with OpenConnector and ABORTS
+# startup if that fails. Tests must not require a live OpenConnector, so opt out
+# here -- before any Settings instance is built. The registrar's own behaviour is
+# covered directly in tests/integrations/test_gateway_oauth_registrar.py.
+os.environ.setdefault("MULDRO_SKIP_GATEWAY_VALIDATION", "true")
+
 import asyncio
 import inspect
 from datetime import datetime, timezone

@@ -31,6 +31,11 @@ class GatewayProvider:
     # a tool). Lives HERE, on the registry, so a new provider cannot degrade to
     # its raw provider_id via a hand-maintained label table somewhere downstream.
     display_name: str
+    # Settings prefix for the OAuth CLIENT credentials this provider registers
+    # with OpenConnector: settings.{key}_oauth_client_id/_secret. Declared HERE
+    # so the gmail+googlecalendar -> one Google client fan-out is stated rather
+    # than inferred from server_name by a downstream table that can drift.
+    oauth_credential_key: str
     actions: tuple[GatewayAction, ...]
     # The Muldro PERCEPTION SOURCE names this provider's credential backs, i.e.
     # the ``perception_state.source`` values the scheduler polls. These names
@@ -44,6 +49,10 @@ class GatewayProvider:
     def __post_init__(self) -> None:
         if not self.display_name.strip():
             raise ValueError(f"gateway provider {self.provider_id!r} declares no display_name")
+        if not self.oauth_credential_key.strip():
+            raise ValueError(
+                f"gateway provider {self.provider_id!r} declares no oauth_credential_key"
+            )
         if not self.actions:
             raise ValueError(f"gateway provider {self.provider_id!r} declares no actions")
         ids = [a.action_id for a in self.actions]

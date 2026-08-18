@@ -37,6 +37,28 @@ class OpenConnectorAdminClient:
             )
         return resp.json()
 
+    async def put_oauth_config(self, *, service: str, client_id: str, client_secret: str) -> dict:
+        """PUT /api/oauth/configs/{service} — register the OAuth CLIENT for a service.
+
+        Returns {service, configured, clientId, expectedRedirectUri, auth}.
+        Idempotent: re-PUTting the same credentials is a no-op upstream.
+        """
+        body = {"clientId": client_id, "clientSecret": client_secret}
+        async with httpx.AsyncClient(timeout=self._timeout) as http:
+            resp = await http.put(
+                f"{self._base_url}/api/oauth/configs/{service}",
+                json=body,
+                headers=self._headers,
+            )
+        if resp.status_code // 100 != 2:
+            # resp.text (not resp.json()) — same reason as start_authorization:
+            # an infra-level error has no JSON body and decoding it here would
+            # raise inside the error path and mask the real status code.
+            raise OpenConnectorAdminError(
+                f"put_oauth_config({service}) failed: {resp.status_code} {resp.text[:500]}"
+            )
+        return resp.json()
+
     async def list_connections(self) -> list[dict]:
         """GET /api/connections — ALL connections on the shared instance."""
         async with httpx.AsyncClient(timeout=self._timeout) as http:
