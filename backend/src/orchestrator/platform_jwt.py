@@ -13,6 +13,10 @@ sets `settings.platform_jwt_public_pem` instead and never holds the signing key:
 verification is a public-key operation, and handing the boundary the private half
 would mean anything that compromised it could mint a token for any tenant.
 
+When both are configured — deploy.sh puts both in the minting process's env — the
+private key wins: JWKS and verification are always derived from the key actually
+used to sign, so a rotated private PEM cannot desynchronise from a stale public one.
+
 With neither set, an ephemeral RSA-2048 key is generated on first use for
 local/dev and a warning is logged. An ephemeral key is single-process only
 (tokens are unverifiable across processes/restarts), so a stable PEM is required
@@ -50,6 +54,24 @@ class MissingSigningKeyError(RuntimeError):
     """
 
 
+def _parse_private_pem(pem: str | bytes) -> rsa.RSAPrivateKey:
+    """Parse a configured private PEM, raising on anything that is not an RSA key."""
+    key_bytes = pem.encode("utf-8") if isinstance(pem, str) else pem
+    private_key = serialization.load_pem_private_key(key_bytes, password=None)
+    if not isinstance(private_key, rsa.RSAPrivateKey):
+        raise ValueError("platform_jwt_private_pem must decode to an RSA private key")
+    return private_key
+
+
+def _parse_public_pem(pem: str | bytes) -> rsa.RSAPublicKey:
+    """Parse a configured public PEM, raising on anything that is not an RSA key."""
+    key_bytes = pem.encode("utf-8") if isinstance(pem, str) else pem
+    public_key = serialization.load_pem_public_key(key_bytes)
+    if not isinstance(public_key, rsa.RSAPublicKey):
+        raise ValueError("platform_jwt_public_pem must decode to an RSA public key")
+    return public_key
+
+
 def _load_or_generate_private_key() -> rsa.RSAPrivateKey:
     """Load the configured RSA private key, or generate an ephemeral one.
 
@@ -59,11 +81,7 @@ def _load_or_generate_private_key() -> rsa.RSAPrivateKey:
     settings = get_settings()
     pem = settings.platform_jwt_private_pem
     if pem:
-        key_bytes = pem.encode("utf-8") if isinstance(pem, str) else pem
-        private_key = serialization.load_pem_private_key(key_bytes, password=None)
-        if not isinstance(private_key, rsa.RSAPrivateKey):
-            raise ValueError("platform_jwt_private_pem must decode to an RSA private key")
-        return private_key
+        return _parse_private_pem(pem)
 
     if settings.platform_jwt_public_pem:
         # Verify-only process (the adapter): it holds the public half by design and
@@ -95,11 +113,7 @@ def _load_public_key() -> rsa.RSAPublicKey | None:
     pem = get_settings().platform_jwt_public_pem
     if not pem:
         return None
-    key_bytes = pem.encode("utf-8") if isinstance(pem, str) else pem
-    public_key = serialization.load_pem_public_key(key_bytes)
-    if not isinstance(public_key, rsa.RSAPublicKey):
-        raise ValueError("platform_jwt_public_pem must decode to an RSA public key")
-    return public_key
+    return _parse_public_pem(pem)
 
 
 # Keys are resolved lazily and cached: a verify-only process must be able to import
@@ -107,6 +121,23 @@ def _load_public_key() -> rsa.RSAPublicKey | None:
 # ephemeral key) at import time for a process that will only ever verify.
 _private_key: rsa.RSAPrivateKey | None = None
 _public_key: rsa.RSAPublicKey | None = None
+
+
+def _validate_configured_key_material() -> None:
+    """Fail fast at import on malformed key material, without forcing key resolution.
+
+    Only PEMs that are actually configured are parsed (and the result discarded —
+    resolution stays lazy). A process with neither PEM set imports cleanly and defers
+    ephemeral-key generation, and its warning, to first use.
+    """
+    settings = get_settings()
+    if settings.platform_jwt_private_pem:
+        _parse_private_pem(settings.platform_jwt_private_pem)
+    if settings.platform_jwt_public_pem:
+        _parse_public_pem(settings.platform_jwt_public_pem)
+
+
+_validate_configured_key_material()
 
 
 def _signing_key_pem() -> bytes:
@@ -124,11 +155,21 @@ def _signing_key_pem() -> bytes:
 def _verifying_key() -> rsa.RSAPublicKey:
     """The public key used to VERIFY and to publish JWKS.
 
-    An explicitly configured ``platform_jwt_public_pem`` wins, so a verify-only
-    process never touches the signing key. Otherwise it is derived from the private
-    key — the minting process's own path, unchanged.
+    A configured private key ALWAYS wins: a process that signs must publish and
+    verify with the public half derived from the very key it signs with, otherwise
+    rotating the private PEM while leaving a stale ``platform_jwt_public_pem`` in
+    place silently desynchronises JWKS from the signature. ``platform_jwt_public_pem``
+    is therefore only consulted when no private key is configured — the verify-only
+    adapter process, which never holds the signing key.
     """
     global _public_key, _private_key
+    # Checked directly rather than via MissingSigningKeyError: that error is the
+    # verify-only process's legitimate state here and must not escape.
+    if get_settings().platform_jwt_private_pem:
+        if _private_key is None:
+            _private_key = _load_or_generate_private_key()
+        return _private_key.public_key()
+
     if _public_key is None:
         _public_key = _load_public_key()
     if _public_key is not None:
