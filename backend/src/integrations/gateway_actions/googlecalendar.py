@@ -554,6 +554,7 @@ GOOGLECALENDAR = GatewayProvider(
     provider_id="googlecalendar",
     server_name="google-workspace",
     display_name="Google Calendar",
+    oauth_credential_key="google",
     actions=GOOGLECALENDAR_ACTIONS,
     # The scheduler polls the source "calendar" (see provider_map._PROVIDER_SOURCES
     # and the observe_calendar schedule) -- NOT "googlecalendar".

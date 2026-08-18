@@ -189,6 +189,7 @@ GMAIL = GatewayProvider(
     provider_id="gmail",
     server_name="google-workspace",
     display_name="Gmail",
+    oauth_credential_key="google",
     actions=GMAIL_ACTIONS,
     perception_sources=("gmail",),
 )

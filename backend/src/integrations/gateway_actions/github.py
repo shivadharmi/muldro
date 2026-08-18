@@ -214,6 +214,7 @@ GITHUB = GatewayProvider(
     provider_id="github",
     server_name="github",
     display_name="GitHub",
+    oauth_credential_key="github",
     actions=GITHUB_ACTIONS,
     # GitHub's native OAuth was retired with Google's, so the "github" perception
     # source has no token and no route that can mint one. Declaring it here routes
