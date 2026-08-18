@@ -64,6 +64,49 @@ logger = logging.getLogger(__name__)
 # large ambient context can never bloat the approval row.
 _MAX_PERSISTED_CONTEXT_CHARS = 8000
 
+# Invariant 9 (single-lead cutover): the persisted tool_input must never carry a secret and
+# must never bloat the Approval row. Substring match, case-insensitive, on the KEY name — a
+# deny-list of names rather than a value heuristic, so it cannot be fooled by an odd-looking
+# value and cannot silently redact a legitimate field.
+REDACTED = "[redacted]"
+_REDACTED_KEY_SUBSTRINGS = (
+    "token",
+    "secret",
+    "password",
+    "api_key",
+    "authorization",
+    "credential",
+)
+
+
+def _is_secret_key(key: str) -> bool:
+    lowered = key.lower()
+    return any(marker in lowered for marker in _REDACTED_KEY_SUBSTRINGS)
+
+
+def _redact(value):
+    """Recursively replace deny-listed keys' values with ``REDACTED``."""
+    if isinstance(value, dict):
+        return {k: (REDACTED if _is_secret_key(str(k)) else _redact(v)) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_redact(v) for v in value]
+    return value
+
+
+def redact_tool_input(args: dict | None) -> tuple[str, bool]:
+    """Return ``(json_payload, truncated)`` for persistence onto ``artifact_refs``.
+
+    Deny-listed keys are redacted (recursively), the result is JSON-serialised, and the
+    string is capped at the SAME ``_MAX_PERSISTED_CONTEXT_CHARS`` both gates already use for
+    ``context_block`` — one constant, so the two bounds cannot drift. ``truncated`` is
+    returned separately so the queue can SAY the payload was clipped rather than showing a
+    lie. ``default=repr`` keeps a non-JSON-serialisable argument from raising inside a gate.
+    """
+    payload = json.dumps(_redact(args or {}), default=repr)
+    if len(payload) > _MAX_PERSISTED_CONTEXT_CHARS:
+        return payload[:_MAX_PERSISTED_CONTEXT_CHARS], True
+    return payload, False
+
 
 async def _resolve_tool_def(name: str, workspace_id: str, db_factory) -> tuple[bool, Any]:
     """Resolve *name* → its ``ToolDefinition`` via ONE short-lived registry lookup.
