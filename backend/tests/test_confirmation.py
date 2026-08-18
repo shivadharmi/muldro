@@ -4,9 +4,15 @@
 presence grants something `permission_mode` did not.
 """
 
+import json
+
 import pytest
 
-from src.deep_runtime.confirmation import resolve_effective_permission_mode
+from src.deep_runtime.confirmation import (
+    prepared_tool_message,
+    resolve_confirmation,
+    resolve_effective_permission_mode,
+)
 
 
 @pytest.mark.parametrize(
@@ -59,3 +65,35 @@ def test_no_pair_ever_produces_bypass_without_a_present_entitled_user():
                     assert entitled is True
                 if mode not in ("bypass", "ask", "auto"):
                     assert result == "ask", "an unrecognised mode must fail CLOSED"
+
+
+def test_only_a_present_human_interrupts():
+    assert resolve_confirmation("present") == "interrupt"
+    assert resolve_confirmation("absent") == "prepare"
+    # Anything that is not the literal "present" PREPARES (fail-safe).
+    assert resolve_confirmation("") == "prepare"
+    assert resolve_confirmation("Present") == "prepare"
+    assert resolve_confirmation("unknown") == "prepare"
+
+
+def test_prepared_tool_message_is_success_not_error():
+    """LOAD-BEARING: stream_adapter maps status=="error" to the frozen `blocked` SSE frame,
+    which would stop the lead at the first prepared write. A prepared write is staged, not
+    failed — the turn must carry on and report what it staged."""
+    msg = prepared_tool_message(
+        name="gmail_send_email",
+        tool_call_id="call_1",
+        approval_id="apr_1",
+        capability="email.send",
+    )
+    assert msg.status == "success"
+    assert msg.tool_call_id == "call_1"
+    assert msg.name == "gmail_send_email"
+    body = json.loads(msg.content)
+    assert body["prepared"] is True
+    assert body["approval_id"] == "apr_1"
+    assert body["capability"] == "email.send"
+    # It must not read as an error to a model consuming the transcript.
+    assert "error" not in body
+    # It must say plainly that nothing ran.
+    assert "not executed" in body["detail"].lower()

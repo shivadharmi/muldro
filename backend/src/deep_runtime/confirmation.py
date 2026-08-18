@@ -21,7 +21,10 @@ It is the shared vocabulary the chat processor and (in a later task) both write 
 
 from __future__ import annotations
 
+import json
 from typing import Literal
+
+from langchain_core.messages import ToolMessage
 
 Presence = Literal["present", "absent"]
 
@@ -61,3 +64,49 @@ def resolve_effective_permission_mode(
     if not bypass_entitled:
         return "auto"
     return "bypass"
+
+
+ConfirmationOutcome = Literal["interrupt", "prepare"]
+
+
+def resolve_confirmation(presence: str) -> ConfirmationOutcome:
+    """A CONFIRM verdict becomes an INTERRUPT only when a human is on the turn.
+
+    Anything other than the literal ``"present"`` PREPARES — fail-safe, because an interrupt
+    with nobody to answer it either stalls the turn or orphans a checkpoint, while executing
+    instead would be an ungated write. Preparing is the third option: record the action in
+    full, let the turn finish, and let the founder confirm it later.
+    """
+    return "interrupt" if presence == PRESENT else "prepare"
+
+
+def prepared_tool_message(
+    *, name: str, tool_call_id: str, approval_id: str, capability: str
+) -> ToolMessage:
+    """The ToolMessage returned in place of an interrupt when a write is PREPARED.
+
+    ``status="success"`` is LOAD-BEARING and must not be "corrected" to ``"error"``:
+    ``stream_adapter`` maps ``status == "error"`` onto the frozen ``blocked`` SSE frame, which
+    would stop the lead at the first prepared write. A prepared write is not a failure — the
+    turn should finish everything else and report what it staged.
+
+    The content is addressed to the MODEL reading the transcript, so it says plainly that
+    nothing ran and that the action is waiting, rather than a bare flag a model would
+    confabulate around.
+    """
+    return ToolMessage(
+        content=json.dumps(
+            {
+                "prepared": True,
+                "approval_id": approval_id,
+                "capability": capability,
+                "detail": (
+                    "Prepared for review and NOT executed. It is waiting in the founder's "
+                    "prepared-work queue; approving it there runs exactly this action."
+                ),
+            }
+        ),
+        tool_call_id=tool_call_id,
+        name=name,
+        status="success",
+    )

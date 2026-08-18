@@ -28,6 +28,7 @@ the two gates (``permission_gate`` alone carries ``chat`` / ``permission_mode`` 
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -95,6 +96,8 @@ def build_legibility_refs(
     tool_input: dict | None,
     capability_scope,
     presence: str,
+    *,
+    prepared: bool = False,
 ) -> dict:
     """The ``artifact_refs`` keys BOTH gates persist identically.
 
@@ -102,14 +105,46 @@ def build_legibility_refs(
     ``_get_or_create_approval`` is: the two gates must not drift. The remaining keys in each
     gate's ``artifact_refs`` genuinely differ (``permission_gate`` alone carries ``chat`` /
     ``permission_mode`` / ``lead_scope`` / ``user_message``), so only the common four move.
+
+    ``prepared`` marks a row the single-lead review queue owns (single-lead cutover). Left out
+    of the dict entirely when False — see the comment at the call site below for why.
     """
     persisted_input, input_truncated = redact_tool_input(tool_input)
-    return {
+    refs = {
         "tool_input": persisted_input,
         "tool_input_truncated": input_truncated,
         "capability_scope": sorted(capability_scope),
         "presence": presence,
     }
+    if prepared:
+        # Marks a row the review queue owns. Kept out of the dict entirely when False rather
+        # than written as `"prepared": False`, so a queue query can key on presence-of-key and
+        # every pre-existing approval row stays correctly excluded.
+        refs["prepared"] = True
+    return refs
+
+
+# ``Approval.approval_type`` for a write that was recorded rather than executed. The review
+# queue finds these rows by this exact value, so it is a constant, not an inline literal.
+PREPARED_APPROVAL_TYPE = "prepared_action"
+
+
+def prepared_approval_overrides(
+    prepared: bool, ttl_days: int
+) -> tuple[str | None, datetime | None]:
+    """Return the ``(approval_type, expires_at)`` overrides for ``_get_or_create_approval``.
+
+    ``(None, None)`` when the write is being interrupted rather than prepared — which
+    ``_get_or_create_approval`` reads as "keep today's defaults", so the live-approval path is
+    untouched. Returning a pair rather than mutating keeps the two gates' call sites symmetric
+    and makes the prepared/live distinction one decision instead of two scattered conditionals.
+    """
+    if not prepared:
+        return (None, None)
+    return (
+        PREPARED_APPROVAL_TYPE,
+        datetime.now(timezone.utc) + timedelta(days=ttl_days),
+    )
 
 
 async def _find_existing_approval(workspace_id, thread_id, tool_call_id, db_factory):
@@ -145,6 +180,8 @@ async def _get_or_create_approval(
     thread_id: str,
     tool_call_id: str,
     artifact_refs: dict,
+    approval_type: str | None = None,
+    expires_at: datetime | None = None,
 ) -> str:
     """Idempotent get-or-create of the pending Approval on an ALREADY-OPEN session, returning
     its id. The replay-safe persist shared by the autonomous ``trust_gate`` and the chat
@@ -158,6 +195,11 @@ async def _get_or_create_approval(
     the gate body replays on resume and the resume path may already have marked the row
     approved/rejected, so a pending-only filter would miss it and duplicate. On a lost create
     race the ``IntegrityError`` rolls back and re-selects the winner (fail LOUD if still absent).
+
+    ``approval_type`` / ``expires_at`` default to today's values (``tool:<name>`` and
+    ``create_approval``'s 24h). The PREPARE path overrides both: ``prepared_action`` so the
+    review queue can find these rows, and a longer TTL because prepared work is reviewed on
+    the founder's schedule, not the turn's.
     """
     stmt = select(Approval).where(
         Approval.workspace_id == workspace_id,
@@ -173,7 +215,7 @@ async def _get_or_create_approval(
         db,
         user_id=user_id,
         workspace_id=workspace_id,
-        approval_type=f"tool:{name}",
+        approval_type=approval_type or f"tool:{name}",
         title=f"Approve: {capability}",
         summary=summary,
         risk_level=risk_level,
@@ -181,6 +223,7 @@ async def _get_or_create_approval(
         run_id=None,
         step_id=None,
         artifact_refs=artifact_refs,
+        expires_at=expires_at,
     )
     try:
         await db.commit()

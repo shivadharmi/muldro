@@ -207,6 +207,11 @@ class Settings(BaseSettings):
     # Off by default — dormant until the 5b chat wiring lands and this flag is flipped.
     deep_single_lead: bool = False  # MULDRO_DEEP_SINGLE_LEAD
 
+    # Single-lead cutover: how long a PREPARED action stays actionable in the review queue
+    # before it expires. Longer than approval_service's 24h default because prepared work is
+    # reviewed on the founder's schedule, not the turn's.
+    prepared_action_ttl_days: int = 7  # MULDRO_PREPARED_ACTION_TTL_DAYS
+
     # Step 10D P2.5c: drop the Planner from the deep chat single-lead path. When True (and only
     # when the single-lead path is already active — deep_single_lead + permission_mode), a chat
     # turn skips classify_intent + fast-path + Planner + plan record +
