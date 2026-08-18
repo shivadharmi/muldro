@@ -29,13 +29,20 @@ def _call_sites_missing_workspace_id() -> list[str]:
             continue
         tree = ast.parse(path.read_text())
         for node in ast.walk(tree):
-            if (
-                isinstance(node, ast.Call)
-                and isinstance(node.func, ast.Name)
-                and node.func.id in _SEAM_FUNCS
-                and not any(kw.arg == "workspace_id" for kw in node.keywords)
-            ):
-                missing.append(f"{path.relative_to(_SRC.parent)}:{node.lineno} {node.func.id}(...)")
+            if not isinstance(node, ast.Call):
+                continue
+            # Match both `complete_text(...)` and a qualified `utility.complete_text(...)`
+            # — the seam is importable either way, and a guard that only sees the bare
+            # name would wave the qualified form straight through.
+            func = node.func
+            if isinstance(func, ast.Name):
+                name = func.id
+            elif isinstance(func, ast.Attribute):
+                name = func.attr
+            else:
+                continue
+            if name in _SEAM_FUNCS and not any(kw.arg == "workspace_id" for kw in node.keywords):
+                missing.append(f"{path.relative_to(_SRC.parent)}:{node.lineno} {name}(...)")
     return missing
 
 
