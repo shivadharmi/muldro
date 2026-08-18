@@ -581,10 +581,10 @@ async def test_byte_neutral_flag_off_skips_all_permission_io():
     path does zero extra I/O for them.
 
     ``has_durable_checkpointer`` IS still called: ``_process_core`` resolves the turn's
-    EFFECTIVE presence once via ``_resolve_presence`` immediately after starting the trace,
-    unconditionally and ahead of (independent of) the ``deep_single_lead`` gate, so both call
-    sites of ``_resolve_effective_mode`` share one resolved presence. That call is a pure,
-    in-process ``isinstance`` check with no I/O, so this stays byte-neutral in production."""
+    EFFECTIVE presence once via ``_resolve_effective_presence`` right after ``TraceStarted`` is
+    yielded, unconditionally and ahead of (independent of) the ``deep_single_lead`` gate, so
+    both call sites of ``_resolve_effective_mode`` share one resolved presence. That call is a
+    pure, in-process ``isinstance`` check with no I/O, so this stays byte-neutral in production."""
     plan = PlanOutput(goal="g", reasoning="r", steps=[_step("s1", "respond")])
     chat, rec = _make_chat(settings_overrides={"deep_single_lead": False})
     entitlement = AsyncMock(return_value=True)

@@ -21,7 +21,12 @@ from typing import Any
 from src.config.settings import Settings
 from src.connectors.mcp_bridge import close_turn_sessions
 from src.contracts import PlanOutput
-from src.deep_runtime.confirmation import ABSENT, PRESENT, resolve_effective_permission_mode
+from src.deep_runtime.confirmation import (
+    ABSENT,
+    PRESENT,
+    Presence,
+    resolve_effective_permission_mode,
+)
 from src.errors import classify, new_correlation_id
 from src.integrations.capabilities import CAPABILITY_CATALOG
 from src.integrations.turn_scope import turn_scope
@@ -330,7 +335,9 @@ class ChatProcessor(_ChatSingleLeadMixin):
             if sse is not None:
                 yield sse
 
-    def _resolve_presence(self, presence: str) -> str:
+    def _resolve_effective_presence(
+        self, presence: str, workspace_id: str, user_id: str
+    ) -> Presence:
         """Resolve the EFFECTIVE presence for this turn — a fail-safe downgrade only.
 
         A pause is only worth taking if it can be RESUMED, which needs a durable checkpointer.
@@ -342,8 +349,11 @@ class ChatProcessor(_ChatSingleLeadMixin):
             return PRESENT
         if presence == PRESENT:
             logger.warning(
-                "no durable checkpointer — a pause could not be resumed; treating this turn "
-                "as absent so gated writes are not interrupted into an unresumable thread"
+                "no durable checkpointer for workspace=%s user=%s — a pause could not be "
+                "resumed; treating this turn as absent so gated writes are not interrupted "
+                "into an unresumable thread",
+                workspace_id,
+                user_id,
             )
         return ABSENT
 
@@ -356,7 +366,8 @@ class ChatProcessor(_ChatSingleLeadMixin):
         exhaustively-tested :func:`resolve_effective_permission_mode`; this method supplies the
         one input that needs a DB read (the workspace bypass entitlement).
 
-        ``presence`` must ALREADY be the effective presence (see :meth:`_resolve_presence`).
+        ``presence`` must ALREADY be the effective presence
+        (see :meth:`_resolve_effective_presence`).
 
         Returns ``None`` when the single-lead path should NOT be taken (the legacy multi-agent
         arm runs instead). ``self._settings.deep_single_lead`` is checked FIRST so the default
@@ -419,7 +430,7 @@ class ChatProcessor(_ChatSingleLeadMixin):
                 # Resolve the turn's EFFECTIVE presence ONCE, inside the guarded region, so both
                 # `_resolve_effective_mode` call sites below share one answer and any failure
                 # here is sanitised into RunFailed and still finishes the trace.
-                presence = self._resolve_presence(presence)
+                presence = self._resolve_effective_presence(presence, workspace_id, user_id)
 
                 _fire_event(
                     "command_received",

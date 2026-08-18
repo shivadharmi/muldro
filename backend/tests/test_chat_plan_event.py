@@ -89,7 +89,7 @@ class TestProcessMessageStreamErrorIsSanitized:
         # `_process_core` resolves the turn's effective presence (a synchronous,
         # in-process check) before entering the try/except this test exercises, so the
         # minimal double needs an `_invoker` even though this test isn't about permission
-        # mode at all — see `_resolve_presence` in `chat_processor.py`.
+        # mode at all — see `_resolve_effective_presence` in `chat_processor.py`.
         chat._invoker = MagicMock()
         chat._invoker.has_durable_checkpointer = MagicMock(return_value=True)
 
