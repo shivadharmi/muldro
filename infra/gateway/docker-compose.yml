@@ -119,9 +119,32 @@ services:
       # API container.
       JARVIS_PLATFORM_JWT_PUBLIC_PEM: ${JARVIS_PLATFORM_JWT_PUBLIC_PEM:?Set JARVIS_PLATFORM_JWT_PUBLIC_PEM before starting the stack — see README.md}
       # Jarvis's existing Postgres (NOT started by this file — see header
-      # comment). Use host.docker.internal (Mac/Windows) or the host's LAN/
-      # bridge IP (Linux) if Postgres runs outside this compose network.
-      JARVIS_DATABASE_URL: ${JARVIS_DATABASE_URL:?Set JARVIS_DATABASE_URL before starting the stack — see README.md}
+      # comment), addressed AS THE CONTAINER SEES IT.
+      #
+      # Two variables because loopback means two different machines here. The
+      # Jarvis backend is a host process, so its own JARVIS_DATABASE_URL is
+      # legitimately `...@127.0.0.1:5432/...` (that is what infra/user-data.sh
+      # writes on the production host). Inside this container, 127.0.0.1 is the
+      # container itself — the same string points at nothing, and because the
+      # adapter's DB connection is lazy the container still starts and still
+      # passes `--wait` while every connection lookup fails at request time.
+      #
+      # So: JARVIS_GATEWAY_DATABASE_URL wins when set, which is how a host with a
+      # loopback backend URL supplies a container-reachable one (see
+      # infra/scripts/deploy.sh, which requires it). Local-dev setups that already
+      # point JARVIS_DATABASE_URL at host.docker.internal need no change and keep
+      # falling through to it.
+      #
+      #   JARVIS_GATEWAY_DATABASE_URL=postgresql+asyncpg://jarvis:...@host.docker.internal:5432/jarvis
+      #
+      # `host.docker.internal` is provided automatically on Mac/Windows only; the
+      # extra_hosts entry below makes it resolve on Linux too.
+      JARVIS_DATABASE_URL: ${JARVIS_GATEWAY_DATABASE_URL:-${JARVIS_DATABASE_URL:?Set JARVIS_GATEWAY_DATABASE_URL (or a container-reachable JARVIS_DATABASE_URL) before starting the stack — see README.md}}
+    extra_hosts:
+      # Linux does not resolve host.docker.internal on its own (unlike Docker
+      # Desktop on Mac/Windows); host-gateway maps it to the bridge gateway so the
+      # DB URL above works unchanged across all three platforms.
+      - "host.docker.internal:host-gateway"
     depends_on:
       - openconnector
     restart: unless-stopped

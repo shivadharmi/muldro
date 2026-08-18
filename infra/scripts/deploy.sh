@@ -33,19 +33,72 @@ GATEWAY_REQUIRED_VARS=(
   OOMOL_CONNECT_RUNTIME_TOKEN           # gates OC POST /mcp
   OOMOL_CONNECT_ADMIN_TOKEN             # gates OC /api/* — unset means an OPEN admin plane
   JARVIS_PLATFORM_JWT_PUBLIC_PEM        # adapter VERIFIES with this (never the private key)
+  JARVIS_DATABASE_URL                   # backend's own DB; also compose's fallback for the adapter
+  JARVIS_GATEWAY_DATABASE_URL           # adapter's DB URL as seen from INSIDE its container
 )
+# Why JARVIS_GATEWAY_DATABASE_URL is required here and not just in local dev:
+# infra/user-data.sh writes JARVIS_DATABASE_URL=...@127.0.0.1:5432/... because the
+# backend runs as a host process. The adapter runs in a container, where 127.0.0.1
+# is the container itself — that URL resolves to nothing and every connection
+# lookup fails lazily, long after `--wait` has reported the stack healthy. On this
+# host the two URLs can never be the same value, so demand both.
 
 if [ ! -f "$ENV_FILE" ]; then
   echo "ERROR: $ENV_FILE not found — cannot resolve gateway configuration." >&2
   exit 1
 fi
 
-# Presence check by grep, NOT by sourcing: sourcing .env would execute whatever is
+# Presence check by parsing, NOT by sourcing: sourcing .env would execute whatever is
 # in it, and JARVIS_PLATFORM_JWT_PRIVATE_PEM is a multi-line value whose parse
 # depends on exact quoting. Docker Compose reads the same file via --env-file below,
 # so nothing here needs the values themselves — only whether each key has one.
+#
+# Scan line by line and inspect the extracted value rather than matching one
+# regex against the whole assignment. The regex form required a non-space
+# character immediately after the optional opening quote, which rejected the
+# canonical multi-line PEM whose opening quote ends the line:
+#     JARVIS_PLATFORM_JWT_PUBLIC_PEM="
+#     -----BEGIN PUBLIC KEY-----
+#     ...
+#     "
+# i.e. it failed exactly the value this comment block exists to accommodate.
+#
+# Present  = the key is assigned something other than nothing, whitespace, or an
+#            empty quote pair. A bare opening quote counts: it opens a
+#            multi-line value.
+# Missing  = `KEY=`, `KEY=   `, `KEY=""`, `KEY=''`, a commented-out line, or no
+#            such key at all.
+# Later assignments override earlier ones, matching how both the shell and
+# Compose read a duplicated key.
 env_has() {
-  grep -Eq "^[[:space:]]*(export[[:space:]]+)?$1=[\"']?[^\"'[:space:]]" "$ENV_FILE"
+  local key="$1"
+  local line value found=1
+
+  # `|| [ -n "$line" ]` so a final line with no trailing newline is still read.
+  while IFS= read -r line || [ -n "$line" ]; do
+    # Strip leading whitespace, then an `export ` prefix, then whitespace again.
+    line="${line#"${line%%[![:space:]]*}"}"
+    line="${line#export }"
+    line="${line#"${line%%[![:space:]]*}"}"
+
+    # Only a real assignment for this key counts; `#KEY=v` stays a comment
+    # because the `#` is still there after the strips above.
+    case "$line" in
+      "$key"=*) ;;
+      *) continue ;;
+    esac
+
+    value="${line#*=}"
+    # Trailing whitespace is not a value: `KEY=   ` is as empty as `KEY=`.
+    value="${value%"${value##*[![:space:]]}"}"
+
+    case "$value" in
+      ''|'""'|"''") found=1 ;;   # assigned, but assigned nothing
+      *) found=0 ;;
+    esac
+  done < "$ENV_FILE"
+
+  return "$found"
 }
 
 missing=()
@@ -121,8 +174,12 @@ echo ""
 echo "Service status:"
 systemctl is-active jarvis-backend && echo "  jarvis-backend: running" || echo "  jarvis-backend: FAILED"
 systemctl is-active caddy && echo "  caddy: running" || echo "  caddy: FAILED"
+# `|| echo`, like every status line above it: this is a report, not a gate. The
+# gateway was already gated by `up --wait` failing hard earlier, so a non-zero
+# exit from `ps` here (compose hiccup, format error) must not make an otherwise
+# successful deploy exit non-zero under `set -e` before printing its result.
 (cd "$GATEWAY_DIR" && docker compose --env-file "$ENV_FILE" ps --status running \
-  --format '  gateway: {{.Service}} running')
+  --format '  gateway: {{.Service}} running') || echo "  gateway: status unavailable"
 
 echo ""
 echo "=== Deploy complete ==="

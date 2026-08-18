@@ -99,6 +99,19 @@ docker compose up -d
 docker compose ps
 ```
 
+If the Postgres URL you give the backend is loopback (`...@127.0.0.1:5432/...`,
+as `infra/user-data.sh` writes on the production host), also export a
+container-reachable copy for the adapter — inside the container `127.0.0.1` is
+the container itself, and the resulting failure is silent because the adapter
+connects lazily, so `up --wait` still reports success:
+
+```bash
+export JARVIS_GATEWAY_DATABASE_URL=postgresql+asyncpg://jarvis:<password>@host.docker.internal:5432/jarvis
+```
+
+It overrides `JARVIS_DATABASE_URL` for `connection-adapter` only (README §2);
+if your `JARVIS_DATABASE_URL` already points at `host.docker.internal`, skip it.
+
 Confirm both are healthy — `openconnector` listening on `:3001`,
 `connection-adapter` listening on `:8100/mcp` (per `backend/run_adapter.py`).
 
