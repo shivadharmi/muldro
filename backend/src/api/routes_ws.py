@@ -472,23 +472,123 @@ async def _handle_execute_insight(user_id: str, payload: dict, app, cid: str = "
     if not orchestrator:
         return {"status": "error", "error": "Orchestrator not available"}
 
+    capability = str(selected.get("capability") or "").strip()
+    if not capability:
+        # No capability means nothing for the trust gate to evaluate. Refuse
+        # rather than fall back to re-planning from the description, which is
+        # how the ungated path existed in the first place.
+        logger.warning(
+            "ws_execute_insight_no_capability: surface=%s index=%s", surface_id, action_index
+        )
+        return {"status": "error", "error": "Suggested action has no capability"}
+
+    action_input = selected.get("action_input")
+    if not isinstance(action_input, dict):
+        action_input = {}
+
     try:
-        # User explicitly clicked "execute" on the insight — authorize execution
-        # rather than re-plan (chat-pipeline-fold drift #6 override).
-        result = await orchestrator.process_message(
+        run_id = await _queue_insight_action(
             user_id=user_id,
             workspace_id=workspace_id,
-            message=f"[Execute insight action] {selected.get('description', '')}",
-            mode="ask",
+            surface_id=surface_id,
+            capability=capability,
+            action_input=action_input,
         )
+        if not run_id:
+            return {"status": "error", "error": "Could not queue insight action"}
         return {
             "status": "success",
             "surface_id": surface_id,
-            "action": selected.get("description", ""),
+            "capability": capability,
+            "run_id": run_id,
         }
     except Exception as e:
         logger.warning("ws_execute_insight_failed: %s", e, exc_info=True)
         return safe_error_event(e, cid, channel="ws")
+
+
+async def _queue_insight_action(
+    *,
+    user_id: str,
+    workspace_id: str,
+    surface_id: str,
+    capability: str,
+    action_input: dict,
+) -> str | None:
+    """Queue one structured insight action as a GATED autonomous run.
+
+    Why this exists rather than a ``process_message`` call:
+    ``RelevanceAssessment.suggested_actions[].description`` is prose written by a
+    model that was reading attacker-controllable content (an email body, a Slack
+    message). Passing it to ``process_message`` relabels it as the founder's own
+    words -- that path carries ``authorization_source=DIRECT_USER_REQUEST``, so
+    ``trust_gate`` returns early ("the user's message IS the authorization") and
+    ``permission_gate`` is not installed at all (it requires ``deep_single_lead``,
+    which is off). One click then produced an ungated external write.
+
+    Note what this does and does not fix. ``capability`` and ``action_input`` are
+    *also* model-authored, so they are not trusted here -- they are **gated**.
+    Routing through a persisted Plan and a ``source="background"`` TaskRun puts the
+    action behind ``DagRunner``'s TrustEngine evaluation, the same gate every other
+    autonomous write passes. The founder sees the real capability and arguments in
+    the approval, instead of a re-plan derived from prose.
+
+    The description is deliberately not carried into the plan. The founder already
+    read it on the card; the runtime has no use for it and every reason not to.
+
+    Returns the run id, or ``None`` if the plan was not persisted (idempotent skip).
+    """
+    from src.config.settings import get_settings
+    from src.contracts import PlanOutput, PlanStep
+    from src.models.database import get_session_factory
+    from src.orchestrator.plan_store import PlanStore
+    from src.services.graph_executor_factory import create_graph_executor
+
+    settings = get_settings()
+    factory = get_session_factory()
+
+    plan = PlanOutput(
+        goal=f"Insight action: {capability}",
+        reasoning=f"Founder selected a suggested action on insight surface {surface_id}.",
+        steps=[
+            PlanStep(
+                step_id="s1",
+                description=f"Execute {capability} (insight {surface_id})",
+                actor="jarvis",
+                capability=capability,
+                input=action_input,
+            )
+        ],
+    )
+
+    store = PlanStore(lambda: factory)
+    persisted = await store.persist_plan_record(
+        plan,
+        user_id,
+        workspace_id,
+        trigger_type="insight_action",
+        idempotency_key=f"insight:{surface_id}:{capability}",
+    )
+    if not persisted.plan_id:
+        logger.info("insight_action_plan_not_persisted: surface=%s", surface_id)
+        return None
+
+    async with factory() as db:
+        executor = await create_graph_executor(settings=settings, db=db, workspace_id=workspace_id)
+        run = await executor.create_run(
+            plan_id=persisted.plan_id,
+            user_id=user_id,
+            workspace_id=workspace_id,
+            source="background",
+        )
+        await db.commit()
+        logger.info(
+            "insight_action_queued: surface=%s capability=%s run=%s",
+            surface_id,
+            capability,
+            run.run_id,
+        )
+        return run.run_id
 
 
 # Registry of named action handlers
