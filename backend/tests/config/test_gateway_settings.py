@@ -49,3 +49,13 @@ def test_openconnector_admin_settings_from_env(monkeypatch):
     s = Settings(_env_file=None)
     assert s.openconnector_admin_url == "http://oc:3000"
     assert s.openconnector_admin_token == "admtok"
+
+
+def test_skip_gateway_validation_defaults_false():
+    """Startup gateway registration is mandatory unless explicitly opted out."""
+    assert Settings(_env_file=None).skip_gateway_validation is False
+
+
+def test_skip_gateway_validation_reads_env(monkeypatch):
+    monkeypatch.setenv("MULDRO_SKIP_GATEWAY_VALIDATION", "true")
+    assert Settings(_env_file=None).skip_gateway_validation is True
