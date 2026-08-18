@@ -124,7 +124,7 @@ def _annotated_command(result: Command, tm: ToolMessage, *, unreviewed: bool, cr
 
 
 def make_governor_delegate_critique_middleware(
-    *, redis, is_read_only_delegate: bool
+    *, redis, is_read_only_delegate: bool, workspace_id: str = ""
 ) -> AgentMiddleware:
     """Build the delegate-summary critique middleware for one turn.
 
@@ -133,6 +133,8 @@ def make_governor_delegate_critique_middleware(
             ``services.extras.get("redis")`` (the 6C carry-fix pattern), never a typed attr.
         is_read_only_delegate: ``True`` → fail-open annotation (never blocks); ``False`` →
             fail-closed block on a failed/negative critique (the defensive write branch).
+        workspace_id: Resolves the critique model against this workspace's bindings, so a
+            workspace model override applies to the side-call as well as the lead.
 
     The critique side-call goes through the shared ``UtilityLLM`` seam (``complete_text``,
     Haiku tier) — same shape the RiskAssessor uses.
@@ -174,6 +176,7 @@ def make_governor_delegate_critique_middleware(
                 user=f"{open_tag}\n{summary_text}\n{close_tag}",
                 tier="haiku",
                 max_tokens=256,
+                workspace_id=workspace_id,
             )
             verdict = CritiqueVerdict.model_validate(parse_llm_json(text))
         except Exception:

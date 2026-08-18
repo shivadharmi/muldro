@@ -155,3 +155,44 @@ async def test_complete_text_with_usage_zeros_when_no_metadata():
         )
     assert text == "x"
     assert usage.input_tokens == 0 and usage.output_tokens == 0
+
+
+@contextmanager
+def _capturing_seam(model, seen: dict):
+    """Like ``_seam`` but records the kwargs ``ModelResolver.resolve`` was called with."""
+
+    async def _capture(self, **kwargs):
+        seen.update(kwargs)
+        return await _fake_resolve(self, **kwargs)
+
+    with (
+        patch("src.llm.utility.build_langchain_model", return_value=model),
+        patch("src.llm.utility.get_session_factory", lambda: lambda: _fake_session()),
+        patch("src.llm.utility.ModelResolver.resolve", _capture),
+    ):
+        yield
+
+
+async def test_complete_text_threads_workspace_id_to_the_resolver():
+    """A workspace model override must apply to utility completions too.
+
+    ``complete_text`` is the entry point for every shared-machinery side-call
+    (risk_assessor, intent_classifier, presenter, relevance_assessor, event_processor,
+    context_assembler, step_runner, verifier, contradictions, governor critique). If it
+    cannot carry ``workspace_id``, all of them resolve against the deployment default
+    and the workspace's configured model is silently ignored on the entire utility path.
+    """
+    seen: dict = {}
+    with _capturing_seam(_mock_model("ok"), seen):
+        await complete_text(
+            system="s", user="u", tier="haiku", max_tokens=16, workspace_id="ws_target"
+        )
+    assert seen.get("workspace_id") == "ws_target"
+
+
+async def test_complete_text_workspace_id_defaults_to_none():
+    """Callers with no workspace in scope keep resolving against the deployment default."""
+    seen: dict = {}
+    with _capturing_seam(_mock_model("ok"), seen):
+        await complete_text(system="s", user="u", tier="haiku", max_tokens=16)
+    assert seen.get("workspace_id") is None

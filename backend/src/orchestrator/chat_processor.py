@@ -417,7 +417,7 @@ class ChatProcessor(_ChatSingleLeadMixin):
                 )
 
                 history_block = await self._context.load_conversation_history(
-                    conversation_id, user_id=user_id
+                    conversation_id, user_id=user_id, workspace_id=workspace_id
                 )
 
                 # P2.5c planless reroute: when the flag is on AND the deep single-lead path is
@@ -447,7 +447,9 @@ class ChatProcessor(_ChatSingleLeadMixin):
                         return
 
                 # Step 0: Fast intent classification
-                intent, confidence, sources = await classify_intent(message, history_block)
+                intent, confidence, sources = await classify_intent(
+                    message, history_block, workspace_id
+                )
                 yield IntentClassified(intent=intent, confidence=confidence)
 
                 if sources:

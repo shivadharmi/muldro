@@ -767,10 +767,15 @@ class JarvisOrchestrator:
         max_messages: int = 20,
         max_chars: int = 20000,
         user_id: str = "",
+        workspace_id: str = "",
     ) -> str:
         """Delegate to ContextAssembler (facade kept for internal callers)."""
         return await self._context.load_conversation_history(
-            conversation_id, max_messages=max_messages, max_chars=max_chars, user_id=user_id
+            conversation_id,
+            max_messages=max_messages,
+            max_chars=max_chars,
+            user_id=user_id,
+            workspace_id=workspace_id,
         )
 
     async def _assemble_context(

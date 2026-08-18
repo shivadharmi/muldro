@@ -69,6 +69,7 @@ class ContextAssembler:
         max_messages: int = 20,
         max_chars: int = 20000,
         user_id: str = "",
+        workspace_id: str = "",
     ) -> str:
         """Load recent conversation history from DB for multi-turn context.
 
@@ -122,7 +123,10 @@ class ContextAssembler:
                 recent = lines[-5:]
                 older = lines[:-5]
                 summary = await self._summarize_history(
-                    older, conversation_id=conversation_id, user_id=user_id
+                    older,
+                    conversation_id=conversation_id,
+                    user_id=user_id,
+                    workspace_id=workspace_id,
                 )
                 lines = [f"[Earlier conversation summary]: {summary}"] + recent
 
@@ -148,7 +152,11 @@ class ContextAssembler:
             return ""
 
     async def _summarize_history(
-        self, lines: list[str], conversation_id: str | None = None, user_id: str = ""
+        self,
+        lines: list[str],
+        conversation_id: str | None = None,
+        user_id: str = "",
+        workspace_id: str = "",
     ) -> str:
         """Summarize older conversation messages using Haiku (cheap, fast)."""
         try:
@@ -168,6 +176,7 @@ class ContextAssembler:
                 tier="haiku",
                 max_tokens=300,
                 temperature=0,
+                workspace_id=workspace_id,
             )
 
             # Embed conversation summary into Qdrant for semantic search

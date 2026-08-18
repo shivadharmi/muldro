@@ -626,6 +626,7 @@ class AgentInvoker:
             critique = make_governor_delegate_critique_middleware(
                 redis=self._services.extras.get("redis") if self._services else None,
                 is_read_only_delegate=True,
+                workspace_id=workspace_id,
             )
             extra_middleware = (critique, *extra_middleware)
 

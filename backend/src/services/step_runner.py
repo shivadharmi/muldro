@@ -203,6 +203,7 @@ class StepRunner:
             user="\n".join(parts),
             tier="resolved",
             max_tokens=1024,
+            workspace_id=run.workspace_id,
         )
 
         try:

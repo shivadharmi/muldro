@@ -178,7 +178,7 @@ class EventProcessor:
             logger.debug("Duplicate event skipped: %s", idempotency_key)
             return None
 
-        scores = await self._score_event(raw, user_id)
+        scores = await self._score_event(raw, user_id, workspace_id)
 
         event_id = f"evt_{ULID()}"
         event = NormalizedEvent(
@@ -539,7 +539,7 @@ class EventProcessor:
 
         return True
 
-    async def _score_event(self, raw: RawEvent, user_id: str) -> dict:
+    async def _score_event(self, raw: RawEvent, user_id: str, workspace_id: str = "") -> dict:
         """Score an event using Claude with user context. Falls back to defaults."""
         user_message = await self._build_scoring_message(raw, user_id)
 
@@ -549,6 +549,7 @@ class EventProcessor:
                 user=user_message,
                 tier="resolved",
                 max_tokens=512,
+                workspace_id=workspace_id,
             )
             from src.llm_utils import parse_llm_json
 

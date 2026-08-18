@@ -197,7 +197,7 @@ class Presenter:
             workspace_id=workspace_id,
         )
         style = await self._get_briefing_style(user_id)
-        briefing_content = await self._call_claude(context, style=style)
+        briefing_content = await self._call_claude(context, style=style, workspace_id=workspace_id)
 
         briefing_id = f"brief_{ULID()}"
         briefing = Briefing(
@@ -261,7 +261,7 @@ class Presenter:
             meeting_event,
             workspace_id=workspace_id,
         )
-        prep = await self._call_meeting_prep(context)
+        prep = await self._call_meeting_prep(context, workspace_id=workspace_id)
 
         return {
             "meeting_id": meeting_event.event_id,
@@ -624,7 +624,7 @@ class Presenter:
         )
         return list(result.scalars().all())
 
-    async def _call_meeting_prep(self, context: str) -> dict:
+    async def _call_meeting_prep(self, context: str, workspace_id: str = "") -> dict:
         """Call Claude to generate meeting prep content."""
         try:
             text = await complete_text(
@@ -632,6 +632,7 @@ class Presenter:
                 user=context,
                 tier="resolved",
                 max_tokens=2048,
+                workspace_id=workspace_id,
             )
             from src.llm_utils import parse_llm_json
 
@@ -647,7 +648,9 @@ class Presenter:
                 "talking_points": [],
             }
 
-    async def _call_claude(self, context: str, style: str = "general") -> dict:
+    async def _call_claude(
+        self, context: str, style: str = "general", workspace_id: str = ""
+    ) -> dict:
         """Call Claude to generate briefing content."""
         system_prompt = BRIEFING_STYLE_PROMPTS.get(style, BRIEFING_SYSTEM_PROMPT)
         try:
@@ -656,6 +659,7 @@ class Presenter:
                 user=context,
                 tier="resolved",
                 max_tokens=2048,
+                workspace_id=workspace_id,
             )
             from src.llm_utils import parse_llm_json
 
