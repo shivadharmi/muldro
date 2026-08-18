@@ -52,6 +52,12 @@ BACKOFF_CAP = 8  # max backoff multiplier (2^3)
 # relying on holding the row lock across the cycle.
 LEASE_TTL_S = 180
 
+# Poll cadence per source. NOT AN ALLOWLIST — ``get_or_create_state`` reads it
+# with ``.get(source, 300)``, so an unlisted source is provisioned silently at
+# the 300s default rather than rejected. Do not cite a source's absence from
+# this map as evidence that the source cannot be polled; what actually holds an
+# unlisted source shut is that every writer creates its row ``mode="paused"``
+# and the due-source queries filter ``mode != "paused"``.
 DEFAULT_INTERVALS: dict[str, int] = {
     "gmail": 300,
     "calendar": 900,

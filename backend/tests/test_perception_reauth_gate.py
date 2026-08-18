@@ -1,5 +1,11 @@
 """Tests for the validity-aware OAuth re-auth gate in the perception tick.
 
+Scope: the OAuth-BACKED branch of the gate (slack, notion, github, ...). Sources
+whose credential lives in the OpenConnector gateway (gmail, calendar) are decided
+from `connection_map` and never reach OAuthManager — that branch is owned by
+`tests/test_perception_gateway_gate.py`, including the multi-source fan-out that
+`gmail` + `calendar` used to exercise here.
+
 The perception tick's pre-flight gate must distinguish a *permanently* unusable
 credential (no_token / no_refresh_token / revoked) from a *transient* refresh
 blip (refresh_failed) and from a healthy token (ok):
@@ -69,7 +75,7 @@ def scheduler():
 
 @pytest.mark.asyncio
 async def test_valid_token_keeps_source_runnable(scheduler):
-    state = _make_state(source="gmail")
+    state = _make_state(source="slack")
 
     oauth = MagicMock()
     oauth.get_valid_token_with_reason = AsyncMock(return_value=_token_result("ok"))
@@ -83,7 +89,7 @@ async def test_valid_token_keeps_source_runnable(scheduler):
     assert kept == [state]
     assert state.mode != "paused"
     reauth.mark_needs_reauth.assert_not_called()
-    oauth.get_valid_token_with_reason.assert_awaited_once_with("usr_test", "google")
+    oauth.get_valid_token_with_reason.assert_awaited_once_with("usr_test", "slack")
 
 
 # ---------------------------------------------------------------------------
@@ -98,7 +104,7 @@ async def test_permanent_reason_drops_and_applies_reauth_on_outer_db(scheduler, 
     # (apply_needs_reauth(db, ...)) — NOT open a second session via
     # mark_needs_reauth — to avoid a cross-session row-lock self-deadlock with
     # the tick's FOR UPDATE locks on the same perception_state rows.
-    state = _make_state(source="gmail", user_id="usr_x", workspace_id="ws_x")
+    state = _make_state(source="slack", user_id="usr_x", workspace_id="ws_x")
 
     oauth = MagicMock()
     oauth.get_valid_token_with_reason = AsyncMock(return_value=_token_result(reason))
@@ -117,7 +123,7 @@ async def test_permanent_reason_drops_and_applies_reauth_on_outer_db(scheduler, 
     # signature: apply_needs_reauth(db, user_id, provider, reason)
     assert args[0] is db
     assert args[1] == "usr_x"
-    assert args[2] == "google"
+    assert args[2] == "slack"
     assert args[3] == reason
     # mark_needs_reauth (which opens its own session) must NOT be used here.
     reauth.mark_needs_reauth.assert_not_called()
@@ -129,7 +135,7 @@ async def test_gate_returns_collected_reauth_tuples_for_post_commit_notify(sched
     # tick can notify AFTER its commit (notify is Redis + external; must be
     # post-commit). Verify the gate exposes them via _drop_tokenless_sources
     # returning (kept, marked_tuples) OR sets them on a known attribute.
-    state = _make_state(source="gmail", user_id="usr_x", workspace_id="ws_x")
+    state = _make_state(source="slack", user_id="usr_x", workspace_id="ws_x")
 
     oauth = MagicMock()
     oauth.get_valid_token_with_reason = AsyncMock(return_value=_token_result("revoked"))
@@ -143,18 +149,20 @@ async def test_gate_returns_collected_reauth_tuples_for_post_commit_notify(sched
         kept = await scheduler._drop_tokenless_sources(db, [state], marked_out=collected)
 
     assert kept == []
-    assert collected == [("usr_x", "google", "revoked", "ws_x")]
+    assert collected == [("usr_x", "slack", "revoked", "ws_x")]
 
 
 # ---------------------------------------------------------------------------
-# (c) gmail + calendar (same google provider) → ONE mark_needs_reauth call
+# (c) two rows sharing one (user, provider) → ONE mark_needs_reauth call
+# (one user, one provider, two workspaces — the gmail+calendar fan-out that used
+# to be the example here is now decided on the gateway branch)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_gmail_and_calendar_collapse_to_one_reauth(scheduler):
-    s_gmail = _make_state(state_id="pst_g", source="gmail", user_id="usr_g")
-    s_cal = _make_state(state_id="pst_c", source="calendar", user_id="usr_g")
+async def test_same_user_provider_collapses_to_one_reauth(scheduler):
+    s_gmail = _make_state(state_id="pst_g", source="slack", user_id="usr_g", workspace_id="ws_a")
+    s_cal = _make_state(state_id="pst_c", source="slack", user_id="usr_g", workspace_id="ws_b")
 
     oauth = MagicMock()
     oauth.get_valid_token_with_reason = AsyncMock(return_value=_token_result("revoked"))
@@ -166,8 +174,8 @@ async def test_gmail_and_calendar_collapse_to_one_reauth(scheduler):
         kept = await scheduler._drop_tokenless_sources(db, [s_gmail, s_cal])
 
     assert kept == []
-    # Both sources map to the google provider → ONE validity check, ONE reauth.
-    oauth.get_valid_token_with_reason.assert_awaited_once_with("usr_g", "google")
+    # Both rows share the (user, provider) key → ONE validity check, ONE reauth.
+    oauth.get_valid_token_with_reason.assert_awaited_once_with("usr_g", "slack")
     reauth.apply_needs_reauth.assert_awaited_once()
 
 
@@ -178,7 +186,7 @@ async def test_gmail_and_calendar_collapse_to_one_reauth(scheduler):
 
 @pytest.mark.asyncio
 async def test_refresh_failed_keeps_source_no_notify(scheduler):
-    state = _make_state(source="gmail")
+    state = _make_state(source="slack")
 
     oauth = MagicMock()
     oauth.get_valid_token_with_reason = AsyncMock(return_value=_token_result("refresh_failed"))
@@ -201,8 +209,8 @@ async def test_refresh_failed_keeps_source_no_notify(scheduler):
 
 @pytest.mark.asyncio
 async def test_validity_check_cached_per_user_provider(scheduler):
-    s_gmail = _make_state(state_id="pst_g", source="gmail", user_id="usr_g")
-    s_cal = _make_state(state_id="pst_c", source="calendar", user_id="usr_g")
+    s_gmail = _make_state(state_id="pst_g", source="slack", user_id="usr_g", workspace_id="ws_a")
+    s_cal = _make_state(state_id="pst_c", source="slack", user_id="usr_g", workspace_id="ws_b")
 
     oauth = MagicMock()
     oauth.get_valid_token_with_reason = AsyncMock(return_value=_token_result("ok"))
@@ -224,7 +232,7 @@ async def test_validity_check_cached_per_user_provider(scheduler):
 
 @pytest.mark.asyncio
 async def test_gate_failure_keeps_all_sources(scheduler):
-    state = _make_state(source="gmail")
+    state = _make_state(source="slack")
 
     oauth = MagicMock()
     oauth.get_valid_token_with_reason = AsyncMock(side_effect=RuntimeError("boom"))
@@ -246,7 +254,7 @@ async def test_gate_failure_keeps_all_sources(scheduler):
 
 @pytest.mark.asyncio
 async def test_no_oauth_manager_keeps_all_sources(scheduler):
-    state = _make_state(source="gmail")
+    state = _make_state(source="slack")
 
     db = MagicMock()
     with patch.object(scheduler, "_validity_gate_collaborators", return_value=(None, None)):
@@ -275,7 +283,11 @@ def _factory_for(db):
 @pytest.mark.asyncio
 async def test_reauth_recovery_clears_when_token_valid_again(scheduler):
     # One source paused-for-reauth (mode=paused, last_error=needs_reauth).
-    paused = _make_state(state_id="pst_p", source="gmail", user_id="usr_p", mode="paused")
+    # The reaper must clear by PROVIDER, not by source name, so this uses a
+    # synthetic native fan-out provider rather than a real source: no shipped
+    # OAuth provider backs more than one source today (gmail/calendar moved
+    # behind the gateway), and hard-coding one would only re-encode that.
+    paused = _make_state(state_id="pst_p", source="acme_inbox", user_id="usr_p", mode="paused")
     paused.last_error = "needs_reauth"
 
     rows = MagicMock()
@@ -289,13 +301,19 @@ async def test_reauth_recovery_clears_when_token_valid_again(scheduler):
     reauth = MagicMock()
     reauth.clear_reauth = AsyncMock()
 
-    with patch.object(scheduler, "_validity_gate_collaborators", return_value=(oauth, reauth)):
+    with (
+        patch.object(scheduler, "_validity_gate_collaborators", return_value=(oauth, reauth)),
+        patch(
+            "src.integrations.provider_map._PROVIDER_SOURCES",
+            {"acme": ["acme_inbox", "acme_tasks"]},
+        ),
+    ):
         await scheduler._tick_reauth_recovery(_factory_for(db))
 
     reauth.clear_reauth.assert_awaited_once()
     args, kwargs = reauth.clear_reauth.await_args
     assert args[0] == "usr_p"
-    assert args[1] == "google"
+    assert args[1] == "acme"
 
 
 @pytest.mark.asyncio
@@ -392,12 +410,15 @@ async def test_reauth_recovery_taskrun_branch_noop_when_invalid(scheduler):
 
 @pytest.mark.asyncio
 async def test_reauth_recovery_dedupes_validity_check_across_branches(scheduler):
-    # A google provider appears in BOTH a paused perception_state AND a deferred
+    # One provider appears in BOTH a paused perception_state AND a deferred
     # TaskRun. The validity check must run ONCE per (user, provider) and clear
-    # ONCE — not twice.
-    paused = _make_state(state_id="pst_p", source="gmail", user_id="usr_p", mode="paused")
+    # ONCE — not twice. The two branches key off different things (a SOURCE vs a
+    # checkpointed PROVIDER), so the dedup only collapses them if the source is
+    # resolved through provider_map first; a synthetic fan-out provider keeps
+    # that nuance testable now that no shipped provider backs two sources.
+    paused = _make_state(state_id="pst_p", source="acme_inbox", user_id="usr_p", mode="paused")
     paused.last_error = "needs_reauth"
-    run = _make_awaiting_run("usr_p", "google")
+    run = _make_awaiting_run("usr_p", "acme")
 
     pstate_rows = MagicMock()
     pstate_rows.scalars.return_value.all.return_value = [paused]
@@ -413,8 +434,14 @@ async def test_reauth_recovery_dedupes_validity_check_across_branches(scheduler)
     reauth = MagicMock()
     reauth.clear_reauth = AsyncMock()
 
-    with patch.object(scheduler, "_validity_gate_collaborators", return_value=(oauth, reauth)):
+    with (
+        patch.object(scheduler, "_validity_gate_collaborators", return_value=(oauth, reauth)),
+        patch(
+            "src.integrations.provider_map._PROVIDER_SOURCES",
+            {"acme": ["acme_inbox", "acme_tasks"]},
+        ),
+    ):
         await scheduler._tick_reauth_recovery(_factory_for(db))
 
-    oauth.get_valid_token_with_reason.assert_awaited_once_with("usr_p", "google")
+    oauth.get_valid_token_with_reason.assert_awaited_once_with("usr_p", "acme")
     reauth.clear_reauth.assert_awaited_once()

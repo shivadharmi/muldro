@@ -16,6 +16,8 @@ from dataclasses import dataclass
 
 from pydantic import BaseModel
 
+from src.integrations.gateway_actions import PROVIDER_REGISTRY
+from src.integrations.gateway_naming import action_id_to_tool_name
 from src.tools.schemas import (
     AddToBriefInput,
     ApproveActionInput,
@@ -437,51 +439,9 @@ def _ext(
 # itself low-risk. Tool-granularity risk is more accurate than capability-granularity.
 EXTERNAL_TOOL_SEEDS: list[ExternalToolSeed] = [
     # _ext(name, capability, server, risk, approval, verified)
-    # google-workspace (18 tools, verified=True)
-    # Complete tier, gmail + calendar. Real names confirmed via list_tools() 2026-03-30.
-    _ext("search_gmail_messages", "email.search", "google-workspace", "low", False, True),
-    _ext("get_gmail_message_content", "email.read", "google-workspace", "low", False, True),
-    _ext("get_gmail_messages_content_batch", "email.read", "google-workspace", "low", False, True),
-    _ext("send_gmail_message", "email.send", "google-workspace", "high", True, True),
-    _ext("draft_gmail_message", "email.draft", "google-workspace", "medium", True, True),
-    _ext("modify_gmail_message_labels", "email.send", "google-workspace", "medium", True, True),
-    _ext(
-        "batch_modify_gmail_message_labels", "email.send", "google-workspace", "medium", True, True
-    ),
-    _ext("get_gmail_thread_content", "email.read", "google-workspace", "low", False, True),
-    _ext("get_gmail_threads_content_batch", "email.read", "google-workspace", "low", False, True),
-    _ext("get_gmail_attachment_content", "email.read", "google-workspace", "low", False, True),
-    _ext("list_gmail_labels", "email.list", "google-workspace", "low", False, True),
-    _ext("list_gmail_filters", "email.list", "google-workspace", "low", False, True),
-    _ext("manage_gmail_filter", "email.send", "google-workspace", "medium", True, True),
-    _ext("manage_gmail_label", "email.send", "google-workspace", "medium", True, True),
-    _ext("get_events", "calendar.list", "google-workspace", "low", False, True),
-    _ext("list_calendars", "calendar.list", "google-workspace", "low", False, True),
-    _ext("manage_event", "calendar.create", "google-workspace", "medium", True, True),
-    _ext("query_freebusy", "calendar.get", "google-workspace", "low", False, True),
-    # github (22 tools, verified=False)
-    _ext("issue_write", "issue.create", "github", "medium", True, False),
-    _ext("issue_read", "issue.get", "github", "low", False, False),
-    _ext("add_issue_comment", "issue.comment", "github", "medium", True, False),
-    _ext("create_pull_request", "repo.create_pr", "github", "high", True, False),
-    _ext("merge_pull_request", "repo.merge_pr", "github", "high", True, False),
-    _ext("update_pull_request", "repo.update_pr", "github", "medium", True, False),
-    _ext("pull_request_read", "repo.list_prs", "github", "low", False, False),
-    _ext("pull_request_review_write", "repo.review_pr", "github", "medium", True, False),
-    _ext("sub_issue_write", "issue.sub_issue", "github", "medium", True, False),
-    _ext("list_issues", "issue.list", "github", "low", False, False),
-    _ext("search_issues", "issue.search", "github", "low", False, False),
-    _ext("search_code", "repo.search_code", "github", "low", False, False),
-    _ext("search_repositories", "repo.search_repos", "github", "low", False, False),
-    _ext("search_users", "search.users", "github", "low", False, False),
-    _ext("search_orgs", "search.orgs", "github", "low", False, False),
-    _ext("get_diff", "repo.get_diff", "github", "low", False, False),
-    _ext("get_reviews", "repo.get_reviews", "github", "low", False, False),
-    _ext("get_check_runs", "repo.get_checks", "github", "low", False, False),
-    _ext("get_files", "repo.get_files", "github", "low", False, False),
-    _ext("list_pull_requests", "repo.list_prs", "github", "low", False, False),
-    _ext("search_pull_requests", "repo.search_prs", "github", "low", False, False),
-    _ext("get_sub_issues", "issue.get", "github", "low", False, False),
+    # google-workspace and github are gateway-only (OpenConnector) -- see the
+    # derived block below EXTERNAL_TOOL_SEEDS. Native hand-written seeds for
+    # these two migrated servers are deliberately absent.
     # slack (8 tools, verified=False)
     _ext("slack_post_message", "messaging.send", "slack", "high", True, False),
     _ext("slack_reply_to_thread", "messaging.reply", "slack", "high", True, False),
@@ -553,6 +513,24 @@ EXTERNAL_TOOL_SEEDS: list[ExternalToolSeed] = [
     _ext("addWorklogToJiraIssue", "issue.update", "atlassian", "medium", True, False),
     # _composite (1 tool, verified=False)
     _ext("web_search", "search.web", "_composite", "low", False, False),
+]
+
+# Gateway-backed servers -- DERIVED from the single source of truth
+# (gateway_actions.PROVIDER_REGISTRY) with the agent-legal naming contract
+# (dots are illegal in Anthropic/OpenAI tool names). Names MUST match what the
+# adapter warm-start exposes (action_id_to_tool_name). Native hand-written seeds
+# for these servers are deliberately absent: a migrated server is gateway-only.
+EXTERNAL_TOOL_SEEDS += [
+    _ext(
+        action_id_to_tool_name(action.action_id),
+        action.capability,
+        provider.server_name,
+        action.risk,
+        action.requires_approval,
+        True,
+    )
+    for provider in PROVIDER_REGISTRY.values()
+    for action in provider.actions
 ]
 
 

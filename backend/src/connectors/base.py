@@ -5,7 +5,6 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from src.connectors.poll_result import PollResult
-from src.services.event_processor import RawEvent
 
 
 @dataclass
@@ -40,11 +39,6 @@ class BaseConnector(ABC):
     provider: str
     cursor_type: str = "opaque"  # Override per connector: history_id, sync_token, etc.
 
-    # Override in subclasses that support webhooks / write actions
-    supports_webhooks: bool = False
-    supports_actions: bool = False
-    available_actions: list[str] = []
-
     def __init__(self, settings=None):
         self._settings = settings
 
@@ -66,20 +60,11 @@ class BaseConnector(ABC):
     async def get_auth_url(self, scopes: list[str] | None = None) -> str:
         """Get the OAuth authorization URL for this connector."""
 
-    async def handle_webhook(self, payload: dict) -> list[RawEvent]:
-        """Parse incoming webhook payload into RawEvents.
-
-        Override in connectors that set supports_webhooks = True.
-        """
-        raise NotImplementedError(f"{self.__class__.__name__} does not support webhooks")
-
-    async def execute_action(self, action: str, params: dict, credentials: dict) -> dict:
-        """Execute a write action (e.g. send_email, create_issue).
-
-        Override in connectors that set supports_actions = True.
-        Returns a result dict with at least {"status": "ok"|"error"}.
-        """
-        raise NotImplementedError(f"{self.__class__.__name__} does not support actions")
+    # NOTE: this class deliberately exposes no write-action or webhook-payload
+    # hooks. Write actions go through MCP (see connectors/mcp_bridge.py), and
+    # push notifications are wake signals only — the receiver sets pending_run
+    # and the connector's normal poll fetches the data, so nothing ever needed
+    # a payload-parsing hook here.
 
 
 # Registry of connector classes by provider name

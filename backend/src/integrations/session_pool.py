@@ -15,6 +15,12 @@ from typing import Any
 from fastmcp import Client
 from fastmcp.client.auth import BearerAuth
 
+from src.integrations.gateway_actions import (
+    PROVIDER_REGISTRY,
+    capabilities_for_server,
+    providers_for_server,
+)
+from src.integrations.gateway_naming import action_id_to_tool_name
 from src.integrations.local_process_manager import get_local_process_manager
 from src.integrations.mcp_errors import McpAuthRequiredError
 from src.integrations.provider_map import provider_for_server
@@ -48,6 +54,81 @@ _STDIO_TOKEN_ENV_VARS: dict[str, str] = {
 # unusable and the user must reconnect (vs. "refresh_failed" which is transient).
 _PERMANENT_REAUTH_REASONS: frozenset[str] = frozenset({"no_token", "no_refresh_token", "revoked"})
 
+# Safety window before a bound platform JWT's expiry at which a cached session
+# is proactively rebuilt (Gmail gateway). Larger than any single tool call so a
+# call started just under the wire still completes on a valid bearer.
+_PLATFORM_JWT_REFRESH_MARGIN_SECONDS = 30
+
+
+def _platform_jwt_exp(token: str) -> float | None:
+    """Return a platform JWT's ``exp`` (epoch seconds) without verifying it.
+
+    Signature verification is unnecessary here — the token was just minted by
+    this process; we only need its expiry to decide when to rebuild the cached
+    session. Returns None if the token is unparseable or carries no ``exp``.
+    """
+    import jwt
+
+    try:
+        claims = jwt.decode(token, options={"verify_signature": False})
+    except Exception:
+        return None
+    exp = claims.get("exp")
+    return float(exp) if exp is not None else None
+
+
+def _gateway_owned_tool_names(server_name: str) -> frozenset[str] | None:
+    """Registry-owned tool names for a gateway-backed server, or None if not one.
+
+    ``None`` (not an empty set) means the server is NOT gateway-backed and its
+    discovery response must be taken verbatim — auto-registering unknown MCP
+    tools is deliberate behaviour for ordinary MCP servers.
+
+    A server is gateway-backed exactly when ``providers_for_server`` is
+    non-empty, the same signal ``services/integration_status.py`` uses.
+    """
+    provider_ids = providers_for_server(server_name)
+    if not provider_ids:
+        return None
+    return frozenset(
+        action_id_to_tool_name(a.action_id)
+        for provider_id in provider_ids
+        for a in PROVIDER_REGISTRY[provider_id].actions
+    )
+
+
+def _narrow_discovered_tools(raw_tools: list, server_name: str) -> list:
+    """Narrow a gateway server's discovery response to the tools it actually owns.
+
+    WHY: ONE OpenConnector gateway adapter endpoint serves SEVERAL Jarvis
+    installations (google-workspace and github both resolve to the same
+    ``/mcp`` URL). ``list_tools()`` therefore returns the union of every
+    provider's named tools plus the generic ``execute_action`` /
+    ``list_connections`` escape hatches — a discovery response is NOT
+    per-installation. Taken verbatim, whichever gateway installation is
+    discovered FIRST claims every name, so ``get_server_for_tool`` resolves
+    e.g. ``gmail_get_profile`` to ``github``, a github session is opened, and
+    its platform JWT is minted from github's capabilities only — the adapter's
+    capability gate then refuses the call.
+
+    Narrowing by the registry restores the per-installation view. Non-gateway
+    servers are returned unchanged.
+    """
+    owned = _gateway_owned_tool_names(server_name)
+    if owned is None:
+        return raw_tools
+    narrowed = [t for t in raw_tools if t.name in owned]
+    if raw_tools and not narrowed:
+        logger.warning(
+            "[mcp:session] gateway server %s discovered %d tool(s), none of which "
+            "the gateway registry recognises (registry owns %d name(s)) — "
+            "registering an empty tool map",
+            server_name,
+            len(raw_tools),
+            len(owned),
+        )
+    return narrowed
+
 
 @dataclass
 class SessionEntry:
@@ -66,6 +147,11 @@ class SessionEntry:
     # to a live Client" failures that manifest as Atlassian's generic
     # "We are having trouble..." error.
     bound_token: str | None = None
+    # Wall-clock (epoch seconds) expiry of the bound bearer, when it is a
+    # self-describing token (the platform JWT used by the Gmail gateway).
+    # Lets a cached session be rebuilt before its short-lived JWT expires,
+    # rather than reusing a dead bearer mid-turn. None for non-JWT bearers.
+    bound_token_exp: float | None = None
     # Name of the locally-managed MCP process this session uses (if any), so
     # every teardown path releases the process refcount exactly once.
     managed_server: str | None = None
@@ -97,8 +183,11 @@ class UserMCPSessionPool:
         self._server_configs: dict[tuple[str, str], dict] = {}
         # (workspace_id, server_name) → tool mapping (canonical → raw)
         self._server_tools: dict[tuple[str, str], dict[str, str]] = {}
-        # canonical_name → metadata (global — names don't conflict across workspaces)
-        self._tool_metadata: dict[str, dict[str, Any]] = {}
+        # Keyed by (workspace_id, server_name, tool_name): a tool's identity is
+        # the triple, not the bare name. Two servers may legitimately serve the
+        # same tool name (e.g. two gateway installations behind one adapter
+        # endpoint) and must coexist rather than overwrite.
+        self._tool_metadata: dict[tuple[str, str, str], dict[str, Any]] = {}
 
     def register_server_config(
         self,
@@ -157,6 +246,26 @@ class UserMCPSessionPool:
                     )
                     await self.refresh_session(server_name, user_id, workspace_id=workspace_id)
 
+        # Gmail gateway slice: a cached platform_jwt session holds a short-lived
+        # (300s) bearer minted at creation. Unlike OAuth, the JWT is not
+        # re-resolved on reuse, so a turn outliving the TTL would send an expired
+        # bearer and the gateway would reject the call. Rebuild the session once
+        # the bound JWT is within the refresh margin — the create path below
+        # mints a fresh token.
+        if auth_provider == "platform_jwt":
+            entry = self._sessions.get(key)
+            if (
+                entry
+                and entry.bound_token_exp is not None
+                and time.time() + _PLATFORM_JWT_REFRESH_MARGIN_SECONDS >= entry.bound_token_exp
+            ):
+                logger.info(
+                    "[mcp:session] platform JWT near expiry for %s/%s — rebuilding session",
+                    server_name,
+                    user_id,
+                )
+                await self.refresh_session(server_name, user_id, workspace_id=workspace_id)
+
         async with self._lock:
             entry = self._sessions.get(key)
             if entry:
@@ -180,14 +289,19 @@ class UserMCPSessionPool:
                 config["env"] = dict(config["env"])
 
             # Resolve auth
-            auth = await self._resolve_auth(server_name, user_id, config)
+            auth = await self._resolve_auth(server_name, user_id, config, workspace_id=workspace_id)
             bound_token: str | None = None
+            bound_token_exp: float | None = None
             if auth is not None and isinstance(auth, BearerAuth):
                 bound_token = (
                     auth.token.get_secret_value()
                     if hasattr(auth.token, "get_secret_value")
                     else str(auth.token)
                 )
+                # Only the platform JWT is self-describing; record its expiry so
+                # the reuse path above can rebuild before it dies.
+                if auth_provider == "platform_jwt" and bound_token:
+                    bound_token_exp = _platform_jwt_exp(bound_token)
 
             # Create Client
             transport = config.get("transport", "stdio")
@@ -239,6 +353,13 @@ class UserMCPSessionPool:
             client = await client_ctx.__aenter__()
             raw_tools = await client.list_tools()
 
+            # A gateway endpoint is shared by several installations, so narrow
+            # its response to the tools the registry says THIS server owns
+            # before anything is derived from it. Applied here so the single
+            # narrowed list feeds _server_tools, _tool_metadata AND
+            # _register_discovered_tools alike. See _narrow_discovered_tools.
+            raw_tools = _narrow_discovered_tools(raw_tools, server_name)
+
             # Skip normalization — store real MCP names end-to-end
             tool_mapping = {}
             for t in raw_tools:
@@ -248,7 +369,7 @@ class UserMCPSessionPool:
                     or getattr(t, "input_schema", None)
                     or {"type": "object", "properties": {}}
                 )
-                self._tool_metadata[t.name] = {
+                self._tool_metadata[(workspace_id, server_name, t.name)] = {
                     "name": t.name,
                     "server": server_name,
                     "description": t.description or "",
@@ -267,6 +388,7 @@ class UserMCPSessionPool:
                 user_id=user_id,
                 tools=tool_mapping,
                 bound_token=bound_token,
+                bound_token_exp=bound_token_exp,
                 managed_server=managed_server,
             )
             self._sessions[key] = entry
@@ -695,7 +817,7 @@ class UserMCPSessionPool:
         self._server_configs.pop((workspace_id, server_name), None)
         removed_tools = self._server_tools.pop((workspace_id, server_name), {})
         for canonical in removed_tools:
-            self._tool_metadata.pop(canonical, None)
+            self._tool_metadata.pop((workspace_id, server_name, canonical), None)
 
     def has_server_config(self, server_name: str, workspace_id: str = "") -> bool:
         """Check if a server config is registered."""
@@ -731,13 +853,40 @@ class UserMCPSessionPool:
         return False
 
     def get_server_for_tool(self, tool_name: str, workspace_id: str = "") -> str | None:
-        """Find which server provides a canonical tool name."""
-        for key, tools in self._server_tools.items():
-            if workspace_id and key[0] != workspace_id:
-                continue
-            if tool_name in tools:
-                return key[1]  # server_name
-        return None
+        """Find which server provides a canonical tool name.
+
+        Resolution is deterministic (lexicographically first server) rather than
+        first-match-over-a-dict, because ``_server_tools`` is ordered by discovery
+        and would otherwise resolve the same collision differently across
+        restarts. A collision is also warned about: increment 2 hit exactly this
+        shape when two gateway installations shared one MCP endpoint and every
+        Gmail tool silently resolved to the ``github`` server.
+
+        Candidates are deduplicated by server name before the ambiguity check.
+        An unscoped lookup (``workspace_id=""``) walks every workspace, so one
+        server installed in two workspaces yields the same name twice — that is
+        not a collision, and warning about it would put noise on the exact
+        channel this warning exists to keep clean.
+        """
+        candidates = sorted(
+            {
+                key[1]
+                for key, tools in self._server_tools.items()
+                if (not workspace_id or key[0] == workspace_id) and tool_name in tools
+            }
+        )
+        if not candidates:
+            return None
+        if len(candidates) > 1:
+            logger.warning(
+                "[mcp:pool] tool %r is served by %d servers (%s) — resolving to %r; "
+                "tool identity is (workspace, server, name), so a bare name is ambiguous",
+                tool_name,
+                len(candidates),
+                ", ".join(candidates),
+                candidates[0],
+            )
+        return candidates[0]
 
     def get_all_tools(self, workspace_id: str = "") -> dict[str, str]:
         """Return all tools across all servers: {canonical_name: server_name}."""
@@ -760,16 +909,26 @@ class UserMCPSessionPool:
         Stripping the key from ``required`` and ``properties`` removes that
         pressure while still letting the user pass it explicitly if they
         ever want to override (call_tool preserves caller-supplied keys).
+
+        The key ``(workspace_id, server_name, tool_name)`` is the authoritative
+        identity, so both the workspace filter and the ``_server_configs``
+        lookup read it rather than the duplicated ``_workspace_id`` payload
+        value. Reading the key is what makes an unscoped call (``workspace_id=""``,
+        meaning "no filtering") still find each row's own installation config —
+        otherwise ``tool_defaults`` were never stripped and the agent saw
+        injected params as required. An empty key workspace still passes any
+        filter, preserving the "global rows are always visible" behaviour.
         """
         result: list[dict[str, Any]] = []
-        for name, meta in self._tool_metadata.items():
-            if workspace_id and meta.get("_workspace_id") and meta["_workspace_id"] != workspace_id:
+        for key, meta in self._tool_metadata.items():
+            row_workspace = key[0]
+            if workspace_id and row_workspace and row_workspace != workspace_id:
                 continue
             item = dict(meta)
-            item["name"] = name
+            item["name"] = key[2]
 
-            server_name = meta.get("server")
-            server_cfg = self._server_configs.get((workspace_id, server_name)) or {}
+            server_name = key[1]
+            server_cfg = self._server_configs.get((row_workspace, server_name)) or {}
             tool_defaults = server_cfg.get("tool_defaults") or {}
             if tool_defaults:
                 item["input_schema"] = _strip_injected_params(
@@ -798,9 +957,60 @@ class UserMCPSessionPool:
         server_name: str,
         user_id: str,
         config: dict,
+        workspace_id: str = "",
     ) -> BearerAuth | str | None:
         """Resolve authentication for a server connection."""
         auth_provider = config.get("auth_provider", "none")
+
+        if auth_provider == "platform_jwt":
+            # Gateway slice: mint a fresh short-lived platform JWT for the
+            # ToolHive vMCP instead of resolving a stored OAuth/static token. The
+            # JWT's tenant_id MUST match how connection_map rows are keyed (the
+            # workspace_id) so the downstream adapter can resolve the caller's
+            # connection. Falls back to user_id only when workspace_id is absent
+            # (the one-user-one-workspace invariant).
+            from src.orchestrator.platform_jwt import mint_platform_jwt
+
+            tenant = workspace_id or user_id
+            # Capabilities are DERIVED from the gateway_actions registry as the
+            # union across the providers this installation serves (see
+            # capabilities_for_server), so a GitHub session's token carries no
+            # email capability and vice versa — which is what makes the
+            # adapter's per-action capability gate load-bearing ACROSS
+            # installations, not just within one. An unregistered server_name
+            # mints an empty capability list (fail-closed): it must not
+            # inherit another installation's capabilities.
+            #
+            # Known remaining limitation (separate scheduled increment, not
+            # fixed here): the token is minted once per SESSION creation,
+            # cached by SessionKey across steps, and rebuilt only near
+            # bound_token_exp — so it is not step-scoped. Narrowing to the
+            # current step's capability would need either a capability-keyed
+            # session key or a per-call re-mint, plus a ContextVar that does
+            # not exist today. WITHIN one installation, the deep runtime's
+            # capability_scope middleware is the first-line guard.
+            capabilities = list(capabilities_for_server(server_name))
+            if not capabilities:
+                # The two gateway-ness signals have diverged: this installation
+                # DECLARES auth_provider="platform_jwt" (so it routes to the
+                # vMCP) but the registry knows no providers for its
+                # server_name. The token mints empty, so every gateway call it
+                # makes will be denied at the adapter's capability gate — a
+                # useless installation. Registry invariant tests pin the seeded
+                # set; this catches a DB row that drifted from it.
+                logger.error(
+                    "Installation %r declares auth_provider='platform_jwt' but the gateway "
+                    "registry knows no providers for it — minting an EMPTY capability set, "
+                    "so every gateway call for this server will be denied.",
+                    server_name,
+                )
+            token = mint_platform_jwt(
+                principal_id=user_id,
+                tenant_id=tenant,
+                workspace_id=tenant,
+                capabilities=capabilities,
+            )
+            return BearerAuth(token=token)
 
         if auth_provider == "none":
             return None

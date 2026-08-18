@@ -9,11 +9,16 @@ from src.integrations.provider_map import (
 
 
 class TestProviderForSource:
-    def test_gmail_maps_to_google(self):
-        assert provider_for_source("gmail") == "google"
+    def test_gateway_backed_sources_are_identity(self):
+        """gmail/calendar no longer fan out from a native ``google`` provider.
 
-    def test_calendar_maps_to_google(self):
-        assert provider_for_source("calendar") == "google"
+        They moved behind the OpenConnector gateway, so every native caller of
+        this function short-circuits on ``gateway_provider_for_source`` before
+        reaching it. The identity answer is what "no native provider owns this"
+        looks like — ``gateway_actions`` is the map that answers for them.
+        """
+        assert provider_for_source("gmail") == "gmail"
+        assert provider_for_source("calendar") == "calendar"
 
     def test_other_source_is_identity(self):
         assert provider_for_source("slack") == "slack"
@@ -22,10 +27,12 @@ class TestProviderForSource:
 
 
 class TestServersForProvider:
-    def test_google_servers(self):
-        assert servers_for_provider("google") == ["google-workspace"]
-
-    def test_github_servers(self):
+    def test_gateway_migrated_providers_are_not_listed(self):
+        """google/github have no native OAuth provider owning an MCP server any
+        more — the gateway registry (``gateway_actions.providers_for_server``)
+        answers for them, so this map deliberately does not. They therefore hit
+        the identity fallback rather than naming a server."""
+        assert servers_for_provider("google") == ["google"]
         assert servers_for_provider("github") == ["github"]
 
     def test_slack_servers(self):
@@ -70,8 +77,15 @@ class TestProviderForServer:
 
 
 class TestSourcesForProvider:
-    def test_google_sources(self):
-        assert sources_for_provider("google") == ["gmail", "calendar"]
+    def test_no_provider_fans_out_today(self):
+        """``_PROVIDER_SOURCES`` is empty: every provider backs one same-named source.
+
+        The only fan-out entry was ``google -> [gmail, calendar]``, retired with
+        the gateway migration. Its sole reader (``ReauthService`` pause/resume)
+        is reachable only for natively-authenticated providers, and a
+        ``platform_jwt`` installation cannot raise ``McpAuthRequiredError``.
+        """
+        assert sources_for_provider("google") == ["google"]
 
     def test_other_provider_is_identity(self):
         assert sources_for_provider("slack") == ["slack"]

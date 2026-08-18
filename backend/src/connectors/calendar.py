@@ -1,217 +1,193 @@
-"""Google Calendar connector — polls for calendar events."""
+"""Google Calendar connector — polls calendar events through the OpenConnector gateway.
+
+Increment 2 retired this connector's native OAuth, so it no longer speaks Google
+REST: it calls ``googlecalendar.list_events`` through the gateway and inherits
+the envelope handling, pagination and cursor policy from :class:`GatewayConnector`.
+
+**Why a timestamp cursor and not ``syncToken``.** ``syncToken`` IS in the action's
+inputSchema, so a 1:1 port looked free — but the native connector detected an
+expired token by reading ``resp.status_code == 410`` off the wire, and through
+adapter -> OpenConnector -> Google this connector sees a result dict, not an HTTP
+status. An opaque error cannot be told apart from "resync now", leaving only two
+failure modes: stall forever, or full-resync every tick. A timestamp cannot expire.
+
+**Deletions still arrive.** ``_normalize_event`` maps ``status: "cancelled"`` to
+``event_cancelled``, and Google documents ``updatedMin`` as always including
+entries deleted since that time *regardless of* ``showDeleted`` — so
+``showDeleted`` is deliberately never sent (setting it would also change
+initial-sync semantics).
+
+**The initial/incremental asymmetry is preserved, not introduced.** An initial
+sync answers "what is on my calendar" (``timeMin`` = now); an incremental sync
+answers "what changed" (``updatedMin``). That is the same split the pre-gateway
+connector had as ``timeMin`` vs ``syncToken``.
+
+**How initial mode is exited.** Google used to hand back a ``nextSyncToken``
+even on an empty final page, so the connector always left initial mode. There is
+no such token here, so every undrained-free initial sync — whether or not it
+observes any events — seeds its cursor at **poll-start minus
+``OVERLAP_SECONDS``**, unconditionally. Poll-start is captured before the
+request, never after — see :meth:`CalendarConnector.poll`.
+
+``max(updated)`` over the returned rows is NOT used as the seed, even when it
+exists. ``timeMin=now`` asks "what is on my calendar from now on", and a
+long-established recurring event can answer with an ``updated`` stamp years
+old — older than ``CURSOR_FLOOR_DAYS`` — which the next poll's plausibility
+check would then reject, bouncing the connector straight back to
+``timeMin=now`` forever. What is actually known after an initial sync is "the
+calendar as observed as of poll-start", not "as of whenever some future
+event was last edited" — so poll-start, not ``max(updated)``, is the only
+correct cursor for this branch. The sole exception is a truncated walk: it
+did not drain its window and must hold the incoming cursor, exactly as
+:meth:`GatewayConnector._resolve_cursor` already enforces for every other
+branch.
+"""
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
-from src.connectors.base import BaseConnector, ConnectorHealth, register_connector
-from src.connectors.poll_result import PollResult, _classify_http_status
+from src.connectors.base import register_connector
+from src.connectors.gateway_connector import OVERLAP_SECONDS, GatewayConnector
+from src.connectors.poll_result import PollResult
 from src.services.event_processor import RawEvent
 
 logger = logging.getLogger(__name__)
 
-# Defensive page cap for a single incremental/initial sync. Google Calendar
-# returns nextSyncToken only on the final page; intermediate pages carry
-# nextPageToken. A misbehaving provider that always returns a nextPageToken
-# would otherwise loop forever. On truncation we log a warning so silent data
-# loss is visible, consistent with the gmail connector's MAX_HISTORY_PAGES.
-MAX_PAGES = 50
+# Defensive page cap for a single poll. A misbehaving provider that always
+# returns a nextPageToken would otherwise loop forever. Truncation is reported
+# structurally by PageWalk and consumed via _resolve_cursor, so a capped walk
+# holds its cursor instead of skipping the undrained remainder.
+MAX_PAGES = 5
+
+# Events requested per page. The action's inputSchema allows up to 2500; a
+# modest page keeps a single gateway call well inside the poll budget.
+PAGE_SIZE = 50
+
+
+def _rfc3339(when: datetime) -> str:
+    """Render a UTC datetime in the RFC 3339 form the action's schema declares."""
+    return when.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 @register_connector("calendar")
-class CalendarConnector(BaseConnector):
-    """Polls Google Calendar API using syncToken for incremental fetch."""
+class CalendarConnector(GatewayConnector):
+    """Polls Google Calendar through the gateway, watermarked on ``updated``."""
 
-    cursor_type: str = "sync_token"
+    cursor_type: str = "timestamp"
+
+    READ_ACTION = "googlecalendar.list_calendars"
+    LIST_ACTION = "googlecalendar.list_events"
 
     async def poll(self, user_id: str, cursor: str | None, credentials: dict) -> PollResult:
-        """Poll Calendar for event changes since syncToken cursor."""
-        import httpx
+        """Poll Calendar for events changed since the cursor watermark.
 
-        access_token = credentials.get("access_token", "")
-        if not access_token:
-            return PollResult(events=[], cursor=cursor, error_class="auth_failed")
+        ``credentials`` is unused: the credential lives in OpenConnector and the
+        gateway injects it per connection. The parameter stays because
+        ``BaseConnector.poll`` defines it.
+        """
+        watermark = self._sane_rfc3339_cursor(cursor)
+
+        # Captured BEFORE the request, not after it returns: a post-walk now()
+        # would sit past anything modified while the walk was in flight, and
+        # seeding there would skip it permanently. See the seed below.
+        poll_started = datetime.now(timezone.utc)
+
+        payload: dict = {
+            "calendarId": "primary",
+            "singleEvents": True,
+            "maxResults": PAGE_SIZE,
+        }
+        if watermark is None:
+            # Initial sync: what is on my calendar from now on.
+            payload["timeMin"] = _rfc3339(poll_started)
+        else:
+            # Incremental: what changed, re-reading OVERLAP_SECONDS of the
+            # previous window as insurance against clock skew and
+            # second-granularity boundaries. Duplicates are absorbed by
+            # EventProcessor's idempotency key, so the only cost is quota.
+            payload["updatedMin"] = _rfc3339(watermark - timedelta(seconds=OVERLAP_SECONDS))
+
+        walk = await self._walk_pages(
+            self.LIST_ACTION, payload, items_key="items", max_pages=MAX_PAGES
+        )
+        if walk.error_class is not None:
+            return PollResult(events=[], cursor=cursor, error_class=walk.error_class)
 
         events: list[RawEvent] = []
-        new_cursor = cursor
+        observed: str | None = None
+        for page in walk.pages:
+            for item in page:
+                event = self._normalize_event(item, user_id)
+                if event:
+                    events.append(event)
+                # Google renders `updated` as a UTC RFC 3339 stamp with a fixed
+                # "Z" suffix and millisecond precision, so a lexicographic max is
+                # a chronological max and the winner round-trips straight back as
+                # the cursor. (Were the precision ever to vary within one second,
+                # "…:00Z" would sort above "…:00.500Z" — landing up to a second
+                # EARLY, i.e. an extra re-read. The error can only under-advance.)
+                # `updated` is optional in the recorded outputSchema (only id and
+                # status are required), and an absent or empty stamp is not a
+                # watermark: taking it would make the next poll reject the cursor
+                # and restart from now(), skipping the window in between.
+                updated = item.get("updated")
+                if (
+                    isinstance(updated, str)
+                    and updated
+                    and (observed is None or updated > observed)
+                ):
+                    observed = updated
 
-        try:
-            async with httpx.AsyncClient() as client:
-                # Walk every page before advancing the cursor. Google returns
-                # nextSyncToken ONLY on the final page; intermediate pages carry
-                # nextPageToken. The first request of a sync carries syncToken
-                # (incremental) or timeMin (first sync) — subsequent requests carry
-                # ONLY pageToken, since the API rejects combining a pageToken with
-                # syncToken/timeMin.
-                page_token: str | None = None
-                pages_fetched = 0
-                truncated = False
-                while True:
-                    params: dict = {"singleEvents": "true", "maxResults": 50}
-                    if page_token:
-                        params["pageToken"] = page_token
-                    elif cursor:
-                        params["syncToken"] = cursor
-                    else:
-                        # Initial sync: get events from now onward.
-                        params["timeMin"] = datetime.now(timezone.utc).isoformat()
+        # Never advance past an undrained window: a truncated walk, or a walk
+        # with no watermark to advance TO, holds the incoming cursor.
+        new_cursor = self._resolve_cursor(walk, incoming=cursor, observed=observed)
 
-                    resp = await client.get(
-                        "https://www.googleapis.com/calendar/v3/calendars/primary/events",
-                        params=params,
-                        headers={"Authorization": f"Bearer {access_token}"},
-                        timeout=15,
-                    )
-
-                    if resp.status_code == 410:
-                        # Sync token expired — full sync (cursor=None, not a failure)
-                        return await self.poll(user_id, None, credentials)
-
-                    if resp.status_code != 200:
-                        error_class = _classify_http_status(resp.status_code)
-                        logger.warning(
-                            "Calendar API returned %d for user %s", resp.status_code, user_id
-                        )
-                        # Return unchanged incoming cursor on failure
-                        return PollResult(events=[], cursor=cursor, error_class=error_class)
-
-                    data = resp.json()
-                    for item in data.get("items", []):
-                        event = self._normalize_event(item, user_id)
-                        if event:
-                            events.append(event)
-
-                    # nextSyncToken only appears on the final page; keep the last
-                    # seen value so the cursor advances correctly after the loop.
-                    sync_token = data.get("nextSyncToken")
-                    if sync_token:
-                        new_cursor = sync_token
-
-                    pages_fetched += 1
-                    page_token = data.get("nextPageToken")
-                    if not page_token:
-                        break
-                    if pages_fetched >= MAX_PAGES:
-                        truncated = True
-                        break
-
-                if truncated:
-                    logger.warning(
-                        "Calendar sync truncated at %d pages for user %s; remaining "
-                        "events were not drained this poll",
-                        MAX_PAGES,
-                        user_id,
-                    )
-
-        except Exception:
-            logger.warning("Calendar poll failed for user %s", user_id, exc_info=True)
-            return PollResult(events=[], cursor=cursor, error_class="transient")
+        # LEAVING INITIAL-SYNC MODE. Before the gateway port Google handed back
+        # a nextSyncToken even on an empty final page, so the connector always
+        # advanced out of initial mode. There is no such token here: without an
+        # explicit seed, an initial sync that observes nothing holds its
+        # (absent or rejected) cursor and asks timeMin=now again next poll —
+        # for ever. While stuck there a newly-created PAST-dated event is
+        # invisible, because timeMin=now excludes it and updatedMin never runs.
+        #
+        # Seeding at poll-start does NOT violate "advance to max-observed, never
+        # wall-clock now()". That invariant guards a CHANGE FEED, where anything
+        # modified between the last returned row and now() would be skipped. An
+        # initial sync is not a change feed — it asks "what is on my calendar"
+        # (timeMin), not "what changed" — and the next poll's updatedMin covers
+        # everything modified since poll-start. The overlap subtraction is the
+        # same clock-skew insurance the incremental branch applies.
+        #
+        # Unconditional on `observed`, deliberately: `observed` is the max
+        # `updated` among rows timeMin=now returned, and for a long-established
+        # recurring series that can be years old — older than
+        # CURSOR_FLOOR_DAYS. Taking it as the cursor would write a value the
+        # very next poll's _sane_rfc3339_cursor rejects as implausible, which
+        # falls back to watermark=None -> timeMin=now again -> the same rows ->
+        # the same stale cursor, forever: an initial sync that never leaves
+        # initial mode even though it is observing events every poll. Poll-start
+        # is always <= "now" and so is always plausible; it is also the only
+        # instant this branch can honestly claim to have covered ("the calendar
+        # as of poll-start"), not "as of whenever some future event happened to
+        # be last edited". So it is used regardless of what was observed.
+        #
+        # Still narrow on the other two axes: INITIAL branch only (an
+        # incremental poll that observes nothing must still hold — that path is
+        # unchanged above), and never on truncation (that would seed past an
+        # undrained window — _resolve_cursor already holds `incoming` for that
+        # case, so this check only needs to avoid overwriting it).
+        if watermark is None and not walk.truncated:
+            new_cursor = _rfc3339(poll_started - timedelta(seconds=OVERLAP_SECONDS))
+            logger.info(
+                "Calendar initial sync seeding the cursor at poll-start minus the "
+                "overlap (%s) so the next poll runs updatedMin instead of timeMin "
+                "(observed=%r)",
+                new_cursor,
+                observed,
+            )
 
         logger.info("Calendar poll: %d events", len(events))
         return PollResult(events=events, cursor=new_cursor)
-
-    async def test(self, credentials: dict) -> ConnectorHealth:
-        """Test Calendar connection."""
-        import httpx
-
-        access_token = credentials.get("access_token", "")
-        try:
-            async with httpx.AsyncClient() as client:
-                resp = await client.get(
-                    "https://www.googleapis.com/calendar/v3/calendars/primary",
-                    headers={"Authorization": f"Bearer {access_token}"},
-                    timeout=10,
-                )
-                status = "healthy" if resp.status_code == 200 else "down"
-                return ConnectorHealth(
-                    provider="calendar",
-                    status=status,
-                    last_poll_at=datetime.now(timezone.utc) if status == "healthy" else None,
-                    error=None if status == "healthy" else f"HTTP {resp.status_code}",
-                )
-        except Exception as e:
-            return ConnectorHealth(
-                provider="calendar", status="down", last_poll_at=None, error=str(e)
-            )
-
-    supports_actions: bool = True
-    available_actions: list[str] = ["create_event", "update_event"]
-
-    async def execute_action(self, action: str, params: dict, credentials: dict) -> dict:
-        """Execute a Calendar write action."""
-        if action not in self.available_actions:
-            return {"status": "error", "error": f"Unknown action: {action}"}
-
-        access_token = credentials.get("access_token", "")
-        if not access_token:
-            return {"status": "error", "error": "No access token"}
-
-        dispatch = {
-            "create_event": self._action_create_event,
-            "update_event": self._action_update_event,
-        }
-        return await dispatch[action](params, access_token)
-
-    async def _action_create_event(self, params: dict, access_token: str) -> dict:
-        """Create a calendar event."""
-        import httpx
-
-        body = {
-            "summary": params.get("summary", ""),
-            "start": params.get("start", {}),
-            "end": params.get("end", {}),
-        }
-        if params.get("description"):
-            body["description"] = params["description"]
-        if params.get("location"):
-            body["location"] = params["location"]
-        if params.get("attendees"):
-            body["attendees"] = [{"email": e} for e in params["attendees"]]
-
-        async with httpx.AsyncClient() as client:
-            resp = await client.post(
-                "https://www.googleapis.com/calendar/v3/calendars/primary/events",
-                json=body,
-                headers={"Authorization": f"Bearer {access_token}"},
-                timeout=15,
-            )
-            if resp.status_code in (200, 201):
-                data = resp.json()
-                return {
-                    "status": "ok",
-                    "event_id": data.get("id"),
-                    "html_link": data.get("htmlLink"),
-                }
-            return {"status": "error", "error": f"HTTP {resp.status_code}: {resp.text[:200]}"}
-
-    async def _action_update_event(self, params: dict, access_token: str) -> dict:
-        """Update a calendar event."""
-        import httpx
-
-        event_id = params.get("event_id", "")
-        if not event_id:
-            return {"status": "error", "error": "event_id required"}
-
-        body = {}
-        for key in ("summary", "description", "location", "start", "end"):
-            if params.get(key):
-                body[key] = params[key]
-        if params.get("attendees"):
-            body["attendees"] = [{"email": e} for e in params["attendees"]]
-
-        async with httpx.AsyncClient() as client:
-            resp = await client.patch(
-                f"https://www.googleapis.com/calendar/v3/calendars/primary/events/{event_id}",
-                json=body,
-                headers={"Authorization": f"Bearer {access_token}"},
-                timeout=15,
-            )
-            if resp.status_code == 200:
-                data = resp.json()
-                return {"status": "ok", "event_id": data.get("id")}
-            return {"status": "error", "error": f"HTTP {resp.status_code}: {resp.text[:200]}"}
-
-    async def get_auth_url(self, scopes: list[str] | None = None) -> str:
-        return "/v1/auth/oauth/google/authorize"
 
     @staticmethod
     def _normalize_event(item: dict, user_id: str) -> RawEvent | None:

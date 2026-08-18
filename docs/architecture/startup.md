@@ -19,7 +19,7 @@ sequenceDiagram
     opt --worker flag
         R->>W: Spawn daemon thread (user_ids)
         W->>W: StreamConsumerManager
-        W->>W: SchedulerLoop (per-user PerceptionCoordinators)
+        W->>W: SchedulerLoop (perception tick over all users)
         Note over W: All run via asyncio.gather()
     end
 
@@ -176,16 +176,21 @@ On every boot, `run_startup_recovery()` reconciles in-flight state:
 - Individual operation failures don't cascade (logged but don't block startup)
 - The final DB commit includes all successful recoveries
 
-## Perception Coordinator Initialization
+## Perception Tick Initialization
 
-When the scheduler starts, it accepts a `user_ids` list and creates per-user PerceptionCoordinators:
+The scheduler holds no per-user perception objects. Its perception tick
+(`src/services/scheduler/perception_tick.py`) queries `perception_state` for
+every due source across all users each tick, claims them, and runs the cycles:
 
-1. **For each user_id**, create a coordinator with orchestrator reference
-2. **Enable default sources**: gmail, calendar, slack, github
-3. **Restore cursors** from `observation_cursors` table
-4. **Set interval multiplier** based on current budget status
+1. **Budget pre-check** sets the interval multiplier for the tick
+2. **Claim** due rows (`FOR UPDATE SKIP LOCKED` → lease → commit) so locks are
+   never held across a cycle
+3. **Run cycles** grouped by user, each group inside one MCP `TurnScope`
+4. **Record each outcome** in its own fresh transaction
 
-This ensures perception cycles resume from where they left off, with no observation gaps. Each user gets independent observation state.
+Cursors live in `observation_cursors` and are read per poll, so perception
+resumes from where it left off with no observation gaps. Observation state is
+per `(workspace, user, source)` row, so users remain independent.
 
 ## Lazy Service Initialization
 

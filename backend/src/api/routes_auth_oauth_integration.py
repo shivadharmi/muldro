@@ -17,11 +17,15 @@ logger = logging.getLogger(__name__)
 def _mcp_servers_for_sources(sources: list[str]) -> list[str]:
     """Order-preserving, deduped MCP server names backing ``sources``.
 
-    Perception sources (``gmail``, ``calendar``) are not MCP server names: both
-    are served by the single ``google-workspace`` server. Eager schema discovery
-    must key off server names, so translate each source through its OAuth
-    provider via ``provider_map`` (the single source of truth for the
-    source -> provider -> server relationship).
+    A perception source is not necessarily an MCP server name, and several
+    sources can share one server. Eager schema discovery must key off server
+    names, so translate each source through its OAuth provider via
+    ``provider_map`` (the single source of truth for the source -> provider ->
+    server relationship) and dedupe the result.
+
+    Only the natively-authenticated providers reach here: the gateway-backed
+    installations (google-workspace, github) are connected through
+    ``routes_integrations``, not the OAuth callback.
     """
     from src.integrations.provider_map import provider_for_source, servers_for_provider
 
@@ -131,6 +135,25 @@ async def _register_webhooks_for_sources(
     callback base URL). A registration failure NEVER fails the OAuth connect —
     the source simply stays in poll mode. Idempotency is handled inside
     ``WebhookManager.register`` (reuses an existing active channel).
+
+    NO PRODUCTION CALLER (deliberate, increment 3). This function needs an
+    OAuth token to call Google's ``watch`` API, but gmail/calendar credentials
+    now live in OpenConnector and its curated action set exposes no watch
+    action — the Wave 0 spike found ``gmail.stop_watch`` and no ``watch``, i.e.
+    you can stop a push channel you cannot start. Wiring this to the connect
+    flow would wire it to a call that cannot succeed.
+
+    It is kept rather than deleted because it is the ONLY entry point into a
+    subsystem that is otherwise live and structurally complete: the
+    ``/v1/webhooks/{provider}/{subscription_id}`` route is mounted,
+    ``PushReceiver`` constructs a ``WebhookManager``, and the scheduler runs a
+    ``webhook_renewal_tick``. Deleting this would make that route and that tick
+    permanently unreachable — debris and load-bearing look identical here.
+
+    Re-home it to ``confirm_connection``'s pending->active edge, where
+    perception schedules are already enabled, once OpenConnector exposes a
+    watch action. See ``infra/gateway/RUNBOOK-gateway.md`` §13 and
+    ``infra/gateway/spike-findings-perception.md`` Q5.
     """
     try:
         from src.config.settings import get_settings

@@ -28,7 +28,7 @@ User <-> Next.js Frontend (A2UI)
 ```
 
 **Key paths:**
-- Orchestrator + agents: `backend/src/orchestrator/` (jarvis.py, agents.py, hooks.py, prompts.py, tracing.py, budget.py, perception.py, recovery.py, intent_classifier.py, api_circuit_breaker.py, capability_summary.py, services.py)
+- Orchestrator + agents: `backend/src/orchestrator/` (jarvis.py, agents.py, hooks.py, prompts.py, tracing.py, budget.py, perception_runner.py, connector_poller.py, recovery.py, intent_classifier.py, api_circuit_breaker.py, capability_summary.py, services.py)
 - Deep runtime (the single execution engine): `backend/src/deep_runtime/` (agent_builder.py, model_factory.py, _thinking.py, stream_adapter.py, middleware/) + the model layer `backend/src/llm/` (model_factory.py, utility.py)
 - Services (business logic): `backend/src/services/` — planner, governor, executor, presenter, memory_service, world_model, event_processor, capability_resolver, risk_assessor, trust_engine, etc.
 - Tool layer: `backend/src/tools/` (catalog.py, schemas.py, validation.py, intelligence_server.py, communication_server.py, server.py)

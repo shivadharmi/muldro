@@ -11,6 +11,7 @@ from src.api.routes_artifacts import router as artifacts_router
 from src.api.routes_auth import router as auth_router
 from src.api.routes_briefings import router as briefings_router
 from src.api.routes_chat import router as chat_router
+from src.api.routes_connections import router as connections_router
 from src.api.routes_conversations import router as conversations_router
 from src.api.routes_events import router as events_router
 from src.api.routes_feedback import router as feedback_router
@@ -19,6 +20,7 @@ from src.api.routes_health import router as health_router
 from src.api.routes_history import router as history_router
 from src.api.routes_insights import router as insights_router
 from src.api.routes_integrations import router as integrations_router
+from src.api.routes_jwks import router as jwks_router
 from src.api.routes_knowledge import router as knowledge_router
 from src.api.routes_mcp import router as mcp_router
 from src.api.routes_meetings import router as meetings_router
@@ -462,6 +464,9 @@ def create_app() -> FastAPI:
     # OAuth authentication callbacks
     app.include_router(auth_router, tags=["auth"])
 
+    # JWKS (no /v1 prefix — well-known endpoints must be root-level)
+    app.include_router(jwks_router, tags=["auth"])
+
     # A2UI surface state REST endpoints
     app.include_router(ui_router, tags=["ui"])
 
@@ -519,6 +524,7 @@ def create_app() -> FastAPI:
     # Integration platform
     app.include_router(integrations_router, tags=["integrations"])
     app.include_router(mcp_router, tags=["mcp"])
+    app.include_router(connections_router, tags=["connections"])
 
     # Runtime projections
     app.include_router(runtime_router, tags=["runtime"])
