@@ -221,3 +221,63 @@ async def test_flag_off_no_delegates_byte_identical():
     assert subagents == ()
     mock_disable_gp.assert_not_called()
     mock_build_delegate.assert_not_called()
+
+
+async def test_gp_disable_keys_off_the_resolved_model_not_the_catalog_default():
+    """The GP-disable key must name the model the deep runtime ACTUALLY builds.
+
+    deepagents derives a lead's harness-profile key from its built model
+    (``f"{provider}:{identifier}"``). Keying the disable off ``get_model_for_agent``
+    — the catalog default — means a workspace that overrides an agent onto another
+    model or provider registers a key nothing looks up, and the lead silently keeps
+    an unscoped general-purpose ``task`` child. Key off ``_resolved_model_ref``.
+    """
+    inv = _make_invoker(deep_delegates_enabled=True)
+    inv._build_deep_agent_for = AsyncMock(return_value=object())
+    # Workspace override: both agents resolve onto openai/gpt-5, not the anthropic
+    # catalog defaults (opus for the planner lead, sonnet for the perceiver delegate).
+    inv._resolved_model_ref = AsyncMock(return_value=("openai", "gpt-5"))
+
+    fake_delegate = {"name": "perceiver", "description": "d", "runnable": object()}
+
+    with (
+        patch("src.orchestrator.agent_invoker.stream_deep_agent_events", _agent_done_frame),
+        patch(
+            "src.deep_runtime.delegates.build_read_only_delegate",
+            new=AsyncMock(return_value=fake_delegate),
+        ),
+        patch("src.deep_runtime.delegates.disable_general_purpose_subagent") as mock_disable_gp,
+    ):
+        await _drive(inv, "planner")
+
+    assert mock_disable_gp.called
+    calls = [(c.args[0], c.kwargs.get("provider")) for c in mock_disable_gp.call_args_list]
+    assert all(call == ("gpt-5", "openai") for call in calls), calls
+    # The catalog defaults must NOT appear — that is the bug this locks out.
+    disabled_ids = [c[0] for c in calls]
+    assert "claude-opus-4-8" not in disabled_ids
+    assert "claude-sonnet-4-6" not in disabled_ids
+
+
+async def test_gp_disable_falls_back_to_the_anthropic_catalog_default():
+    """With no binding (or a failed lookup) the fallback is the tier default, declared
+    as anthropic — ``default_model_id_for_tier`` reads the Anthropic catalog only, so
+    that provider is a fact about the fallback rather than an assumption."""
+    inv = _make_invoker(deep_delegates_enabled=True)
+    inv._build_deep_agent_for = AsyncMock(return_value=object())
+
+    fake_delegate = {"name": "perceiver", "description": "d", "runnable": object()}
+
+    with (
+        patch("src.orchestrator.agent_invoker.stream_deep_agent_events", _agent_done_frame),
+        patch(
+            "src.deep_runtime.delegates.build_read_only_delegate",
+            new=AsyncMock(return_value=fake_delegate),
+        ),
+        patch("src.deep_runtime.delegates.disable_general_purpose_subagent") as mock_disable_gp,
+    ):
+        await _drive(inv, "planner")
+
+    calls = [(c.args[0], c.kwargs.get("provider")) for c in mock_disable_gp.call_args_list]
+    assert ("claude-opus-4-8", "anthropic") in calls  # lead (planner, reasoning)
+    assert ("claude-sonnet-4-6", "anthropic") in calls  # delegate (perceiver, balanced)
