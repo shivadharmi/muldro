@@ -290,7 +290,7 @@ class _ChatSingleLeadMixin:
         opt-out) the wider standing scope means more connector writes are reachable ungated from
         perception-sourced ``history_block`` content — an EXPANSION of the already-tracked
         perception-injection latent enhancement (CLAUDE.md "Two execution paths"), scoped to
-        bypass. Bounded by: bypass requires workspace entitlement, and ``can_pause=False``
+        bypass. Bounded by: bypass requires workspace entitlement, and ``presence="absent"``
         autonomous/perception turns never reach this path (they stay on the gated GraphExecutor)."""
         ilog_id = await self._plans.log_interaction(
             user_id,

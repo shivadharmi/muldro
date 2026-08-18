@@ -553,7 +553,7 @@ async def test_legacy_mode_ask_default_permission_mode_is_legacy():
 
 @pytest.mark.parametrize("perm", ["bypass", "ask", "auto"])
 async def test_batch_guard_stays_legacy_for_every_permission_mode(perm):
-    """Batch guard (P2.3): the batch entry passes ``can_pause=False``, so even with
+    """Batch guard (P2.3): the batch entry passes ``presence="absent"``, so even with
     deep_single_lead=True + deep runtime + entitled + durable, NO permission mode enters
     the single-lead path — batch/scheduled turns have no synchronous user to confirm a
     pause. All fall to the legacy path."""
@@ -569,16 +569,22 @@ async def test_batch_guard_stays_legacy_for_every_permission_mode(perm):
             c.stop()
     assert rec.lead_calls == []  # single-lead NOT entered on the batch path
     assert rec.called_agent("presenter")  # legacy path ran
-    # can_pause=False short-circuits BEFORE any runtime/entitlement/checkpointer read.
+    # presence="absent" short-circuits BEFORE any runtime/entitlement/checkpointer read.
     chat._invoker.effective_chat_runtime.assert_not_awaited()
     chat._invoker.has_durable_checkpointer.assert_not_called()
 
 
 async def test_byte_neutral_flag_off_skips_all_permission_io():
-    """Byte-neutral: with deep_single_lead=False (prod default) the legacy path is taken
-    and NONE of effective_chat_runtime / workspace_allows_bypass / has_durable_checkpointer
-    is consulted — the cheap flag short-circuits first, so the default path does zero extra
-    I/O."""
+    """Byte-neutral: with deep_single_lead=False (prod default) the legacy path is taken and
+    NONE of effective_chat_runtime / workspace_allows_bypass is consulted — both are gated
+    behind the cheap ``deep_single_lead`` check in ``_resolve_effective_mode``, so the default
+    path does zero extra I/O for them.
+
+    ``has_durable_checkpointer`` IS still called: ``_process_core`` resolves the turn's
+    EFFECTIVE presence once via ``_resolve_presence`` immediately after starting the trace,
+    unconditionally and ahead of (independent of) the ``deep_single_lead`` gate, so both call
+    sites of ``_resolve_effective_mode`` share one resolved presence. That call is a pure,
+    in-process ``isinstance`` check with no I/O, so this stays byte-neutral in production."""
     plan = PlanOutput(goal="g", reasoning="r", steps=[_step("s1", "respond")])
     chat, rec = _make_chat(settings_overrides={"deep_single_lead": False})
     entitlement = AsyncMock(return_value=True)
@@ -596,7 +602,7 @@ async def test_byte_neutral_flag_off_skips_all_permission_io():
     assert rec.lead_calls == []
     assert rec.called_agent("presenter")
     chat._invoker.effective_chat_runtime.assert_not_awaited()
-    chat._invoker.has_durable_checkpointer.assert_not_called()
+    chat._invoker.has_durable_checkpointer.assert_called_once()
     entitlement.assert_not_awaited()
 
 

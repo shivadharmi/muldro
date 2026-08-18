@@ -21,6 +21,7 @@ from typing import Any
 from src.config.settings import Settings
 from src.connectors.mcp_bridge import close_turn_sessions
 from src.contracts import PlanOutput
+from src.deep_runtime.confirmation import ABSENT, PRESENT, resolve_effective_permission_mode
 from src.errors import classify, new_correlation_id
 from src.integrations.capabilities import CAPABILITY_CATALOG
 from src.integrations.turn_scope import turn_scope
@@ -203,11 +204,10 @@ class ChatProcessor(_ChatSingleLeadMixin):
             prompt_style="structured",
             context=context,
             conversation_id=conversation_id,
-            # Batch/scheduled turns have NO synchronous user to confirm a pause, so the
-            # single-lead permission path (incl. bypass) is never taken here — an
-            # ask/auto pause would orphan the checkpoint and the ApprovalRequired event
-            # is silently dropped by the batch fold below (case _: pass).
-            can_pause=False,
+            # BATCH entry: no synchronous user is on this turn, so a CONFIRM verdict cannot be
+            # answered. A later task makes `presence="absent"` PREPARE such writes (record them
+            # for review) instead of interrupting into a void.
+            presence=ABSENT,
         ):
             match event:
                 case TraceStarted(trace_id=trace_id):
@@ -293,11 +293,10 @@ class ChatProcessor(_ChatSingleLeadMixin):
             prompt_style="conversational",
             context=context,
             conversation_id=conversation_id,
-            # Streaming entry: a synchronous user IS present to confirm a pause, so the
-            # single-lead ask/auto path may suspend the turn for approval.
-            # ``process_message_stream`` reaches ``_process_core`` through this method,
-            # so it inherits ``can_pause=True`` too.
-            can_pause=True,
+            # STREAMING entry: a synchronous user IS on this turn, so a CONFIRM verdict can be
+            # answered by interrupting. `process_message_stream` reaches `_process_core` through
+            # this method, so it inherits `presence="present"` too.
+            presence=PRESENT,
         ):
             yield event
 
@@ -331,48 +330,53 @@ class ChatProcessor(_ChatSingleLeadMixin):
             if sse is not None:
                 yield sse
 
-    async def _resolve_effective_mode(
-        self, permission_mode: str, can_pause: bool, workspace_id: str
-    ) -> str | None:
-        """Resolve the EFFECTIVE permission mode for the deep single-lead chat path, applying
-        FAIL-SAFE downgrades. Returns ``bypass`` / ``ask`` / ``auto`` when the single-lead path
-        should be taken, else ``None`` (the standard multi-agent chat path). SECURITY — this
-        decides whether/how a write is gated.
+    def _resolve_presence(self, presence: str) -> str:
+        """Resolve the EFFECTIVE presence for this turn — a fail-safe downgrade only.
 
-        ``self._settings.deep_single_lead`` (a cheap bool, OFF in prod) is checked FIRST so the
-        default path does ZERO extra work — no entitlement / checkpointer read — keeping it
-        cheap. ``can_pause`` is False on the batch / scheduled path (no synchronous user to
-        confirm a pause), so the whole single-lead path (INCLUDING bypass) is only ever taken on
-        the streaming entries. ``permission_mode`` is an INDEPENDENT field, never derived from
-        the legacy ``mode`` slot.
-
-        Downgrades are fail-safe ONLY (never escalate authority):
-          * bypass on a workspace that has not opted in  → auto
-          * ask/auto with no durable checkpointer to resume a pause → standard chat path (None)
+        A pause is only worth taking if it can be RESUMED, which needs a durable checkpointer.
+        Without one, a nominally ``present`` turn is treated as ``absent`` so its gated writes
+        are handled the safe way rather than interrupted into a thread nothing can re-enter.
+        This subsumes the old ``needs_durable`` fallback exactly.
         """
-        effective_mode: str | None = None
-        if (
-            self._settings.deep_single_lead
-            and can_pause
-            and permission_mode in ("bypass", "ask", "auto")
-        ):
-            effective_mode = permission_mode
-            if effective_mode == "bypass" and not await workspace_allows_bypass(
-                self._db_factory, workspace_id
-            ):
+        if presence == PRESENT and self._invoker.has_durable_checkpointer():
+            return PRESENT
+        if presence == PRESENT:
+            logger.warning(
+                "no durable checkpointer — a pause could not be resumed; treating this turn "
+                "as absent so gated writes are not interrupted into an unresumable thread"
+            )
+        return ABSENT
+
+    async def _resolve_effective_mode(
+        self, permission_mode: str, presence: str, workspace_id: str
+    ) -> str | None:
+        """Resolve the EFFECTIVE permission mode for the deep single-lead chat path.
+
+        SECURITY — this decides whether/how a write is gated. The policy itself is the pure,
+        exhaustively-tested :func:`resolve_effective_permission_mode`; this method supplies the
+        one input that needs a DB read (the workspace bypass entitlement).
+
+        ``presence`` must ALREADY be the effective presence (see :meth:`_resolve_presence`).
+
+        Returns ``None`` when the single-lead path should NOT be taken (the legacy multi-agent
+        arm runs instead). ``self._settings.deep_single_lead`` is checked FIRST so the default
+        path does ZERO extra work — no entitlement read. THAT GUARD AND THIS ``None`` RETURN ARE
+        BOTH DELETED IN THE COLLAPSE COMMIT, together with the legacy arm.
+        """
+        if not self._settings.deep_single_lead or presence != PRESENT:
+            return None
+        if permission_mode not in ("bypass", "ask", "auto"):
+            return None
+        bypass_entitled = True
+        if permission_mode == "bypass":
+            bypass_entitled = await workspace_allows_bypass(self._db_factory, workspace_id)
+            if not bypass_entitled:
                 logger.warning(
-                    "workspace %s not entitled for bypass — downgrading to auto",
-                    workspace_id,
+                    "workspace %s not entitled for bypass — downgrading to auto", workspace_id
                 )
-                effective_mode = "auto"
-            needs_durable = effective_mode in ("ask", "auto")
-            if needs_durable and not self._invoker.has_durable_checkpointer():
-                logger.warning(
-                    "no durable checkpointer — chat permission gate cannot resume a "
-                    "pause; falling back to the standard multi-agent chat path"
-                )
-                effective_mode = None
-        return effective_mode
+        return resolve_effective_permission_mode(
+            permission_mode, presence, bypass_entitled=bypass_entitled
+        )
 
     async def _process_core(
         self,
@@ -386,7 +390,7 @@ class ChatProcessor(_ChatSingleLeadMixin):
         context: dict | None,
         conversation_id: str | None,
         permission_mode: str = "auto",
-        can_pause: bool = False,
+        presence: str = ABSENT,
     ) -> AsyncGenerator[CoreEvent, None]:
         """Unified chat-orchestration pipeline shared by both public entry points.
 
@@ -398,8 +402,12 @@ class ChatProcessor(_ChatSingleLeadMixin):
 
         Runtime events fire in the background (the stream path's discipline,
         adopted for both per chat-pipeline-fold drift #4).
+
+        ``presence`` defaults to ``absent`` — the FAIL-SAFE direction. An unknown future caller
+        gets the cautious treatment rather than interrupting into a void or reaching ``bypass``.
         """
         trace = self._trace_manager.start_trace("user_message")
+        presence = self._resolve_presence(presence)
 
         async with turn_scope(on_close=close_turn_sessions):
 
@@ -431,7 +439,7 @@ class ChatProcessor(_ChatSingleLeadMixin):
                 # `_resolve_effective_mode` the planned path uses at its own site below.
                 if self._settings.chat_planless:
                     effective_mode = await self._resolve_effective_mode(
-                        permission_mode, can_pause, workspace_id
+                        permission_mode, presence, workspace_id
                     )
                     if effective_mode in ("bypass", "ask", "auto"):
                         async for evt in self._run_single_lead_planless(
@@ -581,7 +589,7 @@ class ChatProcessor(_ChatSingleLeadMixin):
                 # so the P2.5c planless early-gate can reuse the SAME resolution before the
                 # plan machinery, without duplicating the downgrade logic.
                 effective_mode = await self._resolve_effective_mode(
-                    permission_mode, can_pause, workspace_id
+                    permission_mode, presence, workspace_id
                 )
 
                 # The deep single-lead chat path (P2.3): taken for the resolved effective mode
