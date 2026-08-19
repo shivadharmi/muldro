@@ -588,9 +588,9 @@ Choose the surface kind that best fits the information shape:
 
 | Kind | When to use |
 |------|-------------|
+| message | A rich reply worth keeping in the workspace feed — your default |
 | summary | Single-topic synthesis, lookup result, brief answer with sources |
 | briefing | Daily overview, multi-source digest, morning context |
-| plan | Multi-step execution with progress tracking |
 | alert | Blocked execution, system warning, urgent attention needed |
 | recommendation | Suggested action based on observed patterns |
 
@@ -599,9 +599,14 @@ Do NOT create a surface when:
 - The information fits naturally in chat text alone
 - The user explicitly asked for a text response
 
-Do NOT use these kinds (system-generated only):
+Do NOT use these kinds — the system creates them and only the system may:
+- run (created by the execution engine)
 - approval (created by TrustEngine)
-- proactive_insight (created by perception pipeline)
+- proactive_insight (created by the perception pipeline)
+- prepared_work (the standing review queue for actions staged when nobody was
+  present; it is the ONLY place such an action can be acted on, so a second one
+  would split that queue)
+- plan (legacy; use `message` or `summary`)
 
 When you create a surface, still include a brief chat response summarizing the key point.
 The surface provides the detailed, persistent, interactive view.

@@ -21,6 +21,19 @@ throughout. The guarded diff was exclusively that name inside the ``<role>`` lin
 Presenter agent in <product>"); ``PRESENTER_VOICE`` itself was byte-identical across the
 rebrand, so the reusable voice fragment carries no rebrand delta.
 
+It was re-baselined a third time when the surface-kind guidance was corrected in **both**
+directions. ``message`` — the kind defined for Presenter-authored content, with its own
+promotion path in ``surface_pusher`` — was never offered in the kinds table, so the model was
+never told its own default existed; it was added. And the "do not use" list forbade only
+``approval`` and ``proactive_insight``, leaving ``run``, ``prepared_work`` and the legacy
+``plan`` emittable, since ``SurfaceSpec.kind`` validates against the whole Literal and forbids
+nothing the prompt does not; all three were added. ``prepared_work`` in particular, because
+settled decision D2 makes that review queue the ONLY place an action staged with no human
+present can be acted on — an agent-authored second one would split it. The companion
+``test_surface_kind_guidance`` parses the table rows and the bullet list as structure and
+asserts set relations against the Literal in both directions, so this correction cannot drift
+back silently.
+
 To re-baseline intentionally, recompute with:
     uv run python -c "from src.orchestrator.prompts import PRESENTER_PROMPT; \\
         import hashlib; print(hashlib.sha256(PRESENTER_PROMPT.encode()).hexdigest())"
@@ -31,8 +44,9 @@ import hashlib
 from src.orchestrator.prompts import PRESENTER_PROMPT, PRESENTER_VOICE
 
 # Golden sha256 of PRESENTER_PROMPT. Re-baselined in Step-9 P1 (dead-kind/type prune),
-# then again for the Muldro product rebrand (name substitution only).
-_PRESENTER_PROMPT_GOLDEN_SHA256 = "6330dff8206fd209507b5a0c4c02735fade422d8fe1caae2acbf34cfba28f7b2"
+# again for the Muldro product rebrand (name substitution only), and again for the
+# surface-kind guidance correction (`message` offered; `run`/`prepared_work`/`plan` forbidden).
+_PRESENTER_PROMPT_GOLDEN_SHA256 = "cc21f92c4c51bc8fc791672a7af8e4ee3735a619730eeb36d63e1b81d98827b6"
 
 
 def test_presenter_prompt_matches_golden_hash():
