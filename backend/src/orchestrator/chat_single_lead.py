@@ -28,7 +28,7 @@ from collections.abc import AsyncGenerator
 from typing import Any
 
 from src.connectors.mcp_bridge import close_turn_sessions
-from src.errors import classify, new_correlation_id
+from src.errors import _GENERIC_CODE, _GENERIC_MESSAGE, classify, new_correlation_id
 from src.integrations.turn_scope import turn_scope
 from src.middleware.observability import get_correlation_id
 from src.orchestrator.core_events import (
@@ -46,6 +46,13 @@ from src.orchestrator.core_events import (
 from src.services.surface_mapping import extract_surface_spec, strip_surface_blocks
 
 logger = logging.getLogger(__name__)
+
+# What a turn says when its lead finished but wrote nothing. An EMPTY reply is not the same
+# as a short one: ``routes_chat`` gates the assistant-message insert on truthy reply text, so
+# an empty ``Presentation`` persists nothing and the turn has no answer at all when the
+# conversation is reloaded. This is the honest alternative — a plain statement of what
+# happened, never a stand-in for a reply the lead did not write.
+_NO_REPLY_TEXT = "I finished this turn without producing a reply."
 
 
 class _ChatSingleLeadMixin:
@@ -200,8 +207,22 @@ class _ChatSingleLeadMixin:
         (:meth:`_run_single_lead_planless`) paths — the ONLY difference between them is how the
         lead + ``context_block`` are built, so that setup stays in each caller and this
         streaming/pause/tail seam lives here once (mirrors how ``_emit_completion_tail`` folds the
-        tail)."""
+        tail).
+
+        TERMINAL-TEXT INVARIANT: a turn must never end claiming success with nothing to show
+        for it. One lead now carries BOTH the tool work and the reply, so a single failure
+        anywhere is a lost reply — under the old per-step arm a dedicated Presenter call still
+        ran and spoke. Two ways the reply can go missing, handled below:
+
+        * the stream ends on a sanitized ``error`` frame (``stream_adapter`` catches, yields
+          ``error``, and returns WITHOUT ``agent_done``). That turn FAILED — it emits
+          ``RunFailed``, not the completion tail, so the client is never told ``done``;
+        * ``agent_done`` arrives with empty text. The lead finished but said nothing, which is
+          a real outcome — it gets a plain ``Presentation`` saying so, because an empty one is
+          not persisted at all."""
         presenter_text = ""
+        saw_agent_done = False
+        error_frame: dict | None = None
         async for frame in self._invoker.stream_deep_lead(
             lead,
             message=message,
@@ -237,14 +258,57 @@ class _ChatSingleLeadMixin:
                     thread_id=frame.get("thread_id"),
                 )
                 return
+            if frame.get("event") == "error":
+                # Remember the LAST error frame so the failure below can reuse its already
+                # client-safe code/message/correlation_id instead of inventing new ones. The
+                # frame is still passed through verbatim (next line) — the client sees it once.
+                error_frame = frame
             yield agent_event_from_sse(frame)
             if frame.get("event") == "agent_done":
+                saw_agent_done = True
                 presenter_text = frame.get("text", "")
                 # RE-HOME the presenter output (C-CORR2): stream_deep_lead emits NO
                 # Presentation frame, so synthesize it here — else the reply is never
                 # persisted (routes_chat persists only on Presentation) and the chat bubble
-                # is empty. Keep presenter_text RAW for the shared tail's surface extraction.
-                yield Presentation(text=strip_surface_blocks(presenter_text))
+                # is empty. Keep presenter_text RAW for the shared tail's surface extraction;
+                # only the CHAT-VISIBLE text falls back when there is nothing to show.
+                reply = strip_surface_blocks(presenter_text).strip()
+                yield Presentation(text=reply or _NO_REPLY_TEXT)
+
+        if not saw_agent_done:
+            # The stream ended without a terminal reply — an ``error`` frame, or (defensively)
+            # any other early end. Either way the turn did NOT succeed, so it must not reach
+            # the completion tail: a ``RunCompleted`` here becomes an SSE ``done`` that tells
+            # the client the turn finished normally while nothing was ever persisted. Emit the
+            # same ``RunFailed`` ``_process_core``'s exception path emits, so the client's
+            # existing error handling applies unchanged. No reply is invented and nothing is
+            # retried: the lead failed, and the turn says so.
+            cid = (error_frame or {}).get("correlation_id") or (
+                get_correlation_id() or new_correlation_id()
+            )
+            code = (error_frame or {}).get("code") or _GENERIC_CODE
+            safe_msg = (error_frame or {}).get("message") or _GENERIC_MESSAGE
+            logger.error(
+                "lead stream ended with no agent_done (workspace=%s user=%s code=%s cid=%s) — "
+                "reporting the turn as failed rather than completed",
+                workspace_id,
+                user_id,
+                code,
+                cid,
+            )
+            self._spawn_background(
+                self._events.emit_runtime_event(
+                    "run_failed",
+                    workspace_id=workspace_id,
+                    user_id=user_id,
+                    run_id=None,
+                    payload={"code": code, "message": safe_msg, "correlation_id": cid},
+                )
+            )
+            yield RunFailed(
+                trace_id=trace.trace_id, code=code, message=safe_msg, correlation_id=cid
+            )
+            return
 
         # COMPLETION TAIL — single-lead: the learner runs with the RAW user message + reply.
         async for evt in self._emit_completion_tail(

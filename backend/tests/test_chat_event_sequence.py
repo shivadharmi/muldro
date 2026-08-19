@@ -27,6 +27,7 @@ from tests.test_chat_pipeline_golden import (
     _make_orch,
     _patches,
     _run_batch,
+    _run_stream,
     _scenario_multi_step,
     _scenario_single_read,
     _scenario_system_step,
@@ -431,3 +432,221 @@ class TestValidationSequence:
         assert sorted(result) == [
             "error",
         ]
+
+
+# ── The terminal-text invariant: never end claiming success with nothing to show ──
+#
+# The sequences above all run a harness lead that always reaches ``agent_done``, which is
+# exactly why the two ways a reply can go missing went unnoticed. One lead now carries BOTH
+# the tool work and the reply, so a single failure anywhere loses the answer — where the old
+# per-step arm still had a dedicated Presenter call left to speak.
+
+
+def _lead_stream(frames):
+    """Replace the harness lead with one that emits exactly ``frames``."""
+
+    async def _stream(lead, tools=None, **kw):
+        for frame in frames:
+            yield frame
+
+    return _stream
+
+
+class TestTerminalTextInvariant:
+    async def test_a_lead_stream_that_errors_reports_failure_not_completion(self):
+        """``stream_adapter`` sanitizes any upstream exception into an ``error`` frame and
+        RETURNS — no ``agent_done``, so no ``Presentation``. The turn must then report
+        ``run_failed``: a ``run_completed`` here becomes an SSE ``done`` telling the client
+        the turn finished normally, while ``routes_chat`` persisted no assistant message at
+        all (its insert is gated on truthy reply text). The user's own message IS persisted
+        before streaming, so the visible damage is an unanswered turn on reload — reported
+        as success."""
+        plan, users, canned = _scenario_single_read()
+        orch, _ = _make_orch(canned)
+        orch._invoker.stream_deep_lead = _lead_stream(
+            [
+                {"event": "agent_start", "agent": "lead", "model": "m"},
+                {
+                    "event": "error",
+                    "agent": "lead",
+                    "code": "internal_error",
+                    "message": "Something went wrong.",
+                    "correlation_id": "cid_boom",
+                },
+            ]
+        )
+        with _Scenario(_patches(plan, users)):
+            types = await _stream_event_types(orch)
+
+        assert types == [
+            "trace_started",
+            "intent_classified",
+            *_PLANNER_TRIPLET,
+            "interaction_logged",
+            "plan_ready",
+            "agent_started",
+            "agent_stream",  # the sanitized error frame, passed through verbatim once
+            "run_failed",
+        ]
+        # The two things that must NOT happen: a success claim, or a completion tail.
+        assert "run_completed" not in types
+        assert "presentation" not in types
+        orch._surfaces.push_presenter_surface.assert_not_awaited()
+
+    async def test_error_frame_failure_reuses_the_frames_own_safe_fields(self):
+        """The frame's ``code``/``message``/``correlation_id`` are already client-safe, so the
+        failure quotes them rather than minting a second, unrelated correlation id."""
+        plan, users, canned = _scenario_single_read()
+        orch, _ = _make_orch(canned)
+        orch._invoker.stream_deep_lead = _lead_stream(
+            [
+                {
+                    "event": "error",
+                    "agent": "lead",
+                    "code": "internal_error",
+                    "message": "Something went wrong.",
+                    "correlation_id": "cid_boom",
+                }
+            ]
+        )
+        with _Scenario(_patches(plan, users)):
+            stream = await _run_stream(orch)
+
+        errors = [e for e in stream if e.get("event") == "error"]
+        assert errors[-1]["correlation_id"] == "cid_boom"
+        assert errors[-1]["code"] == "internal_error"
+        assert "done" not in [e.get("event") for e in stream]
+
+    async def test_a_lead_that_finishes_with_no_text_still_persists_something(self):
+        """``agent_done`` with empty text IS a completed turn — but an empty ``Presentation``
+        is not persisted (``routes_chat`` gates its insert on truthy text), so the turn would
+        have no answer on reload. It gets a plain sentence instead. Nothing is invented: the
+        sentence says the lead produced no reply, it does not stand in for one."""
+        plan, users, canned = _scenario_single_read()
+        orch, _ = _make_orch(canned)
+        orch._invoker.stream_deep_lead = _lead_stream(
+            [
+                {"event": "agent_start", "agent": "lead", "model": "m"},
+                {"event": "agent_done", "agent": "lead", "text": ""},
+            ]
+        )
+        with _Scenario(_patches(plan, users)):
+            result = await _run_batch(orch)
+
+        # Something persistable, and the turn still completes normally.
+        assert result["presentation"]
+        assert result["presentation"].strip()
+        assert "trace_id" in result and "decision" not in result
+
+    async def test_a_reply_that_is_only_a_surface_block_still_leaves_chat_text(self):
+        """Same hole by another route: a reply whose whole body is a fenced surface block
+        strips to empty. The surface still pushes; the chat must not be left blank."""
+        plan, users, canned = _scenario_single_read()
+        orch, _ = _make_orch(canned)
+        orch._invoker.stream_deep_lead = _lead_stream(
+            [{"event": "agent_done", "agent": "lead", "text": "   "}]
+        )
+        with _Scenario(_patches(plan, users)):
+            result = await _run_batch(orch)
+
+        assert result["presentation"].strip()
+
+
+# ── The chat boundary for a plan-mode risky write ─────────────────────────────
+#
+# ``mode="plan"`` used to skip any step with ``risk in ("medium","high")`` inside the per-step
+# loop. It no longer decides anything about execution: it forces the Planner and stamps
+# ``requires_user_input`` (which nothing in ``src/`` reads). The whole safety burden moved to
+# ``permission_gate`` x ``presence``, and the batch entry's ``presence=ABSENT`` is what makes a
+# confirmation-worthy write STAGE instead of run.
+#
+# The test below refuses to stop at "what was handed to the lead". It takes the permission_mode
+# and presence the real chat boundary produced and drives them through the REAL policy
+# functions (``permission_should_interrupt`` + ``resolve_confirmation``, in the order
+# ``permission_gate`` calls them), so it goes red if the boundary starts handing over
+# ``present``/``bypass`` OR if the policy itself loosens.
+
+
+class TestPlanModeRiskyWriteBoundary:
+    async def test_batch_plan_mode_high_risk_write_is_prepared_not_executed(self):
+        from src.deep_runtime.confirmation import resolve_confirmation
+        from src.deep_runtime.middleware.permission_gate import permission_should_interrupt
+        from src.services.risk_assessor import RiskAssessment
+
+        # A high-risk, irreversible, external write — the shape legacy plan-mode refused to run.
+        assessment = RiskAssessment(
+            risk_level="high",
+            reasoning="sends mail to a third party",
+            reversible=False,
+            blast_radius="external_single",
+        )
+        executed: list[str] = []
+        prepared: list[str] = []
+
+        plan, users, canned = _scenario_user_action()  # carries a high-risk email.send step
+        orch, _ = _make_orch(canned)
+
+        async def _gated_lead(lead, tools=None, **kw):
+            """Stand-in lead that runs the REAL gate policy on the REAL boundary values."""
+            mode, presence = kw["permission_mode"], kw["presence"]
+            if not permission_should_interrupt(mode, assessment):
+                executed.append("email.send")
+            elif resolve_confirmation(presence) == "prepare":
+                prepared.append("email.send")
+            else:
+                raise AssertionError("interrupted a turn with nobody on it")
+            yield {"event": "agent_done", "agent": "lead", "text": "Staged the email."}
+
+        orch._invoker.stream_deep_lead = _gated_lead
+
+        with _Scenario(_patches(plan, users)):
+            result = await _run_batch(orch)  # batch default: mode="plan"
+
+        assert executed == []  # THE claim: no ungated external write on a batch turn
+        assert prepared == ["email.send"]
+        # ...and the turn still finishes and speaks, rather than stalling on a confirmation
+        # nobody is there to answer.
+        assert result["presentation"] == "Staged the email."
+
+    async def test_batch_plan_mode_hands_the_lead_absent_and_never_bypass(self):
+        """The boundary half of the claim above, pinned on its own so a regression names
+        itself: ``mode="plan"`` grants nothing, and the batch entry is always ``absent``."""
+        plan, users, canned = _scenario_user_action()
+        orch, rec = _make_orch(canned)
+
+        with _Scenario(_patches(plan, users)):
+            await _run_batch(orch)
+
+        assert len(rec.lead_calls) == 1
+        assert rec.lead_calls[0]["presence"] == "absent"
+        assert rec.lead_calls[0]["permission_mode"] == "auto"
+
+    def test_medium_risk_reversible_internal_write_now_executes_in_auto(self):
+        """A stated behaviour change, pinned rather than left to be discovered: legacy
+        plan-mode skipped EVERY medium-or-high-risk step. ``auto`` assesses the real call
+        instead of the Planner's coarse label, and a medium-risk write that is reversible with
+        an internal blast radius now EXECUTES. Bounded to internal-state mutations."""
+        from src.deep_runtime.middleware.permission_gate import permission_should_interrupt
+        from src.services.risk_assessor import RiskAssessment
+
+        medium_internal = RiskAssessment(
+            risk_level="medium",
+            reasoning="updates a record in our own workspace",
+            reversible=True,
+            blast_radius="internal",
+        )
+        assert permission_should_interrupt("auto", medium_internal) is False
+        # The same call under the old coarse rule would have been skipped; and anything
+        # irreversible, external, or high still confirms.
+        assert (
+            permission_should_interrupt(
+                "auto", medium_internal.model_copy(update={"reversible": False})
+            )
+            is True
+        )
+        assert (
+            permission_should_interrupt(
+                "auto", medium_internal.model_copy(update={"blast_radius": "external_single"})
+            )
+            is True
+        )
