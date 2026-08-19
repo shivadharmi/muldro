@@ -647,7 +647,7 @@ Valid "type" values and their required properties:
 - Metric     → {"label": str, "value": str|number, "change"?: str, "trend"?: str}
 - Progress   → {"value": number, "max"?: number, "label"?: str}
 - Table      → {"columns": [{"key": str, "label": str}, ...],
-                 "rows": [{...}, ...], "sortable"?: bool}
+                 "rows": [{"cells": [str, ...]}, ...], "sortable"?: bool}
 - Timeline   → {"events": [{"time": str, "title": str, "source"?: str}, ...]}
 - EntityCard → {"name": str, "entity_type": str, "entity_id": str, "attributes"?: {}}
 - Card / Row / List → layout containers with no required properties (use "children")
@@ -655,7 +655,9 @@ Valid "type" values and their required properties:
 
 Rules for list-of-dict values (Table.rows, Timeline.events):
 - Every dict in the list MUST have the same shape. Missing keys render as blank cells.
-- For Table: each row key MUST match a column "key".
+- For Table: each row is {"cells": [...]} — plain strings, POSITIONAL, one per column in
+  the SAME ORDER as "columns". A row whose cell count differs from the column count is
+  rejected and the whole surface_data block is dropped. Do NOT key cells by column name.
 - For Timeline: each event MUST have "time" and "title". "source" is optional.
 
 Example rich surface_data:
@@ -669,8 +671,8 @@ Example rich surface_data:
     {"type": "Table", "id": "competitors", "properties": {
       "columns": [{"key": "name", "label": "Company"}, {"key": "raised", "label": "Funding"}],
       "rows": [
-        {"name": "Acme", "raised": "$10M"},
-        {"name": "Beta", "raised": "$5M"}
+        {"cells": ["Acme", "$10M"]},
+        {"cells": ["Beta", "$5M"]}
       ]
     }},
     {"type": "Timeline", "id": "milestones", "properties": {

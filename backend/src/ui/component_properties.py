@@ -7,7 +7,7 @@ and are intentionally absent from PROPERTY_MODELS.
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 
 # ── Text family ─────────────────────────────────────────────────────────────
 
@@ -60,12 +60,43 @@ class ButtonProperties(BaseModel):
 # ── Data family ───────────────────────────────────────────────────────────────
 
 
+class TableColumn(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    key: str
+    label: str
+
+
+class TableRow(BaseModel):
+    """Positional cells, aligned to `TableProperties.columns`.
+
+    Row keys are chosen at runtime FROM the columns, so a keyed map cannot be declared in a
+    schema — and a free-form map makes the whole component schema unusable for provider-side
+    structured output. Positions carry the same information in a closed shape.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    cells: list[str]
+
+
 class TableProperties(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
-    columns: list[dict]
-    rows: list[dict]
+    columns: list[TableColumn]
+    rows: list[TableRow]
     sortable: bool = False
+
+    @model_validator(mode="after")
+    def _rows_match_columns(self) -> "TableProperties":
+        width = len(self.columns)
+        for i, row in enumerate(self.rows):
+            if len(row.cells) != width:
+                raise ValueError(
+                    f"row {i} has {len(row.cells)} cells but there are {width} columns; "
+                    "a mismatched row renders as blank cells with no error"
+                )
+        return self
 
 
 class TimelineProperties(BaseModel):

@@ -124,8 +124,12 @@ class TestButtonProperties:
 
 class TestTableProperties:
     def test_valid_table(self):
-        p = TableProperties(columns=[{"key": "name"}], rows=[{"name": "Alice"}])
+        p = TableProperties(
+            columns=[{"key": "name", "label": "Name"}],
+            rows=[{"cells": ["Alice"]}],
+        )
         assert len(p.rows) == 1
+        assert p.rows[0].cells == ["Alice"]
 
     def test_missing_columns_raises(self):
         with pytest.raises(ValidationError):

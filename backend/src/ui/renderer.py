@@ -116,10 +116,21 @@ def button(
 def table(
     id: str,
     columns: list[dict],
-    rows: list[dict],
+    rows: list[dict] | list[list[str]],
     sortable: bool = False,
 ) -> A2UIComponent:
-    props = TableProperties(columns=columns, rows=rows, sortable=sortable)
+    """Build a Table component.
+
+    ``rows`` accepts either positional cell lists or the legacy keyed dicts; keyed rows are
+    projected into column order here so callers migrate independently. The wire shape is
+    always positional — a keyed map cannot be expressed in a schema a provider can enforce.
+    """
+    keys = [c["key"] for c in columns]
+    normalized: list[dict] = []
+    for row in rows:
+        cells = row if isinstance(row, list) else [str(row.get(k, "")) for k in keys]
+        normalized.append({"cells": [str(c) for c in cells]})
+    props = TableProperties(columns=columns, rows=normalized, sortable=sortable)
     return A2UIComponent(
         type="Table",
         id=id,

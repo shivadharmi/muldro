@@ -14,7 +14,7 @@
  * Every assertion snapshots what renderer.tsx does right now — they PASS on write.
  */
 
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { test, expect, vi } from "vitest";
 import { A2UIRenderer } from "./renderer";
 import type { A2UIComponent, A2UISurface } from "@/lib/a2ui-types";
@@ -108,4 +108,78 @@ test("TRIPWIRE: Chart is a dead type and renders the [Unknown] fallback", () => 
     />,
   );
   expect(screen.getByText(/\[Unknown: Chart\]/)).toBeInTheDocument();
+});
+
+// ─── Table: positional cells (Task 5a) ───────────────────────────────────────
+// The wire shape is now `rows: [{ cells: [...] }]`, positionally aligned to `columns`.
+// The legacy keyed shape must keep rendering for surfaces persisted before the change,
+// so BOTH are pinned here.
+
+const TABLE_COLUMNS = [
+  { key: "name", label: "Company" },
+  { key: "raised", label: "Funding" },
+];
+
+test("Table renders positional cell rows", () => {
+  render(
+    <A2UIRenderer
+      surface={surface([
+        comp({
+          type: "Table",
+          id: "tbl-positional",
+          properties: { columns: TABLE_COLUMNS, rows: [{ cells: ["Acme", "$10M"] }] },
+        }),
+      ])}
+      onAction={vi.fn()}
+    />,
+  );
+  expect(screen.getByText("Acme")).toBeInTheDocument();
+  expect(screen.getByText("$10M")).toBeInTheDocument();
+});
+
+test("Table still renders a LEGACY keyed row (back-compat for persisted surfaces)", () => {
+  render(
+    <A2UIRenderer
+      surface={surface([
+        comp({
+          type: "Table",
+          id: "tbl-legacy",
+          properties: { columns: TABLE_COLUMNS, rows: [{ name: "Acme", raised: "$10M" }] },
+        }),
+      ])}
+      onAction={vi.fn()}
+    />,
+  );
+  expect(screen.getByText("Acme")).toBeInTheDocument();
+  expect(screen.getByText("$10M")).toBeInTheDocument();
+});
+
+test("a sortable Table actually REORDERS positional rows when a header is clicked", () => {
+  // Regression guard: the sort comparator used to index rows by COLUMN KEY. Against the
+  // positional shape every lookup returns undefined, so every comparison returns 0 and the
+  // rows never move — a silent no-op with no error anywhere. The comparator must read the
+  // cell positionally, exactly like the cell render does.
+  render(
+    <A2UIRenderer
+      surface={surface([
+        comp({
+          type: "Table",
+          id: "tbl-sort",
+          properties: {
+            columns: TABLE_COLUMNS,
+            rows: [{ cells: ["Zeta", "$1M"] }, { cells: ["Acme", "$10M"] }],
+            sortable: true,
+          },
+        }),
+      ])}
+      onAction={vi.fn()}
+    />,
+  );
+
+  const firstCellText = () =>
+    screen.getAllByRole("row")[1].querySelectorAll("td")[0].textContent;
+
+  expect(firstCellText()).toBe("Zeta");
+  fireEvent.click(screen.getByText("Company"));
+  expect(firstCellText()).toBe("Acme");
 });

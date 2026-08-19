@@ -34,6 +34,15 @@ present can be acted on — an agent-authored second one would split it. The com
 asserts set relations against the Literal in both directions, so this correction cannot drift
 back silently.
 
+It was re-baselined a fourth time when ``TableProperties.rows`` became positional ``cells``.
+The prompt was the only *other* producer of Table components — the lead authors them directly
+in a ```json:surface_data``` block — and it taught row-keyed-by-column-key, a shape the closed
+model now rejects. That is not a cosmetic drift: one bad Table makes ``extract_surface_data``
+return ``None`` for the WHOLE payload, so every section of the surface is dropped silently.
+The companion ``TestPresenterVoiceExampleMatchesTheSchema`` in ``test_surface_spec.py`` now
+runs the prompt's own worked example through the real parser, so prose and schema can no
+longer disagree without CI saying so.
+
 To re-baseline intentionally, recompute with:
     uv run python -c "from src.orchestrator.prompts import PRESENTER_PROMPT; \\
         import hashlib; print(hashlib.sha256(PRESENTER_PROMPT.encode()).hexdigest())"
@@ -44,9 +53,10 @@ import hashlib
 from src.orchestrator.prompts import PRESENTER_PROMPT, PRESENTER_VOICE
 
 # Golden sha256 of PRESENTER_PROMPT. Re-baselined in Step-9 P1 (dead-kind/type prune),
-# again for the Muldro product rebrand (name substitution only), and again for the
-# surface-kind guidance correction (`message` offered; `run`/`prepared_work`/`plan` forbidden).
-_PRESENTER_PROMPT_GOLDEN_SHA256 = "cc21f92c4c51bc8fc791672a7af8e4ee3735a619730eeb36d63e1b81d98827b6"
+# again for the Muldro product rebrand (name substitution only), again for the surface-kind
+# guidance correction (`message` offered; `run`/`prepared_work`/`plan` forbidden), and again
+# for the positional Table.rows shape (`{"cells": [...]}` replacing rows keyed by column key).
+_PRESENTER_PROMPT_GOLDEN_SHA256 = "220941cd2454d0f8bf290e82a7b3d620a49882fc1ba3499ad14f459b448f06b5"
 
 
 def test_presenter_prompt_matches_golden_hash():

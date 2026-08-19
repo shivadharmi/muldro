@@ -124,7 +124,7 @@ class TestExtractSurfaceData:
   {"type": "Text", "id": "t1", "properties": {"text": "Hello", "variant": "heading"}},
   {"type": "Table", "id": "t2", "properties": {
     "columns": [{"key": "title", "label": "Title"}],
-    "rows": [{"title": "Fix bug"}]
+    "rows": [{"cells": ["Fix bug"]}]
   }}
 ]}
 ```"""
@@ -134,7 +134,7 @@ class TestExtractSurfaceData:
         assert len(data.sections) == 2
         assert data.sections[0].type == "Text"
         assert data.sections[1].type == "Table"
-        assert data.sections[1].properties["rows"] == [{"title": "Fix bug"}]
+        assert data.sections[1].properties["rows"] == [{"cells": ["Fix bug"]}]
 
     def test_returns_none_when_no_data_block(self):
         from src.services.surface_mapping import extract_surface_data
@@ -268,3 +268,23 @@ class TestSurfaceDataPayloadContract:
                     {"type": "Table", "id": "t1", "properties": {"rows": []}},
                 ]
             )
+
+
+class TestPresenterVoiceExampleMatchesTheSchema:
+    """The surface_data taxonomy is taught to the lead as PROSE in PRESENTER_VOICE, and
+    validated at parse time by the Pydantic property models. Nothing tied the two together,
+    so the prose silently taught a row shape the models reject — one bad Table drops the
+    ENTIRE surface_data block (extract_surface_data returns None for the whole payload).
+    """
+
+    def test_the_worked_example_in_the_prompt_actually_parses(self):
+        from src.orchestrator.prompts import PRESENTER_VOICE
+        from src.services.surface_mapping import extract_surface_data
+
+        data = extract_surface_data(PRESENTER_VOICE)
+        assert data is not None, (
+            "the ```json:surface_data``` example inside PRESENTER_VOICE does not survive "
+            "the validation the runtime applies to it — the prompt teaches a shape the "
+            "property models reject"
+        )
+        assert [s.type for s in data.sections] == ["Text", "Metric", "Table", "Timeline"]
