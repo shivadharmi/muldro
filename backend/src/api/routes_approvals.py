@@ -157,8 +157,13 @@ async def approve_action(
     )
     _guard_not_chat_approval(approval)
 
-    # Idempotent: already approved — return without re-executing (T6)
-    if approval.status == "approved":
+    # Idempotent: already decided in a state that satisfies "approve" — return without
+    # re-executing (T6). `executed` is included because a PREPARED action's successful
+    # replay leaves that status, and falling through here would overwrite the decision
+    # metadata, re-log the audit, re-publish the event and re-enter `run_prepared_action`.
+    # The idempotency ledger keeps the external effect from firing twice; nothing else on
+    # that path is idempotent.
+    if approval.status in ("approved", "executed"):
         return ApprovalResponse(
             approval_id=approval.approval_id,
             status=approval.status,
@@ -789,9 +794,23 @@ async def _get_approval(
         raise HTTPException(status_code=410, detail="Approval has expired")
 
     if approval.status != "pending":
-        # Idempotent: if already in the intended terminal state, return it (T6)
-        expected = "approved" if intended_action == "approve" else "rejected"
-        if approval.status == expected:
+        # Idempotent: if already in a terminal state that SATISFIES the intent, return it
+        # (T6) and let the caller short-circuit on the status field.
+        #
+        # `executed` satisfies "approve". It is what a successful confirm of a PREPARED
+        # action leaves behind — approved and then run — so a second click is a double
+        # click, not a conflict. Without it the founder got 400 "Approval already executed"
+        # for an action that HAD run exactly once, and the queue card never refreshed
+        # (its error path does not call onSuccess), so the row sat there looking unactioned
+        # and every further click repeated the error.
+        #
+        # `failed` deliberately still 400s for either intent: a permanent refusal is
+        # information the founder needs, not a double click to absorb. And nothing
+        # satisfies "reject" but `rejected` — you cannot reject what already ran.
+        satisfying = {"approve": {"approved", "executed"}, "reject": {"rejected"}}.get(
+            intended_action, {"rejected"}
+        )
+        if approval.status in satisfying:
             return approval  # caller detects via status field and short-circuits
         raise HTTPException(
             status_code=400,

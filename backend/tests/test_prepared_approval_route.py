@@ -404,3 +404,41 @@ async def test_an_event_bus_failure_does_not_fail_the_confirmation():
 
     assert response.status == "executed"
     assert approval.status == "executed"
+
+
+# ── Double-confirm must not re-enter the replay ─────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_second_confirm_of_an_executed_action_short_circuits():
+    """A prepared replay ends in `executed`. The approve handler's idempotent early-return
+    compares against `approved`, so without covering `executed` the second confirm would
+    fall through — overwrite the decision metadata, re-log the audit, re-publish the event
+    and re-enter `run_prepared_action`. The idempotency ledger stops the external effect
+    firing twice, but nothing else about that path is idempotent.
+    """
+    approval = _prepared_approval()
+    approval.status = "executed"
+    approval.title = "Send the email"
+    approval.summary = "to a@b.com"
+    approval.risk_level = "medium"
+    approval.created_at = datetime.now(timezone.utc)
+    db = MagicMock()
+    db.commit = AsyncMock()
+
+    with (
+        patch("src.api.routes_approvals._get_approval", AsyncMock(return_value=approval)),
+        patch("src.api.routes_approvals_prepared.run_prepared_action") as replay,
+    ):
+        resp = await approve_action(
+            approval.approval_id,
+            req=None,
+            user_id=CONFIRMER_ID,
+            workspace_id=WORKSPACE_ID,
+            db=db,
+            settings=make_mock_settings(),
+        )
+
+    replay.assert_not_called()
+    assert resp.status == "executed"
+    db.commit.assert_not_called()
