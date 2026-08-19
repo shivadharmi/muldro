@@ -124,7 +124,13 @@ async def run_prepared_action(approval, *, user_id: str, db, settings):
         # must stay actionable — leaving it `approved` makes every later confirm hit the
         # idempotent early-return and silently succeed while nothing ever executes.
         logger.exception("prepared action %s failed to execute", approval.approval_id)
+        # Reverting to `pending` means the decision did not take effect, so the decision
+        # metadata must go with it — a row cannot coherently be awaiting review AND record
+        # who already approved it. The queue renders these fields directly.
         approval.status = "pending"
+        approval.decided_at = None
+        approval.approved_by = None
+        approval.decision_reason = None
         approval.artifact_refs = {
             **(approval.artifact_refs or {}),
             "prepared_error": f"could not run: {exc.__class__.__name__} — not yet executed",
@@ -147,7 +153,13 @@ async def run_prepared_action(approval, *, user_id: str, db, settings):
         # flight. Marking it `failed` would tell the founder to try again while `_get_approval`
         # refuses to let them — the row must stay `pending`.
         approval.artifact_refs = refs
+        # Reverting to `pending` means the decision did not take effect, so the decision
+        # metadata must go with it — a row cannot coherently be awaiting review AND record
+        # who already approved it. The queue renders these fields directly.
         approval.status = "pending"
+        approval.decided_at = None
+        approval.approved_by = None
+        approval.decision_reason = None
         await db.commit()
         logger.info("[prepared] %s not run (transient): %s", approval.approval_id, outcome.error)
         raise HTTPException(status_code=503, detail=_RETRY_DETAIL)

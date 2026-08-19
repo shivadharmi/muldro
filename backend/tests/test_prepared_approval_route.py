@@ -111,6 +111,18 @@ async def _replay(outcome=None, *, raises=None, capture=None):
         yield SimpleNamespace(dispatcher=dispatcher, db=_mock_db())
 
 
+def _decided(approval, *, by=CONFIRMER_ID):
+    """Stamp the decision metadata ``approve_action`` writes before the replay runs.
+
+    Set to real values (never left None) so a test asserting they were CLEARED is proving the
+    clearing happened rather than passing on a default.
+    """
+    approval.decided_at = datetime(2026, 8, 19, 6, 14, tzinfo=timezone.utc)
+    approval.approved_by = by
+    approval.decision_reason = "looks right, send it"
+    return approval
+
+
 def _mock_db():
     db = MagicMock()
     db.execute = AsyncMock(return_value=MagicMock())
@@ -184,7 +196,7 @@ async def test_an_infrastructure_failure_leaves_the_action_confirmable():
     status must go back to ``pending``, the reason must be recorded, and the founder must be
     told it did not run.
     """
-    approval = _prepared_approval()
+    approval = _decided(_prepared_approval())
     async with _replay(raises=ConnectionError("redis down")) as h:
         with pytest.raises(HTTPException) as exc:
             await run_prepared_action(
@@ -196,6 +208,11 @@ async def test_an_infrastructure_failure_leaves_the_action_confirmable():
     assert approval.status == "pending", "not approved (silently stuck) and not failed (dead)"
     assert "ConnectionError" in approval.artifact_refs["prepared_error"]
     h.db.commit.assert_awaited()
+    # The decision did not take effect, so its metadata goes with it — the queue renders these
+    # fields, and "awaiting your review" beside "approved by you at 06:14" is a small lie.
+    assert approval.decided_at is None
+    assert approval.approved_by is None
+    assert approval.decision_reason is None
 
 
 async def test_a_transient_refusal_leaves_the_action_confirmable():
@@ -204,7 +221,7 @@ async def test_a_transient_refusal_leaves_the_action_confirmable():
     Marking it ``failed`` would tell the founder to try again while ``_get_approval`` refuses
     to let them: a five-second collision would permanently discard a reviewed action.
     """
-    approval = _prepared_approval()
+    approval = _decided(_prepared_approval())
     contended = PreparedActionResult(
         "transient", error="another write to this capability is in progress — try again"
     )
@@ -217,6 +234,11 @@ async def test_a_transient_refusal_leaves_the_action_confirmable():
     assert exc.value.status_code == 503
     assert approval.status == "pending"
     assert "in progress" in approval.artifact_refs["prepared_error"]
+    assert (approval.decided_at, approval.approved_by, approval.decision_reason) == (
+        None,
+        None,
+        None,
+    )
 
 
 async def test_an_already_executed_action_is_terminal_not_retried():
