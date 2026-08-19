@@ -279,6 +279,38 @@ def test_insight_body_renders_all_fields() -> None:
         assert token in s
 
 
+# ── event_timeline ──────────────────────────────────────────────────
+
+
+def test_event_timeline_emits_the_key_the_renderer_reads() -> None:
+    """The producer must speak the CONSUMER's vocabulary.
+
+    Nothing exercised this builder before, so while `TimelineProperties.events` was
+    `list[dict]` the producer emitted `timestamp` against a `timeline.tsx` reading `time`:
+    every run-events timeline drew a blank time line and no test on either side failed.
+    """
+    c = units.event_timeline(
+        [
+            {
+                "timestamp": "2026-08-20T09:00:00",
+                "event_type": "step_started",
+                "summary": "Drafting the reply",
+            }
+        ],
+        run_id="run_x",
+    )
+    timeline = next(child for child in c.children if child.type == "Timeline")
+    event = timeline.properties["events"][0]
+    assert event["time"] == "2026-08-20T09:00:00"
+    assert event["title"] == "step_started"
+    assert event["description"] == "Drafting the reply"
+
+
+def test_event_timeline_without_events_renders_a_placeholder_not_an_empty_card() -> None:
+    c = units.event_timeline([], run_id="run_x")
+    assert "No events recorded." in str(c.model_dump())
+
+
 # ── composite ───────────────────────────────────────────────────────
 
 

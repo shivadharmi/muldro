@@ -183,3 +183,54 @@ test("a sortable Table actually REORDERS positional rows when a header is clicke
   fireEvent.click(screen.getByText("Company"));
   expect(firstCellText()).toBe("Acme");
 });
+
+// ─── Timeline: the closed event shape (Task 5b) ──────────────────────────────
+// `TimelineProperties.events` was `list[dict]`, so the producer
+// (`backend/src/ui/units.py::event_timeline`) emitted `timestamp`/`title`/`description`
+// while this renderer read `time`/`title`/`source`. Only `title` matched: every run-events
+// timeline drew a BLANK time line and silently dropped its description, and no test on
+// either side could notice. These pin all three fields the closed `TimelineEvent` declares.
+
+test("Timeline renders time, title AND description for an event", () => {
+  render(
+    <A2UIRenderer
+      surface={surface([
+        comp({
+          type: "Timeline",
+          id: "tl-full",
+          properties: {
+            events: [
+              {
+                time: "2026-08-20T09:00:00",
+                title: "step_started",
+                description: "Drafting the reply",
+              },
+            ],
+          },
+        }),
+      ])}
+      onAction={vi.fn()}
+    />,
+  );
+  expect(screen.getByText("2026-08-20T09:00:00")).toBeInTheDocument();
+  expect(screen.getByText("step_started")).toBeInTheDocument();
+  expect(screen.getByText("Drafting the reply")).toBeInTheDocument();
+});
+
+test("Timeline omits the optional lines when they are absent", () => {
+  render(
+    <A2UIRenderer
+      surface={surface([
+        comp({
+          type: "Timeline",
+          id: "tl-minimal",
+          properties: { events: [{ time: "09:00", title: "approval_requested" }] },
+        }),
+      ])}
+      onAction={vi.fn()}
+    />,
+  );
+  expect(screen.getByText("approval_requested")).toBeInTheDocument();
+  // Only the time and title lines — no empty supporting paragraphs.
+  expect(document.querySelectorAll("p")).toHaveLength(2);
+});

@@ -142,12 +142,20 @@ class TestTableProperties:
 
 class TestTimelineProperties:
     def test_valid_timeline(self):
-        p = TimelineProperties(events=[{"date": "2026-01-01", "text": "Start"}])
+        p = TimelineProperties(events=[{"time": "2026-01-01", "title": "Start"}])
         assert len(p.events) == 1
+        assert p.events[0].title == "Start"
 
     def test_missing_events_raises(self):
         with pytest.raises(ValidationError):
             TimelineProperties()
+
+    def test_event_without_a_title_raises(self):
+        """This case previously PASSED against `date`/`text` keys, because `events` was
+        `list[dict]` and accepted any shape at all — which is how the producer and the
+        renderer drifted onto different key names without a single failure."""
+        with pytest.raises(ValidationError):
+            TimelineProperties(events=[{"time": "2026-01-01"}])
 
 
 class TestMetricProperties:

@@ -99,10 +99,27 @@ class TableProperties(BaseModel):
         return self
 
 
+class TimelineEvent(BaseModel):
+    """One event on a timeline.
+
+    Field names are the CONSUMER's — `timeline.tsx` renders `time`, `title`, then the
+    supporting lines. While `events` was `list[dict]`, the producer emitted `timestamp` and
+    `description` against a renderer reading `time` and `source`, so every event rendered a
+    blank time line and dropped its description with nothing failing anywhere.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    time: str
+    title: str
+    description: str | None = None
+    source: str | None = None
+
+
 class TimelineProperties(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
-    events: list[dict]
+    events: list[TimelineEvent]
 
 
 class MetricProperties(BaseModel):

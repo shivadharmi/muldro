@@ -15,7 +15,7 @@ from src.ui.component_properties import PROPERTY_MODELS
 # Shapes still open, closed in the commits that follow this one. Named explicitly so the
 # remaining gap is visible in CI rather than silent — and so the allowlist cannot outlive its
 # reason (see the test below it).
-_STILL_OPEN = {"Timeline", "EntityCard", "ExecutionTrace"}
+_STILL_OPEN = {"EntityCard", "ExecutionTrace"}
 
 
 def _open_maps(node, path=""):

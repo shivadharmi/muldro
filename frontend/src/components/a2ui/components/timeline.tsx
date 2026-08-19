@@ -5,7 +5,8 @@ interface Props {
 }
 
 export function A2UITimeline({ component }: Props) {
-  const events = (component.properties.events as Array<Record<string, string>>) || [];
+  const events =
+    (component.properties.events as Array<Record<string, string | undefined>>) || [];
 
   return (
     <div className="space-y-0">
@@ -20,6 +21,9 @@ export function A2UITimeline({ component }: Props) {
           <div className="pb-4 min-w-0">
             <p className="text-xs text-t-tertiary">{evt.time || ""}</p>
             <p className="text-sm text-t-primary">{evt.title || ""}</p>
+            {evt.description && (
+              <p className="text-xs text-t-tertiary">{evt.description}</p>
+            )}
             {evt.source && (
               <p className="text-xs text-t-tertiary">{evt.source}</p>
             )}
