@@ -915,6 +915,7 @@ class AgentInvoker:
         trace=None,
         permission_mode: str | None = None,
         presence: Presence = "absent",
+        authorization_source: str = AuthorizationSource.DIRECT_USER_REQUEST,
     ) -> AsyncGenerator[dict[str, Any], None]:
         """Run ONE synthetic deep lead over a whole user goal, streaming SSE-compatible frames
         (Step 10D A-5). Generalizes the ``call_agent_stream`` deep branch for a
@@ -925,9 +926,8 @@ class AgentInvoker:
         (``is_reply_lead=True``), decoupling the reply lead from ``name=="presenter"`` — the
         lead is named ``"lead"``. (2) The RAW user ``message`` is the human turn input;
         ``context_block`` goes into the SYSTEM prompt (not the human message) so any
-        extraction middleware sees a clean source. Authorization is DIRECT_USER_REQUEST
-        (user's message = authorization; trust_gate stays dormant). ``intent``/``trace`` are
-        accepted for the 5c librarian-fidelity wiring; unused in 5a.
+        extraction middleware sees a clean source. ``intent``/``trace`` are accepted for the
+        5c librarian-fidelity wiring; unused in 5a.
 
         Delegation is DELIBERATELY not composed here (only ``_augment_system_blocks_for_inline``
         is applied, never ``_augment_system_blocks_for_delegation``): the A-5 single lead does
@@ -952,6 +952,13 @@ class AgentInvoker:
         ``presence`` (single-lead cutover): forwarded to the gates, where a CONFIRM verdict
         interrupts only when a human is on the turn and PREPARES otherwise. Defaults to
         ``absent`` (fail-safe).
+
+        ``authorization_source`` (single-lead cutover): the turn's PROVENANCE, forwarded
+        verbatim to ``_build_deep_agent_for``. Defaults to ``DIRECT_USER_REQUEST`` — real chat,
+        where the user's message IS the authorization and ``trust_gate`` short-circuits. Batch
+        callers with no founder on the turn (the scheduler's dispatch actions, the WS
+        unknown-action fallback) pass ``AUTONOMOUS``, which ACTIVATES ``trust_gate`` so every
+        write on that turn is evaluated by the trust x risk matrix.
         """
         if tools is None:
             tools = await self._resolve_tools(lead, workspace_id, None)
@@ -971,7 +978,7 @@ class AgentInvoker:
             user_id=user_id,
             workspace_id=workspace_id,
             thread_id=thread_id,
-            authorization_source=AuthorizationSource.DIRECT_USER_REQUEST,
+            authorization_source=authorization_source,
             system_prompt=build_system_message(augmented),
             context_block=context_block,
             # A3: the ungated single-lead path fail-closes its writes on Redis-down.

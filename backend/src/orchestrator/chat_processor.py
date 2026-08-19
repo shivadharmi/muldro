@@ -21,6 +21,7 @@ from typing import Any
 from src.config.settings import Settings
 from src.connectors.mcp_bridge import close_turn_sessions
 from src.contracts import PlanOutput
+from src.deep_runtime.authorization import AuthorizationSource
 from src.deep_runtime.confirmation import (
     ABSENT,
     PRESENT,
@@ -162,6 +163,7 @@ class ChatProcessor(_ChatSingleLeadMixin):
         context: dict | None = None,
         mode: str = "plan",
         permission_mode: str = "auto",
+        authorization_source: str = AuthorizationSource.DIRECT_USER_REQUEST,
     ) -> dict:
         """Process a user message and return the batch ``result`` dict.
 
@@ -178,6 +180,11 @@ class ChatProcessor(_ChatSingleLeadMixin):
         authorization) override to ``"ask"``; pre-authorized scheduled automation
         (``custom_agent_task``) overrides to ``"execute"``. See the override map
         in ``routes_ws`` / ``schedule_dispatch``.
+
+        ``authorization_source`` defaults to chat's own value, so the default is a no-op.
+        Scheduled turns and the WS action fallback pass ``AUTONOMOUS``: the cron tick — or the
+        click — authorizes the TURN, not each write inside it, and the prepared-work queue is
+        where each write gets its own authorization.
         """
         if not user_id:
             return {"error": "user_id is required"}
@@ -201,6 +208,7 @@ class ChatProcessor(_ChatSingleLeadMixin):
             # answered. `absent` therefore PREPARES such a write — recorded in full for review,
             # the turn finishing everything else — instead of interrupting into a void.
             presence=ABSENT,
+            authorization_source=authorization_source,
         ):
             match event:
                 case TraceStarted(trace_id=trace_id):
@@ -382,6 +390,7 @@ class ChatProcessor(_ChatSingleLeadMixin):
         conversation_id: str | None,
         permission_mode: str = "auto",
         presence: str = ABSENT,
+        authorization_source: str = AuthorizationSource.DIRECT_USER_REQUEST,
     ) -> AsyncGenerator[CoreEvent, None]:
         """Unified chat-orchestration pipeline shared by both public entry points.
 
@@ -400,6 +409,10 @@ class ChatProcessor(_ChatSingleLeadMixin):
 
         ``presence`` defaults to ``absent`` — the FAIL-SAFE direction. An unknown future caller
         gets the cautious treatment rather than interrupting into a void or reaching ``bypass``.
+
+        ``authorization_source`` defaults to chat's own ``direct_user_request``, under which
+        ``trust_gate`` stays dormant. A non-chat caller declares its real provenance, which
+        ACTIVATES the gate for that turn — see :meth:`process_message`.
         """
         trace = self._trace_manager.start_trace("user_message")
 
@@ -447,6 +460,7 @@ class ChatProcessor(_ChatSingleLeadMixin):
                         workspace_id=workspace_id,
                         effective_mode=effective_mode,
                         presence=presence,
+                        authorization_source=authorization_source,
                         conversation_id=conversation_id,
                     ):
                         yield evt
@@ -600,6 +614,7 @@ class ChatProcessor(_ChatSingleLeadMixin):
                     workspace_id=workspace_id,
                     effective_mode=effective_mode,
                     presence=presence,
+                    authorization_source=authorization_source,
                     user_steps=user_steps,
                 ):
                     yield evt

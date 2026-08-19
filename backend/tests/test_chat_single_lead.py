@@ -143,6 +143,7 @@ def _make_chat(
         trace=None,
         permission_mode=None,
         presence=None,
+        authorization_source=None,
     ):
         rec.lead_calls.append(
             {
@@ -156,6 +157,7 @@ def _make_chat(
                 "trace": trace,
                 "permission_mode": permission_mode,
                 "presence": presence,
+                "authorization_source": authorization_source,
             }
         )
         yield {"event": "agent_start", "agent": "lead", "model": "m"}

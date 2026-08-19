@@ -28,6 +28,7 @@ from collections.abc import AsyncGenerator
 from typing import Any
 
 from src.connectors.mcp_bridge import close_turn_sessions
+from src.deep_runtime.authorization import AuthorizationSource
 from src.errors import _GENERIC_CODE, _GENERIC_MESSAGE, classify, new_correlation_id
 from src.integrations.turn_scope import turn_scope
 from src.middleware.observability import get_correlation_id
@@ -139,6 +140,7 @@ class _ChatSingleLeadMixin:
         effective_mode: str,
         presence: str,
         user_steps,
+        authorization_source: str = AuthorizationSource.DIRECT_USER_REQUEST,
     ) -> AsyncGenerator[CoreEvent, None]:
         """Run the turn's ONE lead over a plan, for the already-resolved effective mode
         (bypass/ask/auto) — plus the action-time permission gate (ask/auto) that suspends
@@ -186,6 +188,7 @@ class _ChatSingleLeadMixin:
             workspace_id=workspace_id,
             effective_mode=effective_mode,
             presence=presence,
+            authorization_source=authorization_source,
         ):
             yield evt
 
@@ -201,6 +204,7 @@ class _ChatSingleLeadMixin:
         workspace_id: str,
         effective_mode: str,
         presence: str,
+        authorization_source: str = AuthorizationSource.DIRECT_USER_REQUEST,
     ) -> AsyncGenerator[CoreEvent, None]:
         """Stream a built lead, handle the pause seam, re-home the reply, and run the completion
         tail. Shared verbatim by the planned (:meth:`_run_single_lead`) and planless
@@ -235,6 +239,9 @@ class _ChatSingleLeadMixin:
             # Whether a human is on this turn. `present` keeps today's confirm-and-suspend
             # behaviour; `absent` makes the gates PREPARE a gated write instead of stalling.
             presence=presence,
+            # Where this turn came from. Chat's own ``direct_user_request`` keeps trust_gate
+            # dormant; a scheduled / WS-fallback turn declares AUTONOMOUS and the gate wakes.
+            authorization_source=authorization_source,
         ):
             # PAUSE SEAM (P2.3): the action-time permission gate paused this turn for the
             # user's confirmation. Emit the typed pause event and `return` — ending the
@@ -332,6 +339,7 @@ class _ChatSingleLeadMixin:
         workspace_id: str,
         effective_mode: str,
         presence: str,
+        authorization_source: str = AuthorizationSource.DIRECT_USER_REQUEST,
         conversation_id: str | None = None,
     ) -> AsyncGenerator[CoreEvent, None]:
         """The PLANLESS deep single-lead chat BRANCH (P2.5c) — the Planner never ran.
@@ -363,8 +371,10 @@ class _ChatSingleLeadMixin:
         opt-out) the wider standing scope means more connector writes are reachable ungated from
         perception-sourced ``history_block`` content — an EXPANSION of the already-tracked
         perception-injection latent enhancement (CLAUDE.md "Two execution paths"), scoped to
-        bypass. Bounded by: bypass requires workspace entitlement, and ``presence="absent"``
-        autonomous/perception turns never reach this path (they stay on the gated GraphExecutor)."""
+        bypass. Bounded by: bypass requires workspace entitlement; perception-triggered runs stay
+        on the gated GraphExecutor entirely; and a batch turn that DOES reach this path (the
+        scheduler's dispatch actions, the WS action fallback) now declares
+        ``authorization_source=AUTONOMOUS``, which wakes ``trust_gate`` for every write on it."""
         ilog_id = await self._plans.log_interaction(
             user_id,
             workspace_id,
@@ -393,6 +403,7 @@ class _ChatSingleLeadMixin:
             workspace_id=workspace_id,
             effective_mode=effective_mode,
             presence=presence,
+            authorization_source=authorization_source,
         ):
             yield evt
 

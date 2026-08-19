@@ -16,6 +16,7 @@ import logging
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from ulid import ULID
 
+from src.deep_runtime.authorization import AuthorizationSource
 from src.errors import safe_error_event
 
 logger = logging.getLogger(__name__)
@@ -336,13 +337,15 @@ async def _handle_orchestrator_action(
         async with get_session_factory()() as db:
             workspace_id = await resolve_workspace_id(db, user_id)
 
-        # Interactive surface action: the user's click is authorization, so
-        # execute rather than re-plan (chat-pipeline-fold drift #6 override).
+        # The click authorizes the TURN, not each write inside it. Provenance is AUTONOMOUS so
+        # trust_gate evaluates every write; because this path is `absent`, a CONFIRM verdict
+        # PREPARES the write into the review queue rather than firing it.
         result = await orchestrator.process_message(
             user_id=user_id,
             workspace_id=workspace_id,
             message=message,
             mode="ask",
+            authorization_source=AuthorizationSource.AUTONOMOUS,
         )
         return {"status": "success", "result": result}
     except Exception as e:
