@@ -55,12 +55,6 @@ SURFACE_RATE_LIMITS: dict[str, int] = {
     "email": 3,
 }
 
-# Notification type for the prepared-work queue. DELIBERATELY not `approval_request`: a
-# prepared action is finished, staged work waiting on the founder's schedule, not an urgent
-# interrupt. It therefore earns delivery on its priority score like any other signal and holds
-# for the briefing below 0.6, exactly as `_hold_for_briefing` already does.
-PREPARED_WORK_NOTIFICATION_TYPE = "prepared_work"
-
 # Types urgent enough to skip the priority + rate-limit filters.
 BYPASS_FILTER_TYPES = ("approval_request", "critical_alert", "auto_execute_notify")
 # Types delivered to ALL active surfaces rather than only the preferred one.

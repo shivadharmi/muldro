@@ -12,12 +12,14 @@ from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
 
 from src.api.routes_surface_detail import _PREFIX_MAP
+from src.deep_runtime.middleware.approval_persistence import PREPARED_APPROVAL_TYPE
 from src.models.approvals import Approval
 from src.services.surface_builder import SurfaceService
 from src.services.surface_detail_builders import TAB_BUILDERS, build_prepared_work_queue
 from src.services.surface_mapping import MAX_WORKSPACE_SURFACES, apply_surface_cap
 from src.ui.contracts import SYSTEM_SURFACE_KINDS
 from src.ui.renderer import _TABS_BY_KIND, build_detail_config
+from tests.conftest import make_filtering_db
 
 USER = "usr_prep"
 WORKSPACE = "ws_prep"
@@ -36,13 +38,15 @@ def _approval(
     prepared_error: str | None = None,
     created_at: datetime | None = None,
     workspace: str = WORKSPACE,
+    approval_type: str = PREPARED_APPROVAL_TYPE,
+    status: str = "pending",
 ) -> Approval:
     apr = Approval()
     apr.approval_id = approval_id
     apr.user_id = USER
     apr.workspace_id = workspace
-    apr.approval_type = "prepared_action"
-    apr.status = "pending"
+    apr.approval_type = approval_type
+    apr.status = status
     apr.title = f"Approve: {capability}"
     apr.summary = "Send the launch note to the investor list."
     apr.risk_level = risk
@@ -59,42 +63,6 @@ def _approval(
         refs["prepared_error"] = prepared_error
     apr.artifact_refs = refs
     return apr
-
-
-def _db(rows: list[Approval]) -> AsyncMock:
-    result = MagicMock()
-    scalars = MagicMock()
-    scalars.all.return_value = rows
-    result.scalars.return_value = scalars
-    db = AsyncMock()
-    db.execute.return_value = result
-    return db
-
-
-def _filtering_db(rows: list[Approval]) -> AsyncMock:
-    """A db whose ``execute`` actually honours the statement's user/workspace binds.
-
-    The plain ``_db`` above returns its rows regardless of the query, which cannot tell a
-    correctly-scoped query from an unscoped one. These tests are about the scoping, so the
-    mock reads the compiled bind params and filters in Python.
-    """
-    db = AsyncMock()
-
-    async def _execute(stmt):
-        params = stmt.compile().params
-        uid = params.get("user_id_1")
-        wid = params.get("workspace_id_1")
-        matched = [
-            row
-            for row in rows
-            if (uid is None or row.user_id == uid) and (wid is None or row.workspace_id == wid)
-        ]
-        result = MagicMock()
-        result.scalars.return_value.all.return_value = matched
-        return result
-
-    db.execute = _execute
-    return db
 
 
 def _surface(surface_id: str = f"prepared_work_{WORKSPACE}") -> MagicMock:
@@ -168,13 +136,13 @@ def test_queue_tab_builder_is_registered():
 
 async def test_empty_queue_produces_no_card():
     """An empty queue is ABSENT from the workspace — not a card saying there is nothing to do."""
-    service = SurfaceService(db=_db([]), workspace_id=WORKSPACE)
+    service = SurfaceService(db=make_filtering_db([]), workspace_id=WORKSPACE)
     assert await service._build_prepared_work_surface(USER) is None
 
 
 async def test_populated_queue_counts_and_carries_the_queue_tab():
     rows = [_approval("apr_1"), _approval("apr_2", risk="medium")]
-    service = SurfaceService(db=_db(rows), workspace_id=WORKSPACE)
+    service = SurfaceService(db=make_filtering_db(rows), workspace_id=WORKSPACE)
 
     push = await service._build_prepared_work_surface(USER)
 
@@ -195,7 +163,7 @@ async def test_populated_queue_counts_and_carries_the_queue_tab():
 
 
 async def test_card_matches_build_detail_config():
-    service = SurfaceService(db=_db([_approval()]), workspace_id=WORKSPACE)
+    service = SurfaceService(db=make_filtering_db([_approval()]), workspace_id=WORKSPACE)
     push = await service._build_prepared_work_surface(USER)
     expected = build_detail_config("prepared_work", f"prepared_work_{WORKSPACE}")
     assert push.detail_config == expected.model_dump(mode="json")
@@ -203,10 +171,10 @@ async def test_card_matches_build_detail_config():
 
 async def test_build_workspace_surfaces_includes_the_queue():
     rows = [_approval("apr_1")]
-    service = SurfaceService(db=_db([]), workspace_id=WORKSPACE)
+    service = SurfaceService(db=make_filtering_db([]), workspace_id=WORKSPACE)
 
     async def _queue(user_id):
-        populated = SurfaceService(db=_db(rows), workspace_id=WORKSPACE)
+        populated = SurfaceService(db=make_filtering_db(rows), workspace_id=WORKSPACE)
         return await populated._build_prepared_work_surface(user_id)
 
     service._build_run_surfaces = AsyncMock(return_value=[])
@@ -222,7 +190,7 @@ async def test_build_workspace_surfaces_includes_the_queue():
 
 
 async def test_build_workspace_surfaces_skips_an_empty_queue():
-    service = SurfaceService(db=_db([]), workspace_id=WORKSPACE)
+    service = SurfaceService(db=make_filtering_db([]), workspace_id=WORKSPACE)
     service._build_run_surfaces = AsyncMock(return_value=[])
     service._build_briefing_surface = AsyncMock(return_value=None)
     service._build_insight_surfaces = AsyncMock(return_value=[])
@@ -239,7 +207,7 @@ async def test_build_workspace_surfaces_skips_an_empty_queue():
 
 async def test_tab_shows_capability_payload_risk_and_controls():
     apr = _approval("apr_9", capability="email.send", tool_input={"to": "board@acme.com"})
-    tab = await build_prepared_work_queue(_db([apr]), _surface(), user_id=USER)
+    tab = await build_prepared_work_queue(make_filtering_db([apr]), _surface(), user_id=USER)
 
     assert tab.tab_id == "queue"
     blob = _texts(tab)
@@ -256,7 +224,7 @@ async def test_tab_shows_capability_payload_risk_and_controls():
 
 async def test_first_row_expanded_rest_collapsed():
     rows = [_approval(f"apr_{i}") for i in range(3)]
-    tab = await build_prepared_work_queue(_db(rows), _surface(), user_id=USER)
+    tab = await build_prepared_work_queue(make_filtering_db(rows), _surface(), user_id=USER)
 
     assert len(tab.sections) == 3
     assert tab.sections[0].collapsed is False
@@ -265,7 +233,7 @@ async def test_first_row_expanded_rest_collapsed():
 
 async def test_truncated_payload_is_labelled_not_shown_as_whole():
     apr = _approval("apr_t", tool_input={"body": "x" * 20}, truncated=True)
-    tab = await build_prepared_work_queue(_db([apr]), _surface(), user_id=USER)
+    tab = await build_prepared_work_queue(make_filtering_db([apr]), _surface(), user_id=USER)
 
     blob = _texts(tab).lower()
     assert "clip" in blob or "truncat" in blob
@@ -274,7 +242,7 @@ async def test_truncated_payload_is_labelled_not_shown_as_whole():
 async def test_unknown_outcome_asks_for_a_check_not_a_retry():
     """An in-flight ledger row can never be re-fired — say so, do not offer a retry."""
     apr = _approval("apr_x", prepared_error="a prior attempt is still in flight — not re-fired")
-    tab = await build_prepared_work_queue(_db([apr]), _surface(), user_id=USER)
+    tab = await build_prepared_work_queue(make_filtering_db([apr]), _surface(), user_id=USER)
 
     blob = _texts(tab).lower()
     assert "unknown" in blob
@@ -290,7 +258,7 @@ async def test_unknown_outcome_asks_for_a_check_not_a_retry():
 
 async def test_retryable_error_keeps_the_approve_control():
     apr = _approval("apr_r", prepared_error="another write to this capability is in progress")
-    tab = await build_prepared_work_queue(_db([apr]), _surface(), user_id=USER)
+    tab = await build_prepared_work_queue(make_filtering_db([apr]), _surface(), user_id=USER)
 
     buttons = [c for c in _all_components(tab) if c.type == "Button"]
     payloads = [a.payload["type"] for b in buttons for a in (b.actions or [])]
@@ -299,7 +267,7 @@ async def test_retryable_error_keeps_the_approve_control():
 
 
 async def test_empty_queue_tab_still_renders_its_empty_state():
-    tab = await build_prepared_work_queue(_db([]), _surface(), user_id=USER)
+    tab = await build_prepared_work_queue(make_filtering_db([]), _surface(), user_id=USER)
     assert tab.tab_id == "queue"
     assert tab.sections  # not nothing
     assert "waiting" in _texts(tab).lower()
@@ -308,7 +276,7 @@ async def test_empty_queue_tab_still_renders_its_empty_state():
 async def test_tab_without_user_id_renders_empty_rather_than_someone_elses_queue():
     """The surface id embeds no record reference, so ``_verify_ephemeral_ownership`` has
     nothing to check — the builder does the scoping, and refuses to guess."""
-    db = _db([_approval()])
+    db = make_filtering_db([_approval()])
     tab = await build_prepared_work_queue(db, _surface())
     assert tab.tab_id == "queue"
     db.execute.assert_not_awaited()
@@ -356,7 +324,7 @@ async def test_tab_returns_only_the_addressed_workspace():
     """One founder, two workspaces. The card counts one workspace; the tab must match it."""
     mine = _approval("apr_here", workspace=WORKSPACE)
     other = _approval("apr_elsewhere", workspace="ws_other")
-    db = _filtering_db([mine, other])
+    db = make_filtering_db([mine, other])
 
     tab = await build_prepared_work_queue(db, _surface(), user_id=USER)
 
@@ -366,10 +334,10 @@ async def test_tab_returns_only_the_addressed_workspace():
 
 async def test_card_count_and_tab_row_count_agree():
     rows = [_approval("apr_a"), _approval("apr_b"), _approval("apr_c", workspace="ws_other")]
-    service = SurfaceService(db=_filtering_db(rows), workspace_id=WORKSPACE)
+    service = SurfaceService(db=make_filtering_db(rows), workspace_id=WORKSPACE)
 
     push = await service._build_prepared_work_surface(USER)
-    tab = await build_prepared_work_queue(_filtering_db(rows), _surface(), user_id=USER)
+    tab = await build_prepared_work_queue(make_filtering_db(rows), _surface(), user_id=USER)
 
     assert push.preview["subtitle"].startswith("2 ")
     assert len(tab.sections) == 2
@@ -378,7 +346,9 @@ async def test_card_count_and_tab_row_count_agree():
 async def test_forged_workspace_in_the_surface_id_returns_empty_not_everything():
     """The workspace comes from the URL, so it is untrusted — but it only ever subtracts
     from an already user-scoped set, so a guess yields fewer rows, never someone else's."""
-    db = _filtering_db([_approval("apr_here"), _approval("apr_elsewhere", workspace="ws_other")])
+    db = make_filtering_db(
+        [_approval("apr_here"), _approval("apr_elsewhere", workspace="ws_other")]
+    )
 
     tab = await build_prepared_work_queue(db, _surface("prepared_work_ws_guessed"), user_id=USER)
 
@@ -387,6 +357,63 @@ async def test_forged_workspace_in_the_surface_id_returns_empty_not_everything()
 
 
 async def test_surface_id_without_a_workspace_renders_empty():
-    db = _filtering_db([_approval()])
+    db = make_filtering_db([_approval()])
     tab = await build_prepared_work_queue(db, _surface("surf_01H"), user_id=USER)
     assert "waiting" in _texts(tab).lower()
+
+
+# ── only PENDING, only PREPARED (the two filters the card and tab share) ─
+
+
+async def test_tab_omits_rows_that_have_already_been_decided():
+    """The one bug the founder must never see: a decided row rendered back into the queue
+    with a live Approve button. Confirming it 409s, but the only review surface would be
+    reporting finished work as outstanding."""
+    db = make_filtering_db(
+        [
+            _approval("apr_open"),
+            _approval("apr_done", status="approved"),
+            _approval("apr_refused", status="rejected"),
+        ]
+    )
+
+    tab = await build_prepared_work_queue(db, _surface(), user_id=USER)
+
+    assert _approval_ids(tab) == {"apr_open"}
+
+
+async def test_tab_omits_approvals_that_are_not_prepared_work():
+    """An ordinary approval belongs to its own run's inline gate, not to this queue."""
+    db = make_filtering_db(
+        [
+            _approval("apr_prepared"),
+            _approval("apr_ordinary", approval_type="approval_request"),
+        ]
+    )
+
+    tab = await build_prepared_work_queue(db, _surface(), user_id=USER)
+
+    assert _approval_ids(tab) == {"apr_prepared"}
+
+
+async def test_card_counts_only_pending_prepared_rows():
+    """The card's count is the founder's only signal of how much is waiting — a decided or
+    non-prepared row inflating it sends them to a queue that disagrees with the card."""
+    rows = [
+        _approval("apr_open"),
+        _approval("apr_done", status="approved"),
+        _approval("apr_ordinary", approval_type="approval_request"),
+    ]
+    service = SurfaceService(db=make_filtering_db(rows), workspace_id=WORKSPACE)
+
+    push = await service._build_prepared_work_surface(USER)
+
+    assert push is not None
+    assert push.preview["subtitle"].startswith("1 action ")
+
+
+async def test_card_is_absent_when_every_prepared_row_is_already_decided():
+    rows = [_approval("apr_done", status="approved")]
+    service = SurfaceService(db=make_filtering_db(rows), workspace_id=WORKSPACE)
+
+    assert await service._build_prepared_work_surface(USER) is None
