@@ -1,4 +1,4 @@
-"""Suppress deepagents' virtual-filesystem tools from every model request.
+"""Suppress the deepagents built-ins that nothing in Muldro backs.
 
 ``create_deep_agent`` auto-installs a scaffolding toolset Muldro cannot drop:
 ``FilesystemMiddleware`` and ``SubAgentMiddleware`` are in deepagents'
@@ -26,7 +26,7 @@ from typing import Any
 
 from langchain.agents.middleware import wrap_model_call
 
-from src.deep_runtime.builtins import VIRTUAL_FILESYSTEM_TOOL_NAMES
+from src.deep_runtime.builtins import DELEGATION_TOOL_NAME, VIRTUAL_FILESYSTEM_TOOL_NAMES
 
 logger = logging.getLogger(__name__)
 
@@ -39,17 +39,28 @@ def _tool_name(tool: Any) -> str | None:  # noqa: ANN401
     return name if isinstance(name, str) else None
 
 
-def make_no_virtual_filesystem_middleware():
-    """Build the middleware that drops the virtual-filesystem tools from a model request."""
+def make_unbacked_builtin_suppressor(*, has_delegates: bool = False):
+    """Build the middleware that drops unbacked built-ins from a model request.
 
-    @wrap_model_call(name="no_virtual_filesystem")
+    Args:
+        has_delegates: whether a Muldro delegate is registered on this agent. When False,
+            ``task`` is suppressed too: it would reach deepagents' auto-added
+            general-purpose subagent rather than a Muldro one. When True it is kept —
+            it is the only route to the delegate, and ``governor_delegate_critique``
+            gates it by name.
+    """
+    suppressed = set(VIRTUAL_FILESYSTEM_TOOL_NAMES)
+    if not has_delegates:
+        suppressed.add(DELEGATION_TOOL_NAME)
+
+    @wrap_model_call(name="unbacked_builtins")
     async def _suppress(
         request: Any,  # noqa: ANN401
         handler: Callable[[Any], Awaitable[Any]],
     ) -> Any:  # noqa: ANN401
         tools = getattr(request, "tools", None)
         if tools:
-            kept = [t for t in tools if _tool_name(t) not in VIRTUAL_FILESYSTEM_TOOL_NAMES]
+            kept = [t for t in tools if _tool_name(t) not in suppressed]
             if len(kept) != len(tools):
                 request = request.override(tools=kept)
         return await handler(request)

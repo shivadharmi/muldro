@@ -53,3 +53,17 @@ VIRTUAL_FILESYSTEM_TOOL_NAMES: frozenset[str] = frozenset(
         "execute",
     }
 )
+
+
+# deepagents' delegation tool. Offered ONLY when a Muldro delegate is actually registered
+# via ``create_deep_agent(subagents=...)``.
+#
+# With no delegate — the live default, since ``deep_delegates_enabled`` is False —
+# deepagents auto-adds its OWN ``general-purpose`` subagent, hands it ``"tools": _tools or
+# []`` (Muldro's inert shells) and a middleware list containing NONE of Muldro's: no
+# capability_scope, no dispatcher, no gates, and not the suppressor either. So ``task``
+# there advertises an agent Muldro never meant to exist, holding shells whose bodies are
+# tripwire AssertionErrors, with its own unfiltered filesystem. Its tool description is
+# several hundred words about that agent, which is what the observed trial that "narrated
+# the task tool's documentation" was reading from.
+DELEGATION_TOOL_NAME = "task"

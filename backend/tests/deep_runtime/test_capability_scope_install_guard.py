@@ -112,7 +112,7 @@ async def test_compiled_write_agent_installs_scope_guard_outermost():
     # Name the whole stack rather than counting it: "index 0" is only a meaningful
     # position claim when something else is in the list, and an exact set catches an
     # unintended addition the way a count did while still admitting a deliberate one.
-    assert names == ["capability_scope_guard", "dummy_extra_guard", "no_virtual_filesystem"]
+    assert names == ["capability_scope_guard", "dummy_extra_guard", "unbacked_builtins"]
     # langchain 1.3.10 `_chain_tool_call_wrappers` docstring: "Compose wrappers
     # into middleware stack (first = outermost)" — index 0 runs first and, on
     # denial, short-circuits before any inner middleware or the tool runs.

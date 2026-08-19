@@ -436,7 +436,7 @@ async def test_no_trust_gate_write_lock_or_presenter_voice():
     assert mw_ids == {
         "capability_scope_guard",
         "muldro_tool_dispatcher",
-        "no_virtual_filesystem",
+        "unbacked_builtins",
     }
     lowered = " ".join(str(x).lower() for x in mw_ids)
     assert "trust_gate" not in lowered

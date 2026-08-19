@@ -25,8 +25,8 @@ from langchain_core.messages import SystemMessage
 from langgraph.graph.state import CompiledStateGraph
 
 from src.deep_runtime.middleware.capability_scope import make_capability_scope_middleware
-from src.deep_runtime.middleware.no_virtual_filesystem import (
-    make_no_virtual_filesystem_middleware,
+from src.deep_runtime.middleware.unbacked_builtins import (
+    make_unbacked_builtin_suppressor,
 )
 from src.deep_runtime.model_factory import build_chat_model
 from src.orchestrator.agents import SubAgent
@@ -113,12 +113,13 @@ async def build_deep_agent(
             )
         )
     middleware.extend(extra_middleware)
-    # Suppress deepagents' virtual-filesystem tools from every model request. They are
-    # auto-installed by required middleware we cannot drop, and Muldro has no filesystem
-    # feature — so a model that "saves" something there loses it at end of thread while
-    # reporting success. Installed for EVERY agent (chat lead and autonomous step alike):
-    # none of them has a filesystem story, and this is the one choke point they share.
-    middleware.append(make_no_virtual_filesystem_middleware())
+    # Suppress the deepagents built-ins nothing in Muldro backs. They are auto-installed by
+    # required middleware we cannot drop. The filesystem always goes: Muldro has no
+    # filesystem feature, so a model that "saves" there loses it at end of thread while
+    # reporting success. `task` goes too UNLESS a Muldro delegate is registered, because
+    # without one it reaches deepagents' own general-purpose subagent. Installed for EVERY
+    # agent — this is the one choke point they share.
+    middleware.append(make_unbacked_builtin_suppressor(has_delegates=bool(subagents)))
 
     has_scope_mw = any(
         getattr(mw, "name", None) == "capability_scope_guard"
