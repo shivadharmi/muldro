@@ -75,3 +75,27 @@ def coerce_to_object(parsed: dict | list, *, list_key: str) -> dict:
     if isinstance(parsed, list):
         return {list_key: parsed}
     return {list_key: []}
+
+
+def parse_llm_object(text: str, *, default: dict) -> dict:
+    """Parse an LLM response that MUST be a JSON object. Never raises.
+
+    Returns *default* when *text* is unparseable OR parses to a non-object — a bare
+    array, string or number.
+
+    Why this exists rather than a bare ``parse_llm_json`` in a ``try``: that function is
+    honestly typed ``dict | list`` and decodes the first ``{`` **or** ``[``, so a model
+    that answers with a JSON ARRAY is a SUCCESSFUL parse. A ``try/except`` written for
+    parse failures does not catch it, and the caller's own fallback — written for exactly
+    this outcome — never fires. The escape lands as ``AttributeError: 'list' object has
+    no attribute 'get'`` somewhere upstream. Callers annotated ``-> dict`` should use this.
+
+    ``coerce_to_object`` solves the neighbouring problem: an extraction prompt whose bare
+    array IS the answer and only needs wrapping under a key. Use that when the list is
+    meaningful, this when a non-object means the model did not answer the question.
+    """
+    try:
+        parsed = parse_llm_json(text)
+    except (json.JSONDecodeError, ValueError):
+        return default
+    return parsed if isinstance(parsed, dict) else default

@@ -520,3 +520,21 @@ async def test_batch_dedup_and_refetch_queries_are_workspace_scoped(mock_complet
     for sql in sqls:
         assert "workspace_id" in sql, f"batch query not workspace-scoped: {sql}"
         assert "ws_a" in sql, f"batch query did not bind the workspace: {sql}"
+
+
+@patch("src.services.event_processor.complete_text")
+@pytest.mark.asyncio
+async def test_score_event_falls_back_when_the_model_returns_a_json_array(
+    mock_complete, settings, mock_db
+):
+    """A JSON ARRAY parses SUCCESSFULLY, so the `except` never fires and a list escapes
+    `_score_event` to `process`, which immediately calls `scores.get("summary")`."""
+    mock_complete.return_value = json.dumps([{"importance_score": 0.9}])
+
+    processor = EventProcessor(settings=settings, db=mock_db)
+    raw = make_raw_event()
+    scores = await processor._score_event(raw, TEST_USER_ID)
+
+    assert isinstance(scores, dict)
+    assert scores["importance_score"] == DEFAULT_SCORES["importance_score"]
+    assert scores["summary"] == raw.summary

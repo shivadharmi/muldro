@@ -61,3 +61,21 @@ async def test_minimal_claude_action_falls_back_on_non_json(monkeypatch):
     # parse_llm_json finds no JSON value -> JSONDecodeError -> raw-text fallback.
     assert out["status"] == "completed"
     assert out["result"] == "not json, just prose"
+
+
+@pytest.mark.asyncio
+async def test_minimal_claude_action_falls_back_on_a_json_array(monkeypatch):
+    """A JSON ARRAY parses SUCCESSFULLY, so the `except JSONDecodeError` never fires and a
+    list escapes to a caller that treats the return as a step-result dict."""
+    runner = _runner()
+    monkeypatch.setattr(runner, "build_step_context", _empty_ctx)
+
+    with patch(
+        "src.services.step_runner.complete_text",
+        AsyncMock(return_value='["completed", "hi"]'),
+    ):
+        out = await runner.minimal_claude_action(_step(), _run())
+
+    assert isinstance(out, dict)
+    assert out["status"] == "completed"
+    assert out["result"] == '["completed", "hi"]'

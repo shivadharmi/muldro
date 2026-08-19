@@ -16,12 +16,11 @@ reason — the coordinator owns the ``_active_traces`` dict lifecycle.
 
 from __future__ import annotations
 
-import json
 import logging
 
 from src.config.settings import Settings
 from src.llm.utility import complete_text
-from src.llm_utils import parse_llm_json
+from src.llm_utils import parse_llm_object
 from src.models.task_graph import TaskRun, TaskStep
 from src.services.contention import (
     CONTENDED_MESSAGE,
@@ -206,10 +205,10 @@ class StepRunner:
             workspace_id=run.workspace_id,
         )
 
-        try:
-            return parse_llm_json(raw)
-        except json.JSONDecodeError:
-            return {"status": "completed", "result": raw}
+        # `parse_llm_object`, not `parse_llm_json`: a JSON ARRAY parses SUCCESSFULLY, so the
+        # raw-text fallback below would be skipped and a list would escape to a caller that
+        # reads this as a step-result dict.
+        return parse_llm_object(raw, default={"status": "completed", "result": raw})
 
     async def build_executor_tools(self, step_capability: str, workspace_id: str) -> list[dict]:
         """Offer ONLY the current step's capability tools (its primary tool + same-family

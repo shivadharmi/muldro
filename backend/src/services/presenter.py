@@ -662,6 +662,14 @@ class Presenter:
 
     async def _call_meeting_prep(self, context: str, workspace_id: str = "") -> dict:
         """Call Claude to generate meeting prep content."""
+        fallback = {
+            "agenda": [],
+            "attendee_briefs": [],
+            "related_threads": [],
+            "action_items": [],
+            "risks": ["Meeting prep generation failed."],
+            "talking_points": [],
+        }
         try:
             text = await complete_text(
                 system=MEETING_PREP_SYSTEM_PROMPT,
@@ -670,25 +678,27 @@ class Presenter:
                 max_tokens=2048,
                 workspace_id=workspace_id,
             )
-            from src.llm_utils import parse_llm_json
-
-            return parse_llm_json(text)
         except Exception:
             logger.warning("Meeting prep generation failed", exc_info=True)
-            return {
-                "agenda": [],
-                "attendee_briefs": [],
-                "related_threads": [],
-                "action_items": [],
-                "risks": ["Meeting prep generation failed."],
-                "talking_points": [],
-            }
+            return fallback
+        # `parse_llm_object`, not `parse_llm_json`: a JSON ARRAY is a SUCCESSFUL parse and
+        # would escape the handler above to a caller that does `.get()`.
+        from src.llm_utils import parse_llm_object
+
+        return parse_llm_object(text, default=fallback)
 
     async def _call_claude(
         self, context: str, style: str = "general", workspace_id: str = ""
     ) -> dict:
         """Call Claude to generate briefing content."""
         system_prompt = BRIEFING_STYLE_PROMPTS.get(style, BRIEFING_SYSTEM_PROMPT)
+        fallback = {
+            "headline": "Unable to generate briefing",
+            "top_priorities": [],
+            "changes_since_last": [],
+            "recommended_actions": ["Check system logs — briefing generation failed."],
+            "full_text": "Muldro was unable to generate today's briefing. Please check the system.",
+        }
         try:
             text = await complete_text(
                 system=system_prompt,
@@ -697,16 +707,13 @@ class Presenter:
                 max_tokens=2048,
                 workspace_id=workspace_id,
             )
-            from src.llm_utils import parse_llm_json
-
-            return parse_llm_json(text)
         except Exception:
             logger.warning("Briefing generation failed", exc_info=True)
-            return {
-                "headline": "Unable to generate briefing",
-                "top_priorities": [],
-                "changes_since_last": [],
-                "recommended_actions": ["Check system logs — briefing generation failed."],
-                "full_text": "Muldro was unable to generate today's briefing. "
-                "Please check the system.",
-            }
+            return fallback
+        # `parse_llm_object`, not `parse_llm_json`: the latter is typed `dict | list` and a
+        # model that answers with a JSON ARRAY parses SUCCESSFULLY, escaping the handler
+        # above to `generate_briefing`'s `.get()` as `AttributeError: 'list' object has no
+        # attribute 'get'`. This fallback exists for exactly that outcome; let it fire.
+        from src.llm_utils import parse_llm_object
+
+        return parse_llm_object(text, default=fallback)

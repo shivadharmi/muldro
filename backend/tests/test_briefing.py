@@ -235,3 +235,41 @@ async def test_presenter_does_not_notify(mock_complete, mock_statuses, settings,
     await presenter.generate_briefing(TEST_USER_ID, date(2026, 3, 13), workspace_id="ws_test")
 
     notifier.notify.assert_not_called()
+
+
+# ── A JSON ARRAY is a SUCCESSFUL parse, and it escapes the fallback ──────────────────
+
+
+@patch("src.services.presenter.complete_text")
+@pytest.mark.asyncio
+async def test_briefing_survives_a_model_that_returns_a_json_array(
+    mock_complete, settings, mock_db
+):
+    """`AttributeError: 'list' object has no attribute 'get'` in generate_briefing.
+
+    `parse_llm_json` is honestly typed `dict | list` and decodes the first `{` OR `[`.
+    `_call_claude` wraps it in a try/except written for parse FAILURES, so a successful
+    parse of an array sails straight through and the "Unable to generate briefing"
+    fallback — which exists for exactly this — never fires.
+    """
+    mock_complete.return_value = json.dumps([{"headline": "not a briefing"}])
+
+    presenter = Presenter(settings=settings, db=mock_db)
+    briefing = await presenter.generate_briefing(TEST_USER_ID, date(2026, 3, 13))
+
+    assert briefing.headline == "Unable to generate briefing"
+
+
+@patch("src.services.presenter.complete_text")
+@pytest.mark.asyncio
+async def test_meeting_prep_survives_a_model_that_returns_a_json_array(
+    mock_complete, settings, mock_db
+):
+    """Same defect, same module: `_call_meeting_prep` is annotated `-> dict` too."""
+    mock_complete.return_value = json.dumps(["agenda item"])
+
+    presenter = Presenter(settings=settings, db=mock_db)
+    result = await presenter._call_meeting_prep("context")
+
+    assert isinstance(result, dict)
+    assert result["risks"] == ["Meeting prep generation failed."]
