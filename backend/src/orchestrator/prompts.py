@@ -422,21 +422,21 @@ Follow this 7-step process for every information-gathering request:
 </rules>
 
 <output_format>
-Return a JSON object with this structure (use literal braces):
+Return a JSON object with this structure:
 
-{{
+{
   "query": "<what was asked>",
   "findings": [
-    {{
+    {
       "fact": "<a single finding>",
       "source": "<tool name, URL, memory ID, or entity graph>",
       "confidence": 0.0,
       "relevant_entities": ["<entity name or ID>"]
-    }}
+    }
   ],
   "synthesis": "<1-3 paragraph narrative connecting findings and highlighting key insights>",
   "gaps": ["<what you could not find or confirm>"]
-}}
+}
 
 Rules for the output:
 - "findings" must be a non-empty array if any information was retrieved.
@@ -454,27 +454,27 @@ Request: "Show me recent emails from investors"
 → Filter for senders that match "investor" or are in the investor entity list
 → Fetch thread details for the top 3 by recency
 → Output:
-{{
+{
   "query": "Recent emails from investors",
   "findings": [
-    {{
+    {
       "fact": "Email from John Doe (john@vc.com) subject 'Term sheet follow-up', \
 received 2026-04-08",
       "source": "gmail.list",
       "confidence": 1.0,
       "relevant_entities": ["John Doe", "Seed Round"]
-    }},
-    {{
+    },
+    {
       "fact": "Email from Sarah Lin asking for Q1 metrics, received 2026-04-07",
       "source": "gmail.list",
       "confidence": 1.0,
       "relevant_entities": ["Sarah Lin"]
-    }}
+    }
   ],
   "synthesis": "2 investor emails in the last 7 days. The most urgent is John Doe's \
 term sheet follow-up from yesterday. Sarah Lin is requesting Q1 metrics.",
   "gaps": []
-}}
+}
 
 Example 2: Internal knowledge search
 
@@ -483,26 +483,26 @@ Request: "What do we know about Acme Corp?"
 → Query entity graph for an entity named "Acme Corp"
 → Search memories tagged with Acme Corp or related contacts
 → Output:
-{{
+{
   "query": "What do we know about Acme Corp?",
   "findings": [
-    {{
+    {
       "fact": "Acme Corp is a Series B startup in the logistics space, founded 2019",
       "source": "entity graph: ent_01abc",
       "confidence": 0.9,
       "relevant_entities": ["Acme Corp"]
-    }},
-    {{
+    },
+    {
       "fact": "Had a demo call with Acme Corp on 2026-03-15, they requested a proposal",
       "source": "memory: mem_01xyz",
       "confidence": 0.85,
       "relevant_entities": ["Acme Corp", "Demo Call"]
-    }}
+    }
   ],
   "synthesis": "Acme Corp is a known contact in the entity graph. Last interaction \
 was a demo call in March where they requested a proposal. No pricing data found.",
   "gaps": ["No pricing or budget information available"]
-}}
+}
 
 Example 3 — Web research (no internal knowledge available):
 
@@ -511,27 +511,27 @@ Request: "What are Series B valuation benchmarks in 2026?"
 → Search the web for "Series B valuation benchmarks 2026" → find 5 results
 → Open the top 2 relevant URLs → read article content
 → Output:
-{{
+{
   "query": "Series B valuation benchmarks 2026",
   "findings": [
-    {{
+    {
       "fact": "Median Series B valuation in 2026 is $150M",
       "source": "https://example.com/report",
       "confidence": 0.8,
       "relevant_entities": []
-    }},
-    {{
+    },
+    {
       "fact": "Series B rounds average $30-50M in 2026",
       "source": "https://example.com/data",
       "confidence": 0.75,
       "relevant_entities": []
-    }}
+    }
   ],
   "synthesis": "Current market data suggests Series B valuations around $150M median \
 with rounds of $30-50M. No internal knowledge was available; all findings are from \
 external web sources.",
   "gaps": ["No industry-specific breakdown available", "No internal deal data to compare against"]
-}}
+}
 </examples>
 """
 
