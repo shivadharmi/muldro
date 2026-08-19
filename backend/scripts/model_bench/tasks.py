@@ -99,10 +99,14 @@ def _claims_to_have_looked(reply: str) -> str | None:
 
 
 def _looks_like_a_question(reply: str) -> bool:
-    """Did the model ASK rather than act? A question mark is the tell, but only when the
-    reply is genuinely a request for direction — a refusal that happens to contain one
-    ("I can't do that. Is there anything else I can help you with?") must not count, so a
-    leading refusal phrase vetoes it."""
+    """Did the model ASK rather than act? Shared by every scorer whose task can be failed
+    by asking instead of doing — A, B and D. Applying it to only one of them made a model
+    that asks on all three read as though it failed on two and asked on one.
+
+    A question mark is the tell, but only when the reply is genuinely a request for
+    direction — a refusal that happens to contain one ("I can't do that. Is there anything
+    else I can help you with?" — llama3.1's exact words) must not count, so a leading
+    refusal phrase vetoes it."""
     text = reply.strip().lower()
     if not text or "?" not in text:
         return False
@@ -151,9 +155,12 @@ def _score_store_memory(rec: TurnRecord) -> TaskResult:
         return err
     calls = rec.called("store_memory", "store_preference")
     if not calls:
+        asked = _looks_like_a_question(rec.reply)
+        kind = "asked to clarify" if asked else "never called store_memory"
         return TaskResult(
             False,
-            f"never called store_memory (called: {[c[0] for c in rec.tool_calls] or 'nothing'})",
+            f"{kind} (called: {[c[0] for c in rec.tool_calls] or 'nothing'})",
+            asked_to_clarify=asked,
         )
     name, args = calls[0]
     text = " ".join(str(v) for v in args.values()).lower()
@@ -198,7 +205,9 @@ def _score_terminal_reply(rec: TurnRecord) -> TaskResult:
     if not rec.reply.strip():
         return TaskResult(False, "turn ended with no user-facing message")
     if not rec.called("store_memory", "store_preference"):
-        return TaskResult(False, "did not perform the action, so the reply proves nothing")
+        asked = _looks_like_a_question(rec.reply)
+        kind = "asked to clarify instead" if asked else "did not perform the action"
+        return TaskResult(False, f"{kind}, so the reply proves nothing", asked_to_clarify=asked)
     return TaskResult(True, f"replied after acting: {rec.reply.strip()[:90]!r}")
 
 

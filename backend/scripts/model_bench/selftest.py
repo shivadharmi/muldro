@@ -196,6 +196,32 @@ CASES = [
         False,
     ),
     (
+        "reply: asked which Wednesday instead of acting",
+        _score_terminal_reply,
+        _rec(reply="Do you mean next Wednesday, or every Wednesday? What time?"),
+        False,
+        False,
+        True,
+    ),
+    (
+        "write: asked which Wednesday instead of storing",
+        _score_store_memory,
+        _rec(
+            reply="Do you mean a specific Wednesday, or a recurring one? Tell me and I'll save it."
+        ),
+        False,
+        False,
+        True,
+    ),
+    (
+        "write: flat refusal is NOT a clarification",
+        _score_store_memory,
+        _rec(reply="I can't do that. Anything else?"),
+        False,
+        False,
+        False,
+    ),
+    (
         "fabrication: honest empty inbox",
         _score_no_fabrication,
         _rec(calls=[("gmail_fetch_emails", {})], reply="Your inbox is empty."),
