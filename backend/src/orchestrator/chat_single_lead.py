@@ -95,11 +95,19 @@ class _ChatSingleLeadMixin:
             )
         )
 
-        # Push workspace surface (Presenter-driven). Keep presenter_text raw for
-        # extraction — it still carries the fenced surface blocks.
+        # Push workspace surface. DEPRECATED path: the lead now calls the typed
+        # `render_surface` tool, whose schema a provider can enforce. This fenced-block
+        # parser stays for one release because a model may still emit the old shape —
+        # but it logs when it fires, so the fallback's usage is visible, not silent.
+        # ``presenter_text`` is kept raw for extraction.
         surface_id = None
         try:
             surface_spec = extract_surface_spec(presenter_text)
+            if surface_spec is not None:
+                logger.warning(
+                    "lead emitted a legacy fenced surface block instead of calling "
+                    "render_surface; the fenced path is deprecated and unvalidated"
+                )
             if surface_spec and surface_spec.should_surface:
                 surface_id = await self._surfaces.push_presenter_surface(
                     spec=surface_spec,

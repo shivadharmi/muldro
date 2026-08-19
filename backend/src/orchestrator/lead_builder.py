@@ -52,6 +52,14 @@ _VIRTUAL_KNOWLEDGE_SCOPES: dict[str, frozenset[str]] = {
 }
 
 
+# The lead is ALWAYS the turn's reply producer (`is_reply_lead=True`, unconditional), so it
+# always receives PRESENTER_VOICE and must always be able to act on it. Surfacing is a
+# presentation decision, not a plan capability — a `respond`-only plan that can describe a
+# surface but not create one is a prompt that argues with its own scope. Deliberately a floor
+# of exactly one internal, workspace-scoped capability, not a general write grant.
+PRESENTATION_FLOOR: frozenset[str] = frozenset({"internal.render_surface"})
+
+
 async def derive_lead_scope(
     steps: list[PlanStep],
     resolver: CapabilityResolver,
@@ -69,11 +77,15 @@ async def derive_lead_scope(
     - any real capability C → {C} plus its read-only family capabilities
       (``resolver.capabilities_for_step(C)``) — parity with ``resolve_for_step(C)``.
 
+    The scope starts at ``PRESENTATION_FLOOR`` — the lead is always the turn's reply
+    producer, so it always carries the Presenter voice and must always be able to render a
+    surface, whatever the plan's shape. The floor is additive, never a widening.
+
     The result is plan-bounded and fail-closed: a read-only plan yields a read-only scope
     (no write capability), and a write plan grants only the plan's specific write
     capabilities, never the executor's full write union.
     """
-    scope: set[str] = set()
+    scope: set[str] = set(PRESENTATION_FLOOR)
     perceiver = agents.get("perceiver")
     for step in steps:
         if getattr(step, "actor", None) == "user":

@@ -1,4 +1,4 @@
-"""PRESENTER_PROMPT content pin + dead-schema guard.
+"""PRESENTER_PROMPT content pin.
 
 ``PRESENTER_VOICE`` (the reusable formatting + surface-emission fragment) is extracted
 from ``PRESENTER_PROMPT`` so the deep runtime can append it as an inline-format
@@ -13,8 +13,8 @@ pruned from PRESENTER_VOICE in lockstep with their deletion from the A2UI schema
 prompt was still advertising kinds that ``SurfaceSpec.kind`` (a strict ``SurfaceKind``
 Literal) now rejects, which silently dropped chat-path workspace surfaces. The hash no
 longer asserts historical byte-neutrality; it pins the *current* pruned content forward.
-The companion ``test_presenter_voice_has_no_dead_schema_tokens`` gives that prune teeth so
-a drift re-introducing a dead kind/type fails CI.
+A companion ``test_presenter_voice_has_no_dead_schema_tokens`` gave that prune teeth, until
+the sixth re-baseline below removed the prose it searched.
 
 It was re-baselined a second time by the Muldro product rebrand, which renamed the product
 throughout. The guarded diff was exclusively that name inside the ``<role>`` line ("the
@@ -50,6 +50,18 @@ handed to a provider for structured-output enforcement in the first place. An En
 added to the worked example at the same time, so the parser test above now covers the new
 shape rather than only asserting the prose was edited.
 
+It was re-baselined a sixth time when the whole ``<surface_generation>`` block was deleted.
+The A2UI taxonomy it recited — the kinds table, the ```json:surface``` and
+```json:surface_data``` worked examples, the component list with each type's required
+properties, and the list-of-dict rules — now lives in the ``render_surface`` tool's input
+schema, where a provider can enforce it instead of a model having to remember it. What
+replaced it is the ``<surfaces>`` block, which carries only WHEN to surface: judgement a
+schema cannot express. The companion assertions moved with the content — the kind rules to
+``test_surface_kind_guidance`` (now asserting against ``RenderSurfaceInput.kind``'s Literal
+rather than parsing a markdown table), and the dead-schema-token guard was deleted outright,
+because the prompt no longer names a single kind or component type for a drift to
+re-introduce.
+
 To re-baseline intentionally, recompute with:
     uv run python -c "from src.orchestrator.prompts import PRESENTER_PROMPT; \\
         import hashlib; print(hashlib.sha256(PRESENTER_PROMPT.encode()).hexdigest())"
@@ -63,8 +75,10 @@ from src.orchestrator.prompts import PRESENTER_PROMPT, PRESENTER_VOICE
 # again for the Muldro product rebrand (name substitution only), again for the surface-kind
 # guidance correction (`message` offered; `run`/`prepared_work`/`plan` forbidden), again
 # for the positional Table.rows shape (`{"cells": [...]}` replacing rows keyed by column key),
-# and again for EntityCard.attributes becoming a list of `{"key", "value"}` pairs.
-_PRESENTER_PROMPT_GOLDEN_SHA256 = "13cf2396d3e59981a79d8c2266e2c4b7af88da4d50e81460ac4d379d495f2ecb"
+# again for EntityCard.attributes becoming a list of `{"key", "value"}` pairs, and again for
+# the deletion of `<surface_generation>` — the taxonomy moved out of prose and into the
+# `render_surface` tool schema, leaving only the WHEN-to-surface judgement behind.
+_PRESENTER_PROMPT_GOLDEN_SHA256 = "15dde7dd812c77adbda06ffdaafa1ff9775282a5aa30f3c0681e7bd854ece575"
 
 
 def test_presenter_prompt_matches_golden_hash():
@@ -77,40 +91,12 @@ def test_presenter_prompt_matches_golden_hash():
     )
 
 
-def test_presenter_voice_has_no_dead_schema_tokens():
-    """PRESENTER_VOICE must not advertise pruned surface-kinds or component-types.
-
-    A one-line reintroduction of any dead kind/type into the prompt must fail here.
-    Tokenization is deliberately precise so live component types ``Table``/``Timeline``
-    (whose same-named *kinds* were deleted) do not trigger false hits.
-    """
-    # Dead surface KINDS — matched via their kinds-table cell / worked-example form so
-    # the live component types Table/Timeline are not falsely flagged.
-    dead_kind_tokens = [
-        "| checklist ",
-        "| comparison ",
-        "| timeline ",
-        "| activity ",
-        '"kind": "table"',
-    ]
-    for token in dead_kind_tokens:
-        assert token not in PRESENTER_VOICE, f"dead surface-kind token still in prompt: {token!r}"
-
-    # Dead COMPONENT TYPES — deleted from the ComponentType enum.
-    dead_component_tokens = ["DataGrid", "StatusIndicator", "KanbanBoard", "Calendar"]
-    for token in dead_component_tokens:
-        assert token not in PRESENTER_VOICE, f"dead component-type token still in prompt: {token!r}"
-
-    # The layout-container line must no longer list the deleted ``Column`` container.
-    assert "Column" not in PRESENTER_VOICE, "deleted layout container 'Column' still in prompt"
-
-
 def test_presenter_voice_is_substring_of_presenter_prompt():
     """The extracted fragment must be the exact contiguous block still embedded in
-    PRESENTER_PROMPT (rules + surface-generation guidance)."""
+    PRESENTER_PROMPT (rules + when-to-surface guidance)."""
     assert PRESENTER_VOICE in PRESENTER_PROMPT
     # The fragment is the reusable voice, NOT the Presenter-specific role or examples.
     assert PRESENTER_VOICE.startswith("<rules>")
-    assert PRESENTER_VOICE.endswith("</surface_generation>")
+    assert PRESENTER_VOICE.endswith("</surfaces>")
     assert "<role>" not in PRESENTER_VOICE
     assert "<examples>" not in PRESENTER_VOICE

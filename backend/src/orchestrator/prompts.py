@@ -580,125 +580,18 @@ PRESENTER_VOICE = """\
 12. Surface subtitles must be under 120 characters
 </rules>
 
-<surface_generation>
-When your response has visual value beyond chat text, include a surface specification
-in a ```json:surface``` fenced block. This creates a persistent workspace card.
+<surfaces>
+When your reply has visual value beyond chat text — a comparison, a set of metrics, a
+table, a timeline — call the render_surface tool to create a workspace card. Its schema
+tells you exactly which components exist and what each one needs.
 
-Choose the surface kind that best fits the information shape:
+Do NOT create a surface when the reply is a simple conversational one (greeting,
+acknowledgment, clarification), when the information fits naturally in chat text, or when
+the user explicitly asked for a text response.
 
-| Kind | When to use |
-|------|-------------|
-| message | A rich reply worth keeping in the workspace feed — your default |
-| summary | Single-topic synthesis, lookup result, brief answer with sources |
-| briefing | Daily overview, multi-source digest, morning context |
-| alert | Blocked execution, system warning, urgent attention needed |
-| recommendation | Suggested action based on observed patterns |
-
-Do NOT create a surface when:
-- The response is a simple conversational reply (greeting, acknowledgment, clarification)
-- The information fits naturally in chat text alone
-- The user explicitly asked for a text response
-
-Do NOT use these kinds — the system creates them and only the system may:
-- run (created by the execution engine)
-- approval (created by TrustEngine)
-- proactive_insight (created by the perception pipeline)
-- prepared_work (the standing review queue for actions staged when nobody was
-  present; it is the ONLY place such an action can be acted on, so a second one
-  would split that queue)
-- plan (legacy; use `message` or `summary`)
-
-When you create a surface, still include a brief chat response summarizing the key point.
-The surface provides the detailed, persistent, interactive view.
-
-Example surface spec:
-```json:surface
-{
-  "should_surface": true,
-  "kind": "summary",
-  "title": "Open Pull Requests",
-  "subtitle": "5 PRs across 3 repos need attention",
-  "priority": "medium",
-  "metrics": [{"label": "Open", "value": "5", "variant": "warning"}],
-  "tags": ["github"]
-}
-```
-
-For rich content inside the surface, include a ```json:surface_data``` block whose
-top-level shape is EXACTLY {"sections": [<A2UIComponent>, ...]}. Each section is a
-typed A2UI component that the frontend renders via the same renderer used for all
-agent-generated UI — do NOT invent ad-hoc fields like "items", "options", or nested
-dicts with custom "type" values outside the taxonomy below.
-
-Each component MUST have these three required fields:
-- "type": one of the valid types listed below (this is the discriminator)
-- "id": a unique string within the surface
-- "properties": an object whose shape is determined by "type"
-
-Optional:
-- "children": a list of nested A2UIComponent objects (NEVER raw dicts)
-- "actions": a list of action specs — usually omitted
-
-Valid "type" values and their required properties:
-- Text       → {"text": str, "variant"?: "heading"|"body"|"caption"}
-- CodeBlock  → {"code": str, "language"?: str}
-- Badge      → {"label": str, "variant"?: "default"|"success"|"warning"|"danger"}
-- Alert      → {"message": str, "severity"?: "info"|"warning"|"error"|"success", "title"?: str}
-- Metric     → {"label": str, "value": str|number, "change"?: str, "trend"?: str}
-- Progress   → {"value": number, "max"?: number, "label"?: str}
-- Table      → {"columns": [{"key": str, "label": str}, ...],
-                 "rows": [{"cells": [str, ...]}, ...], "sortable"?: bool}
-- Timeline   → {"events": [{"time": str, "title": str, "source"?: str}, ...]}
-- EntityCard → {"name": str, "entity_type": str, "entity_id": str,
-                 "attributes"?: [{"key": str, "value": str}, ...]}
-- Card / Row / List → layout containers with no required properties (use "children")
-- Divider    → no required properties
-
-Rules for list-of-dict values (Table.rows, Timeline.events, EntityCard.attributes):
-- Every dict in the list MUST have the same shape. Missing keys render as blank cells.
-- For Table: each row is {"cells": [...]} — plain strings, POSITIONAL, one per column in
-  the SAME ORDER as "columns". A row whose cell count differs from the column count is
-  rejected and the whole surface_data block is dropped. Do NOT key cells by column name.
-- For Timeline: each event MUST have "time" and "title". "source" is optional.
-- For EntityCard: each attribute is {"key": ..., "value": ...}, both plain strings. Do NOT
-  pass a map of attribute names to values — the attribute name goes in "key".
-
-Example rich surface_data:
-```json:surface_data
-{
-  "sections": [
-    {"type": "Text", "id": "intro",
-     "properties": {"text": "Acme raised $10M Series B", "variant": "heading"}},
-    {"type": "Metric", "id": "m1",
-     "properties": {"label": "Funding", "value": "$10M", "trend": "up"}},
-    {"type": "Table", "id": "competitors", "properties": {
-      "columns": [{"key": "name", "label": "Company"}, {"key": "raised", "label": "Funding"}],
-      "rows": [
-        {"cells": ["Acme", "$10M"]},
-        {"cells": ["Beta", "$5M"]}
-      ]
-    }},
-    {"type": "Timeline", "id": "milestones", "properties": {
-      "events": [
-        {"time": "2026-Q1", "title": "Seed round", "source": "Crunchbase"},
-        {"time": "2026-Q3", "title": "Series A closed", "source": "press release"}
-      ]
-    }},
-    {"type": "EntityCard", "id": "acme", "properties": {
-      "name": "Acme", "entity_type": "organization", "entity_id": "ent_acme",
-      "attributes": [
-        {"key": "stage", "value": "Series B"},
-        {"key": "headcount", "value": "48"}
-      ]
-    }}
-  ]
-}
-```
-
-If you cannot fit your content into one of these typed components, fall back to
-a single Text section with the content as a markdown string — DO NOT emit
-unstructured dicts; they will be rejected by validation and dropped silently.
-</surface_generation>"""
+When you do create one, still write a short chat reply with the key point. The surface is
+the detailed, persistent view — not a replacement for speaking to the user.
+</surfaces>"""
 
 PRESENTER_PROMPT = f"""\
 <role>

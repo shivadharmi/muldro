@@ -374,6 +374,63 @@ async def test_single_lead_rehomes_output_stripped_reply_raw_surface_and_learner
     assert learner.learn.call_args.kwargs["agent_response"] == "REPLY_RAW"
 
 
+_FENCED_REPLY = """Here you go.
+
+```json:surface
+{"should_surface": true, "kind": "summary", "title": "Open PRs"}
+```"""
+
+
+async def test_a_legacy_fenced_surface_block_logs_a_deprecation_warning(caplog):
+    """The fenced ```json:surface``` path is deprecated in favour of the typed
+    `render_surface` tool, but it is kept for one release because a model may still emit
+    the old shape. A silent fallback is one nobody can decide to remove, so it must log.
+
+    Deliberately drives the REAL `extract_surface_spec` over a real fenced block rather
+    than a mocked spec — a warning that only fires for a MagicMock proves nothing about
+    what the runtime actually sees.
+    """
+    plan = PlanOutput(goal="g", reasoning="r", steps=[_step("s1", "respond")])
+    chat, _ = _make_chat(lead_text=_FENCED_REPLY)
+
+    ctx = _patches(plan, [])
+    for c in ctx:
+        c.start()
+    try:
+        with caplog.at_level("WARNING", logger=_LEAD):
+            await _run_stream(chat, permission_mode="bypass")
+    finally:
+        for c in ctx:
+            c.stop()
+
+    assert any(
+        "legacy fenced surface block" in r.message
+        for r in caplog.records
+        if r.levelname == "WARNING"
+    ), f"no deprecation warning logged; saw {[r.message for r in caplog.records]}"
+    # The deprecated path still WORKS — deprecating it must not break it.
+    chat._surfaces.push_presenter_surface.assert_awaited_once()
+
+
+async def test_an_ordinary_reply_logs_no_deprecation_warning(caplog):
+    """Teeth in the other direction: a warning that fires on every turn is noise, and
+    would let the test above pass without the fenced block being what triggered it."""
+    plan = PlanOutput(goal="g", reasoning="r", steps=[_step("s1", "respond")])
+    chat, _ = _make_chat(lead_text="just a plain reply")
+
+    ctx = _patches(plan, [])
+    for c in ctx:
+        c.start()
+    try:
+        with caplog.at_level("WARNING", logger=_LEAD):
+            await _run_stream(chat, permission_mode="bypass")
+    finally:
+        for c in ctx:
+            c.stop()
+
+    assert not [r for r in caplog.records if "legacy fenced surface block" in r.message]
+
+
 async def test_single_lead_builds_lead_with_plan_steps_scope_and_raw_message():
     """build_chat_lead receives plan.steps (plan-union scope, not a broad scope); the RAW
     user message is the human turn; plan summary + context go into the system context_block."""

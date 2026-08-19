@@ -425,7 +425,7 @@ async def test_build_chat_lead_uses_invoker_agents_and_returns_lead():
         lead = await inv.build_chat_lead([step], "ws")
 
     assert lead.name == "lead"
-    assert lead.capability_scope == {"email.send"}
+    assert lead.capability_scope == {"email.send"} | lead_builder.PRESENTATION_FLOOR
     # derive_lead_scope received the invoker's own agent set (positional arg[2]).
     assert spy_derive.await_args.args[2] is agents
 
