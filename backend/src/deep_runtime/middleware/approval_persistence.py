@@ -114,7 +114,11 @@ def build_legibility_refs(
         "tool_input": persisted_input,
         "tool_input_truncated": input_truncated,
         "capability_scope": sorted(capability_scope),
-        "presence": presence,
+        # EFFECTIVE, not nominal. A turn the founder was actively watching is recorded here as
+        # ``absent`` when the downgrade came from a missing durable checkpointer rather than
+        # from nobody being there (``_resolve_effective_presence``). The review queue will read
+        # this as provenance, so the key says what the value actually is.
+        "effective_presence": presence,
     }
     if prepared:
         # Marks a row the review queue owns. Kept out of the dict entirely when False rather

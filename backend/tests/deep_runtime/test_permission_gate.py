@@ -997,7 +997,7 @@ async def test_a_prepared_approval_is_typed_and_not_chat_flagged():
     assert captured["expires_at"] is not None
     refs = captured["artifact_refs"]
     assert refs["prepared"] is True
-    assert refs["presence"] == "absent"
+    assert refs["effective_presence"] == "absent"
     assert "chat" not in refs
     assert refs["lead_scope"] == ["calendar.create", "email.send"]
 
@@ -1034,7 +1034,7 @@ async def test_a_live_approval_still_carries_the_chat_flag():
     refs = captured["artifact_refs"]
     assert refs["chat"] is True
     assert "prepared" not in refs
-    assert refs["presence"] == "present"
+    assert refs["effective_presence"] == "present"
 
 
 # ── M3: replay-safe idempotent persist (real Postgres) ───────────────────────

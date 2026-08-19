@@ -343,7 +343,7 @@ class AgentInvoker:
         require_write_lock: bool = False,
         permission_mode: str | None = None,
         user_message: str = "",
-        presence: Presence = "absent",
+        presence: Presence,
     ):
         """Build a compiled deep agent WITH the full gated middleware chain:
         capability_scope (installed by ``build_deep_agent`` when ``db_factory`` is given)
@@ -382,9 +382,11 @@ class AgentInvoker:
         ``presence`` (``present``/``absent``, single-lead cutover): whether a human is on this
         turn to answer a confirmation. Forwarded to BOTH write gates, where a CONFIRM verdict
         becomes an ``interrupt()`` only when someone is present; otherwise the write is
-        PREPARED (recorded in full, reported to the model, turn continues). Defaults to
-        ``absent`` — the fail-safe direction, so a caller that forgets to thread it stages its
-        writes rather than executing them or stalling on a confirmation nobody will answer.
+        PREPARED (recorded in full, reported to the model, turn continues). REQUIRED, with no
+        default: ``absent`` is the fail-safe direction at most build sites but is actively
+        wrong at a resume site, where it drops the founder's REJECT verdict on the floor
+        instead of replaying the gate. Both resume sites pass ``present`` today; forcing every
+        site to state its answer is what keeps that true when the seventh one is written.
 
         ``permission_mode`` (P2.1, ADDITIVE): the chat permission model (``bypass``/``ask``/
         ``auto``). When ``"ask"`` or ``"auto"`` the action-time ``permission_gate`` is inserted
@@ -1542,6 +1544,9 @@ class AgentInvoker:
             authorization_source=AuthorizationSource.AUTONOMOUS,
             pre_approved_capabilities=frozenset(agent.capability_scope),
             system_prompt=build_system_message(system_blocks),
+            # HEADLESS: scheduler-triggered, nobody is on this turn. Stated rather than
+            # defaulted — ``presence`` has no default, so every build site must choose.
+            presence="absent",
             context_block=context_block,
         )
         graph_input = {"messages": [{"role": "user", "content": message}]}

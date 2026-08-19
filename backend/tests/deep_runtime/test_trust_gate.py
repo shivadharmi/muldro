@@ -854,7 +854,7 @@ async def test_a_prepared_approval_is_typed():
     assert captured["expires_at"] is not None
     refs = captured["artifact_refs"]
     assert refs["prepared"] is True
-    assert refs["presence"] == "absent"
+    assert refs["effective_presence"] == "absent"
     assert refs["capability_scope"] == ["calendar.create", "email.send"]
 
 
@@ -889,4 +889,4 @@ async def test_a_live_approval_keeps_its_tool_type():
     assert captured["expires_at"] is None
     refs = captured["artifact_refs"]
     assert "prepared" not in refs
-    assert refs["presence"] == "present"
+    assert refs["effective_presence"] == "present"

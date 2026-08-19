@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ulid import ULID
 
 from src.api.deps import get_current_user_id, get_current_workspace_id, get_session
+from src.api.routes_approvals_prepared import publish_prepared_decision, run_prepared_action
 from src.api.schemas import ApprovalDecisionRequest, ApprovalDetailResponse, ApprovalResponse
 from src.config.settings import Settings, get_settings
 from src.errors import classify, new_correlation_id
@@ -21,7 +22,6 @@ from src.models.task_graph import TaskRun, TaskStep
 from src.services.audit import AuditService
 from src.services.execution_state import transition_run, transition_step
 from src.services.graph_executor import create_graph_executor
-from src.services.prepared_actions import execute_prepared_action
 
 logger = logging.getLogger(__name__)
 
@@ -137,108 +137,6 @@ def _guard_not_chat_approval(approval) -> None:
         )
 
 
-async def _run_prepared_action(approval, *, user_id: str, settings):
-    """Execute a confirmed PREPARED action and record the outcome on the Approval.
-
-    The status moves to ``executed`` or ``failed`` rather than staying ``approved``, so the
-    prepared-work queue drops it either way and the founder can see which it was. This never
-    raises for a policy refusal — ``execute_prepared_action`` fails closed and returns the
-    reason, which is persisted so the queue can show it.
-
-    ``redis`` and ``ledger`` are BOTH load-bearing, not optional. ``execute_prepared_action``
-    defaults them to ``None`` for unit tests, and those defaults are fail-OPEN: without the
-    ledger a double-confirm double-fires an external write (invariant 5 does not hold at all),
-    and without redis a prepared confirm does not mutually exclude with a concurrent chat write
-    to the same capability. Supplying both is this function's main job.
-
-    ``user_id`` is the CONFIRMER, used for audit. The action itself replays as the PREPARER
-    (``execute_prepared_action`` reads ``approval.user_id``) — a replay runs with the authority
-    of the turn that produced it, not the authority of whoever clicked approve.
-    """
-    from src.api.routes_chat import _get_orchestrator
-    from src.models.database import get_session_factory
-    from src.services.idempotency import IdempotencyLedger
-
-    db_factory = get_session_factory()
-    orchestrator = await _get_orchestrator(settings)
-    redis = None
-    try:
-        import redis.asyncio as aioredis
-
-        redis = aioredis.from_url(settings.redis_url, decode_responses=True)
-    except Exception:
-        logger.warning(
-            "prepared action %s running WITHOUT the cross-path write lock — redis unavailable",
-            approval.approval_id,
-            exc_info=True,
-        )
-
-    try:
-        outcome = await execute_prepared_action(
-            approval,
-            execute_tool=orchestrator._execute_tool,
-            db_factory=db_factory,
-            redis=redis,
-            ledger=IdempotencyLedger(db_factory),
-        )
-    finally:
-        if redis is not None:
-            try:
-                await redis.aclose()
-            except Exception:
-                logger.debug("redis close failed", exc_info=True)
-
-    approval.status = "executed" if outcome.executed else "failed"
-    refs = {**(approval.artifact_refs or {})}
-    if outcome.error:
-        refs["prepared_error"] = outcome.error
-    approval.artifact_refs = refs
-    logger.info(
-        "[prepared] %s confirmed by %s -> %s", approval.approval_id, user_id, approval.status
-    )
-    return outcome
-
-
-async def _publish_prepared_decision(
-    approval, *, user_id: str, workspace_id: str, event: str, settings
-) -> None:
-    """Announce a prepared-action decision on the workspace agent stream.
-
-    Same event names and payload keys as the normal approve/reject publishes, with
-    ``run_id: None`` — a prepared action has no run, and inventing one would be a lie. The
-    prepared-work queue is a LIVE surface: without this it silently keeps showing work that
-    has already run until someone refreshes by hand.
-
-    Best-effort, like the paths it mirrors. By the time this fires the external write has
-    already happened, so a dead event bus must never turn a success into an error — losing a
-    notification is not losing the action.
-    """
-    redis = None
-    try:
-        import redis.asyncio as aioredis
-
-        from src.services.event_bus import EventBus
-
-        redis = aioredis.from_url(settings.redis_url, decode_responses=True)
-        bus = EventBus(redis)
-        stream = bus.agent_stream(workspace_id)
-        await bus.publish(
-            stream,
-            event,
-            {"approval_id": approval.approval_id, "run_id": None},
-            user_id,
-            workspace_id=workspace_id,
-        )
-    except Exception:
-        logger.debug("Failed to publish %s event", event, exc_info=True)
-    finally:
-        if redis is not None:
-            try:
-                await redis.aclose()
-            except Exception:
-                logger.debug("redis close failed", exc_info=True)
-
-
 @router.post(
     "/v1/approvals/{approval_id}/approve",
     response_model=ApprovalResponse,
@@ -325,9 +223,9 @@ async def approve_action(
     # GraphExecutor, whose agent would re-derive it and could run something other than what
     # the founder reviewed.
     if (approval.artifact_refs or {}).get("prepared") is True:
-        await _run_prepared_action(approval, user_id=user_id, settings=settings)
+        await run_prepared_action(approval, user_id=user_id, db=db, settings=settings)
         await db.commit()
-        await _publish_prepared_decision(
+        await publish_prepared_decision(
             approval,
             user_id=user_id,
             workspace_id=workspace_id,
@@ -568,11 +466,10 @@ async def reject_action(
         pass
 
     if (approval.artifact_refs or {}).get("prepared") is True:
-        # A rejected prepared action simply never runs. There is no graph to resume and no
-        # TrustState to feed — prepared work is not trust-graduated. It IS audited: refusing a
-        # fully-derived external write is a founder decision, and must be as visible as
-        # approving one. The normal path's audit block sits below the run machinery this
-        # branch returns before, so the row is emitted here rather than skipped.
+        # A rejected prepared action simply never runs: no graph to resume, and no TrustState
+        # to feed (prepared work is not trust-graduated). It IS audited — refusing a
+        # fully-derived external write is a founder decision, as worth logging as approving
+        # one — and the normal path's audit sits below the machinery this branch returns before.
         audit = AuditService(db)
         await audit.log(
             user_id=user_id,
@@ -584,7 +481,7 @@ async def reject_action(
             details={"reason": req.reason if req else None},
         )
         await db.commit()
-        await _publish_prepared_decision(
+        await publish_prepared_decision(
             approval,
             user_id=user_id,
             workspace_id=workspace_id,

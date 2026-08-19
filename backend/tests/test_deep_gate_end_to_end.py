@@ -461,6 +461,7 @@ async def test_direct_user_request_stays_ungated():
                 thread_id=thread_id,
                 authorization_source="direct_user_request",
                 system_prompt=build_system_message(invoker.build_system_prompt(agent, "")),
+                presence="absent",
             )
             config = {"configurable": {"thread_id": thread_id}}
 

@@ -317,6 +317,7 @@ async def _drive_disabled_tool(invoker):
             thread_id=thread_id,
             authorization_source="direct_user_request",
             system_prompt=build_system_message(invoker.build_system_prompt(agent, "")),
+            presence="absent",
         )
         config = {"configurable": {"thread_id": thread_id}}
         frames = [

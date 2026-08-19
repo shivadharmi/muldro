@@ -324,6 +324,7 @@ async def test_build_deep_agent_wires_real_read_fn_when_flag_on():
             thread_id="thread_x",
             authorization_source="autonomous",
             system_prompt="sys",
+            presence="absent",
         )
 
     assert result == "DEEP_AGENT"
@@ -351,6 +352,7 @@ async def test_build_deep_agent_no_readback_middleware_when_flag_off():
             thread_id="thread_x",
             authorization_source="autonomous",
             system_prompt="sys",
+            presence="absent",
         )
 
     mw.assert_not_called()

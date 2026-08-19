@@ -253,3 +253,41 @@ async def test_a_double_confirm_fires_exactly_once():
     assert second.executed is True
     assert len(recorder.calls) == 1
     assert prepared_identity_key("apr_double") in ledger.rows
+
+
+async def test_a_tool_error_marks_the_action_failed_with_its_reason():
+    """A tool that returns an error dict is NOT a success, and must not consume the identity.
+
+    The ledger row is marked failed rather than completed, so the founder can confirm again
+    once whatever the tool complained about is fixed — the write never happened.
+    """
+    approval = _approval(approval_id="apr_tool_err")
+    tool = SimpleNamespace(capability="email.send")
+    ledger = _FakeLedger()
+    recorder = _Recorder(result={"error": "recipient mailbox is full"})
+
+    result = await _run(approval, tool, recorder, ledger=ledger)
+
+    assert result.executed is False
+    assert result.outcome == "tool_failed"
+    assert "recipient mailbox is full" in result.error
+    assert result.result == {"error": "recipient mailbox is full"}
+    assert len(recorder.calls) == 1
+    row = ledger.rows[prepared_identity_key("apr_tool_err")]
+    assert row["status"] == "failed", "a failed tool must not leave a completed ledger row"
+
+
+async def test_a_transient_refusal_is_labelled_transient_not_failed():
+    """In-flight contention is RETRYABLE. The outcome must say so — the route keys on it to
+    leave the row ``pending``; flattening it to a boolean permanently discards the action."""
+    approval = _approval(approval_id="apr_inflight")
+    tool = SimpleNamespace(capability="email.send")
+    ledger = _FakeLedger()
+    # First reserve leaves the row in_flight; the second confirm collides with it.
+    await _run(approval, tool, _Recorder(), ledger=ledger)
+    ledger.rows[prepared_identity_key("apr_inflight")]["status"] = "in_flight"
+
+    result = await _run(approval, tool, _Recorder(), ledger=ledger)
+
+    assert result.outcome == "transient"
+    assert result.executed is False

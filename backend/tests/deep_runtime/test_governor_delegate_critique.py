@@ -379,6 +379,7 @@ async def _call_build(invoker):
         thread_id="t1",
         authorization_source="direct_user_request",
         system_prompt="sys",
+        presence="absent",
     )
 
 

@@ -699,6 +699,7 @@ async def test_autonomous_deep_e2e_kill_resume_dedup():
                     system_prompt="exec",
                     execute_tool=_crash_ledger_execute_tool(),
                     pre_approved_capabilities=frozenset({"email.send"}),
+                    presence="absent",
                 )
                 with pytest.raises(RuntimeError, match="simulated process kill"):
                     await agent.ainvoke(

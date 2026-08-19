@@ -75,6 +75,7 @@ async def _capture_middleware(*, permission_mode):
             authorization_source="direct_user_request",
             system_prompt="sys",
             permission_mode=permission_mode,
+            presence="absent",
         )
     mw = bda.call_args.kwargs["extra_middleware"]
     return mw, trust_sentinel, perm_sentinel, make_perm
@@ -141,6 +142,7 @@ async def test_permission_gate_built_with_mode_and_lead_scope():
             system_prompt="sys",
             context_block="CTX",
             permission_mode="auto",
+            presence="absent",
         )
 
     kwargs = make_perm.call_args.kwargs

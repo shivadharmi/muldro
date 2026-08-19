@@ -4,11 +4,19 @@ A prepared action was fully derived on the original turn and recorded on its ``A
 Confirmation REPLAYS that payload — it is never routed through ``GraphExecutor``, whose agent
 would re-derive the action and could run something other than what the founder reviewed.
 
-Two things are pinned here:
+Four things are pinned here:
 
 1. A prepared approval belongs on the STANDARD approval endpoints. It carries no ``chat`` key,
    so ``_guard_not_chat_approval`` must let it through (a 409 would strand it forever).
-2. The route wires the replay with BOTH the idempotency ledger and the cross-path write lock.
+2. The replay is wired with BOTH the idempotency ledger and the cross-path write lock.
+3. **A prepared action only leaves ``pending`` when we KNOW what happened to it.** Executed or
+   permanently refused are terminal; an infrastructure failure or a transient refusal must
+   leave the row confirmable. ``_get_approval`` refuses every status that is not ``pending`` or
+   the intended terminal state, so a row parked in ``approved``/``failed`` can never be retried:
+   the next confirm returns 200 from the idempotent early-return while nothing runs.
+4. The replay builds its OWN tool dispatcher and never constructs the chat orchestrator
+   singleton — doing so with no ``app`` would cache it without a durable checkpointer and
+   silently downgrade every later chat turn to ``absent``.
 """
 
 from __future__ import annotations
@@ -21,16 +29,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import HTTPException
 
-from src.api.routes_approvals import (
-    _guard_not_chat_approval,
-    _run_prepared_action,
-    approve_action,
-    reject_action,
-)
+from src.api.routes_approvals import _guard_not_chat_approval, approve_action, reject_action
+from src.api.routes_approvals_prepared import run_prepared_action
 from src.services.prepared_actions import PreparedActionResult
 from tests.conftest import make_mock_settings
 
 USER_ID = "usr_founder"
+CONFIRMER_ID = "usr_confirmer"
 WORKSPACE_ID = "ws_prepared"
 
 
@@ -73,90 +78,177 @@ def test_a_chat_approval_is_still_guarded():
 
 
 # ── the replay helper ────────────────────────────────────────────────────────────
+#
+# ``execute_prepared_action`` is patched at ``routes_approvals_prepared`` — where the helper
+# LOOKS IT UP (imported there by name), not at ``src.services.prepared_actions`` where it is
+# defined. ``get_prepared_dispatcher`` is patched for the same reason, and its stub doubles as
+# proof that no orchestrator is built.
+
+
+@asynccontextmanager
+async def _replay(outcome=None, *, raises=None, capture=None):
+    """Run the helper with the executor, dispatcher and redis stubbed."""
+    dispatcher = SimpleNamespace(execute_tool=AsyncMock(return_value={"ok": True}))
+    redis_client = MagicMock()
+    redis_client.aclose = AsyncMock()
+
+    async def _fake_execute(appr, **kwargs):
+        if capture is not None:
+            capture["approval"] = appr
+            capture["kwargs"] = kwargs
+        if raises is not None:
+            raise raises
+        return outcome or PreparedActionResult("executed", result={"ok": True})
+
+    with (
+        patch("src.api.routes_approvals_prepared.execute_prepared_action", _fake_execute),
+        patch(
+            "src.api.routes_approvals_prepared.get_prepared_dispatcher",
+            MagicMock(return_value=dispatcher),
+        ),
+        patch("redis.asyncio.from_url", return_value=redis_client),
+    ):
+        yield SimpleNamespace(dispatcher=dispatcher, db=_mock_db())
+
+
+def _mock_db():
+    db = MagicMock()
+    db.execute = AsyncMock(return_value=MagicMock())
+    db.commit = AsyncMock()
+    return db
 
 
 async def test_approving_a_prepared_action_executes_it():
     approval = _prepared_approval()
     capture: dict = {}
-    settings = make_mock_settings()
-    orchestrator = SimpleNamespace(_execute_tool=AsyncMock(return_value={"ok": True}))
-    redis_client = MagicMock()
-    redis_client.aclose = AsyncMock()
-
-    async def _fake_execute(appr, **kwargs):
-        capture["approval"] = appr
-        capture["kwargs"] = kwargs
-        return PreparedActionResult(True, result={"ok": True})
-
-    with (
-        patch("src.api.routes_approvals.execute_prepared_action", _fake_execute),
-        patch("src.api.routes_chat._get_orchestrator", AsyncMock(return_value=orchestrator)),
-        patch("redis.asyncio.from_url", return_value=redis_client),
-    ):
-        outcome = await _run_prepared_action(approval, user_id=USER_ID, settings=settings)
+    async with _replay(capture=capture) as h:
+        outcome = await run_prepared_action(
+            approval, user_id=CONFIRMER_ID, db=h.db, settings=make_mock_settings()
+        )
 
     assert capture["approval"] is approval
     assert outcome.executed is True
     assert approval.status == "executed"
 
 
-async def test_a_failed_prepared_action_marks_the_approval_failed():
-    """A refusal is persisted, not raised — the queue drops the row either way and shows why."""
+async def test_a_permanent_refusal_marks_the_action_failed():
+    """A refusal is persisted, not raised — the queue drops the row and shows why.
+
+    ``refused`` is PERMANENT by construction (unknown tool, registry drift, out-of-scope
+    capability, unreadable payload). Confirming again would refuse identically, so ``failed``
+    is the honest terminal state.
+    """
     approval = _prepared_approval()
-    settings = make_mock_settings()
-    orchestrator = SimpleNamespace(_execute_tool=AsyncMock())
-    redis_client = MagicMock()
-    redis_client.aclose = AsyncMock()
-
-    async def _fake_execute(appr, **kwargs):
-        return PreparedActionResult(False, error="unknown tool 'x' — refusing")
-
-    with (
-        patch("src.api.routes_approvals.execute_prepared_action", _fake_execute),
-        patch("src.api.routes_chat._get_orchestrator", AsyncMock(return_value=orchestrator)),
-        patch("redis.asyncio.from_url", return_value=redis_client),
-    ):
-        await _run_prepared_action(approval, user_id=USER_ID, settings=settings)
+    refusal = PreparedActionResult("refused", error="unknown tool 'x' — refusing")
+    async with _replay(refusal) as h:
+        await run_prepared_action(
+            approval, user_id=CONFIRMER_ID, db=h.db, settings=make_mock_settings()
+        )
 
     assert approval.status == "failed"
     assert approval.artifact_refs["prepared_error"] == "unknown tool 'x' — refusing"
 
 
 async def test_the_route_supplies_both_the_ledger_and_the_write_lock():
-    """Both ``ledger`` and ``redis`` default to ``None`` in ``execute_prepared_action``, and
-    both defaults are fail-OPEN: without the ledger a double-confirm double-fires the external
-    write, and without redis a prepared confirm does not mutually exclude with a concurrent
-    chat write to the same capability. A test that only asserted "executed once" would pass
-    with ``ledger=None``, so this asserts the WIRING rather than the effect.
+    """Both ``ledger`` and ``redis`` are REQUIRED kwargs of ``execute_prepared_action``, and
+    ``None`` is legal for both — so passing them is not enforced by the signature, only by
+    this test. Without the ledger a double-confirm double-fires the external write; without
+    redis a prepared confirm does not mutually exclude with a concurrent chat write to the
+    same capability. A test that only asserted "executed once" would pass with ``ledger=None``,
+    so this asserts the WIRING rather than the effect.
     """
     approval = _prepared_approval()
     capture: dict = {}
-    settings = make_mock_settings()
-    orchestrator = SimpleNamespace(_execute_tool=AsyncMock(return_value={"ok": True}))
-    redis_client = MagicMock()
-    redis_client.aclose = AsyncMock()
-
-    async def _fake_execute(appr, **kwargs):
-        capture["kwargs"] = kwargs
-        return PreparedActionResult(True, result={"ok": True})
-
-    with (
-        patch("src.api.routes_approvals.execute_prepared_action", _fake_execute),
-        patch("src.api.routes_chat._get_orchestrator", AsyncMock(return_value=orchestrator)),
-        patch("redis.asyncio.from_url", return_value=redis_client),
-    ):
-        await _run_prepared_action(approval, user_id=USER_ID, settings=settings)
+    async with _replay(capture=capture) as h:
+        await run_prepared_action(
+            approval, user_id=CONFIRMER_ID, db=h.db, settings=make_mock_settings()
+        )
 
     kwargs = capture["kwargs"]
     assert kwargs["ledger"] is not None, "no ledger → a double-confirm double-fires the write"
     assert kwargs["redis"] is not None, "no redis → no cross-path write lock"
-    # And the executor it was handed is the real dispatcher entry point, not a re-derivation.
-    assert kwargs["execute_tool"] is orchestrator._execute_tool
+    # And it executes through the module's OWN dispatcher, not the chat orchestrator's.
+    assert kwargs["execute_tool"] is h.dispatcher.execute_tool
+
+
+# ── C1 + I3: a row only leaves `pending` when we know what happened ──────────────
+
+
+async def test_an_infrastructure_failure_leaves_the_action_confirmable():
+    """The C1 regression. ``execute_prepared_action`` raises for INFRASTRUCTURE (redis connects
+    lazily, so a dead redis surfaces from inside the write lock, not at client construction).
+
+    The route has already committed ``approved`` by this point. If the raise escapes, the row
+    stays ``approved`` and every later confirm hits the idempotent early-return: HTTP 200,
+    nothing runs, no reason recorded — loud once, then silently reassuring forever. So the
+    status must go back to ``pending``, the reason must be recorded, and the founder must be
+    told it did not run.
+    """
+    approval = _prepared_approval()
+    async with _replay(raises=ConnectionError("redis down")) as h:
+        with pytest.raises(HTTPException) as exc:
+            await run_prepared_action(
+                approval, user_id=CONFIRMER_ID, db=h.db, settings=make_mock_settings()
+            )
+
+    assert exc.value.status_code == 503
+    assert "confirmed again" in exc.value.detail
+    assert approval.status == "pending", "not approved (silently stuck) and not failed (dead)"
+    assert "ConnectionError" in approval.artifact_refs["prepared_error"]
+    h.db.commit.assert_awaited()
+
+
+async def test_a_transient_refusal_leaves_the_action_confirmable():
+    """Write-lock contention is retryable BY CONSTRUCTION — a lock held for a few seconds.
+
+    Marking it ``failed`` would tell the founder to try again while ``_get_approval`` refuses
+    to let them: a five-second collision would permanently discard a reviewed action.
+    """
+    approval = _prepared_approval()
+    contended = PreparedActionResult(
+        "transient", error="another write to this capability is in progress — try again"
+    )
+    async with _replay(contended) as h:
+        with pytest.raises(HTTPException) as exc:
+            await run_prepared_action(
+                approval, user_id=CONFIRMER_ID, db=h.db, settings=make_mock_settings()
+            )
+
+    assert exc.value.status_code == 503
+    assert approval.status == "pending"
+    assert "in progress" in approval.artifact_refs["prepared_error"]
+
+
+async def test_an_already_executed_action_is_terminal_not_retried():
+    """The ledger reporting a prior success IS success — the effect happened."""
+    approval = _prepared_approval()
+    async with _replay(PreparedActionResult("already_executed", result={"ok": True})) as h:
+        outcome = await run_prepared_action(
+            approval, user_id=CONFIRMER_ID, db=h.db, settings=make_mock_settings()
+        )
+
+    assert outcome.executed is True
+    assert approval.status == "executed"
+
+
+async def test_the_replay_never_builds_the_chat_orchestrator():
+    """I2: ``_get_orchestrator(settings)`` with no ``app`` caches a singleton with no durable
+    checkpointer FOR THE LIFE OF THE WORKER, after which ``_resolve_effective_presence``
+    downgrades every present chat turn to ``absent`` and no chat pause can resume. Approving
+    something before chatting is enough to trigger it, so the replay must own its dispatcher.
+    """
+    import src.api.routes_chat as routes_chat
+
+    assert routes_chat._orchestrator is None, "precondition: no orchestrator built yet"
+    approval = _prepared_approval()
+    async with _replay() as h:
+        await run_prepared_action(
+            approval, user_id=CONFIRMER_ID, db=h.db, settings=make_mock_settings()
+        )
+    assert routes_chat._orchestrator is None, "the replay must not construct the chat singleton"
 
 
 # ── the confirmation is audited and announced ────────────────────────────────────
-
-CONFIRMER_ID = "usr_confirmer"
 
 
 def _route_approval(status="pending"):
@@ -181,11 +273,12 @@ async def _route_harness(*, publish_raises=False, outcome=None):
     """Drive the prepared branches of the real route handlers with everything else stubbed.
 
     ``_get_approval`` is patched so no database is touched; the audit service and event bus are
-    captured so the tests can assert on the CALLS the branch makes.
+    captured so the tests can assert on the CALLS each branch makes. ``AuditService`` is patched
+    in ``routes_approvals`` (where the route looks it up) while ``execute_prepared_action`` is
+    patched in ``routes_approvals_prepared`` (where the helper does) — so the REAL
+    ``run_prepared_action`` runs, and these stay integration tests of the branch.
     """
-    db = MagicMock()
-    db.execute = AsyncMock(return_value=MagicMock())
-    db.commit = AsyncMock()
+    db = _mock_db()
 
     audit_instance = MagicMock()
     audit_instance.log = AsyncMock()
@@ -198,16 +291,18 @@ async def _route_harness(*, publish_raises=False, outcome=None):
 
     redis_client = MagicMock()
     redis_client.aclose = AsyncMock()
-
-    orchestrator = SimpleNamespace(_execute_tool=AsyncMock(return_value={"ok": True}))
+    dispatcher = SimpleNamespace(execute_tool=AsyncMock(return_value={"ok": True}))
 
     async def _fake_execute(appr, **kwargs):
-        return outcome or PreparedActionResult(True, result={"ok": True})
+        return outcome or PreparedActionResult("executed", result={"ok": True})
 
     with (
-        patch("src.api.routes_approvals.execute_prepared_action", _fake_execute),
+        patch("src.api.routes_approvals_prepared.execute_prepared_action", _fake_execute),
+        patch(
+            "src.api.routes_approvals_prepared.get_prepared_dispatcher",
+            MagicMock(return_value=dispatcher),
+        ),
         patch("src.api.routes_approvals.AuditService", MagicMock(return_value=audit_instance)),
-        patch("src.api.routes_chat._get_orchestrator", AsyncMock(return_value=orchestrator)),
         patch("src.services.event_bus.EventBus", MagicMock(return_value=bus_instance)),
         patch("redis.asyncio.from_url", return_value=redis_client),
     ):

@@ -63,7 +63,7 @@ async def test_trust_gate_persists_redacted_tool_input():
     assert "sk-live" not in refs["tool_input"]
     assert refs["tool_input_truncated"] is False
     assert refs["capability_scope"] == ["email.read", "email.send"]
-    assert refs["presence"] == "present"
+    assert refs["effective_presence"] == "present"
 
 
 async def test_permission_gate_persists_redacted_tool_input():
@@ -144,7 +144,7 @@ async def test_presence_defaults_to_absent_when_a_caller_omits_it():
             # presence deliberately NOT passed
         )
 
-    assert captured["artifact_refs"]["presence"] == "absent"
+    assert captured["artifact_refs"]["effective_presence"] == "absent"
 
 
 async def test_an_oversized_payload_is_persisted_truncated_and_flagged():

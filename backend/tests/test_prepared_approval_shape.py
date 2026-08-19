@@ -51,6 +51,6 @@ def test_a_prepared_approval_is_marked():
     assert refs["prepared"] is True
     # The four legibility keys are unchanged by the flag.
     assert refs["capability_scope"] == ["email.send"]
-    assert refs["presence"] == "absent"
+    assert refs["effective_presence"] == "absent"
     assert refs["tool_input_truncated"] is False
     assert '"to": "a@b.com"' in refs["tool_input"]
