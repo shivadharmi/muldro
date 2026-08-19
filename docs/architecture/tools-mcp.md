@@ -137,7 +137,7 @@ tool_name → ToolRegistry.get_tool() → tool.capability → check agent scope
 Governor hooks (`governor_pre_tool_hook`) are **audit-only** — they always return `{allowed: true}` (unless the tool is explicitly blocked). Approval gating has moved to `TrustEngine` in `GraphExecutor`:
 
 - `TrustEngine` (`src/services/trust_engine.py`) evaluates whether a tool call requires user approval based on trust tier, risk level, and approval history
-- Approval gates fire inside `GraphExecutor` per-step, not at the hook level
+- Approval gates fire per-step inside `GraphExecutor` on the autonomous path, and at tool-execution time via the `permission_gate` middleware on chat — never at the hook level
 - This separation keeps the agent loop fast (no blocking on approval checks) while ensuring all external writes go through proper authorization
 
 ## MCP Bridge
@@ -160,7 +160,7 @@ External MCP servers run on demand with no Docker dependency:
 ### Session Lifecycle
 
 - Sessions are per `(workspace_id, server_name, user_id)` and scoped to an agent turn via `TurnScope` (ContextVar + refcounting)
-- Wired into both chokepoints: `MuldroOrchestrator._process_core` (chat path) and `GraphExecutor.execute_run` (autonomous path)
+- Opened at four boundaries: `ChatProcessor._process_core` and `_ChatSingleLeadMixin.resume_message_events` (chat), `GraphExecutor._execute_run_body` (autonomous; `execute_run` itself is the single-flight lease), and the scheduler's perception tick
 - Real MCP names stored and dispatched directly — no normalization
 - Circuit breaker per server (consecutive failure tracking, cooldown)
 - Retry with exponential backoff for transient errors

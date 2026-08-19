@@ -6,7 +6,7 @@ A **Personal AI Operating System** for founders. Not a chatbot — an OS with a 
 Perceive -> Understand -> Update Model -> Plan -> Act -> Communicate
 ```
 
-Muldro continuously observes your data sources (Gmail, Calendar, Slack, GitHub), extracts entities and memories, plans actions, seeks approval for external writes, executes approved plans, and communicates results through a Next.js web frontend.
+Muldro continuously observes your data sources (Gmail, Calendar, Slack, GitHub), extracts entities and memories, plans actions, gates external writes for approval — staging them for review when you are not around rather than acting unasked — executes what is approved, and communicates results through a Next.js web frontend.
 
 ## Architecture
 
@@ -78,7 +78,11 @@ graph TB
 | **Presenter** | Sonnet | Generate user-facing output and live execution surfaces |
 | **Persona** | Haiku | Learn user preferences from interactions |
 
-Only Planner decides intent. Only the Executor executes external actions. Only Presenter talks to the user. TrustEngine gates approvals with graduated autonomy (first_use, learning, trusted, autonomous). The Governor is **not** a routed agent — it is a deterministic policy service invoked as an audit-only pre-tool hook.
+Only Planner decides intent. These six are the **autonomous** path's cast — `GraphExecutor` routes each plan step to one of them by capability, only the Executor performs external actions, and only Presenter talks to the user.
+
+A **chat** turn works differently: it builds one synthetic `lead` (not a registry agent) whose `capability_scope` is the union of the plan's steps, and that lead acts and answers for itself. The boundary that holds there is the scope, enforced at tool-execution time by the `capability_scope` middleware.
+
+Writes are gated at action time — TrustEngine on the autonomous path (graduated autonomy: first_use, learning, trusted, autonomous), `permission_gate` on chat. Both have three outcomes: allow, interrupt, or — when no human is on the turn — **prepare** the action for later review rather than executing it. The Governor is **not** a routed agent — it is a deterministic policy service invoked as an audit-only pre-tool hook.
 
 > **Detailed architecture docs:** [`docs/architecture/`](docs/architecture/README.md) — sequence diagrams, data model, service reference, design decisions
 
@@ -176,10 +180,10 @@ muldro/
 ## Key Features
 
 - **Multi-tenant workspace isolation**: All data tables scoped by `workspace_id` with CASCADE deletes
-- **Real-time streaming**: Claude API streaming with extended thinking (Opus) + SSE to frontend
+- **Real-time streaming**: a LangGraph agent stream adapted to frozen SSE frames, with extended thinking
 - **Full cost tracking**: Cache tokens (1.25x write, 0.1x read), thinking tokens, per-agent cost breakdown
-- **Graduated autonomy**: TrustEngine with 4 trust tiers (first_use, learning, trusted, autonomous)
-- **Capability-based routing**: CapabilityResolver maps plans to agents by capability scope (not decision type)
+- **Graduated autonomy**: TrustEngine with 4 trust tiers (first_use, learning, trusted, autonomous), composed with a per-action `permission_gate` that trust never overrides
+- **Capability-based authority**: a plan's capabilities decide what may run — scoping the chat lead's authority, and selecting the agent per step on the autonomous path (never a decision type)
 - **Live execution surfaces**: Real-time step progress via A2UI during plan execution
 - **TriSearch**: Parallel Qdrant + Postgres FTS + Neo4j search with local cross-encoder reranking
 - **Knowledge graph**: Neo4j with typed relationship edges, weighted traversal, temporal scoping

@@ -8,7 +8,7 @@ stack fully up (installing ToolHive, doing real OAuth connects, running an
 end-to-end chat turn) is a **manual follow-up**, not automated by these
 files — see §5 below.
 
-Design reference: [`docs/superpowers/specs/2026-08-16-toolhive-openconnector-gmail-slice-design.md`](../../docs/superpowers/specs/2026-08-16-toolhive-openconnector-gmail-slice-design.md)
+Design reference: `docs/superpowers/specs/2026-08-16-toolhive-openconnector-gmail-slice-design.md` (a local planning doc — `docs/superpowers/` is untracked/gitignored and not part of the repo).
 (untracked/gitignored planning doc — present on the machine that authored
 this slice; if it's missing on yours, the parent assessment
 [`docs/architecture/toolhive-openconnector-assessment.md`](../../docs/architecture/toolhive-openconnector-assessment.md)

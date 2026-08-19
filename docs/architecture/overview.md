@@ -35,6 +35,7 @@ graph TB
         EXE[Executor]
         PRS[Presenter]
         PER[Persona]
+        LEAD[Lead<br/>synthetic, chat only]
     end
 
     subgraph "Tool Layer"
@@ -65,10 +66,10 @@ graph TB
 
     WEB --> API
     API --> ORCH
-    ORCH --> PCV & LIB & PLN & EXE & PRS & PER
+    ORCH --> PCV & LIB & PLN & EXE & PRS & PER & LEAD
     ORCH --> TRACE & BUDGET
-    PCV & LIB & PLN & EXE & PRS & PER --> INT
-    PCV & EXE --> MCP
+    PCV & LIB & PLN & EXE & PRS & PER & LEAD --> INT
+    PCV & EXE & LEAD --> MCP
     INT --> EP & WM & MS & PL & GV & GE & NT
     ORCH --> CAT
     EP & WM & MS & PL & GV & GE & NT & CR & TE --> PG
@@ -80,7 +81,9 @@ graph TB
 
 ## The 6 Sub-Agents
 
-The orchestrator routes to 6 specialized sub-agents via Claude API. Each agent has a defined role, model tier, write scope, and tool scope. Agents never call each other directly — all coordination flows through the orchestrator. The former Observer and Researcher agents were merged into the Perceiver.
+The registry defines 6 specialized sub-agents. Each has a defined role, model tier, write scope, and tool scope. Agents never call each other directly — all coordination flows through the orchestrator. The former Observer and Researcher agents were merged into the Perceiver.
+
+These six are the **autonomous** path's cast: `GraphExecutor` routes each plan step to one of them by capability. The **chat** path routes to none of them — it builds one synthetic `lead` per turn (`orchestrator/lead_builder.py`, not a registry row) whose `capability_scope` is the union of the plan's steps, and lets it discover its own tools.
 
 | Agent | Model Tier | Role | Write Scope | Tool Scope |
 |-------|-----------|------|-------------|------------|
@@ -98,9 +101,9 @@ The orchestrator routes to 6 specialized sub-agents via Claude API. Each agent h
 These boundaries are strict and must not be violated:
 
 - **Only Planner** decides intent (what to do)
-- **Only the Executor** executes external actions (sends emails, posts messages), scoped to each step's capability
-- **Only Presenter** talks to the user (formats output)
-- **TrustEngine** in GraphExecutor is the single approval gate for the autonomous path. The Governor is not a routed agent — it is a deterministic policy service invoked as an audit-only pre-tool hook
+- **On the autonomous path, only the Executor** executes external actions (sends emails, posts messages), scoped to each step's capability; **only Presenter** talks to the user
+- **On the chat path the lead does both**, within the plan-bounded `capability_scope` it was built with — it acts and its own reply is the turn's reply, with no Presenter step in between. The boundary that still holds there is the scope itself, enforced by the `capability_scope` middleware
+- **TrustEngine** in GraphExecutor is the approval gate for the autonomous path; **`permission_gate`** is the chat path's action-time gate. The Governor is not a routed agent — it is a deterministic policy service invoked as an audit-only pre-tool hook
 
 ### Model Tier Rationale
 
@@ -158,6 +161,8 @@ Redis serves 6 distinct purposes:
 
 ## Data Flow
 
+The autonomous path — perception through delivery:
+
 ```mermaid
 graph LR
     A[Perceiver] --> B[EventProcessor<br/>normalize, score, dedup]
@@ -168,6 +173,18 @@ graph LR
     F --> G[Presenter<br/>deliver via web/A2UI]
 ```
 
+The chat path is shorter and has no agent hand-offs:
+
+```mermaid
+graph LR
+    M[User message] --> I[Intent classifier]
+    I --> P[Planner<br/>or fast-path plan]
+    P --> S[derive_lead_scope<br/>plan capability union]
+    S --> L[ONE lead<br/>discovers its own tools]
+    L --> PG[permission_gate<br/>allow / interrupt / prepare]
+    PG --> R[The lead's own reply]
+```
+
 ## Execution State Machine
 
 Every task progresses through a defined state machine:
@@ -176,7 +193,7 @@ Every task progresses through a defined state machine:
 detected -> planned -> policy_checked -> approved -> executing -> completed/failed
 ```
 
-Every external write requires approval in v1. An audit log with correlation IDs tracks all external writes.
+Every external write passes a gate — `TrustEngine` on the autonomous path, `permission_gate` on chat. Whether the gate *stops* the write depends on accrued trust and on the action's own risk profile; when it must stop and no human is present, the write is **prepared** rather than executed or dropped. An audit log with correlation IDs tracks all external writes.
 
 ## Multi-Tenant Workspace Isolation
 

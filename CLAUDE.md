@@ -14,11 +14,15 @@ Multi-agent hub-and-spoke: a central `MuldroOrchestrator` (`backend/src/orchestr
 User <-> Next.js Frontend (A2UI)
               |
          MuldroOrchestrator (Claude API)
-         Routes to: Perceiver, Librarian, Planner,
-                    Executor, Presenter, Persona
+         Chat turn      -> ONE plan-scoped lead
+         Autonomous run -> Perceiver, Librarian, Planner,
+                           Executor, Presenter, Persona
               |
-         CapabilityResolver (step.capability → agent)
-         TrustEngine (single approval gate per step)
+         derive_lead_scope (plan capabilities → the lead's authority)   [chat]
+         CapabilityResolver (step.capability → agent)                   [autonomous]
+              |
+         trust_gate (per capability) → permission_gate (per action)
+         verdicts: allow | interrupt | prepare
               |
          Tool Layer: FastMCP (intelligence + communication) + external MCP servers
               |
@@ -129,22 +133,27 @@ side-effect rule, and OSS hygiene. Read it before structural changes. Summary be
 | Presenter | Sonnet | Generate user-facing text output | briefings, A2UI surfaces (via SurfaceService + renderer.py) |
 | Persona | Haiku | Learn and store preferences (batched every 10th scheduler tick, min 5 interactions) | memories (preference type) |
 
-**Only Planner decides intent. Only the Executor executes external actions (scoped to the step's capability). Only Presenter talks to the user. TrustEngine gates every external write via a single deterministic approval gate in GraphExecutor.**
+**Only Planner decides intent.** The table above is the **autonomous** path's cast: only the Executor performs external actions (scoped to the step's capability) and only Presenter talks to the user. A **chat** turn routes to none of them — it builds one synthetic `lead` (`orchestrator/lead_builder.py`, not a registry row) scoped to the plan's capability union, and that lead acts and answers for itself. **Every external write is gated at action time** — `trust_gate` (TrustEngine, per capability) on the autonomous path, `permission_gate` (per action) on chat — and with no human on the turn a gated write is *prepared* for review rather than executed.
 
 *The Governor is not a routed cognitive agent — its deterministic policy service (`services/governor.py`) and audit-only pre-tool hook (`hooks.py::governor_pre_tool_hook`, always `allowed: True` except disabled tools) remain as non-agent machinery.*
 
 ## Capability-Based Routing
 
-The Planner produces a `PlanOutput` with ordered `PlanStep` entries. Each step has a `capability` field (e.g., `email.send`, `knowledge.search`, `system.respond`). The `CapabilityResolver` (`src/services/capability_resolver.py`) maps capabilities to agents:
+The Planner produces a `PlanOutput` with ordered `PlanStep` entries. Each step has a `capability` field (e.g., `email.send`, `knowledge.search`, `system.respond`). What happens next differs by path:
 
-| Capability Prefix | Agent |
+- **Chat path — no per-step agent routing.** One lead runs per turn. `derive_lead_scope` (`src/orchestrator/lead_builder.py`) folds the plan's steps into a single `capability_scope` — the *union* of each step's authority — and the lead discovers its own tools inside that scope. A read-only plan yields a read-only lead; a write plan grants only that plan's write capabilities, never the Executor's full write union. `resolve_plan_routing` (`src/orchestrator/chat_pipeline.py`) is all that remains of the old *agent* pre-resolution: a pure filter selecting the steps the *user* must act on, which are reported rather than executed. One residue of per-step **execution** does survive: `system.*` steps are run deterministically per step by `system_capability_handler` before the lead starts, each emitting a `SystemStepResult`. That is not agent routing, but it is not the lead either.
+- **Autonomous path — still per-step.** `GraphExecutor` / `DagRunner` route each step through `StepRunner`, which calls `CapabilityResolver.resolve_for_step` to scope that step's tool offering.
+
+`CapabilityResolver` survives for `resolve_for_step` / `capabilities_for_step` (used by the autonomous path and by `derive_lead_scope`); `classify_capability_agent` survives for `runtime_projection`. The capability→agent table below therefore describes **agent ownership of capabilities**, not chat-turn routing:
+
+| Capability Prefix | Owning agent |
 |------------------|-------|
 | `reason.*`, `respond.*`, `system.respond` | Presenter |
 | `knowledge.*` | Librarian |
 | `email.read/list/search`, `calendar.read`, any read capability | Perceiver |
-| Write capabilities (`email.send`, `calendar.create`, etc.) | Executor (per-step capability scope via `resolve_for_step`) |
+| Write capabilities (`email.send`, `calendar.create`, etc.) | Executor |
 
-**Key files:** `src/services/capability_resolver.py` (resolve, route_step, is_read_capability, is_write_capability), `src/orchestrator/capability_summary.py` (generate_capability_summary — compact ~200-token XML for Planner prompt)
+**Key files:** `src/services/capability_resolver.py` (resolve, resolve_for_step, capabilities_for_step, is_read_capability, is_write_capability), `src/orchestrator/lead_builder.py` (derive_lead_scope, build_chat_lead), `src/orchestrator/capability_summary.py` (generate_capability_summary — compact XML for the Planner prompt)
 
 ## Agentic vs Scripted Execution
 
@@ -208,7 +217,9 @@ Fast intents (`greeting`, `chitchat`, `simple_question`, `data_fetch`, `status_q
 
 ## Data Flow
 
-Perceiver → EventProcessor (normalize, score, dedup, DLQ on failure) → Librarian (entities, memories) → Planner (PlanOutput with capability steps) → TrustEngine (single approval gate per step) → Executor (execute via GraphExecutor, per-step capability scope) → Presenter (deliver via A2UI / web)
+**Autonomous path:** Perceiver → EventProcessor (normalize, score, dedup, DLQ on failure) → Librarian (entities, memories) → Planner (PlanOutput with capability steps) → TrustEngine (approval gate per step) → Executor (execute via GraphExecutor, per-step capability scope via `resolve_for_step`) → Presenter (deliver via A2UI / web)
+
+**Chat path:** intent → Planner (or fast-path plan) → ONE lead scoped to the plan's capability union → `permission_gate` at each write (allow / interrupt / prepare) → the lead's own reply. No per-step routing, no Presenter step.
 
 **Perception signal flow:** Scheduler → PerceptionPolicyService (circuit breaker, rate limiting) → Perceiver → RelevanceAssessor (tier routing: act/alert/brief/silent) → Notifier (priority-scored delivery with hold-for-briefing)
 
@@ -251,7 +262,7 @@ fetchWorkspaceSurfaces() or useMuldroWs hook (surface_update message type)
 - Workspace: `frontend/src/app/page.tsx` → `workspace-canvas.tsx` (pure A2UIRenderer grid)
 - Chat: `frontend/src/app/chat/page.tsx` → split-pane layout (chat left, surfaces right)
 
-**Surface kinds:** run, summary, briefing, alert, recommendation, proactive_insight, message (system/agent-managed) + legacy `plan` (still produced by `derive_surface_kind`) and `approval` (demoted to an inline run-surface detail tab). See the `SurfaceKind` Literal in `src/ui/contracts.py` for the authoritative set.
+**Surface kinds:** run, summary, briefing, alert, recommendation, proactive_insight, `prepared_work` (the standing review queue for actions staged on turns with no human present), message (system/agent-managed) + legacy `plan` (still produced by `derive_surface_kind`) and `approval` (demoted to an inline run-surface detail tab). See the `SurfaceKind` Literal in `src/ui/contracts.py` for the authoritative set.
 
 **Capability → Surface mapping** (in `_push_workspace_surface`): derives surface kind from plan capabilities.
 
@@ -265,11 +276,11 @@ fetchWorkspaceSurfaces() or useMuldroWs hook (surface_update message type)
 
 ## Trust Infrastructure & Approval
 
-Single deterministic approval gate via `TrustEngine` (`src/services/trust_engine.py`):
+The autonomous path's deterministic approval gate is `TrustEngine` (`src/services/trust_engine.py`). It is not the only gate — see "One runtime, gated at action-time" below for how it composes with `permission_gate`:
 - **RiskAssessor** (`src/services/risk_assessor.py`): Haiku-based risk assessment with Redis-cached 24h TTL. Returns `RiskAssessment` (risk_level, reasoning, reversible, blast_radius).
 - **TrustState** model (`src/models/trust_state.py`): Per-workspace, per-capability trust tracking (approved/rejected counts, trust_level, cooldown).
 - **TrustEngine.evaluate()**: 4×4 matrix (trust_level × risk_level) → `PolicyDecision` (approval_required, auto_execute_notify, auto_execute_silent, blocked).
-- **Trust graduation**: 3 approved → learning, 10 approved (<10% reject) → trusted, 25 approved (<5% reject) → autonomous.
+- **Trust graduation**: 3 approved → learning, 10 approved (<10% reject) → trusted, 25 approved (<5% reject) → autonomous. Where `permission_gate` is also installed (chat and the `process_message` batch entry) graduation does **not** reach past it — it sits inner of `trust_gate` and never consults trust, so an irreversible, external/public, or high-risk write is still staged at the `autonomous` level. On **GraphExecutor DAG steps** no `permission_gate` is installed and the step's own capability is pre-approved, so graduation there is genuinely silencing. See "One runtime, gated at action-time" below.
 - **Trust demotion**: Rejection applies cooldowns (72h/48h/24h) with demotion ladder.
 - **Per-call cost attribution**: the `budget` middleware (`deep_runtime/middleware/budget.py`) records a `TokenUsage` span per model call (`trigger="chat"`) via a LangChain `after_model` hook. Per-*tool* token splitting is intentionally not carried over (it was analytics-only).
 - **Trust API**: endpoints in `routes_trust.py` (dashboard, detail, ceiling, reset, time-policies GET+PUT).
@@ -280,12 +291,28 @@ Single deterministic approval gate via `TrustEngine` (`src/services/trust_engine
 
 All surfaces (chat, perception, autonomous) execute on the **single deep runtime** (`src/deep_runtime/` — a LangGraph/Deep-Agents graph built by `build_deep_agent`). This is the *only* runtime; the legacy `agent_loop` engine and its runtime-selection control plane are deleted. Muldro tools are inert schema shells (**tools-are-schemas / execution-is-central**): a central `muldro_tool_dispatcher` (`wrap_tool_call`) routes every execution through `ToolExecutor.execute_tool`. Policy is enforced by a fixed middleware chain wrapping that dispatcher (outer→inner): `capability_scope → governor_audit → unavailable_server → trust_gate → [permission_gate] → write_lock → [read_back] → dispatcher`. Treat `src/deep_runtime/` as the source of truth for its internals; the rebuild's step history lives in the local (untracked/gitignored) `docs/superpowers/plans/` planning trail, not here and not in the repo.
 
-- **Chat path** (`muldro.py` `process_message` / `process_message_stream`): the turn carries `authorization_source = DIRECT_USER_REQUEST`, so `trust_gate` (TrustEngine) stays **dormant** — the user's message *is* the turn's authorization. Writes are held safe by the always-on `capability_scope` + `write_lock` middlewares (see below). Action-time write **confirmation** via **`permission_gate`** (`src/deep_runtime/middleware/permission_gate.py`, per the Claude-Code-style **`permission_mode`**: `bypass` never interrupts, `ask` always confirms a write, `auto` confirms only irreversible / external-or-public / high-risk writes, failing closed when risk is unknown) is the **intended** chat gate — but it is currently **feature-gated behind `settings.deep_single_lead` (default `False`)** plus `can_pause` + a durable checkpointer, and is installed only on the single-lead path (`chat_single_lead.py` `stream_deep_lead`). The default per-step chat path (`call_agent_stream`) runs **without** `permission_gate`. Do **not** "add a TrustEngine gate to the chat path" as a bugfix — TrustEngine is the autonomous-path gate by design; `permission_gate` (once `deep_single_lead` is on) is the chat-path gate.
+**Two independent facts travel with every chat turn, and neither derives from the other** (`src/deep_runtime/confirmation.py`):
+
+- **`permission_mode`** (`bypass` | `ask` | `auto`) — *which* writes need a human. `bypass` never interrupts; `ask` confirms every write; `auto` confirms only irreversible, external-or-public, or high-risk writes, failing closed when risk is unknown. In *every* mode the four internal `system.*` action capabilities (`set_goal`, `set_instruction`, `schedule_reminder`, `add_to_brief`) are exempt — they are the user's own instructions to Muldro, not outbound writes.
+- **`presence`** (`present` | `absent`) — *whether* a human is reachable on this turn. Precisely: `presence = caller_presence AND a durable checkpointer exists`, because an interrupt with nothing to resume from is not a reachable human. That second conjunct is an infrastructure fact, so the `can_pause` conflation is **narrowed and made fail-safe (downgrade-only), not eliminated** — which is exactly why it must not be widened again.
+
+`presence` may only ever **downgrade** authority, never grant it: `bypass` + absent → `auto`, because "do not interrupt me" is only meaningful when there is a *me*. An unknown or blank mode fails closed to `ask`. The whole policy is the pure, exhaustively-tested `resolve_effective_permission_mode`. `presence` replaced the transport boolean `can_pause`, which had been silently acting as an authority input — do not reintroduce that conflation. **`bypass` is transitional**: it is fenced to a present, workspace-entitled user, and nothing new should be built on it.
+
+**A write gate has three outcomes, not two: allow, interrupt, and PREPARE.** When a write needs a human and `presence` is `absent`, both write gates record it as an `Approval` (`approval_type="prepared_action"`) carrying the redacted payload plus a **snapshot of the acting agent's `capability_scope`**, then return a `status="success"` ToolMessage so the turn finishes everything else — a turn with three writes reports *"I did these two and prepared this one."* `status="success"` is load-bearing: `stream_adapter` maps `status="error"` onto the frozen `blocked` SSE frame, which would stop the lead at the first prepared write. Prepared work is discoverable in the `prepared_work` review queue surface — the **only** place an item can be acted on — and via the briefing, into whose context the Presenter injects one pointer line (LLM-mediated, so not a guaranteed literal). It is never announced per item, and there is no dedicated notification type.
+
+- **Chat path** (`muldro.py` `process_message` / `process_message_stream`): **one shape, one lead per turn**, scoped to the plan's capability union (`derive_lead_scope`) and discovering its own tools. There is no per-step agent routing and no Presenter step — the lead's own reply is the turn's reply. The turn normally carries `authorization_source = DIRECT_USER_REQUEST`, under which `trust_gate` (TrustEngine) stays **dormant** — the user's message *is* the turn's authorization — and **`permission_gate`** (`src/deep_runtime/middleware/permission_gate.py`) is the chat gate, installed whenever the effective mode is `ask` or `auto`. Writes are additionally held by the always-on `capability_scope` + `write_lock` middlewares.
 - **Autonomous path** (`graph_executor.py`; all scheduler/perception-triggered runs): persisted as DB `Plan`s and driven per-step by `GraphExecutor` / `DagRunner`, which run each step *through the deep runtime* with `authorization_source = AUTONOMOUS`. **TrustEngine's 4×4 matrix gates every step**, enforced at two layers — the DAG-step `TrustGate` (`dag_runner.py`) and the deep `trust_gate` middleware (`trust_engine.evaluate`); `pre_approved_capabilities` short-circuits the inner gate so a step approved at the DAG level is not double-prompted.
-- **Capability-scope (the always-on compensating control):** `src/deep_runtime/middleware/capability_scope.py` is the **outermost** guard (installed first by `build_deep_agent`), enforcing each agent's `capability_scope` at tool-execution time via one `ToolRegistry.get_tool` lookup (fail-closed for known capabilities; `build_deep_agent` refuses to compile a write-capable agent without it). This is what keeps the chat path safe even though TrustEngine is dormant there and `permission_gate` is off by default.
+- **Non-chat callers of `process_message` declare their real provenance.** The scheduler's dispatch actions and the WebSocket unknown-action fallback pass `authorization_source = AUTONOMOUS` rather than wearing the founder's identity to get past the gate — which *activates* `trust_gate` for those turns. They also run `presence="absent"`, so an `approval_required` verdict becomes PREPARE rather than an interrupt into a void.
+- **Trust and permission answer different questions, and trust does not suppress permission — *where both are installed*.** `trust_gate` asks a per-**capability** question ("has the founder approved this capability enough times to stop asking?"); `permission_gate` asks a per-**action** one ("is *this* write irreversible or externally visible?"). `trust_gate` is **outer**, and its auto-execute verdict returns `await handler(request)` — it falls **through** to `permission_gate`, which decides on `mode × assessment` alone and **never consults trust**. Letting accrued trust suppress the second would let twenty-five approved self-scoped sends silently authorise a send to a brand-new external counterparty.
+- **Which gates are actually installed differs by entry point — do not generalise across them.** There are three shapes:
+  - **User-typed chat** — `DIRECT_USER_REQUEST` keeps `trust_gate` dormant; `permission_gate` is the gate.
+  - **`process_message` batch** (scheduler dispatch actions, WS action fallback) — declares `AUTONOMOUS`, so `trust_gate` wakes **on the lead leg**, and `permission_mode` defaults to `auto`, so `permission_gate` is installed too. **Both** gates run, and the composition above holds in full: an irreversible / external-or-public / high-risk write is staged at **every** trust level including `autonomous`.
+  - **GraphExecutor DAG steps** (`run_autonomous_deep_step`) — pass **no** `permission_mode`, so **`permission_gate` is not installed**, and pass `pre_approved_capabilities={step.capability}` so the deep `trust_gate` short-circuits that capability *before* reaching its irreversible-union override. The DAG-level `TrustGate` (`services/trust_gate.py`) is a bare `TrustEngine.evaluate` with **no** irreversible override. **Consequence: on this path graduation to `autonomous` does silence an irreversible write.** The deep `trust_gate` still guards any *other* capability the step's agent reaches for, and prepares it (`presence="absent"`). Closing this gap is unbuilt work, not a documented invariant.
+- **Confirmation replays a recorded payload; it never re-runs an agent.** `src/services/prepared_actions.py` executes the exact tool call the founder reviewed, checked against the `capability_scope` snapshot taken at prepare time — routing it back through `GraphExecutor` would re-*derive* the action instead. It fails closed on every way the recorded action could fail to be the reviewed one — missing tool name, unknown tool, no capability, registry drift, out-of-scope capability, missing snapshot, truncated payload, unreadable payload — and is exactly-once via the idempotency ledger keyed on the approval id.
+- **Capability-scope (the always-on compensating control):** `src/deep_runtime/middleware/capability_scope.py` is the **outermost** guard (installed first by `build_deep_agent`), enforcing each agent's `capability_scope` at tool-execution time via one `ToolRegistry.get_tool` lookup (fail-closed for known capabilities; `build_deep_agent` refuses to compile a write-capable agent without it). It enforces the agent's *own* scope, never the offered tool list, and remains the real boundary until the platform JWT mint is re-keyed per action.
 - **Latent enhancement (not yet implemented):** if a chat turn's write was triggered by *perception-sourced* content rather than the user's literal words, forcing `permission_gate` to confirm it regardless of `bypass` would be defensible. Tracked, not built.
 
-**Key files:** `src/services/risk_assessor.py`, `src/services/trust_engine.py`, `src/models/trust_state.py` (TrustState + TrustCeiling), `src/api/routes_trust.py`
+**Key files:** `src/services/risk_assessor.py`, `src/services/trust_engine.py`, `src/models/trust_state.py` (TrustState + TrustCeiling), `src/api/routes_trust.py`, `src/deep_runtime/confirmation.py`, `src/services/prepared_actions.py`
 
 ## Execution State Machine
 
@@ -297,7 +324,7 @@ TaskStep statuses: `pending, ready, running, completed, failed, skipped, waiting
 
 State transitions are enforced by `src/services/execution_state.py` — never mutate status directly, use `transition_run()` / `transition_step()`. Retry: `failed → pending`.
 
-**Single approval gate in GraphExecutor** (`graph_executor.py`): TrustEngine.evaluate() per step → approval_required pauses run, auto_execute_notify executes + notifies, auto_execute_silent executes silently. Governor hooks are now audit-only (`hooks.py` always returns `allowed: True` except for blocked tools).
+**DAG-level approval gate in GraphExecutor** (`graph_executor.py`): TrustEngine.evaluate() per step → approval_required pauses run, auto_execute_notify executes + notifies, auto_execute_silent executes silently. Governor hooks are audit-only (`hooks.py` always returns `allowed: True` except for blocked tools). `auto_execute_*` still falls through to the deep `permission_gate`, which gates on the action's own risk profile; with no human on the turn a stop becomes PREPARE and the run continues.
 
 **InteractionLog** (`src/models/interaction_log.py`): Lightweight audit record for simple interactions (replaces TaskRun for non-execution flows).
 
@@ -374,8 +401,16 @@ See [docs/engineering-standards.md](docs/engineering-standards.md) for the full 
 - Do not import `intent_to_decision`/`extract_decision` — renamed to `intent_to_plan`/`extract_plan` in `intent_classifier.py`
 
 ### Approval & Trust
-- Do not use Governor as the primary approval gate — TrustEngine in GraphExecutor is the single approval gate. Governor hooks are audit-only
-- Do not add a TrustEngine gate to the chat path (`process_message`/`process_message_stream`) — TrustEngine stays **dormant** there by design (user's message = authorization). Action-time write confirmation is `permission_gate`'s job (per `permission_mode`); capability-scope enforcement lives in the `capability_scope` deep-runtime middleware. See "One runtime, gated at action-time" above
+- Do not use Governor as an approval gate — it is audit-only. The gates are `trust_gate` (TrustEngine, per capability, autonomous path) and `permission_gate` (per action, chat). Do not collapse them into one: trust is evidence about a *capability*, not about an *action*
+- Do not add a TrustEngine gate to a **user-typed** chat turn — under `authorization_source=DIRECT_USER_REQUEST` TrustEngine stays **dormant** by design (the user's message = authorization). Action-time write confirmation there is `permission_gate`'s job (per `permission_mode`); capability-scope enforcement lives in the `capability_scope` deep-runtime middleware. The qualifier matters: `process_message` is *also* the batch entry point for scheduler dispatch and the WS action fallback, and those callers declare `AUTONOMOUS`, which **wakes** `trust_gate` for their turns. Route provenance through `authorization_source`; do not hard-wire a gate on or off by entry point. See "One runtime, gated at action-time" above
+- Do not reintroduce a transport flag as an authority input. `can_pause` conflated "can this turn interrupt?" with "how should this write be gated?" — `presence` names the first fact explicitly and `permission_mode` owns the second
+- Do not route a prepared action's confirmation through `GraphExecutor` / `run_step_via_deep_agent` — an agent would re-derive the action instead of executing the one the founder reviewed
+- Do not re-derive an agent's `capability_scope` at confirmation time — the snapshot on the Approval is the authority the turn actually held, and a since-widened scope must not authorise it retroactively
+- Do not give a prepared Approval `artifact_refs["chat"]` — that flag routes it to `/v1/muldro/chat/resume`, and a prepared action has no thread to resume
+- Do not "correct" a prepared write's ToolMessage to `status="error"` — `stream_adapter` maps that onto the frozen `blocked` SSE frame, which would stop the lead at the first prepared write. A prepared action is staged work, not a failure
+- Do not claim a gate composition without naming the entry point. `permission_gate` is installed only when the turn carries a `permission_mode` — true for chat and for `process_message` batch turns, **false** for GraphExecutor DAG steps. "Trust never suppresses permission" is a statement about the first two only
+- Do not reference `settings.deep_single_lead`, `can_pause`, `presenter_skip`, `capability_resolver.route_step`, or `chat_pipeline`'s presenter prompt builders — deleted with the legacy chat arm
+- Do not rename an SSE event string while tidying. Two names cross: the `PlanReady` CoreEvent maps to SSE `"plan"`, while `PlanModeStepSkipped` maps to SSE `"plan_ready"`. `tests/test_core_events.py` pins the backend mapping including the literals, but nothing pins the **frontend** switch — so a coordinated backend-plus-test rename still breaks the UI silently
 - Do not make the RiskAssessor fail open — its failure default is `risk_level="high"` (forces approval). Do not "simplify" it back to `medium`
 - Do not reference `ApprovalPolicyEngine`, `TrustScore` model, or `ApprovalPolicy` model — deleted. Use `TrustEngine` + `TrustState` + `TrustCeiling`
 - Do not create tool-level approvals without `run_id` and `artifact_refs` — the approval resume path needs these

@@ -210,7 +210,7 @@ Checkpoints enable:
 
 ## Approval Gates
 
-A single TrustEngine gate in GraphExecutor handles all approval decisions. There is no separate Governor plan-level check — Governor hooks are audit-only.
+On the autonomous path, TrustEngine in GraphExecutor is the DAG-level approval gate. There is no separate Governor plan-level check — Governor hooks are audit-only. Inside the deep runtime a second, independent gate follows it: `permission_gate`, which asks a per-**action** question rather than a per-**capability** one.
 
 ### TrustEngine 4x4 Matrix
 
@@ -225,6 +225,10 @@ The TrustEngine evaluates each step using a 4x4 matrix of `trust_level` (first_u
 
 Higher trust + lower risk = more autonomy. Trust graduates over time based on successful executions.
 
+> **On DAG steps, `auto_execute_*` really does execute.** This gate is a bare `TrustEngine.evaluate` — it has no irreversible-union override. And `run_autonomous_deep_step` builds the step's agent with **no `permission_mode`** (so `permission_gate` is not installed) and with `pre_approved_capabilities={step.capability}` (so the deep `trust_gate` short-circuits that capability before reaching *its* override). Graduation to `autonomous` therefore does silence an irreversible write on this path. The deep `trust_gate` still guards any **other** capability the step's agent reaches for.
+>
+> This is **not** true of the other autonomous entry point. A `process_message` batch turn (scheduler dispatch, WS action fallback) carries `permission_mode="auto"`, so `permission_gate` *is* installed inner of `trust_gate`; because trust's auto-execute verdict is a pass-through (`await handler(request)`) and `permission_gate` never consults trust, an irreversible or externally-visible write is held there at every trust level. Do not generalise either statement to "the autonomous path".
+
 ### Step-Level Flow
 1. GraphExecutor calls `TrustEngine.evaluate()` per step
 2. If `approval_required`: create Approval record, pause run in `awaiting_approval`, notify user
@@ -233,6 +237,16 @@ Higher trust + lower risk = more autonomy. Trust graduates over time based on su
 5. If `blocked`: mark step as failed
 
 Approvals are delivered via the web UI (A2UI InlineApprovalCard).
+
+### When nobody is on the turn: PREPARE
+
+**PREPARE lives in the deep-runtime middleware, not here.** The DAG-level gate above has no concept of `presence`: `approval_required` always creates an Approval and pauses the run. Inside a step, though, the deep `trust_gate` / `permission_gate` middlewares do carry `presence`, and a turn with nobody on it (`presence="absent"`) takes a third option rather than pausing — because pausing would stall the turn or orphan a checkpoint, and executing anyway would be an ungated write.
+
+That third option: record the action as an `Approval` with `approval_type="prepared_action"` — carrying the redacted `tool_input` and a snapshot of the acting agent's `capability_scope` — return a `status="success"` ToolMessage, and let the turn complete the rest of its work. The entry point where this matters most is the `process_message` batch turn (scheduler dispatch, WS action fallback), which runs `presence="absent"` with both gates installed.
+
+Staged actions collect in the `prepared_work` workspace surface, the only place they can be approved or rejected; the Presenter additionally injects one pointer line into the briefing's context (LLM-mediated). Approving replays the recorded payload through `PreparedActions` (never through GraphExecutor), exactly once.
+
+**Operational note:** a scheduled task whose risky write now stages instead of firing will look like it "stopped working". Check the prepared-work queue before debugging it.
 
 ## Execution Timeout
 

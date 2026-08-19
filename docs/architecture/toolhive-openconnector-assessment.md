@@ -78,7 +78,7 @@ flowchart TD
     style MW fill:#1d4ed8,color:#fff
 ```
 
-**Sync vs durable:** the **chat path** runs with `authorization_source=DIRECT_USER_REQUEST`, `permission_mode=None` by default — so in production **neither `trust_gate` nor `permission_gate` is active**; chat safety rests on always-on `capability_scope` (fail-closed) + `write_lock`. The **autonomous path** persists `TaskRun`s and gates **every step** through `TrustEngine.evaluate` at the DAG level (`dag_runner.py:333-346`) and the `trust_gate` middleware. `permission_gate` (the intended chat gate) is feature-gated behind `settings.deep_single_lead` (**default False**, `settings.py:194`).
+**Sync vs durable:** the **chat path** runs one lead per turn with `authorization_source=DIRECT_USER_REQUEST`, which keeps `trust_gate` dormant — the user's message is the turn's authorization. `permission_gate` **is** active there: it is installed whenever the turn's effective `permission_mode` is `ask` or `auto`, and `auto` is the default. Chat safety therefore rests on always-on `capability_scope` (fail-closed) + `write_lock` **plus** action-time confirmation. The **autonomous path** persists `TaskRun`s and gates **every step** through `TrustEngine.evaluate` at the DAG level and the `trust_gate` middleware; because `permission_gate` sits inner of `trust_gate` and never consults trust, a risky autonomous write is staged for review at every trust level. When no human is on the turn, a gate that must stop a write **prepares** it rather than interrupting or executing.
 
 ### 3.3 Secrets and per-server outbound auth (today)
 
@@ -630,7 +630,7 @@ thv run --name oc-remote --transport streamable-http --url http://localhost:3000
 
 1. **Phase 0 — Decide & spike (1–2 wk).** Resolve ADR-OPEN-1 (credential owner). Run the §14 PoC in staging. Confirm ToolHive cache-invalidation + tool-list behaviour in code. **Gate:** PoC assertions 8 & 10 pass.
 2. **Phase 1 — Adapter + JWT minter (2–3 wk).** Build the Connection Context Adapter (principal→connection map in Muldro control DB, forced `connectionName`, suppressed enumeration, per-tenant routing) and the platform-JWT minter. TDD with two-principal isolation tests. Not wired to prod.
-3. **Phase 2 — Seam plumbing (1–2 wk).** Add the `headers=` path to `session_pool.get_or_create_session`; extend `_installation_to_config` + `IntegrationInstallation` with gateway fields. Behind a feature flag (mirror `deep_single_lead` pattern). One provider (Gmail) end-to-end via ToolHive→adapter→OpenConnector.
+3. **Phase 2 — Seam plumbing (1–2 wk).** Add the `headers=` path to `session_pool.get_or_create_session`; extend `_installation_to_config` + `IntegrationInstallation` with gateway fields. Behind a feature flag. One provider (Gmail) end-to-end via ToolHive→adapter→OpenConnector.
 4. **Phase 3 — Provider migration (rolling).** Move providers one at a time: GitHub/Slack/Notion/Atlassian → gateway-fronted; retire `uvx`/`npx` spawning + stdio env-var injection. Keep Muldro native path as fallback per provider until parity verified.
 5. **Phase 4 — Tenant fleet + HA (2 wk).** Per-tenant OpenConnector provisioning automation, Redis session store, distributed refresh lock, KMS keys, NetworkPolicies. Load/HA test.
 6. **Phase 5 — Cutover & decommission.** Flip flag per tenant tier; monitor audit parity; decommission the replaced `LocalMCPProcessManager`/stdio path once all providers migrated.

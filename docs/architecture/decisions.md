@@ -51,6 +51,8 @@
 
 **Models:** `TrustState`, `TrustCeiling`, `InteractionLog`, `EngagementHistory` track trust evolution. `ApprovalPolicyEngine`, `TrustScore`, and `ApprovalPolicy` models were deleted.
 
+> **Amended by [ADR 23](#23-two-independent-write-gates-and-the-prepare-verdict).** "Single gate" now means *one gate per question*, not one gate overall: `TrustEngine` remains the sole **per-capability** gate, and `permission_gate` is the sole **per-action** one. They are deliberately independent, and trust does not suppress permission.
+
 ## 4. ULID with Type Prefixes
 
 **Decision:** Use ULID (Universally Unique Lexicographically Sortable Identifier) with type prefixes (`evt_`, `mem_`, `plan_`, etc.) for all primary keys.
@@ -260,6 +262,8 @@ wrappers over the shared singletons — negligible next to a Claude API call.
 
 **Deleted:** `RouteResolver`, `route_analytics`, `agent_routes` table, `DEFAULT_ROUTES`, all 19 decision type constants. The `CapabilityResolver` (`src/services/capability_resolver.py`) and `capability_summary` service (`src/services/capability_summary.py`) replace them.
 
+> **Extended by [ADR 22](#22-one-chat-shape-a-single-plan-scoped-lead).** The chat path took the "agent-agnostic" bullet to its conclusion and stopped selecting an agent at all: a capability now determines the turn's *authority* rather than its *routing*. Per-step capability→agent routing survives on the autonomous path.
+
 **Trade-off:** Plans are slightly more complex (steps with capabilities vs a single decision string). Worth it because multi-step plans with mixed capabilities are now first-class.
 
 ## 19. Single TrustEngine Gate
@@ -275,6 +279,8 @@ wrappers over the shared singletons — negligible next to a Claude API call.
 **Deleted:** `ApprovalPolicyEngine`, `TrustScore` model, `ApprovalPolicy` model. Governor is now `edge_case_only=True` (audit-only).
 
 **New models:** `TrustState`, `TrustCeiling`, `InteractionLog`, `EngagementHistory`.
+
+> **Amended by [ADR 23](#23-two-independent-write-gates-and-the-prepare-verdict).** The collapse from *three* conflicting gates to one still holds. What was added later is a second gate asking a genuinely different question — see ADR 23 for why that is not a regression to the pre-19 state.
 
 **Trade-off:** Trust must be earned over time (new users face more approval prompts). Acceptable because safety is the priority, and trust levels increase automatically as actions are approved.
 
@@ -309,3 +315,44 @@ wrappers over the shared singletons — negligible next to a Claude API call.
 **Trade-off:** Lower ceiling than the largest hosted rerankers/embedders and English-primary (bge-base / MiniLM). Acceptable for retrieval/dedup ranking; upgrade path is a heavier fastembed model (e.g. `bge-reranker-v2-m3`) if quality/multilingual coverage falls short.
 
 **Deploy note:** model weights (~0.2 GB embed + ~0.12 GB rerank) download on first use to the fastembed cache, which defaults to an **OS temp dir** (e.g. `/tmp/fastembed_cache`) that can be purged — set a persistent `cache_dir` (`FASTEMBED_CACHE_PATH`) and pre-download at build/deploy so a temp-purge doesn't silently force a re-download and the first request doesn't stall.
+
+## 22. One Chat Shape: a Single Plan-Scoped Lead
+
+**Decision (2026-08-19):** The chat path runs **one lead per turn**, built with the union of the plan's step capabilities and left to discover its own tools. The per-step arm — which routed each `PlanStep` to an agent by identity and then ran a Presenter step to word the reply — is deleted, along with the `deep_single_lead` flag that had gated the alternative.
+
+**Rationale:**
+- **Agent identity was the last routing key left.** Everything else in the system had already moved to capability-based authority ([#18](#18-capability-based-routing)); the chat arm was the sole holdout, and keeping it meant two divergent chat implementations.
+- **A plan is a statement of authority, not a script.** `derive_lead_scope` reads the plan for what the turn is *allowed* to do and hands the lead that scope; the lead decides sequencing. This is the same "agentic, not scripted" principle already applied to step execution.
+- **Fail-closed by construction.** A read-only plan yields a lead with no write capability; a write plan grants that plan's writes and never the Executor's full ~50-capability write union. Against the shared executor singleton, the lead **tightens** the enforced floor rather than widening it.
+- **One reply, one author.** With no Presenter hand-off, the reply cannot drift from what the lead actually did.
+
+**What survives:** `CapabilityResolver.resolve_for_step` (autonomous path) and `capabilities_for_step` (feeds `derive_lead_scope`); `classify_capability_agent` for `runtime_projection`; `resolve_plan_routing` as a pure filter selecting the steps the *user* must perform; and deterministic per-step execution of `system.*` steps ahead of the lead.
+
+**Scope of "one shape":** one shape *by default*. `settings.chat_planless` (default off) still reroutes a turn to a planless lead scoped from the workspace's standing connector scope rather than from a plan, skipping the Planner and the plan record entirely. That fork is out of this decision's scope and is tracked separately — it is named here so "one chat shape" is not read as "no flag-gated chat fork exists".
+
+**Deleted:** `settings.deep_single_lead`, `can_pause`, `capability_resolver.route_step`, `presenter_skip`, and `chat_pipeline`'s four Presenter prompt builders.
+
+**Trade-off:** One agent now holds a broader (though still plan-bounded) scope for the length of a turn, instead of each step holding a narrow one. Accepted because the union is derived from the same per-step authority the old arm used, so the *ceiling* is unchanged — and because the enforcement point (`capability_scope` middleware) is unchanged too. The behaviour-preservation evidence is `tests/test_chat_event_sequence.py`, whose expectations were captured from the legacy arm immediately before deleting it.
+
+## 23. Two Independent Write Gates, and the PREPARE Verdict
+
+**Decision (2026-08-19):** Keep **two** write gates that answer different questions, and give both a third verdict.
+
+- `trust_gate` (TrustEngine) asks a per-**capability** question: *has the founder approved this capability often enough to stop being asked?* It is active only for gated `authorization_source`s — i.e. the autonomous path and any non-chat caller of `process_message`.
+- `permission_gate` asks a per-**action** question: *is **this** write irreversible, externally visible, or high-risk?* It is active whenever the turn's effective `permission_mode` is `ask` or `auto`.
+
+`trust_gate` is **outer**; its `auto_execute_*` verdict is a pass-through (`await handler(request)`), so the call still reaches `permission_gate`, which never reads trust.
+
+**Rationale:**
+- **Accrued capability trust must not authorise a novel action.** Without this composition, twenty-five approved self-scoped `email.send` calls would silently authorise a send to a brand-new external counterparty. Trust is evidence about a *capability*; it is not evidence about an *action*.
+- **Two questions, two gates** is the honest decomposition. Collapsing them would mean either losing graduated autonomy or losing per-action risk sensitivity.
+
+**The third verdict — PREPARE.** A gate that must stop a write has historically had two options, and on a turn with no human present both are wrong: interrupting either stalls the turn or orphans a checkpoint, and executing anyway is an ungated write. So `presence` (`present` | `absent`) is an explicit turn-level fact, and when it is `absent` a stop becomes **prepare**: record the action as an `Approval` (`approval_type="prepared_action"`) with the redacted payload and a snapshot of the acting agent's `capability_scope`, return a `status="success"` ToolMessage, and let the turn finish everything else. A turn with three writes reports *"I did these two and prepared this one."*
+
+- **`presence` may only downgrade authority**, never grant it — `bypass` + absent → `auto`, because "do not interrupt me" is only meaningful when there is a *me*. It replaces `can_pause`, a transport boolean that had been silently acting as an authority input.
+- **Confirmation replays the recorded payload** (`services/prepared_actions.py`), never re-running an agent — routing it back through `GraphExecutor` would re-*derive* the action instead of executing the reviewed one. It is checked against the scope snapshot, fails closed on every way the recorded action could fail to be the reviewed one (missing tool name, unknown tool, no capability, registry drift, out-of-scope capability, missing snapshot, truncated payload, unreadable payload), and is exactly-once via the idempotency ledger.
+- **Delivery is calm** ([soul](../soul.md) laws 3 and 10): prepared work is not announced per item. Discovery is the `prepared_work` queue card, plus one pointer line the Presenter injects into the briefing's context (LLM-mediated, not a guaranteed literal). The queue is the only place an item can be acted on.
+
+**Consequence, stated plainly:** a scheduled write that is irreversible, external/public, or high-risk is staged at **every** trust level including `autonomous`. Graduation-to-silent applies only to what `trust_gate` alone would have gated. If a scheduled task appears to have stopped working, check the prepared-work queue before debugging it.
+
+**Trade-off:** `bypass` remains a real escape hatch but is fenced to a present, workspace-entitled user, and is transitional — build nothing new on it.

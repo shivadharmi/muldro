@@ -167,7 +167,9 @@ score = 0.40 * cosine_similarity   (relevance)
 
 **File:** `src/services/trust_engine.py`
 
-**Purpose:** Single approval gate for all execution. Implements a 4x4 matrix of (trust_level x risk_level) to produce PolicyDecision. Trust graduates over time based on successful executions.
+**Purpose:** The autonomous path's approval gate. Implements a 4x4 matrix of (trust_level x risk_level) to produce a PolicyDecision. Trust graduates over time based on successful executions.
+
+**Composes with `permission_gate` — but only where that gate is installed.** `trust_gate` is **outer** of `permission_gate`, and an `auto_execute_*` verdict is a pass-through (`await handler(request)`), so on any turn carrying a `permission_mode` (chat, and the `process_message` batch entry) the call still reaches `permission_gate`, which never reads trust — graduation there silences only reversible, self-scoped, not-high-risk writes. **GraphExecutor DAG steps carry no `permission_mode`**, and pass `pre_approved_capabilities={step.capability}` which short-circuits the deep `trust_gate` before its irreversible override; the DAG-level gate has no override either. Graduation to `autonomous` is genuinely silencing on that path.
 
 **4x4 Matrix:** trust_level (first_use, learning, trusted, autonomous) x risk_level (none, low, medium, high)
 
@@ -471,7 +473,25 @@ Invalid transitions raise `InvalidTransitionError`. All status changes in GraphE
 
 **File:** `src/services/capability_resolver.py`
 
-**Purpose:** Maps capability strings (e.g., `"email.search"`) to concrete tool definitions. Replaces the deleted RouteResolver — routing is now capability-based, not decision-type-based. PlanOutput steps declare capabilities; CapabilityResolver maps them to agents and tools.
+**Purpose:** Maps capability strings (e.g., `"email.search"`) to concrete tool definitions. Replaces the deleted RouteResolver — authority is capability-based, not decision-type-based.
+
+**Two consumers, two questions.** `resolve_for_step` answers *which tools does this autonomous step get offered* and is called by `StepRunner`. `capabilities_for_step` answers *what authority does this capability imply* and feeds `lead_builder.derive_lead_scope`, which unions a chat plan's steps into the single lead's `capability_scope`. The module-level `classify_capability_agent` (capability → owning agent) survives for `runtime_projection` only — no live path routes a chat turn by agent identity.
+
+---
+
+### PreparedActions (L6)
+
+**File:** `src/services/prepared_actions.py`
+
+**Purpose:** Deterministically replay an action that a write gate staged for review. Executes the exact `tool_input` recorded on the `Approval` (`approval_type="prepared_action"`) — **not** through `GraphExecutor`, because an agent would re-derive the action rather than run the one the founder reviewed.
+
+**Authority:** checked against the `capability_scope` **snapshot** taken when the action was prepared, so a scope widened since then cannot retroactively authorise it.
+
+**Fail-closed on:** missing tool name, unknown tool, no capability, registry drift, out-of-scope capability, missing snapshot, truncated payload, unreadable payload.
+
+**Exactly-once:** via the idempotency ledger keyed on the approval id (backed by a Postgres UNIQUE index). A *sequential* double-confirm executes once and the second reports `already_executed`; a *concurrent* one returns `transient` (`in_flight_conflict`) — retryable, not a success.
+
+**Entry points:** `POST /v1/approvals/{id}/approve` and the `prepared_work` queue card. The chat-resume endpoint explicitly refuses prepared rows — they have no thread to resume.
 
 ---
 
