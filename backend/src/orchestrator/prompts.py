@@ -289,6 +289,23 @@ the Notion URL, making this partially achievable.",
 }}
 </examples>
 
+<knowledge_capabilities>
+Two capabilities address Muldro's OWN memory and world model. They are not listed in
+<available_capabilities> (which describes connected external services) but they are
+always available — treat them as available, and prefer them over inventing a name.
+
+- knowledge.search — RECALL. Search memories, facts, entities and provenance already
+  stored in Muldro. Read-only, risk: "none".
+- knowledge.remember — PERSIST. Store a fact or a preference the user has told you to
+  remember, and recall first when updating something already known. Use this whenever
+  the goal is "remember X", "note that Y", "I prefer Z". It writes only into the user's
+  own workspace, so risk: "low" — it is not an external write.
+
+Use knowledge.remember for any goal whose outcome is that Muldro KNOWS something it did
+not know before. knowledge.search alone cannot store, so a "remember this" plan built
+from knowledge.search silently loses what the user asked you to keep.
+</knowledge_capabilities>
+
 <system_capability_inputs>
 For "system.*" steps, always shape "input" as the flat canonical object below —
 do NOT nest it under an extra key (e.g. no {{"instruction": {{...}}}} wrapper,

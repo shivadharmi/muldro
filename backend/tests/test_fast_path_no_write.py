@@ -44,6 +44,34 @@ def test_predicate_classifies_writes_and_unknowns_as_write_fail_closed():
     assert _fast_step_is_write("respond") is False
     assert _fast_step_is_write("reason") is False
     assert _fast_step_is_write("knowledge.search") is False
+
+
+def test_memory_persistence_is_exempt_but_outbound_writes_are_not():
+    """`knowledge.remember` is exempt; nothing outbound gains the same pass.
+
+    The fence stops the INTENT CLASSIFIER — a Haiku call over ten fixed intents — from
+    being what authorizes a write. `knowledge.remember` authorizes only
+    `internal.store_memory` / `internal.store_preference`: internal, workspace-scoped,
+    reversible and asked for in the user's own words. That is the memory analogue of
+    `SYSTEM_ACTION_CAPABILITIES`, which the chat write gates already exempt for the same
+    reason. Every call still crosses the full middleware chain.
+
+    Teeth: the exemption must not have widened to anything that leaves the workspace.
+    """
+    from src.orchestrator.chat_processor import _FAST_SAFE_CAPABILITIES
+
+    assert _fast_step_is_write("knowledge.remember") is False
+    for outbound in ("email.send", "calendar.create", "messaging.send", "repo.create_pr"):
+        assert outbound not in _FAST_SAFE_CAPABILITIES
+        assert _fast_step_is_write(outbound) is True
+
+
+def test_knowledge_remember_grants_no_outbound_capability():
+    """Teeth on the scope itself, not just the name: whatever `knowledge.remember` expands
+    to must stay inside the workspace."""
+    from src.orchestrator.lead_builder import KNOWLEDGE_REMEMBER_CAPABILITIES
+
+    assert all(c.startswith("internal.") for c in KNOWLEDGE_REMEMBER_CAPABILITIES)
     # cataloged read-only stays a non-write:
     from src.integrations.capabilities import CAPABILITY_CATALOG, is_read_only_capability
 

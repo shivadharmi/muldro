@@ -139,3 +139,35 @@ class TestPerceiverPrompt:
 
         assert "perceiver" in AGENT_PROMPTS
         assert AGENT_PROMPTS["perceiver"] == PERCEIVER_PROMPT
+
+
+class TestPlannerKnowledgeCapabilities:
+    """The Planner must be able to plan a memory WRITE, not only a memory read.
+
+    `knowledge.*` is virtual — it never appears in `<available_capabilities>`, which is
+    generated from the tool registry — yet the prompt's own worked example uses
+    `knowledge.search`, in violation of its own rule 3. Documented like the `system.*`
+    capabilities it sits beside, that is coherent; undocumented, the Planner has no way to
+    plan "remember this" and the memory is lost.
+    """
+
+    def test_documents_both_knowledge_capabilities(self):
+        from src.orchestrator.prompts import PLANNER_PROMPT_V2
+
+        assert "knowledge.search" in PLANNER_PROMPT_V2
+        assert "knowledge.remember" in PLANNER_PROMPT_V2
+
+    def test_every_knowledge_capability_it_names_is_translatable(self):
+        """Teeth: a capability the prompt teaches must have a real scope behind it, or the
+        Planner emits something that grants the lead nothing."""
+        import re
+
+        from src.orchestrator.lead_builder import _VIRTUAL_KNOWLEDGE_SCOPES
+        from src.orchestrator.prompts import PLANNER_PROMPT_V2
+
+        named = set(re.findall(r"knowledge\.[a-z_]+", PLANNER_PROMPT_V2))
+        assert named, "expected the prompt to name at least one knowledge capability"
+        assert named <= set(_VIRTUAL_KNOWLEDGE_SCOPES), (
+            f"prompt teaches untranslatable knowledge capabilities: "
+            f"{named - set(_VIRTUAL_KNOWLEDGE_SCOPES)}"
+        )

@@ -16,6 +16,41 @@ from src.services.capability_resolver import CapabilityResolver
 # Capabilities that contribute NO tool authority to the lead (handled without external tools).
 _NON_TOOL_CAPABILITIES = {"reason", "respond", "none"}
 
+# ``knowledge.*`` is VIRTUAL — routing vocabulary the Planner prompt and ``intent_to_plan``
+# both emit, with no backing tool of its own (the same fact ``connector_scope`` records for
+# its ``INTERNAL_READ_FLOOR``). Passed through unresolved it reaches the lead as a literal
+# scope entry, ``get_tools_for_agent`` matches it against no tool, and the lead gets ZERO
+# Muldro tools: a "remember this" turn silently loses the memory and a "what do you know
+# about X" turn cannot search. So it is translated here, exactly as ``perceive`` is.
+#
+# Curated to LEAST AUTHORITY rather than delegated to ``capabilities_for_step``, whose
+# same-family sweep returns ALL 23 non-approval ``internal.*`` capabilities for any one of
+# them — handing a recall turn ``internal.push_ui``, ``internal.update_execution`` and
+# ``internal.report_verdict``. Same reasoning as ``INTERNAL_READ_FLOOR``.
+KNOWLEDGE_RECALL_CAPABILITIES: frozenset[str] = frozenset(
+    {
+        "internal.search",  # memory / semantic search
+        "internal.query_facts",  # world-model fact query
+        "internal.get_entity",  # world-model entity read
+        "internal.traverse",  # world-model graph traversal
+        "internal.get_provenance",  # where a fact came from
+    }
+)
+
+# Recall PLUS persistence. The two store tools are internal, self-scoped and reversible —
+# the user's own instruction to Muldro, not an outbound write — so they are the memory
+# analogue of ``SYSTEM_ACTION_CAPABILITIES``. Every call still passes the full middleware
+# chain (capability_scope -> ... -> write_lock) like any other tool call.
+KNOWLEDGE_REMEMBER_CAPABILITIES: frozenset[str] = KNOWLEDGE_RECALL_CAPABILITIES | {
+    "internal.store_memory",
+    "internal.store_preference",
+}
+
+_VIRTUAL_KNOWLEDGE_SCOPES: dict[str, frozenset[str]] = {
+    "knowledge.search": KNOWLEDGE_RECALL_CAPABILITIES,
+    "knowledge.remember": KNOWLEDGE_REMEMBER_CAPABILITIES,
+}
+
 
 async def derive_lead_scope(
     steps: list[PlanStep],
@@ -28,6 +63,9 @@ async def derive_lead_scope(
     - actor == "user", ``system.*``, ``reason``/``respond``/``none`` → contribute nothing.
     - ``perceive`` → the Perceiver's full read scope (parity with the per-step Perceiver,
       which gets ALL its tools). Read-only, so blast radius is bounded to reads.
+    - ``knowledge.search`` / ``knowledge.remember`` → the curated recall / recall+persist
+      capabilities. These are VIRTUAL: they back no tool, so passing them through would
+      grant the lead nothing at all (see ``_VIRTUAL_KNOWLEDGE_SCOPES``).
     - any real capability C → {C} plus its read-only family capabilities
       (``resolver.capabilities_for_step(C)``) — parity with ``resolve_for_step(C)``.
 
@@ -46,6 +84,10 @@ async def derive_lead_scope(
         if cap == "perceive":
             if perceiver is not None:
                 scope |= set(perceiver.capability_scope)
+            continue
+        virtual = _VIRTUAL_KNOWLEDGE_SCOPES.get(cap)
+        if virtual is not None:
+            scope |= set(virtual)
             continue
         scope |= await resolver.capabilities_for_step(cap)
     return scope

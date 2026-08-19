@@ -52,6 +52,22 @@ def _resolver(cap_map: dict[str, set[str]]):
     return SimpleNamespace(capabilities_for_step=AsyncMock(side_effect=_caps))
 
 
+def _no_resolver():
+    """A resolver that must never be consulted.
+
+    `perceive` and `knowledge.*` are VIRTUAL capabilities — routing vocabulary with no
+    backing tool. `derive_lead_scope` must translate them from its own curated tables, so
+    reaching the registry for one is itself the bug.
+    """
+
+    async def _caps(cap: str) -> set[str]:
+        raise AssertionError(
+            f"derive_lead_scope consulted the registry for virtual capability {cap!r}"
+        )
+
+    return SimpleNamespace(capabilities_for_step=AsyncMock(side_effect=_caps))
+
+
 class _FakeCM:
     def __init__(self, db):
         self._db = db
@@ -66,11 +82,14 @@ class _FakeCM:
 # --- derive_lead_scope: read-only plan -> NO write capability --------------------------
 async def test_read_only_plan_scope_has_no_write_capability():
     steps = [_step("perceive"), _step("knowledge.search")]
-    resolver = _resolver({"knowledge.search": {"knowledge.search"}})
 
-    scope = await derive_lead_scope(steps, resolver, _agents())
+    scope = await derive_lead_scope(steps, _no_resolver(), _agents())
 
-    assert scope == _PERCEIVER_SCOPE | {"knowledge.search"}
+    # Both steps are virtual: `perceive` expands to the Perceiver's read scope and
+    # `knowledge.search` to the curated recall capabilities.
+    from src.orchestrator.lead_builder import KNOWLEDGE_RECALL_CAPABILITIES
+
+    assert scope == _PERCEIVER_SCOPE | set(KNOWLEDGE_RECALL_CAPABILITIES)
     # Teeth: a read-only plan must never grant a write capability.
     assert "email.send" not in scope
     assert "calendar.create" not in scope
@@ -187,3 +206,64 @@ async def test_build_chat_lead_cheap_mode_keeps_balanced_and_thinking():
     assert lead.model_tier == "balanced"  # already balanced — cheap mode leaves it
     assert lead.thinking.budget_tokens == 4096  # thinking passed through (halving dropped)
     assert lead.capability_scope == {"email.send"}
+
+
+# --- A3: knowledge.* must grant REAL authority, not zero -------------------------------
+# `knowledge.*` is a routing-only virtual capability with NO backing tool (the same fact
+# `connector_scope.INTERNAL_READ_FLOOR` records). Left unresolved it reaches the lead as a
+# literal scope entry, `get_tools_for_agent` matches it against no tool, and the lead gets
+# ZERO Muldro tools — so a "remember this" turn cannot store and a "what do you know" turn
+# cannot search. These tests pin the translation to real internal capabilities.
+async def test_knowledge_remember_scope_can_actually_store():
+    """A memory-write step must put a real store tool's capability in the lead's scope."""
+    steps = [_step("knowledge.remember")]
+
+    scope = await derive_lead_scope(steps, _no_resolver(), _agents())
+
+    assert "internal.store_memory" in scope
+    assert "internal.store_preference" in scope
+    # It must still be able to recall, or "update what you know about X" cannot read first.
+    assert "internal.search" in scope
+    # Teeth: the virtual capability must NOT survive into the scope — it matches no tool.
+    assert "knowledge.remember" not in scope
+
+
+async def test_knowledge_search_scope_can_actually_recall():
+    """A recall step must put the memory/world-model read capabilities in scope."""
+    steps = [_step("knowledge.search")]
+
+    scope = await derive_lead_scope(steps, _no_resolver(), _agents())
+
+    assert "internal.search" in scope
+    assert "internal.query_facts" in scope
+    assert "knowledge.search" not in scope
+
+
+async def test_knowledge_scopes_stay_least_authority():
+    """Teeth: the curated scopes must not become the blunt `internal.*` family sweep.
+
+    `capabilities_for_step("internal.search")` returns all 23 non-approval `internal.*`
+    capabilities — including `internal.push_ui`, `internal.update_execution` and
+    `internal.report_verdict`. A chat lead answering "what do you know about X" has no
+    business with any of them.
+    """
+    over_broad = {
+        "internal.push_ui",
+        "internal.update_execution",
+        "internal.update_entity",
+        "internal.ingest_event",
+        "internal.report_verdict",
+        "internal.evaluate_policy",
+        "internal.approve_action",
+    }
+    for cap in ("knowledge.search", "knowledge.remember"):
+        scope = await derive_lead_scope([_step(cap)], _no_resolver(), _agents())
+        assert not (scope & over_broad), f"{cap} granted over-broad internal caps: {scope}"
+
+
+async def test_knowledge_search_grants_no_write():
+    """Recall is read-only: it must not smuggle in the store capabilities."""
+    scope = await derive_lead_scope([_step("knowledge.search")], _no_resolver(), _agents())
+
+    assert "internal.store_memory" not in scope
+    assert "internal.store_preference" not in scope

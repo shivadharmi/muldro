@@ -70,20 +70,43 @@ _PLANNER_JSON_CONTRACT_SUFFIX = (
 )
 
 # Uncataloged capabilities that the fast path (intent_to_plan) legitimately emits — these are
-# reads/respond/reason, never external writes. Keep in sync with intent_to_plan's emissions
-# (a regression test asserts every fast intent stays within these + cataloged reads).
+# reads, respond/reason, and ONE internal self-scoped persistence capability. Never an
+# outbound write. Keep in sync with intent_to_plan's emissions (a regression test asserts
+# every fast intent stays within these + cataloged reads).
+#
+# `knowledge.remember` is the deliberate exemption. It expands (derive_lead_scope) to
+# `internal.store_memory` / `internal.store_preference` plus the recall reads: internal,
+# workspace-scoped, reversible, and asked for in the user's own words — the memory analogue
+# of SYSTEM_ACTION_CAPABILITIES, which the chat write gates already exempt for exactly that
+# reason. Diverting it to the Planner would not fix anything either: the Planner has no
+# capability that stores a memory any more safely, and the round trip costs a reasoning-tier
+# call to reach the same tool.
 _FAST_SAFE_CAPABILITIES = frozenset(
-    {"respond", "reason", "perceive", "knowledge.search", "system.respond", "none"}
+    {
+        "respond",
+        "reason",
+        "perceive",
+        "knowledge.search",
+        "knowledge.remember",
+        "system.respond",
+        "none",
+    }
 )
 
 
 def _fast_step_is_write(capability: str) -> bool:
-    """Fail-closed write classifier for the ungated fast path.
+    """Fail-closed write classifier for the fast path.
 
     A fast-path step is treated as a WRITE (→ divert to the gated Planner path) unless it is a
-    known-safe fast capability (respond/reason/perceive/knowledge.search/...) or a cataloged
+    known-safe fast capability (respond/reason/perceive/knowledge.*/...) or a cataloged
     read-only capability. An UNKNOWN capability fails CLOSED (treated as a write) so a future
-    mutating fast intent can never execute ungated on the inline path.
+    mutating fast intent can never authorize an outbound write off a fast classification.
+
+    What this fence is for NOW: since the single-lead cutover both the fast plan and the
+    Planner plan converge on the same ``_run_single_lead`` with the same middleware chain, so
+    "ungated inline path" no longer describes anything. What survives is narrower and still
+    worth having — the INTENT CLASSIFIER (a Haiku call over ten fixed intents) must not be
+    what decides a write is authorized. Decomposing a write is the Planner's job.
     """
     if capability in _FAST_SAFE_CAPABILITIES:
         return False

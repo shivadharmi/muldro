@@ -149,11 +149,25 @@ class TestIntentToPlan:
         result = intent_to_plan("status_query", "What are my goals?", self.CAPS)
         assert result.steps[0].capability == "knowledge.search"
 
-    def test_memory_operation_returns_knowledge_search(self):
+    def test_memory_operation_can_actually_store(self):
+        """`memory_operation` must name a capability that GRANTS persistence.
+
+        It used to emit `knowledge.search` — recall-only — so "remember X" reached a lead
+        holding no store tool and the memory was silently lost (soul law 5).
+        """
         result = intent_to_plan(
             "memory_operation", "Remember John prefers morning calls", self.CAPS
         )
-        assert result.steps[0].capability == "knowledge.search"
+        assert result.steps[0].capability == "knowledge.remember"
+
+    def test_memory_operation_description_matches_its_capability(self):
+        """The step description promised "Store or recall" while the capability could only
+        recall. Whatever it says, the capability must be able to do."""
+        from src.orchestrator.lead_builder import KNOWLEDGE_REMEMBER_CAPABILITIES
+
+        result = intent_to_plan("memory_operation", "Remember this", self.CAPS)
+        assert "store" in result.steps[0].description.lower()
+        assert "internal.store_memory" in KNOWLEDGE_REMEMBER_CAPABILITIES
 
     def test_approval_response_returns_respond(self):
         result = intent_to_plan("approval_response", "Yes, approve that", self.CAPS)
