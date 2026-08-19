@@ -28,7 +28,7 @@ graph TB
         BUDGET[BudgetTracker]
     end
 
-    subgraph "Sub-Agents (Claude API)"
+    subgraph "Sub-Agents (configurable model provider)"
         PCV[Perceiver]
         LIB[Librarian]
         PLN[Planner]

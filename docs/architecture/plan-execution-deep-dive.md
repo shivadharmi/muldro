@@ -350,7 +350,7 @@ flowchart TD
         R1["1. Query ToolDefinition<br/>WHERE capability = step.capability"]
         R2["2. Get related read tools<br/>from same capability family"]
         R3["3. Deduplicate by tool name"]
-        R4["4. Return as Claude API<br/>tool dicts"]
+        R4["4. Return as provider-neutral<br/>tool dicts"]
         R1 --> R2 --> R3 --> R4
     end
 

@@ -196,7 +196,7 @@ Token usage is persisted to the `token_usage` table via the `async with db_facto
 ### Daily Budget Lifecycle
 
 1. Budget resets at UTC midnight
-2. Every Claude API call records usage to `token_usage` table (including cache and thinking token columns added in migration 025)
+2. Every model call records usage to the `token_usage` table (including cache and thinking token columns added in migration 025)
 3. `BudgetTracker.get_budget_status()` computes current spend using real `calculate_cost()` across all token types
 4. Mode transitions trigger interval multiplier changes
 5. Default daily limit: `$5.00` (configurable via `MULDRO_DAILY_TOKEN_BUDGET_USD`)
