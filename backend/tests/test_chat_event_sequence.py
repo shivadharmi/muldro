@@ -13,8 +13,10 @@ below is a change to what the user sees; make it deliberately, with the frontend
 as a side effect of a refactor.
 
 Two crossings are load-bearing and deliberately NOT tidied: the ``PlanReady`` CoreEvent maps
-to SSE ``"plan"``, while ``PlanModeStepSkipped`` maps to SSE ``"plan_ready"``. Renaming
-either breaks the client silently — no backend test asserts the SSE names.
+to SSE ``"plan"``, while ``PlanModeStepSkipped`` maps to SSE ``"plan_ready"``.
+``tests/test_core_events.py`` DOES pin that mapping including the name literals — what is
+unpinned is the FRONTEND switch, so a coordinated backend-plus-test rename still breaks the
+client silently.
 """
 
 from __future__ import annotations

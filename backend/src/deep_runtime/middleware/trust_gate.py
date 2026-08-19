@@ -1,8 +1,12 @@
 """THE ONE approval gate for the deep chat runtime (Step 6B).
 
 A ``wrap_tool_call`` interceptor placed BETWEEN capability_scope (OUTER) and
-muldro_tool_dispatcher (INNER) — the composed chain is
-``capability_scope → trust_gate → dispatcher``. By the time this gate runs,
+muldro_tool_dispatcher (INNER). The full composed chain is
+``capability_scope → governor_audit → unavailable_server → trust_gate →
+[permission_gate] → write_lock → [read_back] → dispatcher``; note this gate is OUTER
+of ``permission_gate``, and its auto-execute verdict is a PASS-THROUGH into it.
+``permission_gate`` is installed only when the turn carries a ``permission_mode``,
+which GraphExecutor DAG steps do not. By the time this gate runs,
 capability_scope has ALREADY authorized that the tool is inside the agent's
 ``capability_scope``, so the gate never re-checks scope; it only decides *approval*.
 

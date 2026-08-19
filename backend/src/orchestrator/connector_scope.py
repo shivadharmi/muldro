@@ -2,8 +2,8 @@
 
 Where ``lead_builder.derive_lead_scope`` derives a PLAN-bounded scope from a PlanOutput's
 steps (the flag-off / autonomous path), ``resolve_connector_scope`` derives a
-CONNECTOR-bounded scope for the (future, P2.5c) planless lead — the lead that no longer has a
-plan to bound it:
+CONNECTOR-bounded scope for the planless lead — the lead that has no plan to bound it. LIVE but
+flag-gated: reached only when ``settings.chat_planless`` is on (default off):
 
     scope = INTERNAL_READ_FLOOR  ∪  SYSTEM_ACTION_CAPABILITIES  ∪  authenticated-connector caps
 

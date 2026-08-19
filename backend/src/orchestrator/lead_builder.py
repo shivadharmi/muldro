@@ -2,7 +2,8 @@
 SubAgent that handles a whole user goal on the deep runtime, and derives its
 capability_scope from the plan so its authority is plan-bounded and fail-closed.
 
-DORMANT: nothing here is wired into the live chat path in 5a. Wiring is 5b.
+LIVE: this is THE chat path. Every chat turn builds its lead here — the alternative
+per-step arm and the ``deep_single_lead`` flag that gated it are both deleted.
 """
 
 from __future__ import annotations

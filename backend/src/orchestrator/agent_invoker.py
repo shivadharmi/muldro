@@ -943,12 +943,13 @@ class AgentInvoker:
         means "no tools" — only ``None`` triggers the resolve.
 
         The write lock is forced fail-CLOSED here (``require_write_lock=True`` into
-        ``_build_deep_agent_for``): the single-lead path is ungated, so its writes MUST be
-        serialized and never execute unserialized while Redis is down (P1 A3).
+        ``_build_deep_agent_for``): ``trust_gate`` is dormant on a user-typed turn, so writes
+        MUST be serialized and never execute unserialized while Redis is down (P1 A3).
 
-        ``permission_mode`` (P2.1): forwarded verbatim into ``_build_deep_agent_for`` — ``ask``/
-        ``auto`` install the action-time permission gate, ``None`` (default) / ``bypass`` leave
-        the chain byte-identical. Current 5b callers pass nothing; P2.3 wires the per-turn mode.
+        ``permission_mode``: forwarded verbatim into ``_build_deep_agent_for`` — ``ask``/
+        ``auto`` install the action-time permission gate, ``None`` / ``bypass`` leave the chain
+        byte-identical. The live chat caller resolves a real per-turn mode (defaulting to the
+        workspace default, itself ``auto``), so the gate is normally INSTALLED.
 
         ``presence`` (single-lead cutover): forwarded to the gates, where a CONFIRM verdict
         interrupts only when a human is on the turn and PREPARES otherwise. Defaults to
@@ -963,9 +964,9 @@ class AgentInvoker:
         """
         if tools is None:
             tools = await self._resolve_tools(lead, workspace_id, None)
-        # This method IS the deep single-lead path (the 5b caller gates on it). Increment the
-        # runtime-call counter with the fixed "deep" label, mirroring ``call_agent_stream``'s
-        # per-call increment. Dormant in 5a (no live caller).
+        # This method IS the chat path — every chat turn's lead runs through here. Increment
+        # the runtime-call counter with the fixed "deep" label, mirroring ``call_agent_stream``'s
+        # per-call increment.
         AGENT_RUNTIME_CALLS.labels(runtime="deep").inc()
         model = await self._resolved_model_id(lead, workspace_id)
         system_blocks = self.build_system_prompt(lead, context_block)
@@ -982,11 +983,10 @@ class AgentInvoker:
             authorization_source=authorization_source,
             system_prompt=build_system_message(augmented),
             context_block=context_block,
-            # A3: the ungated single-lead path fail-closes its writes on Redis-down.
+            # A3: trust_gate is dormant on a user-typed turn, so writes fail-close on Redis-down.
             require_write_lock=True,
-            # P2.1: the chat permission mode (ask/auto installs the action-time gate; None/
-            # bypass leaves the chain byte-identical). Current 5b callers pass nothing yet;
-            # P2.3 wires the real per-turn mode.
+            # The chat permission mode (ask/auto installs the action-time gate; None/bypass
+            # leaves the chain byte-identical). Resolved per turn by the interactive handler.
             permission_mode=permission_mode,
             # A1: persist the ORIGINAL user message on any Approval this turn pauses on, so an
             # approved resume can fire the interaction-learner (parity with the non-paused tail).
