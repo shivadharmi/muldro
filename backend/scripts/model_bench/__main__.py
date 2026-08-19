@@ -88,6 +88,12 @@ async def _run_candidate(cand: Candidate, trials: int) -> dict:
                 f"  {mark}  {task.key:<18}{trial_label} "
                 f"({len(rec.tools_bound)} tools bound, {rec.latency_ms}ms) — {verdict.detail}"
             )
+            if not verdict.passed and not rec.error:
+                # The reply distinguishes the failure modes that matter: a model that
+                # REFUSED ("I can't do that") is a different problem from one that
+                # answered helpfully without ever looking.
+                snippet = " ".join(rec.reply.split())[:160] or "<empty reply>"
+                print(f"        reply: {snippet!r}")
     return results
 
 

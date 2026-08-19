@@ -70,29 +70,51 @@ def _anthropic(model_id: str):
     return _build
 
 
+# Ollama Cloud models this account can reach, confirmed against GET /v1/models rather than
+# assumed. Grouped by the tier each is a plausible answer for — `fast` wants cheap and
+# high-volume, `balanced` wants reliable tool calling in a 33-tool context, `reasoning`
+# wants strict PlanOutput JSON. A model may of course win a tier it was not filed under;
+# the grouping decides what to try first, not what the result is.
+_OLLAMA_CLOUD = [
+    ("gpt-oss:20b", "fast — smallest open-weight here"),
+    ("deepseek-v4-flash:0731", "fast — flash tier"),
+    ("nemotron-3-nano:30b", "fast — nano tier"),
+    ("gpt-oss:120b", "balanced — the open-weight workhorse"),
+    ("glm-5.2", "balanced — tool-use reputation"),
+    ("minimax-m2.7", "balanced — agentic-tuned"),
+    ("qwen3.5:397b", "balanced/reasoning — large general"),
+    ("kimi-k3", "reasoning"),
+    ("deepseek-v4-pro:0813", "reasoning"),
+    ("nemotron-3-ultra", "reasoning"),
+]
+
+
 def registry() -> list[Candidate]:
     """Every candidate. Ones whose key is missing fail loudly at build, not silently."""
-    return [
+    hosted = [
         # The incumbent, as the reference line every other candidate is read against.
-        Candidate("anthropic/haiku-4.5", _anthropic("claude-haiku-4-5-20251001"), True),
-        Candidate("anthropic/sonnet-4.6", _anthropic("claude-sonnet-4-6"), True),
+        Candidate(
+            "anthropic/haiku-4.5",
+            _anthropic("claude-haiku-4-5-20251001"),
+            True,
+            "incumbent — fast tier",
+        ),
+        Candidate(
+            "anthropic/sonnet-4.6",
+            _anthropic("claude-sonnet-4-6"),
+            True,
+            "incumbent — balanced tier",
+        ),
         # The pragmatic hosted baseline for fast + balanced.
-        Candidate("openai/gpt-5-mini", _openai("gpt-5-mini")),
-        Candidate("openai/gpt-5", _openai("gpt-5")),
-        # Ollama Cloud, via its OpenAI-compatible endpoint.
-        Candidate(
-            "ollama-cloud/gpt-oss:120b",
-            _openai("gpt-oss:120b", base_url=_OLLAMA_CLOUD_BASE, key_env="OLLAMA_API_KEY"),
-            note="open-weight, hosted",
-        ),
-        Candidate(
-            "ollama-cloud/gpt-oss:20b",
-            _openai("gpt-oss:20b", base_url=_OLLAMA_CLOUD_BASE, key_env="OLLAMA_API_KEY"),
-            note="open-weight, hosted",
-        ),
-        Candidate(
-            "ollama-cloud/qwen3-coder:480b",
-            _openai("qwen3-coder:480b", base_url=_OLLAMA_CLOUD_BASE, key_env="OLLAMA_API_KEY"),
-            note="open-weight, hosted",
-        ),
+        Candidate("openai/gpt-5-mini", _openai("gpt-5-mini"), note="hosted baseline"),
+        Candidate("openai/gpt-5", _openai("gpt-5"), note="hosted, reasoning tier"),
     ]
+    cloud = [
+        Candidate(
+            f"ollama-cloud/{model_id}",
+            _openai(model_id, base_url=_OLLAMA_CLOUD_BASE, key_env="OLLAMA_API_KEY"),
+            note=note,
+        )
+        for model_id, note in _OLLAMA_CLOUD
+    ]
+    return hosted + cloud
