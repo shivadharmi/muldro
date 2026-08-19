@@ -35,6 +35,9 @@ SurfaceKind = Literal[
     "alert",
     "recommendation",
     "proactive_insight",
+    # The standing review queue for actions prepared on turns with no human present —
+    # the ONLY place a prepared action can be acted on.
+    "prepared_work",
     # Agent-managed (inline children, no detail API)
     "message",  # Presenter-authored rich response promoted to workspace feed
     # Legacy kinds retained: `plan` is still produced by derive_surface_kind;
@@ -52,6 +55,9 @@ SYSTEM_SURFACE_KINDS = frozenset(
         "alert",
         "recommendation",
         "proactive_insight",
+        # The standing review queue for actions prepared on turns with no human present —
+        # the ONLY place a prepared action can be acted on.
+        "prepared_work",
     }
 )
 """Surface kinds owned by backend services. These expose detail APIs."""

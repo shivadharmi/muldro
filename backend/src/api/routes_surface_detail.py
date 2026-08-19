@@ -28,6 +28,10 @@ _PREFIX_MAP: dict[str, tuple[str, str]] = {
     "briefing_": ("briefing", "briefing_id"),
     "priority_": ("alert", "run_id"),
     "rec_": ("recommendation", "index"),
+    # Workspace-scoped standing queue. It embeds NO record id, so
+    # ``_verify_ephemeral_ownership`` has nothing to check — the builder scopes by the
+    # authenticated ``user_id`` instead (passed through at dispatch below).
+    "prepared_work_": ("prepared_work", "surface_id"),
     # Legacy
     "exec_": ("plan", "run_id"),
     "surf_": ("_from_db", "surface_id"),
@@ -174,4 +178,4 @@ async def get_surface_detail(
             detail=f"No tab '{tab_id}' for surface kind '{kind}'.",
         )
 
-    return await builder(db, surface)
+    return await builder(db, surface, user_id=user_id)

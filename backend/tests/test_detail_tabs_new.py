@@ -98,12 +98,13 @@ class TestRecommendationEvidence:
 
 
 class TestRegistryComplete:
-    def test_tab_builders_has_30_entries(self):
+    def test_tab_builders_registry_size(self):
         from src.services.surface_detail_builders import TAB_BUILDERS
 
         # 40 before Step 9 P1; the 5 dead surface kinds (checklist/comparison/
-        # timeline/table/activity) removed 10 rows -> 30.
-        assert len(TAB_BUILDERS) == 30
+        # timeline/table/activity) removed 10 rows -> 30. The single-lead cutover's
+        # prepared-work review queue adds its one ``queue`` tab -> 31.
+        assert len(TAB_BUILDERS) == 31
 
     def test_all_kinds_covered(self):
         from src.services.surface_detail_builders import TAB_BUILDERS
@@ -118,6 +119,7 @@ class TestRegistryComplete:
             "alert",
             "proactive_insight",
             "run",
+            "prepared_work",
         }
         assert kinds == expected
 
@@ -170,6 +172,7 @@ class TestRegistryComplete:
             ("proactive_insight", "signal"): "build_insight_signal",
             ("proactive_insight", "actions"): "build_insight_actions",
             ("proactive_insight", "context"): "build_insight_context",
+            ("prepared_work", "queue"): "build_prepared_work_queue",
         }
         actual = {key: builder.__name__ for key, builder in TAB_BUILDERS.items()}
         assert actual == expected

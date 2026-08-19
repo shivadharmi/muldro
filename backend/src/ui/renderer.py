@@ -236,6 +236,9 @@ _TABS_BY_KIND: dict[str, list[tuple[str, str]]] = {
     "recommendation": [("overview", "Overview"), ("evidence", "Evidence"), ("context", "Context")],
     "alert": [("overview", "Overview"), ("diagnostics", "Diagnostics")],
     "proactive_insight": [("signal", "Signal"), ("actions", "Actions"), ("context", "Context")],
+    # ONE tab, deliberately. The queue is a list of finished proposals; splitting it into
+    # per-facet tabs would build the cluttered control room the product doc rules out.
+    "prepared_work": [("queue", "Queue")],
 }
 
 

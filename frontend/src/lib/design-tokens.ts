@@ -213,6 +213,9 @@ export function kindStyle(kind: string): { bg: string; text: string } {
     case "proactive_insight":
     case "recommendation":
       return { bg: "bg-j-secondary-soft", text: "text-j-secondary" };
+    // Prepared work is staged, not done — the same warning tone as an approval.
+    case "prepared_work":
+      return { bg: "bg-j-warning-soft", text: "text-j-warning" };
     default:
       return { bg: "bg-surface-3", text: "text-t-secondary" };
   }
@@ -291,4 +294,5 @@ export const KIND_LABELS: Record<string, string> = {
   summary: "Summary",
   recommendation: "Rec",
   proactive_insight: "Insight",
+  prepared_work: "Prepared",
 };

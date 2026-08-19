@@ -16,6 +16,7 @@ from .approval import build_approval_history, build_approval_request, build_appr
 from .briefing import build_briefing_actions, build_briefing_events, build_briefing_priorities
 from .insight import build_insight_actions, build_insight_context, build_insight_signal
 from .plan import build_plan_context, build_plan_execution, build_plan_overview
+from .prepared_work import build_prepared_work_queue
 from .recommendation import (
     build_recommendation_context,
     build_recommendation_evidence,
@@ -64,6 +65,9 @@ TAB_BUILDERS: dict[tuple[str, str], Any] = {
     ("proactive_insight", "signal"): build_insight_signal,
     ("proactive_insight", "actions"): build_insight_actions,
     ("proactive_insight", "context"): build_insight_context,
+    # The standing prepared-work review queue — one tab, workspace-standing, scoped by
+    # the authenticated user_id inside the builder (the surface id carries no record ref).
+    ("prepared_work", "queue"): build_prepared_work_queue,
 }
 
 
@@ -94,4 +98,5 @@ __all__ = [
     "build_run_events_tab",
     "build_run_trace_tab",
     "build_run_approval_tab",
+    "build_prepared_work_queue",
 ]
