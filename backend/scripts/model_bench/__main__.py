@@ -103,16 +103,30 @@ def _report(label: str, results: dict) -> None:
     by_tier: dict[str, list[bool]] = defaultdict(list)
     fabricated = False
     asked = 0
+    errors: list[str] = []
     for task in TASKS:
-        for verdict, _rec in results.get(task.key, []):
+        for verdict, rec in results.get(task.key, []):
+            # A turn that ERRORED is not evidence about the model — a 403 "requires a
+            # subscription" or a 400 "credit balance too low" says nothing about whether it
+            # can call a tool. Counting those as failures would rank an unreachable model
+            # 0/12 beside a genuine 11/12, which is a worse lie than no number at all.
+            if rec.error:
+                errors.append(rec.error)
+                continue
             by_tier[task.tier].append(verdict.passed)
             if verdict.fabricated:
                 fabricated = True
             if verdict.asked_to_clarify:
                 asked += 1
     print(f"\n  == {label} ==")
+    if not by_tier:
+        reason = errors[0].split(" - ", 1)[-1][:130] if errors else "no turns ran"
+        print(f"     NOT MEASURED — every turn errored. {reason}")
+        return
     for tier, outcomes in sorted(by_tier.items()):
         print(f"     {tier:<10} {sum(outcomes)}/{len(outcomes)} passed")
+    if errors:
+        print(f"     ({len(errors)} turn(s) errored and are excluded — not evidence)")
     if asked:
         print(f"     ({asked} non-pass turn(s) ASKED the user rather than refusing)")
     if fabricated:
