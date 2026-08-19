@@ -21,6 +21,7 @@ from src.models.task_graph import TaskRun, TaskStep
 from src.services.audit import AuditService
 from src.services.execution_state import transition_run, transition_step
 from src.services.graph_executor import create_graph_executor
+from src.services.prepared_actions import execute_prepared_action
 
 logger = logging.getLogger(__name__)
 
@@ -136,6 +137,61 @@ def _guard_not_chat_approval(approval) -> None:
         )
 
 
+async def _run_prepared_action(approval, *, user_id: str, settings):
+    """Execute a confirmed PREPARED action and record the outcome on the Approval.
+
+    The status moves to ``executed`` or ``failed`` rather than staying ``approved``, so the
+    prepared-work queue drops it either way and the founder can see which it was. This never
+    raises for a policy refusal — ``execute_prepared_action`` fails closed and returns the
+    reason, which is persisted so the queue can show it.
+
+    ``redis`` and ``ledger`` are BOTH load-bearing, not optional. ``execute_prepared_action``
+    defaults them to ``None`` for unit tests, and those defaults are fail-OPEN: without the
+    ledger a double-confirm double-fires an external write (invariant 5 does not hold at all),
+    and without redis a prepared confirm does not mutually exclude with a concurrent chat write
+    to the same capability. Supplying both is this function's main job.
+    """
+    from src.api.routes_chat import _get_orchestrator
+    from src.models.database import get_session_factory
+    from src.services.idempotency import IdempotencyLedger
+
+    db_factory = get_session_factory()
+    orchestrator = await _get_orchestrator(settings)
+    redis = None
+    try:
+        import redis.asyncio as aioredis
+
+        redis = aioredis.from_url(settings.redis_url, decode_responses=True)
+    except Exception:
+        logger.warning(
+            "prepared action %s running WITHOUT the cross-path write lock — redis unavailable",
+            approval.approval_id,
+            exc_info=True,
+        )
+
+    try:
+        outcome = await execute_prepared_action(
+            approval,
+            execute_tool=orchestrator._execute_tool,
+            db_factory=db_factory,
+            redis=redis,
+            ledger=IdempotencyLedger(db_factory),
+        )
+    finally:
+        if redis is not None:
+            try:
+                await redis.aclose()
+            except Exception:
+                logger.debug("redis close failed", exc_info=True)
+
+    approval.status = "executed" if outcome.executed else "failed"
+    refs = {**(approval.artifact_refs or {})}
+    if outcome.error:
+        refs["prepared_error"] = outcome.error
+    approval.artifact_refs = refs
+    return outcome
+
+
 @router.post(
     "/v1/approvals/{approval_id}/approve",
     response_model=ApprovalResponse,
@@ -216,6 +272,22 @@ async def approve_action(
     approval.artifact_refs = {**(approval.artifact_refs or {}), "decision_type": decision_type}
 
     await db.commit()
+
+    # PREPARED actions: the action was fully derived on the original turn and recorded on this
+    # row. Confirmation REPLAYS that recorded payload — it must NOT be routed through
+    # GraphExecutor, whose agent would re-derive it and could run something other than what
+    # the founder reviewed.
+    if (approval.artifact_refs or {}).get("prepared") is True:
+        await _run_prepared_action(approval, user_id=user_id, settings=settings)
+        await db.commit()
+        return ApprovalResponse(
+            approval_id=approval.approval_id,
+            status=approval.status,
+            title=approval.title,
+            summary=approval.summary,
+            risk_level=approval.risk_level,
+            created_at=approval.created_at,
+        )
 
     # Embed approval decision into Qdrant
     try:
@@ -440,6 +512,19 @@ async def reject_action(
         )
     except Exception:
         pass
+
+    if (approval.artifact_refs or {}).get("prepared") is True:
+        # A rejected prepared action simply never runs. There is no graph to resume and no
+        # TrustState to feed — prepared work is not trust-graduated.
+        await db.commit()
+        return ApprovalResponse(
+            approval_id=approval.approval_id,
+            status=approval.status,
+            title=approval.title,
+            summary=approval.summary,
+            risk_level=approval.risk_level,
+            created_at=approval.created_at,
+        )
 
     # Cancel the run and transition the step
     effective_run_id = approval.run_id or approval.execution_id
