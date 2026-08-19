@@ -55,6 +55,22 @@ SURFACE_RATE_LIMITS: dict[str, int] = {
     "email": 3,
 }
 
+# Notification type for the prepared-work queue. DELIBERATELY not `approval_request`: a
+# prepared action is finished, staged work waiting on the founder's schedule, not an urgent
+# interrupt. It therefore earns delivery on its priority score like any other signal and holds
+# for the briefing below 0.6, exactly as `_hold_for_briefing` already does.
+PREPARED_WORK_NOTIFICATION_TYPE = "prepared_work"
+
+# Types urgent enough to skip the priority + rate-limit filters.
+BYPASS_FILTER_TYPES = ("approval_request", "critical_alert", "auto_execute_notify")
+# Types delivered to ALL active surfaces rather than only the preferred one.
+BROADCAST_TYPES = ("approval_request", "critical_alert")
+
+
+def bypasses_delivery_filters(notification_type: str) -> bool:
+    """True iff this type skips the priority + rate-limit filters."""
+    return notification_type in BYPASS_FILTER_TYPES
+
 
 class Notifier:
     """Coordinates notification delivery across surfaces with persistence."""
@@ -197,11 +213,7 @@ class Notifier:
             except Exception:
                 logger.warning("Failed to persist notification", exc_info=True)
 
-        # Types that bypass priority/rate-limit filters
-        _bypass_filter = ("approval_request", "critical_alert", "auto_execute_notify")
-        # Types that deliver to ALL surfaces (not just preferred)
-        _broadcast_types = ("approval_request", "critical_alert")
-        if notification_type not in _bypass_filter:
+        if not bypasses_delivery_filters(notification_type):
             if priority < 0.3:
                 logger.info(
                     "notification_silent",
@@ -225,7 +237,7 @@ class Notifier:
             return {"status": "queued", "surfaces": []}
 
         # Rate-limit filtering: remove surfaces that are over their hourly cap
-        if notification_type not in _bypass_filter:
+        if not bypasses_delivery_filters(notification_type):
             allowed_surfaces = []
             for surface in surfaces:
                 if await self._check_rate_limit(user_id, surface):
@@ -237,7 +249,7 @@ class Notifier:
 
         results = {}
 
-        if notification_type in _broadcast_types:
+        if notification_type in BROADCAST_TYPES:
             # Send to ALL active surfaces
             for surface in surfaces:
                 result = await self._deliver(surface, notification)
