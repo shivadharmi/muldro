@@ -1451,8 +1451,12 @@ class AgentInvoker:
                 error_occurred = True
             elif event == "approval_needed":
                 # Branch C: the step's PRE-APPROVED capability never reaches here; only an
-                # UN-approved within-step capability expansion would. 10C has NO
-                # GraphInterrupt→run-pause bridge, so fail-block the step (do not pause/bridge).
+                # UN-approved within-step capability expansion would — and it no longer arrives
+                # on this seam. This step runs with ``presence="absent"``, so the deep gate
+                # PREPARES such a write: the step COMPLETES and the write is staged for review
+                # instead of failing the run. Kept because it is still the correct handling if
+                # an ``approval_needed`` frame ever does arrive (a future caller passing
+                # ``present``); a suspended autonomous run must never look like a success.
                 approval_blocked = True
                 errors.append("unapproved within-step capability required approval")
 

@@ -494,6 +494,10 @@ async def test_approval_persistence_is_idempotent_reuses_existing():
             tool_call_id="call_echo",
             agent_name="executor",
             db_factory=_persist_db_factory(existing=existing),
+            # The reuse this pins happens on the RESUME REPLAY, and only a PRESENT turn ever
+            # resumes (``resume_deep_turn`` rebuilds with ``presence="present"``) — so the live
+            # record shape is the honest annotation here.
+            presence="present",
         )
 
     assert require_approval is True
@@ -556,6 +560,10 @@ async def test_unexpected_decision_requires_approval_fail_closed():
             tool_call_id="call_x",
             agent_name="executor",
             db_factory=_persist_db_factory(),
+            # This is the AUTONOMOUS trust matrix failing closed on its FIRST pass, which in
+            # production runs unattended — so ``absent`` is the honest annotation. The verdict
+            # under test is unaffected either way; presence only decides interrupt-vs-prepare.
+            presence="absent",
         )
 
     assert require_approval is True
@@ -608,6 +616,9 @@ async def test_get_or_create_reselects_on_integrity_error():
             tool_call_id="call_echo",
             agent_name="executor",
             db_factory=_factory,
+            # A create RACE is two concurrent FIRST passes, which on the autonomous seam run
+            # unattended — ``absent`` is the honest annotation.
+            presence="absent",
         )
     assert require_approval is True
     assert approval_id == "apr_winner"  # the committed winner, NOT apr_loser
@@ -762,6 +773,52 @@ async def test_a_prepared_write_does_not_stop_the_turn(handler):
     assert json.loads(staged.content)["prepared"] is True
     handler.assert_awaited_once()
     assert followup is handler.return_value
+
+
+async def test_an_absent_turn_prepares_on_the_replay_path_too(handler):
+    """The CF-2 replay branch SHOULD be unreachable on an absent turn — an absent turn never
+    resumes, so nothing replays it. That is precisely why it is guarded, and precisely why the
+    guard is tested: an un-branched ``interrupt()`` here would suspend the run forever, and an
+    untested guard on an assumed-unreachable path is the one a future refactor deletes as dead
+    code.
+
+    An un-awaited ``assess_risk`` is what proves this test actually entered the replay
+    short-circuit rather than falling through to the first pass (which, against this
+    db_factory, would return the same approval_id and would also skip ``create_approval``).
+    """
+    assess_risk = AsyncMock(name="assess_risk")  # the replay branch skips assessment
+    create_approval_mock = AsyncMock()  # the replay branch skips persist
+
+    existing = SimpleNamespace(
+        approval_id="apr_existing",
+        artifact_refs={"capability": "email.send"},
+        risk_level="high",
+    )
+
+    mw = _gate(
+        authorization_source="autonomous",
+        db_factory=_persist_db_factory(existing=existing),
+        assess_risk=assess_risk,
+        presence="absent",
+    )
+    with (
+        patch(f"{MODULE}._resolve_capability", AsyncMock(return_value=(True, "email.send"))),
+        patch(f"{MODULE}.TrustEngine", return_value=_approval_required_engine()),
+        patch(f"{MODULE}.interrupt", _exploding_interrupt),
+        patch(f"{APPROVAL_PERSISTENCE_MODULE}.create_approval", create_approval_mock),
+    ):
+        result = await _hook(mw)(_request("echo", {"text": "hi"}, "c1"), handler)
+
+    assess_risk.assert_not_awaited()  # proves the REPLAY branch, not the first pass
+    handler.assert_not_awaited()
+    create_approval_mock.assert_not_called()
+    assert isinstance(result, ToolMessage)
+    assert result.status == "success"
+    payload = json.loads(result.content)
+    assert payload["prepared"] is True
+    # The EXISTING row's id — the replay branch names the approval already on record.
+    assert payload["approval_id"] == "apr_existing"
+    assert payload["capability"] == "email.send"
 
 
 async def test_a_prepared_approval_is_typed():

@@ -712,6 +712,9 @@ async def test_persist_is_idempotent_reuses_existing():
             context_block="",
             permission_mode="auto",
             lead_scope=frozenset({"email.send"}),
+            # The reuse this pins happens on the RESUME REPLAY, and only a PRESENT turn ever
+            # resumes — so the live record shape is the honest annotation here.
+            presence="present",
         )
 
     assert approval_id == "apr_existing"
@@ -754,6 +757,9 @@ async def test_persist_reselects_on_integrity_error():
             context_block="",
             permission_mode="auto",
             lead_scope=frozenset({"email.send"}),
+            # permission_gate is the CHAT gate, which runs with a human on the turn — the live
+            # record shape is what this race actually races to write.
+            presence="present",
         )
 
     assert approval_id == "apr_winner"
@@ -907,6 +913,54 @@ async def test_a_prepared_write_does_not_stop_the_turn(handler):
     assert json.loads(staged.content)["prepared"] is True
     handler.assert_awaited_once()
     assert followup is handler.return_value
+
+
+async def test_an_absent_turn_prepares_on_the_replay_path_too(handler):
+    """The CF-2 replay branch SHOULD be unreachable on an absent turn — an absent turn never
+    resumes, so nothing replays it. That is precisely why it is guarded, and precisely why the
+    guard is tested: an un-branched ``interrupt()`` here would suspend the turn forever, and an
+    untested guard on an assumed-unreachable path is the one a future refactor deletes as dead
+    code.
+
+    ``auto`` mode is deliberate: the FIRST-pass branch would assess risk, so an un-awaited
+    ``assess_risk`` is what proves this test actually entered the replay short-circuit rather
+    than falling through to the first pass (which, against this db_factory, would return the
+    same approval_id and would also skip ``create_approval``).
+    """
+    assess_risk = AsyncMock(name="assess_risk")  # the replay branch skips assessment
+    resolve_capability = AsyncMock(return_value=(True, "email.send"))
+    create_approval_mock = AsyncMock()  # the replay branch skips persist
+
+    existing = SimpleNamespace(
+        approval_id="apr_existing",
+        artifact_refs={"capability": "email.send"},
+        risk_level="high",
+        decision_reason=None,
+    )
+
+    mw = _gate(
+        permission_mode="auto",
+        resolve_capability=resolve_capability,
+        assess_risk=assess_risk,
+        db_factory=_persist_db_factory(existing=existing),
+        presence="absent",
+    )
+    with (
+        patch(f"{MODULE}.interrupt", _exploding_interrupt),
+        patch(f"{APPROVAL_PERSISTENCE_MODULE}.create_approval", create_approval_mock),
+    ):
+        result = await _hook(mw)(_request("echo", {"text": "hi"}, "c1"), handler)
+
+    assess_risk.assert_not_awaited()  # proves the REPLAY branch, not the first pass
+    handler.assert_not_awaited()
+    create_approval_mock.assert_not_called()
+    assert isinstance(result, ToolMessage)
+    assert result.status == "success"
+    payload = json.loads(result.content)
+    assert payload["prepared"] is True
+    # The EXISTING row's id — the replay branch names the approval already on record.
+    assert payload["approval_id"] == "apr_existing"
+    assert payload["capability"] == "email.send"
 
 
 async def test_a_prepared_approval_is_typed_and_not_chat_flagged():
@@ -1080,6 +1134,9 @@ async def test_persist_twice_yields_exactly_one_row_real_db():
                 context_block="",
                 permission_mode="auto",
                 lead_scope=frozenset({"email.send"}),
+                # The replay this simulates is a RESUME, and only a PRESENT turn resumes — a
+                # prepared write is never replayed, so the live shape is the honest annotation.
+                presence="present",
             )
 
         # The replay: run the persist body twice, then a third time for good measure.

@@ -210,8 +210,8 @@ class ChatProcessor(_ChatSingleLeadMixin):
             context=context,
             conversation_id=conversation_id,
             # BATCH entry: no synchronous user is on this turn, so a CONFIRM verdict cannot be
-            # answered. A later task makes `presence="absent"` PREPARE such writes (record them
-            # for review) instead of interrupting into a void.
+            # answered. `absent` therefore PREPARES such a write — recorded in full for review,
+            # the turn finishing everything else — instead of interrupting into a void.
             presence=ABSENT,
         ):
             match event:
