@@ -18,6 +18,9 @@ from src.ui.contracts import A2UIComponent, DetailTabResponse
 
 from ._shared import _empty_tab, _format_ts, _section
 
+SURFACE_PREFIX = "prepared_work_"
+"""The queue's surface id is ``prepared_work_{workspace_id}`` — see ``_PREFIX_MAP``."""
+
 logger = logging.getLogger(__name__)
 
 QUEUE_LIMIT = 25
@@ -33,6 +36,14 @@ not know whether the write fired, so we will not fire it again), but a row that 
 forever behind an Approve button is a lie. Such rows are rendered as an unknown outcome to
 be checked at the destination, with the approve control withheld.
 """
+
+
+def _workspace_from_surface_id(surface: Any) -> str | None:
+    """Recover the workspace the queue card was built for, or None if unrecoverable."""
+    surface_id = getattr(surface, "surface_id", "") or ""
+    if not surface_id.startswith(SURFACE_PREFIX):
+        return None
+    return surface_id.removeprefix(SURFACE_PREFIX) or None
 
 
 def _is_unknown_outcome(error: str | None) -> bool:
@@ -118,11 +129,15 @@ async def build_prepared_work_queue(
 ) -> DetailTabResponse:
     """Render every prepared action still awaiting the founder's decision.
 
-    Scoped by the authenticated ``user_id`` rather than by a workspace parsed out of the
-    surface id: the prepared-work surface carries no record reference, so the ephemeral
-    tenant guard (``_verify_ephemeral_ownership``) has nothing to check. Doing the scoping
-    here means a guessed or enumerated surface id returns the guesser's OWN queue rather
-    than someone else's. Without a ``user_id`` the tab renders empty — it never guesses.
+    The TENANT scope is the authenticated ``user_id``, not anything in the surface id: the
+    prepared-work surface carries no record reference, so the ephemeral tenant guard
+    (``_verify_ephemeral_ownership``) has nothing to check. Doing the scoping here means a
+    guessed or enumerated surface id returns the guesser's OWN queue rather than someone
+    else's. Without a ``user_id`` the tab renders empty — it never guesses.
+
+    The workspace parsed out of the surface id is then applied ON TOP of that, so the tab
+    lists exactly what the grid card counted (a founder in two workspaces would otherwise
+    see a card counting one and a tab listing both).
     """
     from src.deep_runtime.middleware.approval_persistence import PREPARED_APPROVAL_TYPE
     from src.models.approvals import Approval
@@ -132,10 +147,24 @@ async def build_prepared_work_queue(
         logger.warning("prepared-work queue requested without a user_id — rendering empty")
         return _empty_tab("queue", "Nothing is waiting for your review.")
 
+    workspace_id = _workspace_from_surface_id(surface)
+    if not workspace_id:
+        # Fail closed. Every queue surface id carries its workspace by construction, so a
+        # surface id without one is malformed, not a request for everything.
+        logger.warning("prepared-work queue surface id carries no workspace — rendering empty")
+        return _empty_tab("queue", "Nothing is waiting for your review.")
+
+    # ``workspace_id`` comes from the URL and is NOT trusted — and does not need to be. It is
+    # applied as an ADDITIONAL filter on top of the authenticated ``user_id``, so it can only
+    # ever SUBTRACT from a set that is already this caller's own rows. It cannot widen the
+    # query, cannot reach across a tenant boundary, and a forged or guessed workspace yields
+    # FEWER rows (usually none), never somebody else's. The trusted filter does the security;
+    # this one only makes the tab agree with the card that linked to it.
     result = await db.execute(
         select(Approval)
         .where(
             Approval.user_id == user_id,
+            Approval.workspace_id == workspace_id,
             Approval.approval_type == PREPARED_APPROVAL_TYPE,
             Approval.status == "pending",
         )

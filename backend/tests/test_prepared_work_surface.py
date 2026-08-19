@@ -15,6 +15,7 @@ from src.api.routes_surface_detail import _PREFIX_MAP
 from src.models.approvals import Approval
 from src.services.surface_builder import SurfaceService
 from src.services.surface_detail_builders import TAB_BUILDERS, build_prepared_work_queue
+from src.services.surface_mapping import MAX_WORKSPACE_SURFACES, apply_surface_cap
 from src.ui.contracts import SYSTEM_SURFACE_KINDS
 from src.ui.renderer import _TABS_BY_KIND, build_detail_config
 
@@ -34,11 +35,12 @@ def _approval(
     risk: str = "high",
     prepared_error: str | None = None,
     created_at: datetime | None = None,
+    workspace: str = WORKSPACE,
 ) -> Approval:
     apr = Approval()
     apr.approval_id = approval_id
     apr.user_id = USER
-    apr.workspace_id = WORKSPACE
+    apr.workspace_id = workspace
     apr.approval_type = "prepared_action"
     apr.status = "pending"
     apr.title = f"Approve: {capability}"
@@ -69,6 +71,32 @@ def _db(rows: list[Approval]) -> AsyncMock:
     return db
 
 
+def _filtering_db(rows: list[Approval]) -> AsyncMock:
+    """A db whose ``execute`` actually honours the statement's user/workspace binds.
+
+    The plain ``_db`` above returns its rows regardless of the query, which cannot tell a
+    correctly-scoped query from an unscoped one. These tests are about the scoping, so the
+    mock reads the compiled bind params and filters in Python.
+    """
+    db = AsyncMock()
+
+    async def _execute(stmt):
+        params = stmt.compile().params
+        uid = params.get("user_id_1")
+        wid = params.get("workspace_id_1")
+        matched = [
+            row
+            for row in rows
+            if (uid is None or row.user_id == uid) and (wid is None or row.workspace_id == wid)
+        ]
+        result = MagicMock()
+        result.scalars.return_value.all.return_value = matched
+        return result
+
+    db.execute = _execute
+    return db
+
+
 def _surface(surface_id: str = f"prepared_work_{WORKSPACE}") -> MagicMock:
     s = MagicMock()
     s.surface_id = surface_id
@@ -90,6 +118,16 @@ def _all_components(tab) -> list:
     for section in tab.sections:
         out.extend(_walk(section.children))
     return out
+
+
+def _approval_ids(tab) -> set[str]:
+    """Approval ids the tab's controls actually carry — the identity that reaches the API."""
+    return {
+        a.payload["approval_id"]
+        for c in _all_components(tab)
+        if c.type == "Button"
+        for a in (c.actions or [])
+    }
 
 
 def _texts(tab) -> str:
@@ -274,3 +312,81 @@ async def test_tab_without_user_id_renders_empty_rather_than_someone_elses_queue
     tab = await build_prepared_work_queue(db, _surface())
     assert tab.tab_id == "queue"
     db.execute.assert_not_awaited()
+
+
+# ── discoverability: the cap must not evict the queue (fix 1) ───────────
+
+
+def _capped(kind: str, when: str) -> MagicMock:
+    m = MagicMock()
+    m.kind = kind
+    m.created_at = when
+    return m
+
+
+def test_prepared_work_card_survives_the_surface_cap():
+    """A busy workspace is exactly when staged writes pile up. If twenty newer summaries
+    can evict the queue card, the founder loses the only path to writes the system is
+    blocked on."""
+    surfaces = [_capped("prepared_work", "2026-08-19T09:00:00Z")]
+    surfaces += [
+        _capped("summary", f"2026-08-19T1{i // 60}:{i % 60:02d}:00Z")
+        for i in range(MAX_WORKSPACE_SURFACES + 5)
+    ]
+
+    kept = apply_surface_cap(surfaces)
+
+    assert len(kept) == MAX_WORKSPACE_SURFACES
+    assert sum(1 for s in kept if s.kind == "prepared_work") == 1
+    # And it outranks every other kind, so it is never the eviction candidate.
+    assert kept[0].kind == "prepared_work"
+
+
+def test_prepared_work_outranks_every_other_kind():
+    from src.services.surface_mapping import PRIORITY_TIERS
+
+    others = {k: v for k, v in PRIORITY_TIERS.items() if k != "prepared_work"}
+    assert PRIORITY_TIERS["prepared_work"] < min(others.values())
+
+
+# ── the tab agrees with the card (fix 2) ────────────────────────────────
+
+
+async def test_tab_returns_only_the_addressed_workspace():
+    """One founder, two workspaces. The card counts one workspace; the tab must match it."""
+    mine = _approval("apr_here", workspace=WORKSPACE)
+    other = _approval("apr_elsewhere", workspace="ws_other")
+    db = _filtering_db([mine, other])
+
+    tab = await build_prepared_work_queue(db, _surface(), user_id=USER)
+
+    assert _approval_ids(tab) == {"apr_here"}
+    assert len(tab.sections) == 1
+
+
+async def test_card_count_and_tab_row_count_agree():
+    rows = [_approval("apr_a"), _approval("apr_b"), _approval("apr_c", workspace="ws_other")]
+    service = SurfaceService(db=_filtering_db(rows), workspace_id=WORKSPACE)
+
+    push = await service._build_prepared_work_surface(USER)
+    tab = await build_prepared_work_queue(_filtering_db(rows), _surface(), user_id=USER)
+
+    assert push.preview["subtitle"].startswith("2 ")
+    assert len(tab.sections) == 2
+
+
+async def test_forged_workspace_in_the_surface_id_returns_empty_not_everything():
+    """The workspace comes from the URL, so it is untrusted — but it only ever subtracts
+    from an already user-scoped set, so a guess yields fewer rows, never someone else's."""
+    db = _filtering_db([_approval("apr_here"), _approval("apr_elsewhere", workspace="ws_other")])
+
+    tab = await build_prepared_work_queue(db, _surface("prepared_work_ws_guessed"), user_id=USER)
+
+    assert _approval_ids(tab) == set()
+    assert "waiting" in _texts(tab).lower()
+
+
+async def test_surface_id_without_a_workspace_renders_empty():
+    db = _filtering_db([_approval()])
+    tab = await build_prepared_work_queue(db, _surface("surf_01H"), user_id=USER)
+    assert "waiting" in _texts(tab).lower()

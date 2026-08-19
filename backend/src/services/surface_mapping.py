@@ -150,14 +150,30 @@ def build_briefing_preview(briefing: "Briefing"):
 MAX_WORKSPACE_SURFACES = 20
 
 PRIORITY_TIERS: dict[str, int] = {
-    "approval": 0,
-    "plan": 1,
-    "alert": 2,
-    "briefing": 3,
-    "proactive_insight": 4,
-    "recommendation": 5,
-    "summary": 6,
+    # Tier 0, alone. The prepared-work queue is the ONLY place a prepared action can be
+    # acted on, so evicting its card does not merely hide information — it leaves a write
+    # the system is blocked on with no discovery path at all. Every other kind is either
+    # information about something that already happened (alert/briefing/summary), a
+    # proposal (proactive_insight/recommendation), or reachable another way (a live
+    # ``approval`` also renders inline inside its run surface). It costs one slot: the
+    # queue is a SINGLETON per workspace, one card however long the queue is.
+    #
+    # It is NOT shared with ``approval``: tier 0 is not provably a singleton (persisted
+    # approval surfaces still load from the DB), and sharing a tier with a kind that can
+    # appear twenty times would reintroduce the eviction this ranking exists to prevent.
+    "prepared_work": 0,
+    "approval": 1,
+    "plan": 2,
+    "alert": 3,
+    "briefing": 4,
+    "proactive_insight": 5,
+    "recommendation": 6,
+    "summary": 7,
 }
+
+UNRANKED_TIER = max(PRIORITY_TIERS.values())
+"""Tier for kinds absent from the table (e.g. ``run``) — they rank with the lowest
+ranked kind. Derived from the table so inserting a tier cannot silently promote them."""
 
 
 def apply_surface_cap(surfaces: list) -> list:
@@ -181,7 +197,7 @@ def apply_surface_cap(surfaces: list) -> list:
     )
     by_priority = sorted(
         by_recency,
-        key=lambda s: PRIORITY_TIERS.get(getattr(s, "kind", "summary"), 6),
+        key=lambda s: PRIORITY_TIERS.get(getattr(s, "kind", "summary"), UNRANKED_TIER),
     )
 
     return by_priority[:MAX_WORKSPACE_SURFACES]
