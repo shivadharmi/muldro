@@ -116,6 +116,10 @@ def test_downward_risk_divergence_is_allowlisted():
         "browser_tabs": ("low", "medium"),
         "browser_close": ("low", "medium"),
         "browser_resize": ("low", "medium"),
+        # render_surface publishes to the founder's own workspace UI and nothing else; the
+        # capability inherits the internal family's default `low`, the tool is honestly
+        # `none`. Both bands are ungated, so this divergence cannot weaken a gate.
+        "render_surface": ("none", "low"),
     }
 
     actual: dict[str, tuple[str, str]] = {}
