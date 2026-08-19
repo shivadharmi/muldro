@@ -108,11 +108,13 @@ async def test_compiled_write_agent_installs_scope_guard_outermost():
         )
 
     middleware = mock_create.call_args.kwargs["middleware"]
-    # >= 2 wrap_tool_call middlewares so "index 0" is a meaningful position
-    # claim, not trivially true for a 1-element list.
-    assert len(middleware) == 2
+    names = [getattr(m, "name", None) or type(m).__name__ for m in middleware]
+    # Name the whole stack rather than counting it: "index 0" is only a meaningful
+    # position claim when something else is in the list, and an exact set catches an
+    # unintended addition the way a count did while still admitting a deliberate one.
+    assert names == ["capability_scope_guard", "dummy_extra_guard", "no_virtual_filesystem"]
     # langchain 1.3.10 `_chain_tool_call_wrappers` docstring: "Compose wrappers
     # into middleware stack (first = outermost)" — index 0 runs first and, on
     # denial, short-circuits before any inner middleware or the tool runs.
     assert _is_scope_guard(middleware[0])
-    assert not _is_scope_guard(middleware[1])
+    assert not any(_is_scope_guard(m) for m in middleware[1:])

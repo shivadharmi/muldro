@@ -28,3 +28,28 @@ DEEPAGENTS_BUILTIN_NAMES: frozenset[str] = frozenset(
         "task",
     }
 )
+
+
+# The subset of the built-ins backed by deepagents' VIRTUAL, per-thread filesystem. Muldro
+# has no filesystem feature, so offering these is offering a place to "save" things that
+# vanishes at end of thread: the model reports success over a write that never happened.
+# Suppressed from every model request by ``make_no_virtual_filesystem_middleware``.
+#
+# NOT suppressed, and deliberately: ``task`` (how a lead reaches a delegate subagent, gated
+# by name in governor_delegate_critique) and ``write_todos`` (an internal planning
+# scratchpad with no data to lose).
+#
+# These names are still in DEEPAGENTS_BUILTIN_NAMES and still exempt from every gate — the
+# middlewares are unchanged. Suppression removes them from what the model is OFFERED; it
+# does not change how a call to one would be handled.
+VIRTUAL_FILESYSTEM_TOOL_NAMES: frozenset[str] = frozenset(
+    {
+        "ls",
+        "read_file",
+        "write_file",
+        "edit_file",
+        "glob",
+        "grep",
+        "execute",
+    }
+)

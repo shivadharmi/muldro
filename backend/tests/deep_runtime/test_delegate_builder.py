@@ -427,13 +427,17 @@ async def test_no_trust_gate_write_lock_or_presenter_voice():
     assert system_prompt == cfg.prompt
     assert PRESENTER_VOICE not in system_prompt
 
-    # exactly two middlewares: the capability_scope guard + the tool dispatcher.
-    # No trust_gate / write_lock (those gate WRITES; a read-only delegate never writes).
+    # The scope guard + the tool dispatcher + the virtual-filesystem suppressor, and
+    # NOTHING else. No trust_gate / write_lock (those gate WRITES; a read-only delegate
+    # never writes). Asserted as an exact SET rather than a count so an unintended
+    # addition still fails while a deliberate one is named here.
     middleware = captured["middleware"]
     mw_ids = {getattr(m, "name", None) or type(m).__name__ for m in middleware}
-    assert len(middleware) == 2
-    assert "capability_scope_guard" in mw_ids
-    assert "muldro_tool_dispatcher" in mw_ids
+    assert mw_ids == {
+        "capability_scope_guard",
+        "muldro_tool_dispatcher",
+        "no_virtual_filesystem",
+    }
     lowered = " ".join(str(x).lower() for x in mw_ids)
     assert "trust_gate" not in lowered
     assert "write_lock" not in lowered
