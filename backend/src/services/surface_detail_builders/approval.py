@@ -6,6 +6,10 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.deep_runtime.middleware.approval_persistence import (
+    TOOL_INPUT_KEY,
+    TOOL_INPUT_TRUNCATED_KEY,
+)
 from src.ui import renderer as r
 from src.ui.contracts import A2UIComponent, DetailTabResponse
 
@@ -51,10 +55,10 @@ async def build_approval_request(
         # ``tool_params`` above which stores a raw dict — so ``str()`` here is a no-op that
         # documents the type rather than converting it. Do not remove it: it is what keeps
         # this block correct if the stored shape ever changes.
-        tool_input = apr.artifact_refs.get("tool_input")
+        tool_input = apr.artifact_refs.get(TOOL_INPUT_KEY)
         if tool_input:
             children.append(r.code_block("apr_input", str(tool_input), language="json"))
-            if apr.artifact_refs.get("tool_input_truncated"):
+            if apr.artifact_refs.get(TOOL_INPUT_TRUNCATED_KEY):
                 children.append(
                     r.caption(
                         "apr_input_clipped",

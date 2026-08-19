@@ -65,6 +65,22 @@ logger = logging.getLogger(__name__)
 _ZERO_USAGE: dict[str, int] = {"input": 0, "output": 0, "cache_creation": 0, "cache_read": 0}
 
 
+def is_blocked_result(message) -> bool:
+    """Whether a tool result should surface to the client as a ``blocked`` frame.
+
+    A tool message reports failure through ``status == "error"``, and the client stops the
+    turn on a ``blocked`` frame. This is why a PREPARED write must carry ``status="success"``
+    (see ``confirmation.prepared_tool_message``): staging an action is not failing it, and
+    marking it an error would halt the lead at the first staged write instead of letting the
+    turn finish and report what it prepared.
+
+    Named rather than inlined so that invariant is ASSERTABLE — ``tests/test_confirmation.py``
+    feeds a real prepared ToolMessage straight into this predicate, which is the only automated
+    warning a future reader gets before "correcting" that status and reintroducing the freeze.
+    """
+    return getattr(message, "status", None) == "error"
+
+
 def _approval_needed_frame(agent_name: str, value: dict, config: dict) -> dict:
     """Build the ``approval_needed`` frame from a gate's ``interrupt(...)`` payload.
 
@@ -198,7 +214,7 @@ async def stream_deep_agent_events(
                         "agent": agent_name,
                         "tool": tool_name,
                         "result": msg.content,
-                        "blocked": getattr(msg, "status", None) == "error",
+                        "blocked": is_blocked_result(msg),
                         "latency_ms": max(0, int((time.monotonic() - started) * 1000)),
                     }
             elif mode == "updates":

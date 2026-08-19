@@ -13,6 +13,7 @@ from src.api.deps import get_current_user_id, get_current_workspace_id, get_sess
 from src.api.routes_approvals_prepared import publish_prepared_decision, run_prepared_action
 from src.api.schemas import ApprovalDecisionRequest, ApprovalDetailResponse, ApprovalResponse
 from src.config.settings import Settings, get_settings
+from src.deep_runtime.middleware.approval_persistence import PREPARED_KEY
 from src.errors import classify, new_correlation_id
 from src.middleware.observability import get_correlation_id
 from src.middleware.security import RATE_LIMIT_APPROVAL_DECISION, per_endpoint_rate_limit
@@ -222,7 +223,7 @@ async def approve_action(
     # row. Confirmation REPLAYS that recorded payload — it must NOT be routed through
     # GraphExecutor, whose agent would re-derive it and could run something other than what
     # the founder reviewed.
-    if (approval.artifact_refs or {}).get("prepared") is True:
+    if (approval.artifact_refs or {}).get(PREPARED_KEY) is True:
         await run_prepared_action(approval, user_id=user_id, db=db, settings=settings)
         await db.commit()
         await publish_prepared_decision(
@@ -465,7 +466,7 @@ async def reject_action(
     except Exception:
         pass
 
-    if (approval.artifact_refs or {}).get("prepared") is True:
+    if (approval.artifact_refs or {}).get(PREPARED_KEY) is True:
         # A rejected prepared action simply never runs: no graph to resume, and no TrustState
         # to feed (prepared work is not trust-graduated). It IS audited — refusing a
         # fully-derived external write is a founder decision, as worth logging as approving

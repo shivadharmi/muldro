@@ -7,12 +7,14 @@ presence grants something `permission_mode` did not.
 import json
 
 import pytest
+from langchain_core.messages import ToolMessage
 
 from src.deep_runtime.confirmation import (
     prepared_tool_message,
     resolve_confirmation,
     resolve_effective_permission_mode,
 )
+from src.deep_runtime.stream_adapter import is_blocked_result
 
 
 @pytest.mark.parametrize(
@@ -97,3 +99,28 @@ def test_prepared_tool_message_is_success_not_error():
     assert "error" not in body
     # It must say plainly that nothing ran.
     assert "not executed" in body["detail"].lower()
+
+
+def test_a_prepared_write_does_not_read_as_blocked_to_the_client():
+    """The link between ``prepared_tool_message``'s status and the client's stop condition,
+    asserted rather than commented.
+
+    The test above pins the status to the literal ``"success"``; this one pins what that
+    literal BUYS, by feeding a real prepared ToolMessage into the real predicate the stream
+    adapter uses. Flipping that status to ``"error"`` makes this fail, which is the only
+    automated warning a future reader gets before reintroducing the freeze.
+    """
+    msg = prepared_tool_message(
+        name="gmail_send_email", tool_call_id="c1", approval_id="apr_1", capability="email.send"
+    )
+    assert is_blocked_result(msg) is False
+
+
+def test_a_real_failure_still_reads_as_blocked_to_the_client():
+    """The positive control. Without it the test above passes against a predicate that has
+    been broken into always returning False — which would ALSO stop reporting real tool
+    failures to the client, silently."""
+    failed = ToolMessage(content="boom", tool_call_id="c1", name="gmail_send_email", status="error")
+    assert is_blocked_result(failed) is True
+    # A message with no status at all is not a failure (the adapter sees these).
+    assert is_blocked_result(ToolMessage(content="ok", tool_call_id="c2")) is False

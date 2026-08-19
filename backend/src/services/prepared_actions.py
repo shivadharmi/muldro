@@ -23,6 +23,11 @@ import logging
 from dataclasses import dataclass
 from typing import Literal
 
+from src.deep_runtime.middleware.approval_persistence import (
+    CAPABILITY_SCOPE_KEY,
+    TOOL_INPUT_KEY,
+    TOOL_INPUT_TRUNCATED_KEY,
+)
 from src.services.tool_registry import ToolRegistry
 from src.services.write_lock import WriteLockContended, acquire_write_lock
 
@@ -75,9 +80,9 @@ def _recorded_input(approval) -> dict:
     where the truncation landed. Trusting the flag makes it depend on nothing.
     """
     refs = approval.artifact_refs or {}
-    if refs.get("tool_input_truncated"):
+    if refs.get(TOOL_INPUT_TRUNCATED_KEY):
         raise TruncatedPayload("recorded payload was clipped at persist time")
-    raw = refs.get("tool_input")
+    raw = refs.get(TOOL_INPUT_KEY)
     if raw in (None, ""):
         return {}
     if isinstance(raw, dict):
@@ -139,7 +144,7 @@ async def execute_prepared_action(
         )
 
     # 3. Fail closed unless the capability is inside the SNAPSHOTTED scope. Never re-derived.
-    snapshot = refs.get("capability_scope")
+    snapshot = refs.get(CAPABILITY_SCOPE_KEY)
     if not isinstance(snapshot, list) or not snapshot:
         return PreparedActionResult(
             "refused", error="no capability scope was recorded for this action — refusing"

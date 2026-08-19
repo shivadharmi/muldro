@@ -92,6 +92,21 @@ def redact_tool_input(args: dict | None) -> tuple[str, bool]:
     return payload, False
 
 
+# The ``artifact_refs`` keys ``build_legibility_refs`` writes and OTHER MODULES read back.
+# Named here — at the writer — because each one fails QUIETLY on a rename rather than raising,
+# so a half-done rename passes every test on both sides while the behaviour changes:
+#   * ``capability_scope`` — ``prepared_actions`` fails CLOSED without it, so the symptom is
+#     "no prepared action ever executes again", with nothing pointing at the cause;
+#   * ``tool_input_truncated`` — fails the other way and replays a CLIPPED payload as if whole;
+#   * ``tool_input`` / ``prepared`` — the replay reads an empty payload, and the prepared branch
+#     in ``routes_approvals`` silently stops firing (prepared rows fall down the autonomous path).
+# One definition, several consumers, no convention. Keys with only one consumer stay literals.
+CAPABILITY_SCOPE_KEY = "capability_scope"
+TOOL_INPUT_KEY = "tool_input"
+TOOL_INPUT_TRUNCATED_KEY = "tool_input_truncated"
+PREPARED_KEY = "prepared"
+
+
 def build_legibility_refs(
     tool_input: dict | None,
     capability_scope,
@@ -111,9 +126,9 @@ def build_legibility_refs(
     """
     persisted_input, input_truncated = redact_tool_input(tool_input)
     refs = {
-        "tool_input": persisted_input,
-        "tool_input_truncated": input_truncated,
-        "capability_scope": sorted(capability_scope),
+        TOOL_INPUT_KEY: persisted_input,
+        TOOL_INPUT_TRUNCATED_KEY: input_truncated,
+        CAPABILITY_SCOPE_KEY: sorted(capability_scope),
         # EFFECTIVE, not nominal. A turn the founder was actively watching is recorded here as
         # ``absent`` when the downgrade came from a missing durable checkpointer rather than
         # from nobody being there (``_resolve_effective_presence``). The review queue will read
@@ -124,7 +139,7 @@ def build_legibility_refs(
         # Marks a row the review queue owns. Kept out of the dict entirely when False rather
         # than written as `"prepared": False`, so a queue query can key on presence-of-key and
         # every pre-existing approval row stays correctly excluded.
-        refs["prepared"] = True
+        refs[PREPARED_KEY] = True
     return refs
 
 

@@ -13,6 +13,10 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.deep_runtime.middleware.approval_persistence import (
+    TOOL_INPUT_KEY,
+    TOOL_INPUT_TRUNCATED_KEY,
+)
 from src.ui import renderer as r
 from src.ui.contracts import A2UIComponent, DetailTabResponse
 
@@ -63,10 +67,10 @@ def _row_children(idx: int, apr: Any) -> list[A2UIComponent]:
 
     # Already a JSON STRING (``redact_tool_input`` serialises before persisting), so ``str()``
     # is a no-op that documents the type rather than converting it.
-    tool_input = refs.get("tool_input")
+    tool_input = refs.get(TOOL_INPUT_KEY)
     if tool_input:
         children.append(r.code_block(f"pq_{idx}_input", str(tool_input), language="json"))
-        if refs.get("tool_input_truncated"):
+        if refs.get(TOOL_INPUT_TRUNCATED_KEY):
             children.append(
                 r.caption(
                     f"pq_{idx}_clipped",
