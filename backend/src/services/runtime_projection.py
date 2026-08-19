@@ -164,7 +164,7 @@ class RuntimeProjectionService:
         "Currently executing" means a ``TaskStep`` in ``running`` status whose
         parent ``TaskRun`` is also ``running``. Each step's capability (stored
         in ``input_data["capability"]``) is resolved to the agent that owns it
-        via the same routing logic as :func:`capability_resolver.route_step`.
+        via :func:`capability_resolver.classify_capability_agent`.
 
         Implemented as a single DISTINCT query for in-flight step capabilities,
         followed by an in-memory resolution against a single enabled-tools load

@@ -248,24 +248,18 @@ async def test_stream_deep_lead_increments_deep_runtime_metric():
     mock_counter.labels.return_value.inc.assert_called_once()
 
 
-# --- Dormancy proof: 5a adds callable-but-UNWIRED code --------------------------------
+# --- Wiring proof: _process_core delegates every turn to the lead ---------------------
 def test_chat_processor_wires_single_lead_branch():
-    """P1 Task B (5b) wired the deep single-lead chat path into ``_process_core``;
-    P2.3 WIDENED it to the full chat permission model; P2.2c EXTRACTED the single-lead
-    body into ``chat_single_lead.py`` (``_ChatSingleLeadMixin``). ``_process_core`` MUST
-    still resolve an EFFECTIVE mode (checking ``deep_single_lead`` FIRST so the default
-    short-circuits with zero extra I/O) and DELEGATE to ``_run_single_lead`` on that
-    resolved mode; the lead build + stream live in the mixin — see
-    ``tests/test_chat_single_lead.py`` for the behavioral coverage."""
+    """``_process_core`` MUST resolve an EFFECTIVE permission mode and DELEGATE the turn to
+    ``_run_single_lead``; the lead build + stream live in the mixin (``chat_single_lead.py``,
+    ``_ChatSingleLeadMixin``). Since the collapse there is no second arm to fall to — see
+    ``tests/test_chat_single_lead.py`` and ``tests/test_chat_event_sequence.py`` for the
+    behavioral coverage."""
     orch = Path(__file__).resolve().parent.parent / "src" / "orchestrator"
     core_src = (orch / "chat_processor.py").read_text()
     lead_src = (orch / "chat_single_lead.py").read_text()
-    # ``_process_core`` resolves the effective mode + delegates to the mixin. P2.3: the
-    # branch is gated on a resolved effective mode (fail-safe downgrades), not a bare
-    # exact-equality on "bypass". Assert the wiring SYMBOLS (not an exact expression
-    # string, which would break on a benign refactor) — behavioral coverage lives in
-    # tests/test_chat_single_lead.py.
-    assert "deep_single_lead" in core_src
+    # Assert the wiring SYMBOLS (not an exact expression string, which would break on a
+    # benign refactor) — behavioral coverage lives in tests/test_chat_single_lead.py.
     assert "effective_mode" in core_src
     assert "workspace_allows_bypass" in core_src
     assert "has_durable_checkpointer" in core_src

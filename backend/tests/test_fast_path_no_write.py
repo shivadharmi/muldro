@@ -59,15 +59,14 @@ def _make_chat() -> object:
     """Build a ChatProcessor with every collaborator mocked (golden-test pattern).
 
     ``call_agent_stream`` records the ``(agent_name, message)`` pairs so the test can assert
-    which agent path ran; it yields a minimal ``agent_done`` frame for every agent.
+    which agent path ran; it yields a minimal ``agent_done`` frame for every agent. The lead
+    (``stream_deep_lead``) records under the name ``"lead"``.
     """
     from src.orchestrator.chat_processor import ChatProcessor
 
     chat = ChatProcessor.__new__(ChatProcessor)
 
-    # deep_single_lead=False (explicit) → the P2.3 effective-mode resolution short-circuits
-    # on the cheap flag; the diverted turn runs the legacy path to completion.
-    chat._settings = make_mock_settings(deep_single_lead=False)
+    chat._settings = make_mock_settings()
 
     trace = MagicMock()
     trace.trace_id = "trace_fence"
@@ -89,6 +88,7 @@ def _make_chat() -> object:
 
     chat._context = MagicMock()
     chat._context.load_conversation_history = AsyncMock(return_value="")
+    chat._context.assemble_context = AsyncMock(return_value="")
 
     chat._perception = MagicMock()
     chat._perception._bump_perception_for_sources = AsyncMock()
@@ -115,8 +115,16 @@ def _make_chat() -> object:
         yield {"event": "agent_start", "agent": agent_name, "model": "m"}
         yield {"event": "agent_done", "agent": agent_name, "text": "ok"}
 
+    async def _stream_deep_lead(lead, tools=None, **kw):
+        recorded.append(("lead", kw.get("message", "")))
+        yield {"event": "agent_start", "agent": "lead", "model": "m"}
+        yield {"event": "agent_done", "agent": "lead", "text": "ok"}
+
     chat._invoker = MagicMock()
     chat._invoker.call_agent_stream = _call_agent_stream
+    chat._invoker.build_chat_lead = AsyncMock(return_value=MagicMock(name="lead"))
+    chat._invoker.stream_deep_lead = _stream_deep_lead
+    chat._invoker.has_durable_checkpointer = MagicMock(return_value=True)
     chat._recorded = recorded  # convenience handle for assertions
     return chat
 
@@ -158,7 +166,7 @@ async def test_write_emitting_fast_intent_diverts_to_planner():
         patch(f"{_MOD}.classify_intent", new=AsyncMock(return_value=(fast, 0.95, []))),
         patch(f"{_MOD}.intent_to_plan", new=MagicMock(return_value=write_plan)),
         patch(f"{_MOD}.extract_plan", new=MagicMock(return_value=planner_plan)),
-        patch(f"{_MOD}.resolve_plan_routing", new=AsyncMock(return_value=([], []))),
+        patch(f"{_MOD}.resolve_plan_routing", new=MagicMock(return_value=[])),
     ):
         await _drive(chat)
 

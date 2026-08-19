@@ -1,13 +1,20 @@
-"""Characterization of the LEGACY multi-agent chat arm's CoreEvent sequence.
+"""The exact ``CoreEvent`` sequence a chat turn yields, per plan shape.
 
-TEMPORARY — this file exists so the single-lead collapse is provably behaviour-preserving for
-the event sequence the FRONTEND consumes (`routes_chat` translates CoreEvents to SSE and the
-UI renders from them). The next task converts each captured sequence into an assertion against
-the single-lead path and deletes the legacy half.
+These sequences were CAPTURED from the legacy multi-agent arm immediately before it was
+deleted, then re-asserted here against the single lead that replaced it. That is the point
+of the file: the collapse changed how a turn executes, and these pin what the change did
+and did not do to the events leaving the pipeline.
 
-Do not extend this file, and do not treat the captured sequences as a specification: they are
-a snapshot of what the code did on 2026-08-19, not a statement of what it ought to do. If one
-looks wrong, that is a finding to report — not something to correct here.
+That matters because this sequence IS the chat contract the frontend renders.
+``routes_chat`` translates each ``CoreEvent`` to SSE and the web client switches on the
+result — and it persists the assistant reply only on a ``Presentation``, so a turn that
+loses that event produces an EMPTY BUBBLE rather than an error. A change to any sequence
+below is a change to what the user sees; make it deliberately, with the frontend diff, not
+as a side effect of a refactor.
+
+Two crossings are load-bearing and deliberately NOT tidied: the ``PlanReady`` CoreEvent maps
+to SSE ``"plan"``, while ``PlanModeStepSkipped`` maps to SSE ``"plan_ready"``. Renaming
+either breaks the client silently — no backend test asserts the SSE names.
 """
 
 from __future__ import annotations
@@ -29,13 +36,19 @@ from tests.test_chat_pipeline_golden import (
 
 # ── Capture helpers ───────────────────────────────────────────────────────────
 
+# The Planner call and the lead call each contribute one agent triplet. Before the
+# collapse there was one per routed step PLUS one for the Presenter; now there is
+# exactly one lead, so every shape below shows the same two.
+_PLANNER_TRIPLET = ["agent_started", "agent_text_delta", "agent_done"]
+_LEAD_TRIPLET = ["agent_started", "agent_text_delta", "agent_done"]
+
 
 async def _stream_event_types(orch, **kw) -> list[str]:
     """The ordered CoreEvent discriminators the STREAM drive mode yields.
 
     ``process_message_events`` is the typed entry point ``process_message_stream``
     is a thin SSE adapter over, so this is the stream path's own sequence
-    (``presence=present``, ``prompt_style="conversational"``).
+    (``presence=present``).
     """
     return [
         event.type
@@ -55,10 +68,9 @@ def _spy_core(orch) -> list[str]:
     ``process_message`` folds events into a dict rather than yielding them, so the
     batch path has no natural sequence at its public boundary. It also drives the
     core with *different* arguments than the stream path (``presence=absent``,
-    ``prompt_style="structured"``, ``mode="plan"``), so its sequence is genuinely
-    its own and cannot be inferred from the stream capture. Both halves are pinned:
-    this list, and the result dict's key set (the contract ``routes_ws`` returns
-    verbatim).
+    ``mode="plan"``), so its sequence is genuinely its own and cannot be inferred
+    from the stream capture. Both halves are pinned: this list, and the result
+    dict's key set (the contract ``routes_ws`` returns verbatim).
     """
     seen: list[str] = []
     original = orch._process_core
@@ -89,55 +101,44 @@ class _Scenario:
         return False
 
 
-# ── Scenario A: single read-only Perceiver step (presenter-skip) ──────────────
+# ── Scenario A: single read-only step ─────────────────────────────────────────
 
 
 class TestSingleReadSequence:
-    """Two agent triplets only (Planner, Perceiver): the Presenter LLM call is
-    skipped, yet ``presentation`` still fires — carrying the Perceiver's own
-    synthesis."""
+    """One read. Two agent triplets (Planner, lead) and a ``presentation`` carrying the
+    lead's own answer — the frontend has no other source of terminal text."""
 
     async def test_stream(self):
-        plan, routing, users, canned = _scenario_single_read()
+        plan, users, canned = _scenario_single_read()
         orch, _ = _make_orch(canned)
-        with _Scenario(_patches(plan, routing, users)):
+        with _Scenario(_patches(plan, users)):
             types = await _stream_event_types(orch)
 
         assert types == [
             "trace_started",
             "intent_classified",
-            "agent_started",
-            "agent_text_delta",
-            "agent_done",
+            *_PLANNER_TRIPLET,
             "interaction_logged",
             "plan_ready",
-            "agent_started",
-            "agent_text_delta",
-            "agent_done",
-            "step_result",
+            *_LEAD_TRIPLET,
             "presentation",
             "run_completed",
         ]
 
     async def test_batch(self):
-        plan, routing, users, canned = _scenario_single_read()
+        plan, users, canned = _scenario_single_read()
         orch, _ = _make_orch(canned)
         types = _spy_core(orch)
-        with _Scenario(_patches(plan, routing, users)):
+        with _Scenario(_patches(plan, users)):
             result = await _run_batch(orch)
 
         assert types == [
             "trace_started",
             "intent_classified",
-            "agent_started",
-            "agent_text_delta",
-            "agent_done",
+            *_PLANNER_TRIPLET,
             "interaction_logged",
             "plan_ready",
-            "agent_started",
-            "agent_text_delta",
-            "agent_done",
-            "step_result",
+            *_LEAD_TRIPLET,
             "presentation",
             "run_completed",
         ]
@@ -146,71 +147,49 @@ class TestSingleReadSequence:
             "plan",
             "presentation",
             "run_id",
-            "step_0_calendar.read",
             "summary",
             "trace_id",
         ]
 
 
-# ── Scenario B: multi-step read -> read (Presenter runs) ──────────────────────
+# ── Scenario B: multi-step read -> read ───────────────────────────────────────
 
 
 class TestMultiStepSequence:
+    """A two-step plan yields the SAME sequence as a one-step plan: the steps scope the
+    lead, they do not each get an agent call."""
+
     async def test_stream(self):
-        plan, routing, users, canned = _scenario_multi_step()
+        plan, users, canned = _scenario_multi_step()
         orch, _ = _make_orch(canned)
-        with _Scenario(_patches(plan, routing, users)):
+        with _Scenario(_patches(plan, users)):
             types = await _stream_event_types(orch)
 
         assert types == [
             "trace_started",
             "intent_classified",
-            "agent_started",
-            "agent_text_delta",
-            "agent_done",
+            *_PLANNER_TRIPLET,
             "interaction_logged",
             "plan_ready",
-            "agent_started",
-            "agent_text_delta",
-            "agent_done",
-            "step_result",
-            "agent_started",
-            "agent_text_delta",
-            "agent_done",
-            "step_result",
-            "agent_started",
-            "agent_text_delta",
-            "agent_done",
+            *_LEAD_TRIPLET,
             "presentation",
             "run_completed",
         ]
 
     async def test_batch(self):
-        plan, routing, users, canned = _scenario_multi_step()
+        plan, users, canned = _scenario_multi_step()
         orch, _ = _make_orch(canned)
         types = _spy_core(orch)
-        with _Scenario(_patches(plan, routing, users)):
+        with _Scenario(_patches(plan, users)):
             result = await _run_batch(orch)
 
         assert types == [
             "trace_started",
             "intent_classified",
-            "agent_started",
-            "agent_text_delta",
-            "agent_done",
+            *_PLANNER_TRIPLET,
             "interaction_logged",
             "plan_ready",
-            "agent_started",
-            "agent_text_delta",
-            "agent_done",
-            "step_result",
-            "agent_started",
-            "agent_text_delta",
-            "agent_done",
-            "step_result",
-            "agent_started",
-            "agent_text_delta",
-            "agent_done",
+            *_LEAD_TRIPLET,
             "presentation",
             "run_completed",
         ]
@@ -219,8 +198,6 @@ class TestMultiStepSequence:
             "plan",
             "presentation",
             "run_id",
-            "step_0_calendar.read",
-            "step_1_knowledge.search",
             "summary",
             "trace_id",
         ]
@@ -230,59 +207,48 @@ class TestMultiStepSequence:
 
 
 class TestUserActionSequence:
+    """``user_actions_ready`` fires BEFORE the lead runs (the user is told what is theirs
+    to do whether or not the lead then pauses)."""
+
     async def test_stream(self):
-        plan, routing, users, canned = _scenario_user_action()
+        plan, users, canned = _scenario_user_action()
         orch, _ = _make_orch(canned)
-        with _Scenario(_patches(plan, routing, users)):
+        with _Scenario(_patches(plan, users)):
             types = await _stream_event_types(orch)
 
         assert types == [
             "trace_started",
             "intent_classified",
-            "agent_started",
-            "agent_text_delta",
-            "agent_done",
+            *_PLANNER_TRIPLET,
             "interaction_logged",
             "plan_ready",
-            "agent_started",
-            "agent_text_delta",
-            "agent_done",
-            "step_result",
             "user_actions_ready",
-            "agent_started",
-            "agent_text_delta",
-            "agent_done",
+            *_LEAD_TRIPLET,
             "presentation",
             "run_completed",
         ]
 
     async def test_batch_plan_mode(self):
-        plan, routing, users, canned = _scenario_user_action()
+        plan, users, canned = _scenario_user_action()
         orch, _ = _make_orch(canned)
         types = _spy_core(orch)
-        with _Scenario(_patches(plan, routing, users)):
+        with _Scenario(_patches(plan, users)):
             result = await _run_batch(orch)
 
         assert types == [
             "trace_started",
             "intent_classified",
-            "agent_started",
-            "agent_text_delta",
-            "agent_done",
+            *_PLANNER_TRIPLET,
             "interaction_logged",
             "plan_ready",
-            "plan_mode_step_skipped",
             "user_actions_ready",
-            "agent_started",
-            "agent_text_delta",
-            "agent_done",
+            *_LEAD_TRIPLET,
             "presentation",
             "run_completed",
         ]
         assert sorted(result) == [
             "interaction_id",
             "plan",
-            "plan_ready",
             "presentation",
             "run_id",
             "summary",
@@ -290,29 +256,24 @@ class TestUserActionSequence:
             "user_actions",
         ]
 
-    async def test_batch_ask_mode_executes_the_risky_step(self):
-        plan, routing, users, canned = _scenario_user_action()
+    async def test_batch_ask_mode(self):
+        """``mode`` no longer changes the sequence: it stopped deciding whether a risky
+        step runs, so ask and plan produce the same events. What gates the write now is
+        ``permission_gate`` x ``presence`` at action time, inside the lead."""
+        plan, users, canned = _scenario_user_action()
         orch, _ = _make_orch(canned)
         types = _spy_core(orch)
-        with _Scenario(_patches(plan, routing, users)):
+        with _Scenario(_patches(plan, users)):
             result = await _run_batch(orch, mode="ask")
 
         assert types == [
             "trace_started",
             "intent_classified",
-            "agent_started",
-            "agent_text_delta",
-            "agent_done",
+            *_PLANNER_TRIPLET,
             "interaction_logged",
             "plan_ready",
-            "agent_started",
-            "agent_text_delta",
-            "agent_done",
-            "step_result",
             "user_actions_ready",
-            "agent_started",
-            "agent_text_delta",
-            "agent_done",
+            *_LEAD_TRIPLET,
             "presentation",
             "run_completed",
         ]
@@ -321,7 +282,6 @@ class TestUserActionSequence:
             "plan",
             "presentation",
             "run_id",
-            "step_0_email.send",
             "summary",
             "trace_id",
             "user_actions",
@@ -332,47 +292,41 @@ class TestUserActionSequence:
 
 
 class TestSystemStepSequence:
+    """``system.*`` steps still run deterministically, ahead of the lead."""
+
     async def test_stream(self):
-        plan, routing, users, canned = _scenario_system_step()
+        plan, users, canned = _scenario_system_step()
         orch, _ = _make_orch(canned)
-        with _Scenario(_patches(plan, routing, users)):
+        with _Scenario(_patches(plan, users)):
             types = await _stream_event_types(orch)
 
         assert types == [
             "trace_started",
             "intent_classified",
-            "agent_started",
-            "agent_text_delta",
-            "agent_done",
+            *_PLANNER_TRIPLET,
             "interaction_logged",
             "plan_ready",
             "system_step_result",
-            "agent_started",
-            "agent_text_delta",
-            "agent_done",
+            *_LEAD_TRIPLET,
             "presentation",
             "run_completed",
         ]
 
     async def test_batch(self):
-        plan, routing, users, canned = _scenario_system_step()
+        plan, users, canned = _scenario_system_step()
         orch, _ = _make_orch(canned)
         types = _spy_core(orch)
-        with _Scenario(_patches(plan, routing, users)):
+        with _Scenario(_patches(plan, users)):
             result = await _run_batch(orch)
 
         assert types == [
             "trace_started",
             "intent_classified",
-            "agent_started",
-            "agent_text_delta",
-            "agent_done",
+            *_PLANNER_TRIPLET,
             "interaction_logged",
             "plan_ready",
             "system_step_result",
-            "agent_started",
-            "agent_text_delta",
-            "agent_done",
+            *_LEAD_TRIPLET,
             "presentation",
             "run_completed",
         ]
@@ -387,36 +341,34 @@ class TestSystemStepSequence:
         ]
 
 
-# ── Scenario E: plan mode skips a risky step (stream-only `mode`) ─────────────
+# ── Scenario E: a risky step under mode="plan" ────────────────────────────────
 
 
 def _scenario_plan_mode():
     s1 = _step("s1", "email.send", risk="high", description="send")
     plan = PlanOutput(goal="send", reasoning="r", steps=[s1])
-    routing = [(s1, "executor", [{"name": "t"}])]
-    canned = {"planner": "PLAN_TEXT", "presenter": "Plan ready."}
-    return plan, routing, [], canned
+    canned = {"planner": "PLAN_TEXT", "lead": "Plan ready."}
+    return plan, [], canned
 
 
 class TestPlanModeSequence:
+    """``mode="plan"`` marks the plan ``requires_user_input`` and nothing else: there is
+    no ``plan_mode_step_skipped`` any more, because there is no per-step loop to skip in.
+    The write is still gated — by ``permission_gate`` inside the lead, at action time."""
+
     async def test_stream(self):
-        plan, routing, users, canned = _scenario_plan_mode()
+        plan, users, canned = _scenario_plan_mode()
         orch, _ = _make_orch(canned)
-        with _Scenario(_patches(plan, routing, users, intent="greeting", confidence=0.99)):
+        with _Scenario(_patches(plan, users, intent="greeting", confidence=0.99)):
             types = await _stream_event_types(orch, mode="plan")
 
         assert types == [
             "trace_started",
             "intent_classified",
-            "agent_started",
-            "agent_text_delta",
-            "agent_done",
+            *_PLANNER_TRIPLET,
             "interaction_logged",
             "plan_ready",
-            "plan_mode_step_skipped",
-            "agent_started",
-            "agent_text_delta",
-            "agent_done",
+            *_LEAD_TRIPLET,
             "presentation",
             "run_completed",
         ]

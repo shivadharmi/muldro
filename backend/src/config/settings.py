@@ -201,23 +201,15 @@ class Settings(BaseSettings):
     # False the deep path builds the full eager pack (byte-identical to legacy).
     deep_context_jit: bool = False  # MULDRO_DEEP_CONTEXT_JIT
 
-    # Step 10D A-5: gate the deep-chat single-lead restructure. When True AND mode=="ask",
-    # the chat path runs ONE synthetic lead over the whole goal (built in 5a, wired in 5b)
-    # instead of the per-step loop + presenter step.
-    # Off by default — dormant until the 5b chat wiring lands and this flag is flipped.
-    deep_single_lead: bool = False  # MULDRO_DEEP_SINGLE_LEAD
-
     # Single-lead cutover: how long a PREPARED action stays actionable in the review queue
     # before it expires. Longer than approval_service's 24h default because prepared work is
     # reviewed on the founder's schedule, not the turn's.
     prepared_action_ttl_days: int = 7  # MULDRO_PREPARED_ACTION_TTL_DAYS
 
-    # Step 10D P2.5c: drop the Planner from the deep chat single-lead path. When True (and only
-    # when the single-lead path is already active — deep_single_lead + permission_mode), a chat
-    # turn skips classify_intent + fast-path + Planner + plan record +
-    # resolve_plan_routing entirely and builds ONE lead from the connector-derived scope
-    # (resolve_connector_scope). Off by default — dormant; flag-off is byte-identical (Planner
-    # still called). Gates ONLY the P2.5c reroute, independently of deep_single_lead.
+    # Step 10D P2.5c: drop the Planner from the chat single-lead path. When True a chat turn
+    # skips classify_intent + fast-path + Planner + plan record + resolve_plan_routing entirely
+    # and builds ONE lead from the connector-derived scope (resolve_connector_scope). Off by
+    # default — flag-off keeps the Planner in the loop.
     chat_planless: bool = False  # MULDRO_CHAT_PLANLESS
 
     # Step-10A A3: opt-in fail-closed write lock. When True, a WRITE tool call is REFUSED

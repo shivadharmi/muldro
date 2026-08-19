@@ -5,7 +5,6 @@ Covers:
 - AgentResult.response_text None default (Task 3.1)
 - StepResult.duration_ms None default (Task 3.2)
 - SpanRecord.decision removed (Task 2.5)
-- route_step returns empty string for unknown capability (Task 1.3)
 - _call_agent propagates LoopError (Task 1.2)
 - has_presenter_step includes system.respond/system.acknowledge (Task 4.2)
 """
@@ -24,7 +23,6 @@ from src.contracts import (
     SpanRecord,
     StepResult,
 )
-from src.services.capability_resolver import CapabilityResolver, route_step
 
 # ── PlanOutput circular dependency validation ──────────────────────────
 
@@ -149,38 +147,6 @@ class TestContractDefaults:
     def test_span_record_no_decision_field(self):
         span = SpanRecord(span_id="sp1", agent_name="test")
         assert not hasattr(span, "decision") or "decision" not in span.model_fields
-
-
-# ── route_step unknown capability ──────────────────────────────────────
-
-
-def _mock_db_with_tools(tools: list) -> AsyncMock:
-    db = AsyncMock()
-    result = MagicMock()
-    result.scalars.return_value.all.return_value = tools
-    db.execute = AsyncMock(return_value=result)
-    return db
-
-
-class TestRouteStepUnknownCapability:
-    @pytest.mark.asyncio
-    async def test_unknown_capability_returns_empty_string(self):
-        db = _mock_db_with_tools([])
-        resolver = CapabilityResolver(db, "ws_test")
-        result = await route_step("nonexistent.capability", resolver)
-        assert result == ""
-
-    @pytest.mark.asyncio
-    async def test_known_capability_returns_agent(self):
-        tool = MagicMock()
-        tool.name = "gmail_search"
-        tool.capability = "email.search"
-        tool.requires_approval = False
-        tool.enabled = True
-        db = _mock_db_with_tools([tool])
-        resolver = CapabilityResolver(db, "ws_test")
-        result = await route_step("email.search", resolver)
-        assert result == "perceiver"
 
 
 # ── has_presenter_step includes system.respond ─────────────────────────

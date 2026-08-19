@@ -1,141 +1,62 @@
-"""Characterization tests for the chat orchestration helpers (ORCH-P1-1).
+"""Tests for ``src.orchestrator.chat_pipeline``.
 
-These pin the EXACT behavior of the shared blocks extracted from
-``MuldroOrchestrator.process_message`` and ``process_message_stream`` into
-``src.orchestrator.chat_pipeline``. The expected strings are copied from the
-pre-extraction inline code, so any drift in the moved bodies fails here. They
-must stay green across the structural change.
+The prompt-builder tests that used to live here (``format_prior_step_results``,
+``format_prior_results_for_presenter``, ``build_user_action_block``) went with the
+legacy multi-agent arm: there is no Presenter step to build a prompt for and no
+prior-step results to thread between agents. What remains is the user/lead split.
 """
 
 import types
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 
 def _step(**kw):
-    """A lightweight stand-in for PlanStep (the helpers only read attributes)."""
+    """A lightweight stand-in for PlanStep (the helper only reads attributes)."""
     return types.SimpleNamespace(**kw)
 
 
-class TestFormatPriorStepResults:
-    def test_empty_returns_blank(self):
-        from src.orchestrator.chat_pipeline import format_prior_step_results
-
-        assert format_prior_step_results({}) == ""
-
-    def test_single_entry(self):
-        from src.orchestrator.chat_pipeline import format_prior_step_results
-
-        out = format_prior_step_results({"step_0_perceive": "found 3 emails"})
-        assert out == (
-            "\n\n--- Prior step results ---\n"
-            "[step_0_perceive]:\nfound 3 emails"
-            "\n--- End of prior step results ---\n"
-        )
-
-    def test_multiple_entries_joined_with_blank_line(self):
-        from src.orchestrator.chat_pipeline import format_prior_step_results
-
-        out = format_prior_step_results({"a": "x", "b": "y"})
-        assert out == (
-            "\n\n--- Prior step results ---\n"
-            "[a]:\nx\n\n[b]:\ny"
-            "\n--- End of prior step results ---\n"
-        )
-
-
-class TestFormatPriorResultsForPresenter:
-    def test_empty_returns_blank(self):
-        from src.orchestrator.chat_pipeline import format_prior_results_for_presenter
-
-        assert format_prior_results_for_presenter({}) == ""
-
-    def test_single_entry_uses_presenter_header(self):
-        from src.orchestrator.chat_pipeline import format_prior_results_for_presenter
-
-        out = format_prior_results_for_presenter({"step_0_perceive": "data"})
-        assert out == (
-            "\n\n--- Prior step results (use these to answer the user) ---\n"
-            "[step_0_perceive]:\ndata"
-            "\n--- End of prior step results ---\n"
-        )
-
-
-class TestBuildUserActionBlock:
-    def test_with_context(self):
-        from src.orchestrator.chat_pipeline import build_user_action_block
-
-        steps = [_step(description="Reply to email", user_context="urgent")]
-        assert (
-            build_user_action_block(steps)
-            == "\n\nUser actions required:\n- Reply to email (urgent)"
-        )
-
-    def test_without_context(self):
-        from src.orchestrator.chat_pipeline import build_user_action_block
-
-        steps = [_step(description="Reply to email", user_context=None)]
-        assert build_user_action_block(steps) == "\n\nUser actions required:\n- Reply to email"
-
-    def test_multiple_steps_newline_joined(self):
-        from src.orchestrator.chat_pipeline import build_user_action_block
-
-        steps = [
-            _step(description="A", user_context=None),
-            _step(description="B", user_context="ctx"),
-        ]
-        assert build_user_action_block(steps) == "\n\nUser actions required:\n- A\n- B (ctx)"
-
-
 class TestResolvePlanRouting:
-    def _db_factory(self):
-        db = AsyncMock()
-        cm = MagicMock()
-        cm.__aenter__ = AsyncMock(return_value=db)
-        cm.__aexit__ = AsyncMock(return_value=False)
-        return MagicMock(return_value=cm)
+    """``resolve_plan_routing`` returns ONLY the user-actor steps, in plan order.
 
-    async def test_routes_special_capabilities_without_resolver(self, monkeypatch):
-        import src.orchestrator.chat_pipeline as cp
+    Everything else is the lead's — it is built with the plan's capability union and
+    discovers its own tools, so no step is pre-resolved to an agent or a tool set.
+    """
 
-        # CapabilityResolver is constructed but only used in the else-branch;
-        # route_step must NOT be called for system./reason/respond/perceive.
-        monkeypatch.setattr(cp, "CapabilityResolver", lambda db, ws: MagicMock())
-        route_step = AsyncMock()
-        monkeypatch.setattr(cp, "route_step", route_step)
+    def test_returns_only_user_actor_steps_in_plan_order(self):
+        from src.orchestrator.chat_pipeline import resolve_plan_routing
 
         steps = [
             _step(actor="user", capability="email.draft"),
-            _step(actor="agent", capability="system.respond"),
-            _step(actor="agent", capability="reason"),
-            _step(actor="agent", capability="respond"),
-            _step(actor="agent", capability="perceive"),
+            _step(actor="muldro", capability="system.respond"),
+            _step(actor="muldro", capability="email.send"),
+            _step(actor="user", capability="approve.manual"),
         ]
-        routing, user_steps = await cp.resolve_plan_routing(self._db_factory(), "ws_1", steps)
+        assert resolve_plan_routing(steps) == [steps[0], steps[3]]
 
-        assert len(user_steps) == 1
-        assert routing == [
-            (steps[1], "", []),
-            (steps[2], "presenter", []),
-            (steps[3], "presenter", []),
-            (steps[4], "perceiver", []),
+    def test_no_user_steps_returns_empty(self):
+        from src.orchestrator.chat_pipeline import resolve_plan_routing
+
+        steps = [
+            _step(actor="muldro", capability="calendar.read"),
+            _step(actor="muldro", capability="knowledge.search"),
         ]
-        route_step.assert_not_called()
+        assert resolve_plan_routing(steps) == []
 
-    async def test_resolves_normal_capability_via_route_step(self, monkeypatch):
-        import src.orchestrator.chat_pipeline as cp
+    def test_empty_plan_returns_empty(self):
+        from src.orchestrator.chat_pipeline import resolve_plan_routing
 
-        resolver = MagicMock()
-        resolver.resolve_for_step = AsyncMock(return_value=[{"name": "send_email"}])
-        monkeypatch.setattr(cp, "CapabilityResolver", lambda db, ws: resolver)
-        monkeypatch.setattr(cp, "route_step", AsyncMock(return_value="executor"))
+        assert resolve_plan_routing([]) == []
 
-        steps = [_step(actor="agent", capability="email.send")]
-        routing, user_steps = await cp.resolve_plan_routing(self._db_factory(), "ws_1", steps)
+    def test_takes_no_db_and_does_no_io(self):
+        """It is a pure filter — a sync function with one argument. If this signature
+        grows a session factory again, per-step resolution has crept back in."""
+        import inspect
 
-        assert user_steps == []
-        assert routing == [(steps[0], "executor", [{"name": "send_email"}])]
+        from src.orchestrator.chat_pipeline import resolve_plan_routing
+
+        assert not inspect.iscoroutinefunction(resolve_plan_routing)
+        assert list(inspect.signature(resolve_plan_routing).parameters) == ["steps"]
 
 
 if __name__ == "__main__":

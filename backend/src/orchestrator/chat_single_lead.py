@@ -1,18 +1,22 @@
-"""Deep single-lead chat helpers — the ``ask``/``auto``/``bypass`` permission path.
+"""The chat lead — how every chat turn actually runs.
 
 Extracted from :class:`~src.orchestrator.chat_processor.ChatProcessor` (P2.2c,
-structure-only) so ``chat_processor.py`` stays under the file-size cap. This mixin owns
-the three pieces that belong to the single-lead permission subsystem and share a
-completion tail:
+structure-only) so ``chat_processor.py`` stays under the file-size cap. ``_process_core``
+does intent → plan; everything after that is here. One lead per turn, scoped to the
+plan's capability union, discovering its own tools — there is no per-step agent routing
+and no Presenter step:
 
-* :meth:`_run_single_lead` — the ``_process_core`` single-lead BRANCH (system.* steps →
-  user actions → build lead → stream → pause seam → re-home the reply → completion tail).
+* :meth:`_run_single_lead` — the PLANNED path (system.* steps → user actions → build lead
+  → stream → pause seam → re-home the reply → completion tail).
+* :meth:`_run_single_lead_planless` — the same, without a plan (``chat_planless``).
 * :meth:`resume_message_events` — the RESUME half of a paused ask/auto turn (drives the
   invoker's ``resume_deep_lead``, re-homes the continuation reply, runs the tail).
 * :meth:`_emit_completion_tail` — the ONE completion tail (run_completed → surface push →
-  optional learner → ``RunCompleted``) shared by ``_run_single_lead``,
-  ``resume_message_events``, and (for the legacy branch) ``_process_core``. Co-locating
-  the two lead paths kills the tail duplication they used to carry independently.
+  optional learner → ``RunCompleted``) shared by every producer of a terminal reply.
+
+INVARIANT: a non-failing turn ALWAYS ends in a ``Presentation``. ``routes_chat`` persists
+the reply only on that event and the frontend has no other source of terminal text, so a
+dropped ``Presentation`` is an empty chat bubble — a silent failure, not an error.
 
 ``ChatProcessor`` inherits this mixin (split-via-inheritance) — the methods run on a full
 ``ChatProcessor`` instance and reach its collaborators via ``self`` exactly as before.
@@ -129,27 +133,25 @@ class _ChatSingleLeadMixin:
         presence: str,
         user_steps,
     ) -> AsyncGenerator[CoreEvent, None]:
-        """The deep single-lead chat BRANCH (P2.3): taken for the resolved effective mode
-        (bypass/ask/auto). Same safety posture as today's ungated chat, plus the
-        action-time permission gate (ask/auto) that suspends a write for confirmation.
+        """Run the turn's ONE lead over a plan, for the already-resolved effective mode
+        (bypass/ask/auto) — plus the action-time permission gate (ask/auto) that suspends
+        or prepares a write depending on ``presence``.
 
         The Planner already ran → the plan carries the plan-union scope + the system.*
-        steps. Same safety posture as today's ungated chat, just single-lead execution
-        (one lead vs N per-step calls + presenter). On a normal reply this runs its own
-        completion tail; on a pause it emits ``ApprovalRequired`` and returns WITHOUT the
-        tail (the resume path runs the tail on the terminal reply).
+        steps. On a normal reply this runs its own completion tail; on a pause it emits
+        ``ApprovalRequired`` and returns WITHOUT the tail (the resume path runs the tail
+        on the terminal reply).
         """
         # (a) system.* steps run deterministically here (Planner-produced;
-        # handle_system_capability takes only (step, plan, ...) — no data dep on
-        # agent-step outputs — so running them before the lead is behavior-equivalent to
-        # the per-step loop).
+        # handle_system_capability takes only (step, plan, ...) — no data dep on the
+        # lead's output — so running them before the lead is well-defined).
         for step in plan.steps:
             if getattr(step, "actor", None) != "user" and step.capability.startswith("system."):
                 sys_result = await self._system_capability_handler.handle_system_capability(
                     step, plan, user_id, workspace_id
                 )
                 yield SystemStepResult(key=f"system_{step.capability}", output=sys_result)
-        # (b) user actions (same contract as the legacy path).
+        # (b) user actions — reported to the user, never executed here.
         if user_steps:
             yield UserActionsReady(
                 steps=[
@@ -195,10 +197,10 @@ class _ChatSingleLeadMixin:
     ) -> AsyncGenerator[CoreEvent, None]:
         """Stream a built lead, handle the pause seam, re-home the reply, and run the completion
         tail. Shared verbatim by the planned (:meth:`_run_single_lead`) and planless
-        (:meth:`_run_single_lead_planless`) single-lead paths — the ONLY difference between them
-        is how the lead + ``context_block`` are built, so that setup stays in each caller and this
+        (:meth:`_run_single_lead_planless`) paths — the ONLY difference between them is how the
+        lead + ``context_block`` are built, so that setup stays in each caller and this
         streaming/pause/tail seam lives here once (mirrors how ``_emit_completion_tail`` folds the
-        tail). ``agent_name`` is always None on the single-lead path (no per-step agent)."""
+        tail)."""
         presenter_text = ""
         async for frame in self._invoker.stream_deep_lead(
             lead,

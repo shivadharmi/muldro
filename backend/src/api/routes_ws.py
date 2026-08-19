@@ -522,9 +522,10 @@ async def _queue_insight_action(
     model that was reading attacker-controllable content (an email body, a Slack
     message). Passing it to ``process_message`` relabels it as the founder's own
     words -- that path carries ``authorization_source=DIRECT_USER_REQUEST``, so
-    ``trust_gate`` returns early ("the user's message IS the authorization") and
-    ``permission_gate`` is not installed at all (it requires ``deep_single_lead``,
-    which is off). One click then produced an ungated external write.
+    ``trust_gate`` returns early ("the user's message IS the authorization"), and
+    the batch entry is ``presence=absent``, where ``permission_gate`` PREPARES a
+    confirmable write rather than blocking it. One click would then stage, or in
+    ``auto`` outright run, an external write derived from attacker-influenced prose.
 
     Note what this does and does not fix. ``capability`` and ``action_input`` are
     *also* model-authored, so they are not trusted here -- they are **gated**.

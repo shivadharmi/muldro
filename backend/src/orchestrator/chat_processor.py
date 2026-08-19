@@ -31,25 +31,16 @@ from src.errors import classify, new_correlation_id
 from src.integrations.capabilities import CAPABILITY_CATALOG
 from src.integrations.turn_scope import turn_scope
 from src.middleware.observability import get_correlation_id
-from src.orchestrator.chat_pipeline import (
-    build_presenter_message,
-    build_user_action_block,
-    format_prior_results_for_presenter,
-    format_prior_step_results,
-    resolve_plan_routing,
-)
+from src.orchestrator.chat_pipeline import resolve_plan_routing
 from src.orchestrator.chat_single_lead import _ChatSingleLeadMixin
 from src.orchestrator.core_events import (
     CoreEvent,
     IntentClassified,
     InteractionLogged,
-    PlanModeStepSkipped,
     PlanReady,
     Presentation,
     RunCompleted,
     RunFailed,
-    StepError,
-    StepResult,
     SystemStepResult,
     TraceStarted,
     UserActionsReady,
@@ -64,9 +55,7 @@ from src.orchestrator.intent_classifier import (
     extract_plan,
     intent_to_plan,
 )
-from src.orchestrator.presenter_skip import extract_perceiver_synthesis, single_read_step
 from src.services.capability_resolver import CapabilityResolver
-from src.services.surface_mapping import strip_surface_blocks
 from src.services.workspace_entitlements import workspace_allows_bypass
 
 logger = logging.getLogger(__name__)
@@ -179,13 +168,13 @@ class ChatProcessor(_ChatSingleLeadMixin):
         Accumulating adapter over :meth:`_process_core`: validate inputs (the
         batch-shaped ``{"error": ...}``), drive the core to exhaustion, and fold
         its ``CoreEvent``s into the result dict that ``routes_ws`` returns
-        verbatim. ``prompt_style="structured"`` selects the one-shot Presenter
-        prompt (chat-pipeline-fold drift #1).
+        verbatim.
 
-        ``mode`` defaults to ``"plan"`` (chat-pipeline-fold drift #6): the batch
-        path is non-interactive, so risky (medium/high) steps are surfaced for
-        approval rather than auto-executed, closing the latent ungated-background
-        gap. Interactive callers (WS surface actions, where the user's click is
+        ``mode`` defaults to ``"plan"``, which now only marks the plan
+        ``requires_user_input`` — it no longer decides whether a risky step runs. What
+        keeps this non-interactive entry safe is ``presence=ABSENT`` below: a write the
+        gate would confirm is PREPARED for review instead of executed or interrupted.
+        Interactive callers (WS surface actions, where the user's click is
         authorization) override to ``"ask"``; pre-authorized scheduled automation
         (``custom_agent_task``) overrides to ``"execute"``. See the override map
         in ``routes_ws`` / ``schedule_dispatch``.
@@ -206,7 +195,6 @@ class ChatProcessor(_ChatSingleLeadMixin):
             surface=surface,
             mode=mode,
             permission_mode=permission_mode,
-            prompt_style="structured",
             context=context,
             conversation_id=conversation_id,
             # BATCH entry: no synchronous user is on this turn, so a CONFIRM verdict cannot be
@@ -226,14 +214,6 @@ class ChatProcessor(_ChatSingleLeadMixin):
                     result["summary"] = summary
                 case SystemStepResult(key=key, output=output):
                     result[key] = output
-                case StepResult(key=key, output=output):
-                    result[key] = output
-                case StepError(step_id=step_id, error=error):
-                    result[f"error_{step_id}"] = error
-                case PlanModeStepSkipped(plan_id=plan_id, message=skip_message):
-                    result.setdefault("plan_ready", []).append(
-                        {"plan_id": plan_id, "message": skip_message}
-                    )
                 case UserActionsReady(steps=steps):
                     result["user_actions"] = steps
                 case Presentation(text=text):
@@ -259,6 +239,12 @@ class ChatProcessor(_ChatSingleLeadMixin):
                     # AgentStreamEvent / IntentClassified / typed agent events:
                     # batch drops token-level events. Explicit so a new CoreEvent
                     # is a deliberate drop, not a silent one.
+                    #
+                    # The per-step arms (``StepResult`` -> ``step_{i}_{cap}``, ``StepError``
+                    # -> ``error_{step_id}``, ``PlanModeStepSkipped`` -> ``plan_ready``) went
+                    # with the legacy arm: nothing yields those events any more, because
+                    # there are no per-step agent calls to yield them. The lead's reply
+                    # arrives as ``presentation`` on every non-failing turn.
                     pass
         return error_result if error_result is not None else result
 
@@ -276,9 +262,8 @@ class ChatProcessor(_ChatSingleLeadMixin):
         """Public typed-event entry point for the conversational (streaming) path.
 
         Validate inputs (yielding a typed :class:`ValidationFailed`), then drive
-        :meth:`_process_core` with ``prompt_style="conversational"`` (the live-chat
-        Presenter prompt, chat-pipeline-fold drift #1). Consumers that want SSE
-        dicts use :meth:`process_message_stream`; consumers that fold typed events
+        :meth:`_process_core`. Consumers that want SSE dicts use
+        :meth:`process_message_stream`; consumers that fold typed events
         (``routes_chat``) consume this directly via :func:`core_event_to_sse`.
         """
         if not user_id or not workspace_id:
@@ -295,7 +280,6 @@ class ChatProcessor(_ChatSingleLeadMixin):
             surface=surface,
             mode=mode,
             permission_mode=permission_mode,
-            prompt_style="conversational",
             context=context,
             conversation_id=conversation_id,
             # STREAMING entry: a synchronous user IS on this turn, so a CONFIRM verdict can be
@@ -359,25 +343,22 @@ class ChatProcessor(_ChatSingleLeadMixin):
 
     async def _resolve_effective_mode(
         self, permission_mode: str, presence: str, workspace_id: str
-    ) -> str | None:
-        """Resolve the EFFECTIVE permission mode for the deep single-lead chat path.
+    ) -> str:
+        """Resolve the EFFECTIVE permission mode for this chat turn.
 
         SECURITY — this decides whether/how a write is gated. The policy itself is the pure,
         exhaustively-tested :func:`resolve_effective_permission_mode`; this method supplies the
         one input that needs a DB read (the workspace bypass entitlement).
 
         ``presence`` must ALREADY be the effective presence
-        (see :meth:`_resolve_effective_presence`).
+        (see :meth:`_resolve_effective_presence`) and may only ever DOWNGRADE authority —
+        there is no branch by which it grants what ``permission_mode`` did not.
 
-        Returns ``None`` when the single-lead path should NOT be taken (the legacy multi-agent
-        arm runs instead). ``self._settings.deep_single_lead`` is checked FIRST so the default
-        path does ZERO extra work — no entitlement read. THAT GUARD AND THIS ``None`` RETURN ARE
-        BOTH DELETED IN THE COLLAPSE COMMIT, together with the legacy arm.
+        ALWAYS returns a mode: every turn runs one lead, so there is no "not applicable"
+        answer and an unknown mode fails closed to ``ask`` rather than opting out. Do not
+        reintroduce a transport flag (a feature toggle, a runtime name, a channel) as an
+        authority input here — the two inputs above are the whole vocabulary.
         """
-        if not self._settings.deep_single_lead or presence != PRESENT:
-            return None
-        if permission_mode not in ("bypass", "ask", "auto"):
-            return None
         bypass_entitled = True
         if permission_mode == "bypass":
             bypass_entitled = await workspace_allows_bypass(self._db_factory, workspace_id)
@@ -397,7 +378,6 @@ class ChatProcessor(_ChatSingleLeadMixin):
         *,
         surface: str,
         mode: str,
-        prompt_style: str,
         context: dict | None,
         conversation_id: str | None,
         permission_mode: str = "auto",
@@ -405,11 +385,15 @@ class ChatProcessor(_ChatSingleLeadMixin):
     ) -> AsyncGenerator[CoreEvent, None]:
         """Unified chat-orchestration pipeline shared by both public entry points.
 
-        Drives the single intent → plan → route → execute → present → surface →
-        learn sequence and yields typed ``CoreEvent``s. ``process_message_stream``
-        translates them to SSE; ``process_message`` folds them into the batch
-        result dict. Assumes inputs are already validated by the calling adapter;
-        owns the trace lifecycle and the terminal ``RunFailed`` on exception.
+        Drives the single intent → plan → lead → present → surface → learn sequence and
+        yields typed ``CoreEvent``s. ``process_message_stream`` translates them to SSE;
+        ``process_message`` folds them into the batch result dict. Assumes inputs are
+        already validated by the calling adapter; owns the trace lifecycle and the
+        terminal ``RunFailed`` on exception.
+
+        ONE lead runs per turn, scoped to the plan's capability union, discovering its own
+        tools. There is no per-step agent routing and no Presenter step — the lead's own
+        reply is the turn's reply.
 
         Runtime events fire in the background (the stream path's discipline,
         adopted for both per chat-pipeline-fold drift #4).
@@ -443,32 +427,30 @@ class ChatProcessor(_ChatSingleLeadMixin):
                     conversation_id, user_id=user_id, workspace_id=workspace_id
                 )
 
-                # P2.5c planless reroute: when the flag is on AND the deep single-lead path is
-                # already active, DROP the Planner entirely — skip classify_intent, the fast-path,
-                # the Planner call, the Plan record, PlanReady, resolve_plan_routing, and
-                # UserActionsReady — and route the whole turn through ONE connector-scoped lead
-                # (which self-plans + calls its own system.* tools). `self._settings.chat_planless`
-                # (a cheap bool, OFF by default) short-circuits FIRST so the flag-off path is
-                # byte-identical: this whole block is skipped and control falls through to the
-                # classify_intent + Planner flow below. The single-lead entry check reuses the SAME
-                # `_resolve_effective_mode` the planned path uses at its own site below.
+                # P2.5c planless reroute: when the flag is on, DROP the Planner entirely — skip
+                # classify_intent, the fast-path, the Planner call, the Plan record, PlanReady,
+                # resolve_plan_routing, and UserActionsReady — and route the whole turn through
+                # ONE connector-scoped lead (which self-plans + calls its own system.* tools).
+                # `self._settings.chat_planless` (a cheap bool, OFF by default) short-circuits
+                # FIRST so the flag-off path is byte-identical: this block is skipped and control
+                # falls through to the classify_intent + Planner flow below. Both paths resolve
+                # the effective permission mode through the SAME `_resolve_effective_mode`.
                 if self._settings.chat_planless:
                     effective_mode = await self._resolve_effective_mode(
                         permission_mode, presence, workspace_id
                     )
-                    if effective_mode in ("bypass", "ask", "auto"):
-                        async for evt in self._run_single_lead_planless(
-                            message=message,
-                            history_block=history_block,
-                            trace=trace,
-                            user_id=user_id,
-                            workspace_id=workspace_id,
-                            effective_mode=effective_mode,
-                            presence=presence,
-                            conversation_id=conversation_id,
-                        ):
-                            yield evt
-                        return
+                    async for evt in self._run_single_lead_planless(
+                        message=message,
+                        history_block=history_block,
+                        trace=trace,
+                        user_id=user_id,
+                        workspace_id=workspace_id,
+                        effective_mode=effective_mode,
+                        presence=presence,
+                        conversation_id=conversation_id,
+                    ):
+                        yield evt
+                    return
 
                 # Step 0: Fast intent classification
                 intent, confidence, sources = await classify_intent(
@@ -589,188 +571,36 @@ class ChatProcessor(_ChatSingleLeadMixin):
                     payload={"goal": plan.goal, "trace_id": trace.trace_id},
                 )
 
-                # Step 2: Pre-resolve routing and tools for all steps
-                step_routing, user_steps = await resolve_plan_routing(
-                    self._db_factory, workspace_id, plan.steps
-                )
+                # Step 2: the steps the USER must act on (reported, never executed here).
+                # Everything else is the lead's: it is built with the plan's capability union
+                # and discovers its own tools, so nothing is pre-resolved per step.
+                user_steps = resolve_plan_routing(plan.steps)
 
-                # Step 3: Execute steps. `presenter_text` is declared here for the
-                # multi-agent path's shared completion tail below. The single-lead path
-                # (below) owns its own presenter_text + completion tail inside the mixin.
-                presenter_text = ""
-                agent_name: str | None = None
-
-                # Step 10D P2.3 (chat permission model): resolve the EFFECTIVE permission mode
-                # for the deep single-lead chat path (fail-safe downgrades). SECURITY — this
-                # decides whether/how a write is gated. Extracted to `_resolve_effective_mode`
-                # so the P2.5c planless early-gate can reuse the SAME resolution before the
-                # plan machinery, without duplicating the downgrade logic.
+                # Step 3: resolve the EFFECTIVE permission mode (fail-safe downgrades only) and
+                # run the turn's ONE lead. SECURITY — the mode decides whether/how a write is
+                # gated; `_resolve_effective_mode` is the single resolution both this path and
+                # the planless path above share.
                 effective_mode = await self._resolve_effective_mode(
                     permission_mode, presence, workspace_id
                 )
 
-                # The deep single-lead chat path (P2.3): taken for the resolved effective mode
-                # (bypass/ask/auto). Same safety posture as today's ungated chat, plus the
-                # action-time permission gate (ask/auto) that suspends a write for confirmation.
-                if effective_mode in ("bypass", "ask", "auto"):
-                    # SINGLE-LEAD PATH (P2.3) — delegated to the _ChatSingleLeadMixin
-                    # (:meth:`_run_single_lead`): system.* steps → user actions → build lead
-                    # → stream → pause seam → re-home reply → its own completion tail. On a
-                    # pause it emits ``ApprovalRequired`` and stops WITHOUT the tail. The
-                    # ``return`` here hands the whole single-lead turn (incl. tail) to the
-                    # mixin, so the shared legacy tail below is reached ONLY by the ``else``.
-                    async for evt in self._run_single_lead(
-                        plan=plan,
-                        message=message,
-                        history_block=history_block,
-                        intent=intent,
-                        trace=trace,
-                        user_id=user_id,
-                        workspace_id=workspace_id,
-                        effective_mode=effective_mode,
-                        presence=presence,
-                        user_steps=user_steps,
-                    ):
-                        yield evt
-                    return
-                else:
-                    # LEGACY per-step path — the existing body, moved UNCHANGED (indented one
-                    # level). `step_outputs` is the narrow prior-context accumulator (agent
-                    # step text only) injected into downstream agents — kept separate from
-                    # the batch result contract so plan/trace metadata never leaks into agent
-                    # prompts (drift #2).
-                    step_outputs: dict[str, str] = {}
-                    for step_idx, (step, agent_name, tools) in enumerate(step_routing):
-                        if step.capability.startswith("system."):
-                            sys_result = (
-                                await self._system_capability_handler.handle_system_capability(
-                                    step, plan, user_id, workspace_id
-                                )
-                            )
-                            yield SystemStepResult(
-                                key=f"system_{step.capability}", output=sys_result
-                            )
-                            continue
-
-                        if not agent_name:
-                            error_msg = f"No tools available for capability '{step.capability}'"
-                            logger.warning(error_msg)
-                            yield StepError(step_id=step.step_id, error=error_msg)
-                            continue
-
-                        # Plan mode: skip risky execution, present the plan
-                        if mode == "plan" and step.risk in ("medium", "high"):
-                            yield PlanModeStepSkipped(
-                                plan_id=plan.plan_id,
-                                message="Plan created. Review and approve to execute.",
-                            )
-                            continue
-
-                        agent_message = (
-                            f"Execute this step: {step.description}\n"
-                            f"Goal: {plan.goal}\n"
-                            f"User message: {message}"
-                        )
-                        # Inject prior step results so downstream agents see earlier outputs.
-                        agent_message += format_prior_step_results(step_outputs)
-                        if history_block:
-                            agent_message = f"{history_block}\n\n{agent_message}"
-
-                        step_key = f"step_{step_idx}_{step.capability}"
-                        async for evt in self._invoker.call_agent_stream(
-                            agent_name,
-                            message=agent_message,
-                            user_id=user_id,
-                            trace=trace,
-                            workspace_id=workspace_id,
-                            tools_override=tools if tools else None,
-                            presence=presence,
-                        ):
-                            yield agent_event_from_sse(evt)
-                            if evt.get("event") == "agent_done":
-                                done_text = evt.get("text", "")
-                                yield StepResult(key=step_key, output=done_text)
-                                # Capture step outputs for downstream agents (truthy only).
-                                if done_text:
-                                    step_outputs[step_key] = done_text
-                                # Capture text from respond/reason steps for surface preview.
-                                if step.capability in ("reason", "respond"):
-                                    presenter_text = done_text
-
-                    # Build user action block from user_steps
-                    user_action_block = ""
-                    if user_steps:
-                        user_action_block = build_user_action_block(user_steps)
-                        yield UserActionsReady(
-                            steps=[
-                                {"description": s.description, "context": s.user_context}
-                                for s in user_steps
-                            ]
-                        )
-
-                    # Latency: when the whole plan is one read-only Perceiver step,
-                    # return that read's own `synthesis` prose directly and skip the
-                    # Presenter LLM call (presenter_skip.py). Use the explicit
-                    # suffix-match (deterministic for multi-output; drift #3).
-                    direct_answer = None
-                    read_step = single_read_step(step_routing, user_steps)
-                    if read_step is not None and step_outputs:
-                        read_key = next(
-                            (k for k in step_outputs if k.endswith(f"_{read_step.capability}")),
-                            None,
-                        )
-                        if read_key:
-                            direct_answer = extract_perceiver_synthesis(step_outputs[read_key])
-
-                    # Step 4: Presenter formatting — unless we already have the read
-                    # agent's own answer above. system.respond steps are no-ops in
-                    # _handle_system_capability and reason/respond steps execute with
-                    # the wrong context, so for anything other than a single read we
-                    # still call the Presenter or the chat is left empty.
-                    if direct_answer is not None:
-                        presenter_text = direct_answer
-                        yield Presentation(text=direct_answer)
-                    else:
-                        # Collect prior step results so Presenter can reference them.
-                        prior_results_block = format_prior_results_for_presenter(step_outputs)
-                        presenter_msg = build_presenter_message(
-                            prompt_style=prompt_style,
-                            surface=surface,
-                            message=message,
-                            intent=intent,
-                            plan_dict=plan_dict,
-                            plan_text=plan_text,
-                            prior_results_block=prior_results_block,
-                            user_action_block=user_action_block,
-                            history_block=history_block,
-                        )
-                        async for evt in self._invoker.call_agent_stream(
-                            "presenter",
-                            message=presenter_msg,
-                            user_id=user_id,
-                            trace=trace,
-                            workspace_id=workspace_id,
-                            presence=presence,
-                        ):
-                            yield agent_event_from_sse(evt)
-                            if evt.get("event") == "agent_done":
-                                presenter_text = evt.get("text", "")
-                                # Strip fenced surface blocks for the chat-visible reply
-                                # while keeping presenter_text raw for surface extraction.
-                                yield Presentation(text=strip_surface_blocks(presenter_text))
-
-                # COMPLETION TAIL (multi-agent path) — the shared ``_emit_completion_tail``
-                # (run_completed → surface push → learner → RunCompleted). The single-lead
-                # path runs the SAME helper from inside the mixin; the resume path runs it
-                # with the learner disabled.
-                async for evt in self._emit_completion_tail(
+                # THE LEAD — delegated to the _ChatSingleLeadMixin (:meth:`_run_single_lead`):
+                # system.* steps -> user actions -> build lead -> stream -> pause seam ->
+                # re-home reply -> completion tail. It owns its own tail, so `_process_core`
+                # has none of its own: on a pause the mixin emits ``ApprovalRequired`` and
+                # stops WITHOUT the tail, and the resume path runs the tail on the terminal
+                # reply instead.
+                async for evt in self._run_single_lead(
+                    plan=plan,
+                    message=message,
+                    history_block=history_block,
+                    intent=intent,
                     trace=trace,
-                    presenter_text=presenter_text,
                     user_id=user_id,
                     workspace_id=workspace_id,
-                    message=message,
-                    intent=intent,
-                    run_learner=True,
+                    effective_mode=effective_mode,
+                    presence=presence,
+                    user_steps=user_steps,
                 ):
                     yield evt
 

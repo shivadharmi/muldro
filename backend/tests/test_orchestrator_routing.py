@@ -1,17 +1,29 @@
-"""Tests for capability-based routing in process_message()."""
+"""Tests for capability-based planning in process_message().
+
+The per-step routing assertions that used to live here ("greeting routes to the
+Presenter", "a single read skips the Presenter") went with the legacy multi-agent arm:
+there is no per-step agent call left to route, and no Presenter step to skip. What the
+Planner still decides is the plan — its steps, their capabilities, and the ``system.*``
+steps that run deterministically before the lead. That is what these pin.
+"""
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from tests.conftest import make_mock_settings
 
-def _make_orchestrator():
-    """Create a MuldroOrchestrator with all deps mocked."""
+
+def _make_orchestrator(*, lead_text: str = "Hello! How can I help?"):
+    """Create a MuldroOrchestrator with all deps mocked.
+
+    ``make_mock_settings`` (NOT a bare ``MagicMock``) is load-bearing: an unset MagicMock
+    attribute is TRUTHY, so a bare mock silently flips ``chat_planless`` on and drops the
+    Planner these tests are about.
+    """
     from src.orchestrator.muldro import MuldroOrchestrator
 
-    settings = MagicMock()
-    settings.daily_token_budget_usd = 10.0
-    settings.redis_url = "redis://localhost:6379"
+    settings = make_mock_settings(daily_token_budget_usd=10.0)
 
     mock_db = AsyncMock()
     mock_db.commit = AsyncMock()
@@ -38,124 +50,62 @@ def _make_orchestrator():
 
     orch = MuldroOrchestrator(settings=settings, db_factory=db_factory, services=services)
 
+    # The turn's ONE lead. Recorded on the orchestrator so tests can read the reply back.
+    async def _stream_deep_lead(lead, tools=None, **kw):
+        yield {"event": "agent_start", "agent": "lead", "model": "m"}
+        yield {"event": "agent_done", "agent": "lead", "text": lead_text}
+
+    orch._chat._invoker.build_chat_lead = AsyncMock(return_value=MagicMock(name="lead"))
+    orch._chat._invoker.build_planless_lead = AsyncMock(return_value=MagicMock(name="lead"))
+    orch._chat._invoker.stream_deep_lead = _stream_deep_lead
+    orch._chat._invoker.has_durable_checkpointer = MagicMock(return_value=True)
+    orch._chat._plans.log_interaction = AsyncMock(return_value="ilog_01")
+    orch._push_workspace_surface = AsyncMock()
+    orch._chat._events.emit_runtime_event = AsyncMock()
+    orch._chat._context.load_conversation_history = AsyncMock(return_value="")
+    orch._chat._context.assemble_context = AsyncMock(return_value="")
+    orch._chat._get_available_capabilities = AsyncMock(return_value=[])
+    orch._chat._surfaces.push_presenter_surface = AsyncMock(return_value=None)
     return orch
 
 
-class TestProcessMessageRouting:
-    """process_message() uses PlanOutput capability-based routing."""
+class TestProcessMessagePlanning:
+    """``process_message()`` plans with PlanOutput, then runs ONE lead."""
 
     @pytest.mark.asyncio
     @patch("src.orchestrator.chat_processor.classify_intent")
-    async def test_fast_path_greeting_routes_to_presenter(self, mock_classify):
+    async def test_greeting_still_replies_with_no_per_step_agent(self, mock_classify):
+        """A greeting reaches a reply, and the Planner is the ONLY per-agent call left —
+        the answer comes from the lead, not from a routed Presenter step."""
         mock_classify.return_value = ("greeting", 0.99, [])
-        orch = _make_orchestrator()
+        orch = _make_orchestrator(lead_text="Hello! How can I help?")
 
         agents_called = []
 
-        # Batch folds from the streaming core, so it drives _call_agent_stream.
         async def mock_call_agent_stream(agent_name, **kwargs):
             agents_called.append(agent_name)
-            yield {"event": "agent_done", "agent": agent_name, "text": "Hello! How can I help?"}
+            yield {"event": "agent_done", "agent": agent_name, "text": ""}
 
         orch._chat._invoker.call_agent_stream = mock_call_agent_stream
-        orch._chat._plans.log_interaction = AsyncMock(return_value="ilog_01")
-        orch._push_workspace_surface = AsyncMock()
-        orch._chat._events.emit_runtime_event = AsyncMock()
-        orch._chat._context.load_conversation_history = AsyncMock(return_value="")
-        orch._chat._get_available_capabilities = AsyncMock(return_value=[])
 
         result = await orch.process_message(
             message="Hey Muldro",
             user_id="usr_1",
             workspace_id="ws_1",
         )
-        # Fast path greeting -> intent_to_plan -> PlanStep(capability="respond")
-        # -> Presenter agent
-        assert "presenter" in agents_called
+        # The batch entry defaults to mode="plan", which forces the Planner regardless of
+        # intent. It is the only named agent invoked: no presenter, no perceiver.
+        assert agents_called == ["planner"]
+        assert result["presentation"] == "Hello! How can I help?"
         assert "error" not in result
 
     @pytest.mark.asyncio
     @patch("src.orchestrator.chat_processor.classify_intent")
-    async def test_single_read_skips_presenter(self, mock_classify):
-        """A single read-only Perceiver step returns its synthesis directly;
-        the Presenter LLM call is skipped (latency fix)."""
-        mock_classify.return_value = ("data_fetch", 0.95, ["calendar"])
-        orch = _make_orchestrator()
-
-        agents_called = []
-
-        async def mock_call_agent_stream(agent_name, **kwargs):
-            agents_called.append(agent_name)
-            if agent_name == "perceiver":
-                text = (
-                    '{"query": "calendar", "findings": [], '
-                    '"synthesis": "You have 2 meetings today.", "gaps": []}'
-                )
-            else:
-                text = "should not be called"
-            yield {"event": "agent_done", "agent": agent_name, "text": text}
-
-        orch._chat._invoker.call_agent_stream = mock_call_agent_stream
-        orch._chat._plans.log_interaction = AsyncMock(return_value="ilog_01")
-        orch._push_workspace_surface = AsyncMock()
-        orch._chat._events.emit_runtime_event = AsyncMock()
-        orch._chat._context.load_conversation_history = AsyncMock(return_value="")
-        orch._chat._get_available_capabilities = AsyncMock(return_value=[])
-
-        # mode="ask" exercises the fast-path single-read optimization (the
-        # plan="plan" default forces the Planner, bypassing intent_to_plan).
-        result = await orch.process_message(
-            message="what's on my calendar today",
-            user_id="usr_1",
-            workspace_id="ws_1",
-            mode="ask",
-        )
-
-        assert "perceiver" in agents_called
-        assert "presenter" not in agents_called
-        assert result["presentation"] == "You have 2 meetings today."
-
-    @pytest.mark.asyncio
-    @patch("src.orchestrator.chat_processor.classify_intent")
-    async def test_single_read_falls_back_to_presenter_when_no_synthesis(self, mock_classify):
-        """If the read output has no usable synthesis, the Presenter still runs."""
-        mock_classify.return_value = ("data_fetch", 0.95, ["calendar"])
-        orch = _make_orchestrator()
-
-        agents_called = []
-
-        async def mock_call_agent_stream(agent_name, **kwargs):
-            agents_called.append(agent_name)
-            if agent_name == "perceiver":
-                text = "plain prose, not the expected JSON object"
-            else:
-                text = "Here is your calendar."
-            yield {"event": "agent_done", "agent": agent_name, "text": text}
-
-        orch._chat._invoker.call_agent_stream = mock_call_agent_stream
-        orch._chat._plans.log_interaction = AsyncMock(return_value="ilog_01")
-        orch._push_workspace_surface = AsyncMock()
-        orch._chat._events.emit_runtime_event = AsyncMock()
-        orch._chat._context.load_conversation_history = AsyncMock(return_value="")
-        orch._chat._get_available_capabilities = AsyncMock(return_value=[])
-
-        # mode="ask" exercises the fast-path single-read fallback (the
-        # plan="plan" default forces the Planner, bypassing intent_to_plan).
-        await orch.process_message(
-            message="what's on my calendar today",
-            user_id="usr_1",
-            workspace_id="ws_1",
-            mode="ask",
-        )
-
-        assert "presenter" in agents_called  # fallback preserved
-
-    @pytest.mark.asyncio
-    @patch("src.orchestrator.chat_processor.classify_intent")
     async def test_system_set_goal_calls_handler(self, mock_classify):
-        """Planner returns a system.set_goal step -> direct handler called."""
+        """Planner returns a system.set_goal step -> the handler runs deterministically,
+        ahead of the lead."""
         mock_classify.return_value = ("command", 0.9, [])
-        orch = _make_orchestrator()
+        orch = _make_orchestrator(lead_text="Goal set!")
 
         plan_json = (
             '{"goal": "Launch by April", "steps": [{"step_id": "s1", '
@@ -164,14 +114,10 @@ class TestProcessMessageRouting:
         )
 
         async def mock_call_agent_stream(agent_name, **kwargs):
-            text = plan_json if agent_name == "planner" else "Goal set!"
+            text = plan_json if agent_name == "planner" else ""
             yield {"event": "agent_done", "agent": agent_name, "text": text}
 
         orch._chat._invoker.call_agent_stream = mock_call_agent_stream
-        orch._chat._plans.log_interaction = AsyncMock(return_value="ilog_01")
-        orch._push_workspace_surface = AsyncMock()
-        orch._chat._events.emit_runtime_event = AsyncMock()
-        orch._chat._context.load_conversation_history = AsyncMock(return_value="")
 
         result = await orch.process_message(
             message="I want to launch the product by April",
@@ -179,27 +125,7 @@ class TestProcessMessageRouting:
             workspace_id="ws_1",
         )
         orch._services.memory_service.store_goal_memory.assert_called_once()
-        assert "error" not in result
-
-    @pytest.mark.asyncio
-    @patch("src.orchestrator.chat_processor.classify_intent")
-    async def test_no_resolve_pipeline_called(self, mock_classify):
-        """_resolve_pipeline should NOT be called in the new routing."""
-        mock_classify.return_value = ("greeting", 0.99, [])
-        orch = _make_orchestrator()
-        orch._resolve_pipeline = AsyncMock(side_effect=AssertionError("Should not be called"))
-
-        async def mock_call_agent_stream(agent_name, **kwargs):
-            yield {"event": "agent_done", "agent": agent_name, "text": "Hi!"}
-
-        orch._chat._invoker.call_agent_stream = mock_call_agent_stream
-        orch._chat._plans.log_interaction = AsyncMock(return_value="ilog_01")
-        orch._push_workspace_surface = AsyncMock()
-        orch._chat._events.emit_runtime_event = AsyncMock()
-        orch._chat._context.load_conversation_history = AsyncMock(return_value="")
-        orch._chat._get_available_capabilities = AsyncMock(return_value=[])
-
-        result = await orch.process_message(message="Hi", user_id="usr_1", workspace_id="ws_1")
+        assert result["system_system.set_goal"] is not None
         assert "error" not in result
 
     @pytest.mark.asyncio
@@ -207,7 +133,7 @@ class TestProcessMessageRouting:
     async def test_uses_extract_plan_not_extract_decision(self, mock_classify):
         """Planner path uses extract_plan, returns PlanOutput in result."""
         mock_classify.return_value = ("command", 0.9, [])
-        orch = _make_orchestrator()
+        orch = _make_orchestrator(lead_text="Here are your emails.")
 
         plan_json = (
             '{"goal": "Check email", "steps": [{"step_id": "s1", '
@@ -216,44 +142,29 @@ class TestProcessMessageRouting:
         )
 
         async def mock_call_agent_stream(agent_name, **kwargs):
-            text = plan_json if agent_name == "planner" else "Here are your emails."
+            text = plan_json if agent_name == "planner" else ""
             yield {"event": "agent_done", "agent": agent_name, "text": text}
 
         orch._chat._invoker.call_agent_stream = mock_call_agent_stream
-        orch._chat._plans.log_interaction = AsyncMock(return_value="ilog_01")
-        orch._push_workspace_surface = AsyncMock()
-        orch._chat._events.emit_runtime_event = AsyncMock()
-        orch._chat._context.load_conversation_history = AsyncMock(return_value="")
 
         result = await orch.process_message(
             message="Check my email", user_id="usr_1", workspace_id="ws_1"
         )
         # Result should contain "plan" key (not "decision" key from old routing)
         assert "plan" in result
+        assert result["plan"]["goal"] == "Check email"
         assert "error" not in result
 
 
-class TestProcessMessageStreamRouting:
-    """process_message_stream() uses PlanOutput capability-based routing."""
+class TestProcessMessageStreamPlanning:
+    """``process_message_stream()`` yields the same plan, as SSE frames."""
 
     @pytest.mark.asyncio
     @patch("src.orchestrator.chat_processor.classify_intent")
     async def test_stream_fast_path_emits_plan_event(self, mock_classify):
         mock_classify.return_value = ("greeting", 0.99, [])
-        orch = _make_orchestrator()
-
-        async def mock_call_agent_stream(agent_name, **kwargs):
-            yield {"event": "agent_start", "agent": agent_name, "model": "sonnet"}
-            yield {"event": "agent_done", "agent": agent_name, "text": "Hi!"}
-
-        orch._chat._invoker.call_agent_stream = mock_call_agent_stream
-        orch._call_agent = AsyncMock(return_value="")
-        orch._chat._plans.log_interaction = AsyncMock(return_value="ilog_01")
-        orch._push_workspace_surface = AsyncMock()
+        orch = _make_orchestrator(lead_text="Hi!")
         orch._chat._spawn_background = MagicMock()
-        orch._chat._events.emit_runtime_event = AsyncMock()
-        orch._chat._context.load_conversation_history = AsyncMock(return_value="")
-        orch._chat._get_available_capabilities = AsyncMock(return_value=[])
 
         events = []
         async for evt in orch.process_message_stream(
@@ -269,70 +180,20 @@ class TestProcessMessageStreamRouting:
 
     @pytest.mark.asyncio
     @patch("src.orchestrator.chat_processor.classify_intent")
-    async def test_stream_single_read_skips_presenter(self, mock_classify):
-        """Streaming twin: single read-only step emits its synthesis as the
-        response without a Presenter call."""
-        mock_classify.return_value = ("data_fetch", 0.95, ["calendar"])
-        orch = _make_orchestrator()
-
-        agents_called = []
-
-        async def mock_call_agent_stream(agent_name, **kwargs):
-            agents_called.append(agent_name)
-            text = (
-                '{"query": "calendar", "findings": [], '
-                '"synthesis": "You have 2 meetings today.", "gaps": []}'
-                if agent_name == "perceiver"
-                else "should not be called"
-            )
-            yield {"event": "agent_done", "agent": agent_name, "text": text}
-
-        orch._chat._invoker.call_agent_stream = mock_call_agent_stream
-        orch._call_agent = AsyncMock(return_value="")
-        orch._chat._plans.log_interaction = AsyncMock(return_value="ilog_01")
-        orch._push_workspace_surface = AsyncMock()
-        orch._chat._spawn_background = MagicMock()
-        orch._chat._events.emit_runtime_event = AsyncMock()
-        orch._chat._context.load_conversation_history = AsyncMock(return_value="")
-        orch._chat._get_available_capabilities = AsyncMock(return_value=[])
-
-        events = []
-        async for evt in orch.process_message_stream(
-            message="what's on my calendar today", user_id="usr_1", workspace_id="ws_1"
-        ):
-            events.append(evt)
-
-        assert "perceiver" in agents_called
-        assert "presenter" not in agents_called
-        responses = [e["text"] for e in events if e.get("event") == "response"]
-        assert responses == ["You have 2 meetings today."]
-
-    @pytest.mark.asyncio
-    @patch("src.orchestrator.chat_processor.classify_intent")
-    async def test_stream_does_not_call_resolve_pipeline(self, mock_classify):
+    async def test_stream_reaches_a_response_without_error(self, mock_classify):
         mock_classify.return_value = ("greeting", 0.99, [])
-        orch = _make_orchestrator()
-        orch._resolve_pipeline = AsyncMock(side_effect=AssertionError("Should not be called"))
-
-        async def mock_call_agent_stream(agent_name, **kwargs):
-            yield {"event": "agent_done", "agent": agent_name, "text": "Hi!"}
-
-        orch._chat._invoker.call_agent_stream = mock_call_agent_stream
-        orch._call_agent = AsyncMock(return_value="")
-        orch._chat._plans.log_interaction = AsyncMock(return_value="ilog_01")
-        orch._push_workspace_surface = AsyncMock()
+        orch = _make_orchestrator(lead_text="Hi!")
         orch._chat._spawn_background = MagicMock()
-        orch._chat._events.emit_runtime_event = AsyncMock()
-        orch._chat._context.load_conversation_history = AsyncMock(return_value="")
-        orch._chat._get_available_capabilities = AsyncMock(return_value=[])
 
         events = []
         async for evt in orch.process_message_stream(
             message="Hi", user_id="usr_1", workspace_id="ws_1"
         ):
             events.append(evt)
-        error_events = [e for e in events if e.get("event") == "error"]
-        assert len(error_events) == 0
+
+        assert [e for e in events if e.get("event") == "error"] == []
+        responses = [e["text"] for e in events if e.get("event") == "response"]
+        assert responses == ["Hi!"]
 
 
 class TestSurfacePushForPlanOutput:

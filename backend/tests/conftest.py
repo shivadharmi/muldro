@@ -89,9 +89,6 @@ def make_mock_settings(**overrides) -> MagicMock:
         # Step 8: an unset MagicMock bool is truthy, which would route every
         # runtime="deep" test through the slim JIT pack. Default OFF to mirror prod.
         deep_context_jit=False,
-        # Step 10D A-5: MagicMock unset bool is truthy — would flip the single-lead path ON
-        # for every runtime="deep" test. Mirror the real Settings default (False).
-        deep_single_lead=False,
         # Step 10D P2.5c: MagicMock unset bool is truthy — would flip the planless reroute ON
         # for every test, firing the early planless gate in _process_core and skipping the
         # Planner. Mirror the real Settings default (False) so the flag-off path stays exercised.

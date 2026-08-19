@@ -1,23 +1,19 @@
-"""Golden characterization tests for the chat-pipeline fold (ORCH-P1-1, Phase 0).
+"""Golden tests for the chat pipeline's public contracts.
 
-These freeze the CURRENT behavior of ``MuldroOrchestrator.process_message`` (batch,
-returns a ``result`` dict) and ``process_message_stream`` (SSE, yields event dicts)
-*before* the fold reconciles their drift. Per ``docs/engineering-standards.md`` §5,
-characterization tests come first so that:
+Originally (ORCH-P1-1, Phase 0) these froze the drift between ``process_message``
+(batch, returns a ``result`` dict) and ``process_message_stream`` (SSE, yields event
+dicts) so the fold that reconciled them was provably minimal. The single-lead collapse
+deleted the machinery half of that drift table: there is no per-step agent loop, so
+nothing threads prior-step results between agents (drift #2) and there is no Presenter
+step to prompt in two styles (drift #1) or to skip for a single read (drift #3).
 
-* the behavior commits (spec rows #2, #4) produce an intentional, minimal diff that
-  these snapshots make visible, and
-* the structural fold (rows #1 prompt-style, #3 direct-answer, #5 output contract,
-  #6 mode) is *proven* a no-op by these snapshots staying green.
+What survives here is what both shells still owe their callers: the batch result key
+set ``routes_ws`` returns verbatim, the SSE event names the web client switches on, the
+failure shape, and the ``plan_created`` runtime event. Every turn runs ONE lead, so the
+harness mocks ``build_chat_lead`` / ``stream_deep_lead`` rather than per-agent calls.
 
-Source of truth: ``docs/superpowers/specs/2026-06-16-chat-pipeline-fold-spec.md``
-§3 (contracts to freeze), §5 (drift table), §6 (plan matrix).
-
-The harness builds the orchestrator via ``__new__`` and injects mocks (the pattern
-in ``test_chat_plan_event.py``). Agent calls are plain async fns/generators that
-*record the exact message* each agent receives — that recording is what pins the
-drift-#2 prior-context divergence. Event emitters are ``AsyncMock`` so the
-drift-#4 ``plan_generated`` vs ``plan_created`` split is assertable.
+The harness builds the orchestrator via ``__new__`` and injects mocks (the pattern in
+``test_chat_plan_event.py``).
 """
 
 from __future__ import annotations
@@ -37,10 +33,11 @@ _MULDRO = "src.orchestrator.chat_processor"
 
 
 class _Recorder:
-    """Captures the ``(agent_name, message)`` pairs both paths feed their agents."""
+    """Captures what each turn fed the Planner and the lead."""
 
     def __init__(self) -> None:
         self.agent_messages: list[tuple[str, str]] = []
+        self.lead_calls: list[dict] = []
 
     def message_to(self, agent_name: str) -> str | None:
         for name, msg in self.agent_messages:
@@ -52,23 +49,20 @@ class _Recorder:
 def _make_orch(canned: dict[str, str]) -> tuple[object, _Recorder]:
     """Construct a ChatProcessor with every collaborator mocked.
 
-    ``canned`` maps agent_name -> the text that agent "returns". The same map
-    drives both the batch ``call_agent`` and the streaming ``call_agent_stream``
-    so the two paths are exercised against identical agent outputs.
+    ``canned`` maps a name -> the text that "returns": ``"planner"`` for the Planner's
+    ``call_agent_stream`` text, ``"lead"`` for the text the mocked ``stream_deep_lead``
+    emits on ``agent_done``.
 
-    The post-chat-extraction harness builds the collaborator directly (mirroring
-    ``test_chat_plan_event.py``). For assertion ergonomics the recorded runtime/
-    publish mocks are also bound to convenience attributes (``_emit_runtime_event``,
-    ``_publish_event``, ``_trace_manager``) on the returned instance.
+    For assertion ergonomics the recorded runtime/publish mocks are also bound to
+    convenience attributes (``_emit_runtime_event``, ``_publish_event``,
+    ``_trace_manager``) on the returned instance.
     """
     from src.orchestrator.chat_processor import ChatProcessor
 
     chat = ChatProcessor.__new__(ChatProcessor)
     rec = _Recorder()
 
-    # deep_single_lead=False (explicit) → the P2.3 effective-mode resolution short-circuits
-    # on the cheap flag, keeping these golden scenarios on the legacy path (byte-neutral).
-    chat._settings = make_mock_settings(deep_single_lead=False)
+    chat._settings = make_mock_settings()
 
     trace = MagicMock()
     trace.trace_id = TRACE_ID
@@ -97,6 +91,7 @@ def _make_orch(canned: dict[str, str]) -> tuple[object, _Recorder]:
 
     chat._context = MagicMock()
     chat._context.load_conversation_history = AsyncMock(return_value="")
+    chat._context.assemble_context = AsyncMock(return_value="")
 
     chat._perception = MagicMock()
     chat._perception._bump_perception_for_sources = AsyncMock()
@@ -119,10 +114,6 @@ def _make_orch(canned: dict[str, str]) -> tuple[object, _Recorder]:
     chat._surfaces = MagicMock()
     chat._surfaces.push_presenter_surface = AsyncMock(return_value=None)
 
-    async def _call_agent(agent_name, *, message, **kw):
-        rec.agent_messages.append((agent_name, message))
-        return canned.get(agent_name, "")
-
     async def _call_agent_stream(agent_name, *, message, **kw):
         rec.agent_messages.append((agent_name, message))
         text = canned.get(agent_name, "")
@@ -130,9 +121,20 @@ def _make_orch(canned: dict[str, str]) -> tuple[object, _Recorder]:
         yield {"event": "text_delta", "agent": agent_name, "text": text}
         yield {"event": "agent_done", "agent": agent_name, "text": text}
 
+    async def _stream_deep_lead(lead, tools=None, **kw):
+        rec.lead_calls.append(kw)
+        text = canned.get("lead", "")
+        yield {"event": "agent_start", "agent": "lead", "model": "m"}
+        yield {"event": "text_delta", "agent": "lead", "text": text}
+        yield {"event": "agent_done", "agent": "lead", "text": text}
+
+    fake_lead = MagicMock(name="fake_lead")
     chat._invoker = MagicMock()
-    chat._invoker.call_agent = _call_agent
     chat._invoker.call_agent_stream = _call_agent_stream
+    chat._invoker.build_chat_lead = AsyncMock(return_value=fake_lead)
+    chat._invoker.stream_deep_lead = _stream_deep_lead
+    chat._invoker.has_durable_checkpointer = MagicMock(return_value=True)
+    chat._fake_lead = fake_lead
     return chat, rec
 
 
@@ -147,7 +149,7 @@ def _step(step_id, capability, *, actor="muldro", risk="none", description="do",
     )
 
 
-def _patches(plan: PlanOutput, routing, user_steps, *, intent="compose_request", confidence=0.9):
+def _patches(plan: PlanOutput, user_steps, *, intent="compose_request", confidence=0.9):
     """Patch the module-level pipeline functions for one scenario.
 
     Returns a context-manager list to enter via ``with``. ``intent`` defaults to
@@ -160,10 +162,8 @@ def _patches(plan: PlanOutput, routing, user_steps, *, intent="compose_request",
         ),
         patch(f"{_MULDRO}.extract_plan", new=MagicMock(return_value=plan)),
         patch(f"{_MULDRO}.intent_to_plan", new=MagicMock(return_value=plan)),
-        patch(
-            f"{_MULDRO}.resolve_plan_routing",
-            new=AsyncMock(return_value=(routing, user_steps)),
-        ),
+        patch(f"{_MULDRO}.resolve_plan_routing", new=MagicMock(return_value=user_steps)),
+        patch(f"{_MULDRO}.workspace_allows_bypass", new=AsyncMock(return_value=True)),
     ]
 
 
@@ -192,7 +192,7 @@ def _events(stream) -> list[str]:
     return [e.get("event") for e in stream]
 
 
-# ── Scenario A: single read-only Perceiver step (presenter-skip) ──────────────
+# ── Scenario A: single read-only step ─────────────────────────────────────────
 
 
 def _scenario_single_read():
@@ -203,22 +203,18 @@ def _scenario_single_read():
             _step("s1", "calendar.read", description="read calendar"),
         ],
     )
-    routing = [(plan.steps[0], "perceiver", [{"name": "t"}])]
-    canned = {
-        "planner": "PLAN_TEXT",
-        "perceiver": '{"synthesis": "You have 2 meetings today."}',
-    }
-    return plan, routing, [], canned
+    canned = {"planner": "PLAN_TEXT", "lead": "You have 2 meetings today."}
+    return plan, [], canned
 
 
-class TestSingleReadDirectAnswer:
-    """A lone read-only Perceiver step returns its own synthesis and skips the
-    Presenter LLM call — identically on both paths (drift #3 converges here)."""
+class TestSingleReadReply:
+    """A lone read still ends in a terminal reply — the lead's own text. The frontend
+    has no other source of terminal text, so a turn without it is an empty bubble."""
 
-    async def test_batch_returns_synthesis_and_skips_presenter(self):
-        plan, routing, users, canned = _scenario_single_read()
+    async def test_batch_result_key_set(self):
+        plan, users, canned = _scenario_single_read()
         orch, rec = _make_orch(canned)
-        ctx = _patches(plan, routing, users)
+        ctx = _patches(plan, users)
         for c in ctx:
             c.start()
         try:
@@ -232,9 +228,6 @@ class TestSingleReadDirectAnswer:
         assert result["run_id"] is None
         assert result["interaction_id"] == ILOG_ID
         assert result["summary"] == "user asked"
-        assert "step_0_calendar.read" in result
-        # Presenter was NOT invoked (skip path).
-        assert rec.message_to("presenter") is None
         # Exact key-set is the public contract returned verbatim by routes_ws.
         assert set(result) == {
             "trace_id",
@@ -242,14 +235,13 @@ class TestSingleReadDirectAnswer:
             "interaction_id",
             "plan",
             "summary",
-            "step_0_calendar.read",
             "presentation",
         }
 
-    async def test_stream_emits_response_and_skips_presenter(self):
-        plan, routing, users, canned = _scenario_single_read()
+    async def test_stream_emits_response(self):
+        plan, users, canned = _scenario_single_read()
         orch, rec = _make_orch(canned)
-        ctx = _patches(plan, routing, users)
+        ctx = _patches(plan, users)
         for c in ctx:
             c.start()
         try:
@@ -262,77 +254,46 @@ class TestSingleReadDirectAnswer:
         assert names[0] == "trace"
         assert names[1] == "intent"
         assert "plan" in names
-        # perceiver streamed, then a direct response, then done.
         assert "agent_done" in names
         assert names[-1] == "done"
         responses = [e for e in stream if e.get("event") == "response"]
         assert responses and responses[-1]["text"] == "You have 2 meetings today."
-        assert rec.message_to("presenter") is None
 
 
-# ── Scenario B: multi-step read -> read (drift #2: prior-context injection) ────
+# ── Scenario B: multi-step plan ───────────────────────────────────────────────
 
 
 def _scenario_multi_step():
     s1 = _step("s1", "calendar.read", description="read calendar")
     s2 = _step("s2", "knowledge.search", description="search notes")
     plan = PlanOutput(goal="prep", reasoning="multi", steps=[s1, s2])
-    routing = [(s1, "perceiver", [{"name": "t"}]), (s2, "librarian", [{"name": "t"}])]
-    canned = {
-        "planner": "PLAN_TEXT",
-        "perceiver": "CAL_RESULT",
-        "librarian": "NOTES_RESULT",
-        "presenter": "Here is your prep.",
-    }
-    return plan, routing, [], canned
+    canned = {"planner": "PLAN_TEXT", "lead": "Here is your prep."}
+    return plan, [], canned
 
 
-class TestDriftTwoPriorContext:
-    """DRIFT #2 (spec §5, reconciled 2026-06-16): both paths now inject only the
-    narrow ``step_outputs`` (prior agent text) into downstream agents. Batch no
-    longer leaks trace_id / interaction_id / plan / summary — it converged onto
-    the stream path's behavior."""
+class TestMultiStepPlan:
+    """A multi-step plan is ONE lead call scoped to the plan's capability union — the
+    steps are context for the lead, not a routing table."""
 
-    async def test_batch_injects_only_prior_agent_text_no_leak(self):
-        plan, routing, users, canned = _scenario_multi_step()
+    async def test_one_lead_receives_the_whole_plan(self):
+        plan, users, canned = _scenario_multi_step()
         orch, rec = _make_orch(canned)
-        ctx = _patches(plan, routing, users)
+        ctx = _patches(plan, users)
         for c in ctx:
             c.start()
         try:
-            await _run_batch(orch)
+            result = await _run_batch(orch)
         finally:
             for c in ctx:
                 c.stop()
 
-        librarian_msg = rec.message_to("librarian")
-        assert librarian_msg is not None
-        # Reconciled batch behavior: prior agent text only, no metadata leak.
-        assert "CAL_RESULT" in librarian_msg
-        assert TRACE_ID not in librarian_msg
-        assert ILOG_ID not in librarian_msg
-
-    async def test_stream_injects_only_prior_agent_text(self):
-        plan, routing, users, canned = _scenario_multi_step()
-        orch, rec = _make_orch(canned)
-        ctx = _patches(plan, routing, users)
-        for c in ctx:
-            c.start()
-        try:
-            await _run_stream(orch)
-        finally:
-            for c in ctx:
-                c.stop()
-
-        librarian_msg = rec.message_to("librarian")
-        assert librarian_msg is not None
-        # Stream's narrow step_outputs: prior agent text only, no metadata.
-        assert "CAL_RESULT" in librarian_msg
-        assert TRACE_ID not in librarian_msg
-        assert ILOG_ID not in librarian_msg
+        assert len(rec.lead_calls) == 1
+        orch._invoker.build_chat_lead.assert_awaited_once()
+        assert orch._invoker.build_chat_lead.await_args.args[0] == plan.steps
+        assert result["presentation"] == "Here is your prep."
 
 
-# ── Scenario C: user-action step (user_actions surfaced both ways) ────────────
+# ── Scenario C: user-action step ──────────────────────────────────────────────
 
 
 def _scenario_user_action():
@@ -345,18 +306,15 @@ def _scenario_user_action():
         user_context="needs your ok",
     )
     plan = PlanOutput(goal="send", reasoning="r", steps=[s1, s2])
-    routing = [(s1, "executor", [{"name": "t"}])]
-    canned = {"planner": "PLAN_TEXT", "executor": "SENT", "presenter": "Done."}
-    return plan, routing, [s2], canned
+    canned = {"planner": "PLAN_TEXT", "lead": "Done."}
+    return plan, [s2], canned
 
 
 class TestUserActions:
-    async def test_batch_includes_user_actions_and_skips_risky_step(self):
-        # Batch defaults to mode="plan" (drift #6): the HIGH-risk executor step
-        # is surfaced for approval, not executed; user actions still surface.
-        plan, routing, users, canned = _scenario_user_action()
+    async def test_batch_includes_user_actions(self):
+        plan, users, canned = _scenario_user_action()
         orch, rec = _make_orch(canned)
-        ctx = _patches(plan, routing, users)
+        ctx = _patches(plan, users)
         for c in ctx:
             c.start()
         try:
@@ -368,34 +326,11 @@ class TestUserActions:
         assert result["user_actions"] == [
             {"description": "confirm send", "context": "needs your ok"}
         ]
-        # Risky executor step was skipped, surfaced under plan_ready.
-        assert rec.message_to("executor") is None
-        assert "step_0_email.send" not in result
-        assert result["plan_ready"] == [
-            {"plan_id": plan.plan_id, "message": "Plan created. Review and approve to execute."}
-        ]
-
-    async def test_batch_ask_override_executes_risky_step(self):
-        # An interactive caller passing mode="ask" executes the risky step.
-        plan, routing, users, canned = _scenario_user_action()
-        orch, rec = _make_orch(canned)
-        ctx = _patches(plan, routing, users)
-        for c in ctx:
-            c.start()
-        try:
-            result = await _run_batch(orch, mode="ask")
-        finally:
-            for c in ctx:
-                c.stop()
-
-        assert rec.message_to("executor") is not None
-        assert result["step_0_email.send"] == "SENT"
-        assert "plan_ready" not in result
 
     async def test_stream_emits_user_actions_event(self):
-        plan, routing, users, canned = _scenario_user_action()
+        plan, users, canned = _scenario_user_action()
         orch, _ = _make_orch(canned)
-        ctx = _patches(plan, routing, users)
+        ctx = _patches(plan, users)
         for c in ctx:
             c.start()
         try:
@@ -416,16 +351,15 @@ class TestUserActions:
 def _scenario_system_step():
     s1 = _step("s1", "system.respond", description="respond")
     plan = PlanOutput(goal="ack", reasoning="r", steps=[s1])
-    routing = [(s1, "", [])]
-    canned = {"planner": "PLAN_TEXT", "presenter": "Acknowledged."}
-    return plan, routing, [], canned
+    canned = {"planner": "PLAN_TEXT", "lead": "Acknowledged."}
+    return plan, [], canned
 
 
 class TestSystemStep:
     async def test_batch_stores_system_result(self):
-        plan, routing, users, canned = _scenario_system_step()
+        plan, users, canned = _scenario_system_step()
         orch, _ = _make_orch(canned)
-        ctx = _patches(plan, routing, users)
+        ctx = _patches(plan, users)
         for c in ctx:
             c.start()
         try:
@@ -439,9 +373,9 @@ class TestSystemStep:
         assert result["presentation"] == "Acknowledged."
 
     async def test_stream_does_not_key_system_result(self):
-        plan, routing, users, canned = _scenario_system_step()
+        plan, users, canned = _scenario_system_step()
         orch, _ = _make_orch(canned)
-        ctx = _patches(plan, routing, users)
+        ctx = _patches(plan, users)
         for c in ctx:
             c.start()
         try:
@@ -469,7 +403,7 @@ class TestErrorContract:
         assert result["trace_id"] == TRACE_ID
         assert result["decision"] == "error"
         assert set(result) == {"trace_id", "decision", "summary", "code", "correlation_id"}
-        # Batch now folds from the shared core, which fires runtime events in the
+        # Batch folds from the shared core, which fires runtime events in the
         # background (drift #4 firing-discipline convergence) — called, not awaited.
         orch._emit_runtime_event.assert_called()
         # The error path must drain the core generator so its finally runs
@@ -494,15 +428,14 @@ class TestErrorContract:
 
 
 class TestDriftFourPlanEvent:
-    """DRIFT #4 (spec §5, reconciled 2026-06-16): both paths now fire the
-    canonical durable ``plan_created`` via ``_emit_runtime_event`` (background);
-    the legacy ``plan_generated`` ``_publish_event`` (agent-stream bus, no
-    consumer) is gone from the batch path."""
+    """DRIFT #4 (spec §5, reconciled 2026-06-16): both paths fire the canonical durable
+    ``plan_created`` via ``_emit_runtime_event`` (background); the legacy
+    ``plan_generated`` ``_publish_event`` (agent-stream bus, no consumer) is gone."""
 
     async def test_batch_fires_plan_created_not_plan_generated(self):
-        plan, routing, users, canned = _scenario_multi_step()
+        plan, users, canned = _scenario_multi_step()
         orch, _ = _make_orch(canned)
-        ctx = _patches(plan, routing, users)
+        ctx = _patches(plan, users)
         for c in ctx:
             c.start()
         try:
@@ -517,9 +450,9 @@ class TestDriftFourPlanEvent:
         assert "plan_generated" not in publish_names
 
     async def test_stream_fires_plan_created_not_plan_generated(self):
-        plan, routing, users, canned = _scenario_multi_step()
+        plan, users, canned = _scenario_multi_step()
         orch, _ = _make_orch(canned)
-        ctx = _patches(plan, routing, users)
+        ctx = _patches(plan, users)
         for c in ctx:
             c.start()
         try:
@@ -538,14 +471,16 @@ class TestDriftFourPlanEvent:
 
 
 class TestStreamMode:
-    async def test_plan_mode_marks_requires_user_input_and_skips_risky(self):
+    async def test_plan_mode_marks_requires_user_input(self):
+        """``mode="plan"`` marks the plan ``requires_user_input`` and that reaches the
+        client on the ``plan`` frame. It no longer decides whether a step runs — writes
+        are gated at action time by ``permission_gate`` x ``presence`` instead."""
         s1 = _step("s1", "email.send", risk="high", description="send")
         plan = PlanOutput(goal="send", reasoning="r", steps=[s1])
-        routing = [(s1, "executor", [{"name": "t"}])]
-        canned = {"planner": "PLAN_TEXT", "presenter": "Plan ready."}
+        canned = {"planner": "PLAN_TEXT", "lead": "Plan ready."}
         orch, rec = _make_orch(canned)
         # mode="plan"/"execute" forces use_planner True regardless of intent.
-        ctx = _patches(plan, routing, [], intent="greeting", confidence=0.99)
+        ctx = _patches(plan, [], intent="greeting", confidence=0.99)
         for c in ctx:
             c.start()
         try:
@@ -554,7 +489,5 @@ class TestStreamMode:
             for c in ctx:
                 c.stop()
 
-        names = _events(stream)
-        assert "plan_ready" in names
-        # Risky step skipped -> executor never executed.
-        assert rec.message_to("executor") is None
+        plan_frames = [e for e in stream if e.get("event") == "plan"]
+        assert plan_frames and plan_frames[0]["plan"]["requires_user_input"] is True
