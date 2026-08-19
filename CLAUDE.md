@@ -195,7 +195,7 @@ The `_special` value is a `server` (not a `backend`): tools with `backend="inter
 ## Agent Prompt Architecture
 
 System prompts (`src/orchestrator/prompts.py`):
-- `MULDRO_SOUL_CORE` — shared by all 6 agents (role, agent table, rules, TrustEngine gates writes)
+- `MULDRO_SOUL_CORE` — shared by the 6 agents **and by the chat lead**: identity plus the behavioural laws, and nothing else. It carries **no agent roster and no division of labour**, because everything in it must be true for every reader — and the lead is in no roster while owning its whole turn. Each role prompt states its own boundary in the second person, which is the only form a model can act on. Its rules do cover what a **gate** can do: allow, pause, or *stage* — and that a staged action has not happened yet, which the runtime's `status="success"` PREPARE ToolMessage would otherwise let a model report as done.
 - `PLANNER_PROMPT_V2` — 7-step capability-based decomposition engine (replaces decision classification)
 - `PERCEIVER_PROMPT` — 7-step read-only methodology with JSON output (findings, synthesis, gaps, confidence)
 - `LIBRARIAN_PROMPT`, `EXECUTOR_PROMPT`, `PRESENTER_PROMPT`, `PERSONA_PROMPT` — agent-specific roles
