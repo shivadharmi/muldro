@@ -1,10 +1,11 @@
 """Tests for SchedulerLoop — backend-owned dynamic scheduling."""
 
 from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, create_autospec, patch
 
 import pytest
 
+from src.orchestrator.muldro import MuldroOrchestrator
 from src.services.scheduler import SchedulerLoop, compute_next_run
 from tests.conftest import TEST_USER_ID, TEST_WORKSPACE_ID, make_mock_settings
 
@@ -449,8 +450,11 @@ class TestSchedulerTick:
             action_config={"instructions": "Review open PRs"},
         )
 
-        mock_orch = MagicMock()
-        mock_orch.process_message = AsyncMock(return_value={"status": "ok"})
+        # autospec, NOT a bare MagicMock: a bare mock accepts any kwarg, so a dispatch site
+        # passing an argument the real facade does not accept would pass here and TypeError
+        # in production (which _fire's caller swallows into consecutive_failures).
+        mock_orch = create_autospec(MuldroOrchestrator, instance=True)
+        mock_orch.process_message.return_value = {"status": "ok"}
 
         scheduler = SchedulerLoop(settings, orchestrator=mock_orch)
         await scheduler._fire(sched)
@@ -477,8 +481,11 @@ class TestSchedulerTick:
             action_config={},
         )
 
-        mock_orch = MagicMock()
-        mock_orch.process_message = AsyncMock(return_value={"status": "ok"})
+        # autospec, NOT a bare MagicMock: a bare mock accepts any kwarg, so a dispatch site
+        # passing an argument the real facade does not accept would pass here and TypeError
+        # in production (which _fire's caller swallows into consecutive_failures).
+        mock_orch = create_autospec(MuldroOrchestrator, instance=True)
+        mock_orch.process_message.return_value = {"status": "ok"}
 
         scheduler = SchedulerLoop(settings, orchestrator=mock_orch)
         await scheduler._fire(sched)

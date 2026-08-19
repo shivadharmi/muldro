@@ -214,6 +214,78 @@ async def test_already_decided_is_not_pending():
     fake_db.commit.assert_not_awaited()
 
 
+# ── unit: prepared rows are refused at chat-resume (mirror of _guard_not_chat_approval) ──
+
+
+def _fake_prepared_approval(*, workspace_id="ws"):
+    """A PREPARED approval row, exactly as ``permission_gate`` writes one.
+
+    The load-bearing detail is how MUCH it looks like a resumable chat approval: it is
+    ``pending``, tenant-matched, and carries BOTH ``thread_id`` and a non-empty ``lead_scope``,
+    so it satisfies every other guard in ``_load_pending_approval`` *and* ``resume_deep_lead``'s
+    own refs check. What it does NOT carry is ``chat: True`` — the prepare branch omits it on
+    purpose, so the row routes to the standard approval endpoints instead.
+    """
+    return SimpleNamespace(
+        workspace_id=workspace_id,
+        artifact_refs={
+            "agent_name": "lead",
+            "thread_id": make_thread_id(workspace_id),
+            "lead_scope": ["email.send"],
+            "permission_mode": "auto",
+            "context_block": "",
+            "prepared": True,
+        },
+        status="pending",
+        decided_at=None,
+        approved_by=None,
+        decision_reason=None,
+    )
+
+
+async def test_prepared_row_is_refused_at_chat_resume_and_never_flips():
+    """A prepared row sent to chat-resume must be REFUSED, not consumed.
+
+    Without this guard the row passes every other check, reaches ``_cas_flip_pending``, flips
+    to ``approved``, and resumes a LangGraph thread that never interrupted — the prepare path
+    returned a ``ToolMessage`` instead of calling ``interrupt()``. Net effect: the row leaves
+    the review queue permanently, ``run_prepared_action`` never fires, and the staged write
+    silently never happens. Destructive and silent, which is why it is guarded rather than
+    merely documented.
+    """
+    approval = _fake_prepared_approval()
+    inv, fake_db = _make_lead_invoker(approval)
+    with patch(f"{INVOKER_MODULE}.stream_deep_agent_events") as mock_stream:
+        frames = await _drive(inv, decision="approve")
+
+    assert any(f["event"] == "error" and "prepared work" in f.get("message", "") for f in frames)
+    mock_stream.assert_not_called()
+    # Not consumed: no CAS flip was even attempted, and the row stays pending + in the queue.
+    fake_db.execute.assert_not_awaited()
+    fake_db.commit.assert_not_awaited()
+    assert approval.status == "pending"
+
+
+async def test_prepared_guard_does_not_refuse_a_normal_chat_approval():
+    """The guard must not pass by refusing everything.
+
+    Same code path, same helper, one difference: no ``prepared`` key. This row resumes — CAS
+    flip, status approved, graph re-entered — so the test above is pinning the ``prepared``
+    marker specifically and not some unrelated breakage in the shared loader.
+    """
+    approval = _fake_lead_approval()
+    assert "prepared" not in approval.artifact_refs
+    inv, fake_db = _make_lead_invoker(approval)
+    inv._build_deep_agent_for = AsyncMock(return_value=MagicMock())
+    recorded: dict = {}
+    with patch(f"{INVOKER_MODULE}.stream_deep_agent_events", _stream_recorder(recorded)):
+        frames = await _drive(inv, decision="approve")
+
+    assert not any(f["event"] == "error" for f in frames)
+    assert recorded, "a normal chat approval must still re-enter the graph"
+    assert approval.status == "approved"
+
+
 # ── unit: graceful deny (fail-closed on malformed rebuild inputs) ────────────────
 
 

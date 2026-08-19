@@ -9,22 +9,42 @@ authorization for that turn*. A cron tick wrote one of those messages; a model-a
 ``[Action: ...]`` string wrote another.
 
 These tests pin the correction. Each of the four sites DECLARES ``AUTONOMOUS`` (asserted on
-the call, not on any downstream effect — the claim is the declaration), chat's own default is
-unchanged, and the declaration actually REACHES the gate build, where ``is_gated_source``
-turns it into a real trust x risk evaluation. Because those turns also run ``presence=absent``,
-an ``approval_required`` verdict becomes PREPARE: scheduled writes start as prepared work in
-the founder's review queue and graduate to silent execution as trust accrues.
+the call against a signature-enforcing double — see ``_orchestrator_double``), chat's own
+default is unchanged, and the declaration actually REACHES the gate build, where
+``is_gated_source`` turns it into a real trust x risk evaluation. Because those turns also run
+``presence=absent``, an ``approval_required`` verdict becomes PREPARE rather than an interrupt
+into a void.
+
+What that does NOT mean — the scope of the change, stated precisely because an earlier version
+of this docstring overclaimed it. Scheduled turns leave ``permission_mode`` at ``"auto"``, and
+``resolve_effective_permission_mode("auto", absent, ...)`` returns ``"auto"``, so
+``permission_gate`` is installed alongside ``trust_gate``. The chain runs
+``trust_gate -> permission_gate`` (trust OUTER), and ``trust_gate``'s auto-execute verdict
+returns ``await handler(request)`` — i.e. it falls THROUGH to ``permission_gate``, which
+decides on ``mode x assessment`` alone and never consults trust. So a scheduled write that is
+irreversible, externally/publicly scoped, or high risk is staged for review at EVERY trust
+level, including ``autonomous``; ``email.send`` on a scheduled turn is prepared forever.
+
+Graduation-to-silent therefore applies only to what ``trust_gate`` ALONE would have gated —
+reversible, self-scoped, not-high-risk writes — never to what ``permission_gate`` catches.
+That is a deliberate division of labour rather than an oversight: ``trust_gate`` asks a
+per-CAPABILITY question ("has the founder approved this capability enough times to stop
+asking?"), while ``permission_gate`` asks a per-ACTION one ("is THIS write irreversible or
+externally visible?"). Letting accrued trust suppress the second would let twenty-five
+approved self-scoped sends silently authorize a send to a brand-new external counterparty.
 """
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, create_autospec, patch
 
 from src.contracts import PlanOutput, PlanStep
 from src.deep_runtime.authorization import AuthorizationSource, is_gated_source
 from src.orchestrator.agents import SubAgent, ThinkingConfig
+from src.orchestrator.muldro import MuldroOrchestrator
 from tests.conftest import TEST_USER_ID, TEST_WORKSPACE_ID, make_mock_settings
 
 _CP = "src.orchestrator.chat_processor"
@@ -65,6 +85,66 @@ def test_process_message_defaults_to_direct_user_request():
 
 
 # --------------------------------------------------------------------------------------
+# 2b. The facade every production caller actually holds.
+# --------------------------------------------------------------------------------------
+
+
+def test_facade_process_message_matches_chat_processor_signature():
+    """``MuldroOrchestrator.process_message`` must accept everything ``ChatProcessor`` does.
+
+    The scheduler and the WS fallback hold a ``MuldroOrchestrator``, never a
+    ``ChatProcessor``. When ``authorization_source`` was added to the inner method and not
+    the facade, all four production call sites raised ``TypeError`` on every fire — and
+    ``_fire``'s caller swallows that into ``consecutive_failures``, which auto-disables the
+    schedule after five ticks. Scheduled automation would simply have stopped, silently.
+
+    Pinned as PARITY rather than as one named parameter, so the next parameter added to
+    ``ChatProcessor.process_message`` and forgotten here fails the same way.
+    """
+    from src.orchestrator.chat_processor import ChatProcessor
+
+    def _params(fn):
+        return {n: p.default for n, p in inspect.signature(fn).parameters.items() if n != "self"}
+
+    facade = _params(MuldroOrchestrator.process_message)
+    inner = _params(ChatProcessor.process_message)
+
+    missing = sorted(set(inner) - set(facade))
+    assert not missing, f"facade cannot receive {missing} — production callers will TypeError"
+
+    drifted = {k: (facade[k], inner[k]) for k in inner if facade[k] != inner[k]}
+    assert not drifted, f"facade defaults drifted from ChatProcessor: {drifted}"
+
+
+def test_facade_forwards_authorization_source_to_chat_processor():
+    """Accepting the parameter is not enough — the facade must PASS IT ON.
+
+    A signature-only check would still pass if the facade took the argument and dropped it
+    on the floor, which fails in the quietest possible way: no error, and every scheduled
+    write silently back to wearing the founder's identity.
+    """
+    orch = MuldroOrchestrator.__new__(MuldroOrchestrator)
+    chat = MagicMock()
+    chat.process_message = AsyncMock(return_value={})
+    orch._chat = chat
+
+    async def _go():
+        await orch.process_message(
+            message="m",
+            user_id="u",
+            workspace_id="w",
+            authorization_source=AuthorizationSource.AUTONOMOUS,
+        )
+
+    asyncio.run(_go())
+
+    assert (
+        chat.process_message.await_args.kwargs["authorization_source"]
+        == AuthorizationSource.AUTONOMOUS
+    )
+
+
+# --------------------------------------------------------------------------------------
 # 3. One test per call site — asserted on the CALL, never on a downstream effect.
 # --------------------------------------------------------------------------------------
 
@@ -97,18 +177,45 @@ def _make_schedule(**overrides):
     return sched
 
 
+def _orchestrator_double():
+    """An orchestrator double that ENFORCES the real ``MuldroOrchestrator`` signature.
+
+    A bare ``MagicMock()`` accepts any kwarg whatsoever, so a call site declaring a kwarg the
+    production facade does not accept passes its test and raises ``TypeError`` in production.
+    That is exactly how the missing facade parameter shipped: these tests asserted the
+    declaration against a receiver that could not receive it. ``create_autospec`` binds the
+    real signature, so the same mistake now fails HERE.
+    """
+    orch = create_autospec(MuldroOrchestrator, instance=True)
+    orch.process_message.return_value = {"status": "ok"}
+    return orch
+
+
+def _call_kwargs(mock_method) -> dict:
+    """Normalize one recorded call to ``{param_name: value}`` against the REAL signature.
+
+    Binding through the production signature (rather than reading ``call_args.kwargs``) means
+    these assertions survive a call site that switches a kwarg to a positional argument.
+    """
+    assert mock_method.await_count == 1, f"expected one call, got {mock_method.await_count}"
+    call = mock_method.await_args
+    bound = inspect.signature(MuldroOrchestrator.process_message).bind_partial(
+        None, *call.args, **call.kwargs
+    )
+    bound.apply_defaults()
+    return {k: v for k, v in bound.arguments.items() if k != "self"}
+
+
 async def _fire(action_type: str, action_config: dict) -> dict:
     """Fire one scheduler dispatch action and return the process_message kwargs it used."""
     from src.services.scheduler import SchedulerLoop
 
-    orch = MagicMock()
-    orch.process_message = AsyncMock(return_value={"status": "ok"})
+    orch = _orchestrator_double()
     scheduler = SchedulerLoop(make_mock_settings(), orchestrator=orch)
     # The workspace lookup is a real DB round-trip that has nothing to do with provenance.
     scheduler._resolve_workspace = AsyncMock(return_value=TEST_WORKSPACE_ID)
     await scheduler._fire(_make_schedule(action_type=action_type, action_config=action_config))
-    orch.process_message.assert_awaited_once()
-    return orch.process_message.await_args.kwargs
+    return _call_kwargs(orch.process_message)
 
 
 class TestScheduledTurnsDeclareAutonomous:
@@ -140,8 +247,7 @@ class TestWsFallbackDeclaresAutonomous:
     async def test_orchestrator_action_fallback_declares_autonomous(self):
         from src.api import routes_ws
 
-        orch = MagicMock()
-        orch.process_message = AsyncMock(return_value={"response": "ok"})
+        orch = _orchestrator_double()
         app = MagicMock()
         app.state.orchestrator = orch
 
@@ -160,8 +266,7 @@ class TestWsFallbackDeclaresAutonomous:
             )
 
         assert result["status"] == "success"
-        orch.process_message.assert_awaited_once()
-        kwargs = orch.process_message.await_args.kwargs
+        kwargs = _call_kwargs(orch.process_message)
         assert kwargs["authorization_source"] == AuthorizationSource.AUTONOMOUS
 
 

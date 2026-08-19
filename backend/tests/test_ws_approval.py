@@ -1,9 +1,11 @@
 """Tests for WebSocket approval action handlers."""
 
 import json
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, create_autospec, patch
 
 import pytest
+
+from src.orchestrator.muldro import MuldroOrchestrator
 
 
 class TestHandleApprove:
@@ -96,9 +98,11 @@ class TestWsErrorFramesAreSanitized:
         from src.api.routes_ws import _handle_orchestrator_action
 
         mock_app = MagicMock()
-        # Orchestrator present but process_message raises a leaky exception.
-        orch = MagicMock()
-        orch.process_message = AsyncMock(side_effect=ValueError(f"boom {WS_SECRET}"))
+        # Orchestrator present but process_message raises a leaky exception. autospec so the
+        # handler's real call signature is still enforced — otherwise a signature break here
+        # would masquerade as the very sanitization this test is asserting.
+        orch = create_autospec(MuldroOrchestrator, instance=True)
+        orch.process_message.side_effect = ValueError(f"boom {WS_SECRET}")
         mock_app.state.orchestrator = orch
 
         with patch("src.api.deps.resolve_workspace_id", new_callable=AsyncMock) as rw:

@@ -31,6 +31,7 @@ from src.deep_runtime.agent_builder import build_deep_agent
 from src.deep_runtime.authorization import AuthorizationSource
 from src.deep_runtime.checkpoint_reaper import reap_thread
 from src.deep_runtime.confirmation import Presence
+from src.deep_runtime.middleware.approval_persistence import PREPARED_KEY
 from src.deep_runtime.middleware.budget import make_budget_middleware
 from src.deep_runtime.middleware.governor_audit import make_governor_audit_middleware
 from src.deep_runtime.middleware.governor_delegate_critique import (
@@ -1020,9 +1021,25 @@ class AgentInvoker:
         (d) A6 (Step-10A): the stored ``thread_id`` MUST embed the caller's workspace — a
             thread minted for another tenant, a legacy colonless id, or a MISSING thread_id
             (→ ``workspace_of_thread_id`` None) is refused with the SAME generic not-found
-            envelope (no existence leak), before any state change.
+            envelope (no existence leak), before any state change;
+        (e) PREPARED rows are refused (single-lead cutover) — see below.
 
-        Returns ``(approval, None)`` when all four guards pass, else ``(None, error_frame)`` —
+        Guard (e) is the MIRROR of ``routes_approvals._guard_not_chat_approval``. That one
+        keeps CHAT approvals off the AUTONOMOUS endpoints; this one keeps PREPARED approvals
+        off the CHAT endpoint, and without it the pair is asymmetric. A prepared row satisfies
+        every other guard here — it is ``pending``, tenant-matched, and the permission_gate
+        persists both ``thread_id`` and ``lead_scope`` on it — so ``POST /v1/muldro/chat/resume``
+        with a prepared approval id would reach ``_cas_flip_pending``, flip it to ``approved``,
+        and resume a LangGraph thread THAT NEVER INTERRUPTED (the prepare path returns a
+        ``ToolMessage`` instead of calling ``interrupt()``). The row would leave the review
+        queue permanently, ``run_prepared_action`` would never fire, and the staged write would
+        silently never happen. Confirming prepared work is
+        ``POST /v1/approvals/<approval_id>/approve``, which replays the recorded payload.
+
+        Placed HERE rather than in each caller so it covers ``resume_deep_lead`` AND
+        ``resume_deep_turn`` in one edit — the same reason the other four live here.
+
+        Returns ``(approval, None)`` when all guards pass, else ``(None, error_frame)`` —
         the caller yields the frame and returns. NO status mutation happens here, so a rejected
         guard leaves the row untouched (pending + re-inspectable). Caller-specific refs
         validation (routed ``agent_name`` vs. plan-derived ``lead_scope``) stays with each
@@ -1033,7 +1050,20 @@ class AgentInvoker:
             return None, {"event": "error", "message": "approval not found"}
         if approval.status != "pending":
             return None, {"event": "error", "message": "approval not pending"}
-        thread_id = (approval.artifact_refs or {}).get("thread_id")
+        refs = approval.artifact_refs
+        # STRICT ``is True`` on a real dict, mirroring _guard_not_chat_approval: the gate
+        # persists PREPARED_KEY as the literal True, and a non-dict artifact_refs (a bare
+        # MagicMock in an older test) must not trip this — fail-safe toward the resume path,
+        # which is the untouched default.
+        if isinstance(refs, dict) and refs.get(PREPARED_KEY) is True:
+            return None, {
+                "event": "error",
+                "message": (
+                    "This approval is prepared work; confirm it via "
+                    "POST /v1/approvals/<approval_id>/approve."
+                ),
+            }
+        thread_id = (refs or {}).get("thread_id")
         if workspace_of_thread_id(thread_id) != workspace_id:
             return None, {"event": "error", "message": "approval not found"}
         return approval, None
