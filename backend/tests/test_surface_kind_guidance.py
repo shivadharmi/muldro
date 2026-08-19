@@ -77,3 +77,20 @@ def test_the_prompt_never_both_offers_and_forbids_a_kind():
     the model has to resolve on its own."""
     both = sorted(_offered_kinds() & _forbidden_kinds())
     assert both == [], f"prompt both offers and forbids: {both}"
+
+
+def test_every_valid_kind_is_either_offered_or_forbidden():
+    """The two lists must PARTITION `SurfaceKind`, so a newly added kind cannot slip through.
+
+    `SYSTEM_ONLY` above is hand-written — it has to be, because the codebase's own
+    `SYSTEM_SURFACE_KINDS` means "has a detail API" and includes kinds the Presenter is
+    legitimately offered. A hand-written set is a hole: add a system-only kind to the Literal
+    and nothing forces anyone to forbid it. This closes that hole from the other side. Every
+    kind must be classified one way or the other, so a new one fails here until someone
+    decides which it is.
+    """
+    unclassified = sorted(_valid_kinds() - (_offered_kinds() | _forbidden_kinds()))
+    assert unclassified == [], (
+        f"{unclassified} are valid SurfaceKinds the prompt neither offers nor forbids; "
+        "classify each as offered or system-only"
+    )
