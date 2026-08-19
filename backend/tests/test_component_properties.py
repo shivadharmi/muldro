@@ -200,11 +200,19 @@ class TestEntityCardProperties:
         with pytest.raises(ValidationError):
             EntityCardProperties(name="x", entity_type="company")
 
-    def test_optional_attributes(self):
+    def test_optional_attributes_are_a_closed_list_of_pairs(self):
         p = EntityCardProperties(
-            name="x", entity_type="y", entity_id="z", attributes={"revenue": "1M"}
+            name="x", entity_type="y", entity_id="z", attributes=[{"key": "revenue", "value": "1M"}]
         )
-        assert p.attributes == {"revenue": "1M"}
+        assert p.attributes[0].key == "revenue"
+        assert p.attributes[0].value == "1M"
+
+    def test_attributes_reject_the_keyed_map(self):
+        """Attribute names are chosen at runtime, so a keyed map cannot be declared in a
+        schema a provider can enforce. ``renderer.entity_card`` projects one into pairs;
+        the model itself does not accept it."""
+        with pytest.raises(ValidationError):
+            EntityCardProperties(name="x", entity_type="y", entity_id="z", attributes={"a": "b"})
 
 
 class TestMemoryCardProperties:
@@ -223,12 +231,22 @@ class TestMemoryCardProperties:
 
 class TestExecutionTraceProperties:
     def test_valid_trace(self):
-        p = ExecutionTraceProperties(steps=[{"name": "step1"}], status="completed")
+        p = ExecutionTraceProperties(
+            steps=[{"title": "Draft the reply", "status": "completed"}], status="completed"
+        )
         assert p.status == "completed"
+        assert p.steps[0].title == "Draft the reply"
+        assert p.steps[0].description is None
 
     def test_missing_steps_raises(self):
         with pytest.raises(ValidationError):
             ExecutionTraceProperties(status="running")
+
+    def test_a_step_without_the_title_the_renderer_reads_raises(self):
+        """A step keyed the producer's old way (``label``) renders nameless. It is rejected
+        at construction now rather than reaching a user as "Step 1"."""
+        with pytest.raises(ValidationError):
+            ExecutionTraceProperties(steps=[{"label": "step1", "status": "ok"}], status="running")
 
 
 class TestPropertyModelsRegistry:

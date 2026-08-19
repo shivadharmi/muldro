@@ -180,10 +180,22 @@ def entity_card(
     name: str,
     entity_type: str,
     entity_id: str = "",
-    attributes: dict | None = None,
+    attributes: dict | list[dict] | None = None,
 ) -> A2UIComponent:
+    """Build an EntityCard component.
+
+    ``attributes`` accepts either a keyed map or an explicit list of ``{key, value}`` pairs;
+    a keyed map is projected into pairs here so callers migrate independently. The wire shape
+    is always the list — attribute names are entity-dependent and chosen at runtime, and a
+    keyed map cannot be expressed in a schema a provider can enforce.
+    """
+    pairs: list[dict] | None = None
+    if isinstance(attributes, dict):
+        pairs = [{"key": str(k), "value": str(v)} for k, v in attributes.items()]
+    elif attributes is not None:
+        pairs = [{"key": str(a["key"]), "value": str(a["value"])} for a in attributes]
     props = EntityCardProperties(
-        name=name, entity_type=entity_type, entity_id=entity_id, attributes=attributes
+        name=name, entity_type=entity_type, entity_id=entity_id, attributes=pairs
     )
     return A2UIComponent(type="EntityCard", id=id, properties=props.model_dump())
 

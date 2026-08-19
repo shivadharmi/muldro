@@ -142,13 +142,27 @@ class ProgressProperties(BaseModel):
 # ── Display family ────────────────────────────────────────────────────────────
 
 
+class EntityAttribute(BaseModel):
+    """One `key: value` line on an entity card.
+
+    Attribute names are entity-dependent and chosen at runtime, so they cannot be declared as
+    schema keys — a free-form map makes the whole component schema unusable for provider-side
+    structured output. A list of explicit pairs carries the same information in a closed shape.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    key: str
+    value: str
+
+
 class EntityCardProperties(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     name: str
     entity_type: str
     entity_id: str
-    attributes: dict | None = None
+    attributes: list[EntityAttribute] | None = None
 
 
 class MemoryCardProperties(BaseModel):
@@ -163,10 +177,32 @@ class MemoryCardProperties(BaseModel):
 # ── Specialized family ────────────────────────────────────────────────────────
 
 
+class ExecutionTraceStep(BaseModel):
+    """One step on an execution trace.
+
+    Field names are the CONSUMER's — `execution-trace.tsx` reads `title`, falling back to
+    `task_type` and then to a positional "Step N". While `steps` was `list[dict]` the only
+    producer wrote `label` and `result`, neither of which is read anywhere, so every step of
+    every trace rendered as "Step 1", "Step 2" and the step's own name never reached a user.
+
+    `error` and `duration_ms` are the reverse case — read by the renderer, written by no
+    producer on this path — so they are declared optional rather than dropped.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    title: str
+    status: str
+    task_type: str | None = None
+    description: str | None = None
+    error: str | None = None
+    duration_ms: int | None = None
+
+
 class ExecutionTraceProperties(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
-    steps: list[dict]
+    steps: list[ExecutionTraceStep]
     status: str
 
 

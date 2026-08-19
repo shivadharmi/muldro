@@ -649,16 +649,19 @@ Valid "type" values and their required properties:
 - Table      → {"columns": [{"key": str, "label": str}, ...],
                  "rows": [{"cells": [str, ...]}, ...], "sortable"?: bool}
 - Timeline   → {"events": [{"time": str, "title": str, "source"?: str}, ...]}
-- EntityCard → {"name": str, "entity_type": str, "entity_id": str, "attributes"?: {}}
+- EntityCard → {"name": str, "entity_type": str, "entity_id": str,
+                 "attributes"?: [{"key": str, "value": str}, ...]}
 - Card / Row / List → layout containers with no required properties (use "children")
 - Divider    → no required properties
 
-Rules for list-of-dict values (Table.rows, Timeline.events):
+Rules for list-of-dict values (Table.rows, Timeline.events, EntityCard.attributes):
 - Every dict in the list MUST have the same shape. Missing keys render as blank cells.
 - For Table: each row is {"cells": [...]} — plain strings, POSITIONAL, one per column in
   the SAME ORDER as "columns". A row whose cell count differs from the column count is
   rejected and the whole surface_data block is dropped. Do NOT key cells by column name.
 - For Timeline: each event MUST have "time" and "title". "source" is optional.
+- For EntityCard: each attribute is {"key": ..., "value": ...}, both plain strings. Do NOT
+  pass a map of attribute names to values — the attribute name goes in "key".
 
 Example rich surface_data:
 ```json:surface_data
@@ -679,6 +682,13 @@ Example rich surface_data:
       "events": [
         {"time": "2026-Q1", "title": "Seed round", "source": "Crunchbase"},
         {"time": "2026-Q3", "title": "Series A closed", "source": "press release"}
+      ]
+    }},
+    {"type": "EntityCard", "id": "acme", "properties": {
+      "name": "Acme", "entity_type": "organization", "entity_id": "ent_acme",
+      "attributes": [
+        {"key": "stage", "value": "Series B"},
+        {"key": "headcount", "value": "48"}
       ]
     }}
   ]

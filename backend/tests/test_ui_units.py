@@ -1,8 +1,12 @@
 """Unit tests for composable surface units."""
 
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
 
 from src.contracts import ApprovalContext, InsightSurfaceData, ResultSummary, StepState
+from src.ui import renderer as r
 from src.ui import units
 from src.ui.contracts import (
     AGENT_SURFACE_KINDS,
@@ -384,3 +388,89 @@ def test_format_duration_scales() -> None:
     assert units._format_duration(2500) == "2.5s"
     assert units._format_duration(90_000) == "1.5m"
     assert units._format_duration(3_600_000) == "1.0h"
+
+
+# ── A2UI producers that nothing else exercises ──────────────────────
+#
+# The builders below have no other test coverage at all. They construct component properties
+# as bare dicts and hand them straight to a Pydantic property model, so a model that stops
+# accepting the shape the producer emits raises ValidationError INSIDE the builder — a request
+# -time 500 that the rest of the suite stays entirely green through. These pin both facts:
+# that the producer still builds, and that it speaks the CONSUMER's vocabulary.
+
+
+def _trace_step(
+    name: str = "Draft the reply",
+    status: str = "completed",
+    description: str = "Draft a reply to Acme",
+    output_data: dict | None = None,
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        name=name,
+        step_type="respond",
+        status=status,
+        input_data={"description": description},
+        output_data=output_data,
+    )
+
+
+async def _build_execution_tab(steps: list[SimpleNamespace]):
+    """Drive the REAL plan-execution detail-tab builder against a mocked DB."""
+    from src.services.surface_detail_builders import plan as plan_mod
+
+    surface = SimpleNamespace(surface_id="run_x", payload={}, workspace_id="ws", user_id="u")
+    result = MagicMock()
+    result.scalars.return_value.all.return_value = steps
+    db = AsyncMock()
+    db.execute = AsyncMock(return_value=result)
+    return await plan_mod.build_plan_execution(db, surface)
+
+
+def _trace_steps(tab) -> list[dict]:
+    trace = tab.sections[0].children[0]
+    assert trace.type == "ExecutionTrace"
+    return trace.properties["steps"]
+
+
+async def test_build_plan_execution_builds_a_trace_at_all() -> None:
+    """Crash guard. The events are built as bare dicts inside the builder, so tightening
+    ``ExecutionTraceProperties`` breaks the run-execution tab at request time with nothing in
+    the suite failing. This is the only thing that would notice."""
+    tab = await _build_execution_tab([_trace_step(), _trace_step(name="Send it")])
+    assert tab.tab_id == "execution"
+    assert len(_trace_steps(tab)) == 2
+
+
+async def test_build_plan_execution_emits_the_key_the_renderer_reads() -> None:
+    """The producer must speak the CONSUMER's vocabulary.
+
+    ``execution-trace.tsx`` reads ``title``; the producer wrote ``label``, which nothing read.
+    Every trace step therefore rendered as the renderer's positional fallback — "Step 1",
+    "Step 2" — and the step's own name never reached the screen.
+    """
+    tab = await _build_execution_tab([_trace_step(name="Draft the reply")])
+    step = _trace_steps(tab)[0]
+    assert step["title"] == "Draft the reply"
+    assert step["status"] == "completed"
+    assert step["description"] == "Draft a reply to Acme"
+
+
+async def test_build_plan_execution_falls_back_to_step_type_for_an_unnamed_step() -> None:
+    tab = await _build_execution_tab([_trace_step(name="")])
+    assert _trace_steps(tab)[0]["title"] == "respond"
+
+
+def test_entity_card_builds_without_attributes() -> None:
+    """Crash guard for the one live caller: ``plan.py::build_plan_context`` passes name and
+    type only, so ``attributes`` must stay optional however it is modelled."""
+    c = r.entity_card("ctx_ent_0", "Acme", "organization")
+    assert c.type == "EntityCard"
+    assert c.properties["attributes"] is None
+
+
+def test_entity_card_normalises_a_keyed_attribute_map_into_pairs() -> None:
+    """Attribute names are entity-dependent and chosen at runtime, so they cannot be schema
+    keys. The builder accepts the keyed map callers naturally reach for and projects it onto
+    the closed list of pairs the wire carries."""
+    c = r.entity_card("e1", "Acme", "organization", "ent_1", attributes={"revenue": "$10M"})
+    assert c.properties["attributes"] == [{"key": "revenue", "value": "$10M"}]

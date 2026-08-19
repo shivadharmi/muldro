@@ -287,4 +287,10 @@ class TestPresenterVoiceExampleMatchesTheSchema:
             "the validation the runtime applies to it — the prompt teaches a shape the "
             "property models reject"
         )
-        assert [s.type for s in data.sections] == ["Text", "Metric", "Table", "Timeline"]
+        assert [s.type for s in data.sections] == [
+            "Text",
+            "Metric",
+            "Table",
+            "Timeline",
+            "EntityCard",
+        ]

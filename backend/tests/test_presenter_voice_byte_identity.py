@@ -43,6 +43,13 @@ The companion ``TestPresenterVoiceExampleMatchesTheSchema`` in ``test_surface_sp
 runs the prompt's own worked example through the real parser, so prose and schema can no
 longer disagree without CI saying so.
 
+It was re-baselined a fifth time when ``EntityCardProperties.attributes`` became a closed list
+of ``{"key", "value"}`` pairs. The prompt taught ``"attributes"?: {}`` — an open map, which is
+the exact shape the closed model now rejects and the reason the component schema could not be
+handed to a provider for structured-output enforcement in the first place. An EntityCard was
+added to the worked example at the same time, so the parser test above now covers the new
+shape rather than only asserting the prose was edited.
+
 To re-baseline intentionally, recompute with:
     uv run python -c "from src.orchestrator.prompts import PRESENTER_PROMPT; \\
         import hashlib; print(hashlib.sha256(PRESENTER_PROMPT.encode()).hexdigest())"
@@ -54,9 +61,10 @@ from src.orchestrator.prompts import PRESENTER_PROMPT, PRESENTER_VOICE
 
 # Golden sha256 of PRESENTER_PROMPT. Re-baselined in Step-9 P1 (dead-kind/type prune),
 # again for the Muldro product rebrand (name substitution only), again for the surface-kind
-# guidance correction (`message` offered; `run`/`prepared_work`/`plan` forbidden), and again
-# for the positional Table.rows shape (`{"cells": [...]}` replacing rows keyed by column key).
-_PRESENTER_PROMPT_GOLDEN_SHA256 = "220941cd2454d0f8bf290e82a7b3d620a49882fc1ba3499ad14f459b448f06b5"
+# guidance correction (`message` offered; `run`/`prepared_work`/`plan` forbidden), again
+# for the positional Table.rows shape (`{"cells": [...]}` replacing rows keyed by column key),
+# and again for EntityCard.attributes becoming a list of `{"key", "value"}` pairs.
+_PRESENTER_PROMPT_GOLDEN_SHA256 = "13cf2396d3e59981a79d8c2266e2c4b7af88da4d50e81460ac4d379d495f2ecb"
 
 
 def test_presenter_prompt_matches_golden_hash():

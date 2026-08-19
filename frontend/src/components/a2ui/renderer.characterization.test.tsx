@@ -234,3 +234,83 @@ test("Timeline omits the optional lines when they are absent", () => {
   // Only the time and title lines — no empty supporting paragraphs.
   expect(document.querySelectorAll("p")).toHaveLength(2);
 });
+
+// ─── EntityCard + ExecutionTrace: the last two closed shapes (Task 5c) ───────
+// `EntityCardProperties.attributes` was a bare `dict` and `ExecutionTraceProperties.steps`
+// was a `list[dict]`. Closing them is what makes the component schema provider-enforceable
+// at all — and closing the trace exposed that its only producer wrote `label` while this
+// renderer reads `title`, so every step drew the positional fallback "Step 1", "Step 2"
+// instead of its own name.
+
+test("EntityCard renders attributes as key/value pairs", () => {
+  render(
+    <A2UIRenderer
+      surface={surface([
+        comp({
+          type: "EntityCard",
+          id: "ent-pairs",
+          properties: {
+            name: "Acme",
+            entity_type: "organization",
+            entity_id: "ent_1",
+            attributes: [
+              { key: "revenue", value: "$10M" },
+              { key: "stage", value: "Series B" },
+            ],
+          },
+        }),
+      ])}
+      onAction={vi.fn()}
+    />,
+  );
+  expect(screen.getByText("revenue:")).toBeInTheDocument();
+  expect(screen.getByText("$10M")).toBeInTheDocument();
+  expect(screen.getByText("stage:")).toBeInTheDocument();
+  expect(screen.getByText("Series B")).toBeInTheDocument();
+});
+
+test("EntityCard still renders a LEGACY keyed attribute map (back-compat)", () => {
+  render(
+    <A2UIRenderer
+      surface={surface([
+        comp({
+          type: "EntityCard",
+          id: "ent-legacy",
+          properties: {
+            name: "Acme",
+            entity_type: "organization",
+            attributes: { revenue: "$10M" },
+          },
+        }),
+      ])}
+      onAction={vi.fn()}
+    />,
+  );
+  expect(screen.getByText("revenue:")).toBeInTheDocument();
+  expect(screen.getByText("$10M")).toBeInTheDocument();
+});
+
+test("ExecutionTrace shows a step's own NAME, not the positional 'Step 1' fallback", () => {
+  render(
+    <A2UIRenderer
+      surface={surface([
+        comp({
+          type: "ExecutionTrace",
+          id: "trace-named",
+          properties: {
+            status: "completed",
+            steps: [
+              { title: "Draft the reply", status: "completed", description: "Reply to Acme" },
+              { title: "Send it", status: "pending" },
+            ],
+          },
+        }),
+      ])}
+      onAction={vi.fn()}
+    />,
+  );
+  expect(screen.getByText("Draft the reply")).toBeInTheDocument();
+  expect(screen.getByText("Send it")).toBeInTheDocument();
+  expect(screen.getByText("Reply to Acme")).toBeInTheDocument();
+  expect(screen.queryByText("Step 1")).not.toBeInTheDocument();
+});

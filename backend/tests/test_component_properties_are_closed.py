@@ -12,10 +12,11 @@ import pytest
 
 from src.ui.component_properties import PROPERTY_MODELS
 
-# Shapes still open, closed in the commits that follow this one. Named explicitly so the
-# remaining gap is visible in CI rather than silent — and so the allowlist cannot outlive its
-# reason (see the test below it).
-_STILL_OPEN = {"EntityCard", "ExecutionTrace"}
+# Nothing is exempt any more. The allowlist stays as an empty set, not as a deleted name, so
+# a future reopening has to add itself here in the diff rather than pass unnoticed — and the
+# test that gave it teeth is gone with the last entry, because a parametrization over an empty
+# set does not run at all.
+_STILL_OPEN: set[str] = set()
 
 
 def _open_maps(node, path=""):
@@ -44,14 +45,10 @@ def test_property_model_has_no_free_form_map(name):
     )
 
 
-@pytest.mark.parametrize("name", sorted(_STILL_OPEN))
-def test_an_allowlisted_model_really_is_still_open(name):
-    """Teeth on the allowlist: once a model is closed, its exemption must be deleted or it
-    silently permits a future regression."""
-    schema = PROPERTY_MODELS[name].model_json_schema()
-    assert _open_maps(schema) != [], (
-        f"{name} is allowlisted as still-open but is now closed — remove it from _STILL_OPEN"
-    )
+def test_the_allowlist_is_empty():
+    """Every property model is closed, so the component schema is provider-enforceable as a
+    whole. Re-adding a name here re-opens that hole for every component at once."""
+    assert _STILL_OPEN == set()
 
 
 def test_table_rows_are_positional_cells():
