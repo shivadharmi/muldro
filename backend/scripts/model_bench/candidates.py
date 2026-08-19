@@ -33,13 +33,23 @@ class Candidate:
     note: str = ""
 
 
+def _first_env(*names: str) -> str | None:
+    """First of *names* that is set. Accepts both the `MULDRO_`-prefixed form the app
+    reads and the bare form, so a key added for the benchmark also works for the app."""
+    for name in names:
+        value = os.environ.get(name)
+        if value:
+            return value
+    return None
+
+
 def _openai(model_id: str, *, base_url: str | None = None, key_env: str = "OPENAI_API_KEY"):
     def _build():
         from langchain_openai import ChatOpenAI
 
-        key = os.environ.get(key_env)
+        key = _first_env(f"MULDRO_{key_env}", key_env)
         if not key:
-            raise RuntimeError(f"{key_env} is not set")
+            raise RuntimeError(f"neither MULDRO_{key_env} nor {key_env} is set in backend/.env")
         kwargs = {"model": model_id, "api_key": key}
         if base_url:
             kwargs["base_url"] = base_url
@@ -52,7 +62,7 @@ def _anthropic(model_id: str):
     def _build():
         from langchain_anthropic import ChatAnthropic
 
-        key = os.environ.get("MULDRO_ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")
+        key = _first_env("MULDRO_ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY")
         if not key:
             raise RuntimeError("no Anthropic key in MULDRO_ANTHROPIC_API_KEY/ANTHROPIC_API_KEY")
         return ChatAnthropic(model=model_id, api_key=key, max_tokens=4096)
