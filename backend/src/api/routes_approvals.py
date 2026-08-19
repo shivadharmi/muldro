@@ -150,6 +150,10 @@ async def _run_prepared_action(approval, *, user_id: str, settings):
     ledger a double-confirm double-fires an external write (invariant 5 does not hold at all),
     and without redis a prepared confirm does not mutually exclude with a concurrent chat write
     to the same capability. Supplying both is this function's main job.
+
+    ``user_id`` is the CONFIRMER, used for audit. The action itself replays as the PREPARER
+    (``execute_prepared_action`` reads ``approval.user_id``) — a replay runs with the authority
+    of the turn that produced it, not the authority of whoever clicked approve.
     """
     from src.api.routes_chat import _get_orchestrator
     from src.models.database import get_session_factory
@@ -189,7 +193,50 @@ async def _run_prepared_action(approval, *, user_id: str, settings):
     if outcome.error:
         refs["prepared_error"] = outcome.error
     approval.artifact_refs = refs
+    logger.info(
+        "[prepared] %s confirmed by %s -> %s", approval.approval_id, user_id, approval.status
+    )
     return outcome
+
+
+async def _publish_prepared_decision(
+    approval, *, user_id: str, workspace_id: str, event: str, settings
+) -> None:
+    """Announce a prepared-action decision on the workspace agent stream.
+
+    Same event names and payload keys as the normal approve/reject publishes, with
+    ``run_id: None`` — a prepared action has no run, and inventing one would be a lie. The
+    prepared-work queue is a LIVE surface: without this it silently keeps showing work that
+    has already run until someone refreshes by hand.
+
+    Best-effort, like the paths it mirrors. By the time this fires the external write has
+    already happened, so a dead event bus must never turn a success into an error — losing a
+    notification is not losing the action.
+    """
+    redis = None
+    try:
+        import redis.asyncio as aioredis
+
+        from src.services.event_bus import EventBus
+
+        redis = aioredis.from_url(settings.redis_url, decode_responses=True)
+        bus = EventBus(redis)
+        stream = bus.agent_stream(workspace_id)
+        await bus.publish(
+            stream,
+            event,
+            {"approval_id": approval.approval_id, "run_id": None},
+            user_id,
+            workspace_id=workspace_id,
+        )
+    except Exception:
+        logger.debug("Failed to publish %s event", event, exc_info=True)
+    finally:
+        if redis is not None:
+            try:
+                await redis.aclose()
+            except Exception:
+                logger.debug("redis close failed", exc_info=True)
 
 
 @router.post(
@@ -280,6 +327,13 @@ async def approve_action(
     if (approval.artifact_refs or {}).get("prepared") is True:
         await _run_prepared_action(approval, user_id=user_id, settings=settings)
         await db.commit()
+        await _publish_prepared_decision(
+            approval,
+            user_id=user_id,
+            workspace_id=workspace_id,
+            event="approval.approved",
+            settings=settings,
+        )
         return ApprovalResponse(
             approval_id=approval.approval_id,
             status=approval.status,
@@ -515,8 +569,28 @@ async def reject_action(
 
     if (approval.artifact_refs or {}).get("prepared") is True:
         # A rejected prepared action simply never runs. There is no graph to resume and no
-        # TrustState to feed — prepared work is not trust-graduated.
+        # TrustState to feed — prepared work is not trust-graduated. It IS audited: refusing a
+        # fully-derived external write is a founder decision, and must be as visible as
+        # approving one. The normal path's audit block sits below the run machinery this
+        # branch returns before, so the row is emitted here rather than skipped.
+        audit = AuditService(db)
+        await audit.log(
+            user_id=user_id,
+            action_type="approval_rejected",
+            workspace_id=workspace_id,
+            approval_id=approval_id,
+            execution_id=approval.execution_id,
+            summary=f"Rejected: {approval.title}",
+            details={"reason": req.reason if req else None},
+        )
         await db.commit()
+        await _publish_prepared_decision(
+            approval,
+            user_id=user_id,
+            workspace_id=workspace_id,
+            event="approval.rejected",
+            settings=settings,
+        )
         return ApprovalResponse(
             approval_id=approval.approval_id,
             status=approval.status,
