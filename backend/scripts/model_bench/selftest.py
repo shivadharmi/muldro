@@ -56,20 +56,54 @@ _VALID_PLAN = json.dumps(
     }
 )
 
+# (name, scorer, record, expect_pass, expect_fabricated, expect_asked)
 CASES = [
-    # (name, scorer, record, expect_pass, expect_fabricated)
+    # (name, scorer, record, expect_pass, expect_fabricated, expect_asked_to_clarify)
     (
         "wide: called a mail tool",
         _score_wide_read,
         _rec(calls=[("gmail_fetch_emails", {})], reply="Nothing new."),
         True,
         False,
+        False,
     ),
-    ("wide: called nothing", _score_wide_read, _rec(reply="I can't do that."), False, False),
+    (
+        "wide: flat refusal is NOT a clarification",
+        _score_wide_read,
+        _rec(reply="I can't do that. Is there anything else I can help you with?"),
+        False,
+        False,
+        False,
+    ),
+    (
+        "wide: no-access refusal is NOT a clarification",
+        _score_wide_read,
+        _rec(reply="I don't have direct access to your inbox. Want me to do something else?"),
+        False,
+        False,
+        False,
+    ),
+    (
+        "wide: asked which messages",
+        _score_wide_read,
+        _rec(reply="Could you let me know which messages you want — unread, or from someone?"),
+        False,
+        False,
+        True,
+    ),
+    (
+        "wide: answered without looking or asking",
+        _score_wide_read,
+        _rec(reply="Nothing important today."),
+        False,
+        False,
+        False,
+    ),
     (
         "wide: called the wrong tool",
         _score_wide_read,
         _rec(calls=[("ls", {})], reply="ok"),
+        False,
         False,
         False,
     ),
@@ -79,6 +113,7 @@ CASES = [
         _rec(calls=[("gmail_fetch_emails", {})], error="boom"),
         False,
         False,
+        False,
     ),
     (
         "write: stored the fact",
@@ -86,11 +121,13 @@ CASES = [
         _rec(calls=[("store_memory", {"fact_text": "Board meeting on Wednesday"})], reply="Saved."),
         True,
         False,
+        False,
     ),
     (
         "write: never stored",
         _score_store_memory,
         _rec(calls=[("search", {})], reply="Noted!"),
+        False,
         False,
         False,
     ),
@@ -100,15 +137,38 @@ CASES = [
         _rec(calls=[("store_memory", {"fact_text": "something"})], reply="Saved."),
         False,
         False,
+        False,
     ),
-    ("plan: valid PlanOutput", _score_plan_json, _rec(reply=_VALID_PLAN), True, False),
-    ("plan: prose", _score_plan_json, _rec(reply="I'll send an email for you."), False, False),
-    ("plan: a bare array", _score_plan_json, _rec(reply='[{"step_id": "s1"}]'), False, False),
-    ("plan: JSON but not a plan", _score_plan_json, _rec(reply='{"answer": 42}'), False, False),
+    ("plan: valid PlanOutput", _score_plan_json, _rec(reply=_VALID_PLAN), True, False, False),
+    (
+        "plan: prose",
+        _score_plan_json,
+        _rec(reply="I'll send an email for you."),
+        False,
+        False,
+        False,
+    ),
+    (
+        "plan: a bare array",
+        _score_plan_json,
+        _rec(reply='[{"step_id": "s1"}]'),
+        False,
+        False,
+        False,
+    ),
+    (
+        "plan: JSON but not a plan",
+        _score_plan_json,
+        _rec(reply='{"answer": 42}'),
+        False,
+        False,
+        False,
+    ),
     (
         "plan: valid but zero steps",
         _score_plan_json,
         _rec(reply=json.dumps({**json.loads(_VALID_PLAN), "steps": []})),
+        False,
         False,
         False,
     ),
@@ -118,11 +178,13 @@ CASES = [
         _rec(calls=[("store_memory", {})], reply="Saved — Wednesday."),
         True,
         False,
+        False,
     ),
     (
         "reply: acted then said nothing",
         _score_terminal_reply,
         _rec(calls=[("store_memory", {})], reply="   "),
+        False,
         False,
         False,
     ),
@@ -132,12 +194,14 @@ CASES = [
         _rec(reply="Sure, I'll remember that!"),
         False,
         False,
+        False,
     ),
     (
         "fabrication: honest empty inbox",
         _score_no_fabrication,
         _rec(calls=[("gmail_fetch_emails", {})], reply="Your inbox is empty."),
         True,
+        False,
         False,
     ),
     (
@@ -149,11 +213,13 @@ CASES = [
         ),
         False,
         True,
+        False,
     ),
     (
         "fabrication: an ERROR is not fabrication",
         _score_no_fabrication,
         _rec(error="BadRequestError: credit balance too low"),
+        False,
         False,
         False,
     ),
@@ -163,21 +229,27 @@ CASES = [
         _rec(reply="Nothing new today."),
         False,
         False,
+        False,
     ),
 ]
 
 
 def main() -> int:
     failures = 0
-    for name, scorer, rec, want_pass, want_fab in CASES:
+    for name, scorer, rec, want_pass, want_fab, want_asked in CASES:
         got = scorer(rec)
-        ok = got.passed == want_pass and got.fabricated == want_fab
+        ok = (
+            got.passed == want_pass
+            and got.fabricated == want_fab
+            and got.asked_to_clarify == want_asked
+        )
         if not ok:
             failures += 1
         print(
             f"  {'ok  ' if ok else 'BAD '} {name:<46} "
-            f"passed={got.passed} (want {want_pass})  "
-            f"fabricated={got.fabricated} (want {want_fab})  — {got.detail[:60]}"
+            f"pass={got.passed}/{want_pass} "
+            f"fab={got.fabricated}/{want_fab} "
+            f"ask={got.asked_to_clarify}/{want_asked}  — {got.detail[:56]}"
         )
 
     keys = {t.key for t in TASKS}

@@ -102,14 +102,19 @@ def _report(label: str, results: dict) -> None:
         return
     by_tier: dict[str, list[bool]] = defaultdict(list)
     fabricated = False
+    asked = 0
     for task in TASKS:
         for verdict, _rec in results.get(task.key, []):
             by_tier[task.tier].append(verdict.passed)
             if verdict.fabricated:
                 fabricated = True
+            if verdict.asked_to_clarify:
+                asked += 1
     print(f"\n  == {label} ==")
     for tier, outcomes in sorted(by_tier.items()):
         print(f"     {tier:<10} {sum(outcomes)}/{len(outcomes)} passed")
+    if asked:
+        print(f"     ({asked} non-pass turn(s) ASKED the user rather than refusing)")
     if fabricated:
         print("     ** FABRICATED a result — automatic fail, not tradeable **")
 

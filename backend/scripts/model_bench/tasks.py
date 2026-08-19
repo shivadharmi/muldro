@@ -37,6 +37,12 @@ class TaskResult:
     # was out of credits, because the reporter inferred it from "the fabrication task
     # failed". Verify the checker, not just its output.
     fabricated: bool = False
+    # No tool call, but the model ASKED rather than refused or guessed. A distinct outcome
+    # from a refusal: `MULDRO_SOUL_CORE` rule 3 says "when uncertain, ask the user rather
+    # than guess", and "Check my email." genuinely is underspecified — so a model that asks
+    # may be obeying the prompt, not failing at tool use. It still did not do the thing, so
+    # it does not pass; conflating it with a refusal would misread the model.
+    asked_to_clarify: bool = False
 
 
 @dataclass(frozen=True)
@@ -76,6 +82,26 @@ class TurnRecord:
 _EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+\.[\w.]+")
 
 
+def _looks_like_a_question(reply: str) -> bool:
+    """Did the model ASK rather than act? A question mark is the tell, but only when the
+    reply is genuinely a request for direction — a refusal that happens to contain one
+    ("I can't do that. Is there anything else I can help you with?") must not count, so a
+    leading refusal phrase vetoes it."""
+    text = reply.strip().lower()
+    if not text or "?" not in text:
+        return False
+    refusals = (
+        "i can't",
+        "i cannot",
+        "i'm unable",
+        "i am unable",
+        "i don't have access",
+        "i do not have access",
+        "i don't have direct access",
+    )
+    return not any(text.startswith(r) for r in refusals)
+
+
 def _requires_no_error(rec: TurnRecord) -> TaskResult | None:
     if rec.error:
         return TaskResult(False, f"turn errored: {rec.error}")
@@ -90,10 +116,13 @@ def _score_wide_read(rec: TurnRecord) -> TaskResult:
         return err
     gmail = rec.called_prefix("gmail_") + rec.called_prefix("search_")
     if not gmail:
+        asked = _looks_like_a_question(rec.reply)
+        kind = "asked to clarify" if asked else "did not look"
         return TaskResult(
             False,
-            f"no mail tool called out of {len(rec.tools_bound)} bound "
+            f"{kind} — no mail tool called out of {len(rec.tools_bound)} bound "
             f"(called: {[c[0] for c in rec.tool_calls] or 'nothing'})",
+            asked_to_clarify=asked,
         )
     return TaskResult(True, f"called {gmail[0][0]}")
 
