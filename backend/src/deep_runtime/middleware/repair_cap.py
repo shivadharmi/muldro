@@ -15,6 +15,23 @@ turn — so there is no turn id to track and no state to reset between turns.
 
 Installed immediately outer of the dispatcher (see ``agent_invoker``'s order comment), so it
 sees the dispatcher's normalized ``ToolMessage`` and nothing else can have rewritten it.
+
+WHAT THE COUNTER MEASURES, AND WHAT IT DOES NOT
+``muldro_tool_arg_repair_total`` is emitted from here because this is the only place that
+holds the per-turn context needed to tell a *repair* from a plain first-try success. That
+placement is also its limitation: this middleware only sees calls that go through the
+deep-runtime tool chain. Other callers reach ``ToolExecutor.execute_tool`` directly and are
+invisible to it — ``services/prepared_actions.py`` (a confirmed prepared action replays its
+recorded payload through a dispatcher built in ``api/routes_approvals_prepared.py``, with no
+middleware chain at all), ``deep_runtime/readback_readfn.py`` and ``services/step_runner.py``
+(read-back post-conditions, deliberately bypassing the chain), and
+``orchestrator/muldro.py``'s ``_execute_tool`` facade. An ``invalid_tool_args`` rejection on
+any of those is NOT counted.
+
+That is stated plainly rather than papered over, because it does not weaken the measurement:
+the question being asked is whether the REPAIR LOOP repairs, and the repair loop only exists
+where a model gets another turn to try again — which is here. This is not a count of all
+argument-validation rejections, and must not be read as one.
 """
 
 from __future__ import annotations
@@ -29,6 +46,7 @@ from langchain.agents.middleware.types import ToolCallRequest
 from langchain_core.messages import ToolMessage
 
 from src.deep_runtime.builtins import DEEPAGENTS_BUILTIN_NAMES
+from src.services.metrics_service import MetricsService
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +104,18 @@ def _error_code(result: Any) -> str | None:
     return str(code) if code is not None else None
 
 
+def _record(tool_name: str, outcome: str, attempts: int) -> None:
+    """Count one repair-loop outcome, and say the same thing in the log.
+
+    Printf/bracket style, matching ``tool_executor``'s ``[toolargs] %s rejected: %s`` and the
+    cap's own ``[repair_cap] refusing %s`` — deliberately NOT ``extra={...}``, because
+    ``JSONFormatter`` serializes a 13-key allowlist that contains neither ``tool`` nor
+    ``outcome`` (see the counter's comment in ``services/metrics_service``).
+    """
+    MetricsService.record_tool_arg_repair(tool=tool_name, outcome=outcome)
+    logger.info("[repair_cap] %s %s (failures this turn: %d)", tool_name, outcome, attempts)
+
+
 def make_repair_cap_middleware() -> AgentMiddleware:
     """Build the per-turn tool-argument repair-loop cap.
 
@@ -120,6 +150,13 @@ def make_repair_cap_middleware() -> AgentMiddleware:
                 tool_name,
                 MAX_ATTEMPTS,
             )
+            # Counted here rather than through ``_record`` because the warning above already
+            # IS this outcome's log line; a second one would only duplicate it. Every capped
+            # call counts, not just the first: a model that keeps reaching for a dead tool is
+            # exactly the wasted-round cost this counter exists to expose. It is deliberately
+            # NOT also a ``rejected`` — nothing was dispatched, so nothing was rejected, and
+            # double-counting would corrupt the denominator of ``repaired / rejected``.
+            MetricsService.record_tool_arg_repair(tool=tool_name, outcome="exhausted")
             capped = {
                 "error": (
                     f"Tool '{tool_name}' has failed argument validation "
@@ -140,10 +177,16 @@ def make_repair_cap_middleware() -> AgentMiddleware:
 
         if _error_code(result) == _INVALID_ARGS_CODE:
             failures[tool_name] = failures.get(tool_name, 0) + 1
+            _record(tool_name, "rejected", failures[tool_name])
         elif isinstance(result, ToolMessage) and result.status != "error":
             # The model repaired the call — forgive the earlier failures rather than
             # letting a turn-long tally cap a tool that is now working.
-            failures.pop(tool_name, None)
+            prior = failures.pop(tool_name, 0)
+            # Only a success that FOLLOWED a failure is a repair. A tool that worked first
+            # time never entered the loop, and counting it would inflate the numerator of
+            # the very ratio this counter exists to measure.
+            if prior:
+                _record(tool_name, "repaired", prior)
 
         return result
 
