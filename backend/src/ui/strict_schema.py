@@ -75,6 +75,22 @@ def _strict(node: Any) -> Any:
     if "items" in out:
         out["items"] = _strict(out["items"])
 
+    # A discriminated union generates `oneOf` plus a `discriminator` block. Measured against
+    # the live OpenAI API on 2026-08-20, both must go, and they fail in DIFFERENT ways:
+    #
+    #   `oneOf`         -> hard 400, "'oneOf' is not permitted". Strict mode speaks `anyOf`.
+    #   `discriminator` -> ACCEPTED, and then the model returns output that violates the
+    #                      schema (a TableColumn missing its required `key`), 3 trials out
+    #                      of 3, against 3/3 valid with it removed.
+    #
+    # The second is the dangerous one: the schema is accepted, so nothing signals that
+    # enforcement quietly stopped. Renaming without dropping would look like it worked.
+    # Both are lossless here — `anyOf` over the same `$ref` members still selects exactly
+    # one branch, because the members are mutually exclusive on their `type` const.
+    if isinstance(out.get("oneOf"), list):
+        out["anyOf"] = out.pop("oneOf")
+    out.pop("discriminator", None)
+
     properties = out.get("properties")
     if isinstance(properties, dict):
         out["properties"] = {name: _strict(sub) for name, sub in properties.items()}

@@ -174,23 +174,82 @@ def test_an_object_with_no_declared_properties_is_asserted_too():
         to_strict_json_schema(_BareDict)
 
 
-def test_matches_the_openai_reference_transformer():
-    """Independent oracle. `openai.lib._pydantic` is private, so this is a cross-check, not a
-    dependency — it skips rather than fails if the private path moves. Structural, not byte
-    equality: the OpenAI version additionally strips `default: null`, which is informative to
-    a model and which the API accepts."""
+def test_the_openai_reference_transformer_does_not_handle_discriminated_unions():
+    """Independent oracle, recording a KNOWN divergence rather than asserting equality.
+
+    `openai.lib._pydantic.to_strict_json_schema` was a faithful oracle until this module
+    started renaming `oneOf` and dropping `discriminator`. It does neither — so on a
+    discriminated union its output is a schema the live OpenAI API REJECTS with
+    "'oneOf' is not permitted" (measured 2026-08-20, gpt-5-mini). Ours is verified accepted.
+
+    The assertion is therefore inverted: it pins the divergence so that if the reference
+    ever learns to handle discriminated unions, this test tells us and we can reconsider
+    carrying our own. Private path, so it skips rather than fails if it moves.
+    """
     pytest.importorskip("openai.lib._pydantic")
     from openai.lib._pydantic import to_strict_json_schema as reference
 
-    def drop_null_defaults(node: Any) -> Any:
-        if isinstance(node, list):
-            return [drop_null_defaults(n) for n in node]
-        if not isinstance(node, dict):
-            return node
-        return {
-            k: drop_null_defaults(v) for k, v in node.items() if not (k == "default" and v is None)
-        }
+    def nodes(node: Any):
+        if isinstance(node, dict):
+            yield node
+            for value in node.values():
+                yield from nodes(value)
+        elif isinstance(node, list):
+            for value in node:
+                yield from nodes(value)
 
-    assert drop_null_defaults(to_strict_json_schema(RenderSurfaceInput)) == drop_null_defaults(
-        reference(RenderSurfaceInput)
+    reference_schema = reference(RenderSurfaceInput)
+    assert any("oneOf" in n for n in nodes(reference_schema)), (
+        "the OpenAI reference transformer now strips `oneOf` — re-evaluate whether this "
+        "module still needs to carry its own union handling"
     )
+    assert not any("oneOf" in n for n in nodes(to_strict_json_schema(RenderSurfaceInput)))
+
+
+class TestUnionKeywordsTheProviderRejectsOrIgnores:
+    """A discriminated union's `oneOf` + `discriminator` must not survive the transform.
+
+    Measured against the live OpenAI API on 2026-08-20 with `gpt-5-mini`, and the two fail
+    in different ways — which is why both are asserted separately:
+
+      `oneOf`         hard 400: "Invalid schema ... 'oneOf' is not permitted".
+      `discriminator` ACCEPTED, then the model returned output VIOLATING the schema
+                      (a TableColumn missing its required `key`) on 3 trials out of 3,
+                      against 3/3 valid once it was dropped.
+
+    The second is why this is a test and not a comment: a schema the provider accepts and
+    then silently fails to enforce looks exactly like one that works.
+    """
+
+    def _nodes(self, node):
+        if isinstance(node, dict):
+            yield node
+            for value in node.values():
+                yield from self._nodes(value)
+        elif isinstance(node, list):
+            for value in node:
+                yield from self._nodes(value)
+
+    def test_the_lenient_schema_really_does_contain_both(self):
+        """Teeth: without this the two assertions below could pass on an input that never
+        had a discriminated union in it."""
+        lenient = RenderSurfaceInput.model_json_schema()
+        assert any("oneOf" in n for n in self._nodes(lenient))
+        assert any("discriminator" in n for n in self._nodes(lenient))
+
+    def test_no_oneof_survives(self):
+        strict = to_strict_json_schema(RenderSurfaceInput)
+        assert [n for n in self._nodes(strict) if "oneOf" in n] == []
+
+    def test_no_discriminator_survives(self):
+        strict = to_strict_json_schema(RenderSurfaceInput)
+        assert [n for n in self._nodes(strict) if "discriminator" in n] == []
+
+    def test_the_union_members_are_preserved_as_anyof(self):
+        """Renaming must not lose branches — `anyOf` over the same `$ref` members still
+        selects exactly one, since each member is fixed by its `type` const."""
+        strict = to_strict_json_schema(RenderSurfaceInput)
+        branch_counts = [len(n["anyOf"]) for n in self._nodes(strict) if "anyOf" in n]
+        assert 17 in branch_counts, (
+            f"expected an anyOf with all 17 component branches, saw {sorted(set(branch_counts))}"
+        )
