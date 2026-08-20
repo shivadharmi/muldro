@@ -12,6 +12,8 @@ import json
 import logging
 from functools import lru_cache
 
+from pydantic import ValidationError
+
 from src.models.tool_definitions import ToolBackend
 from src.orchestrator.agents import SubAgent
 from src.orchestrator.event_publisher import EventPublisher
@@ -23,6 +25,79 @@ logger = logging.getLogger(__name__)
 # supplied by Muldro (from auth/turn context), never invented by the LLM, so the
 # LLM-facing schemas in schemas.py deliberately omit them.
 _CONTEXT_ARGS = ("user_id", "workspace_id")
+
+# R1 is a SURVEY: parse every tool call's arguments, report what would be rejected, reject
+# nothing. There is no production traffic to survey — this is an unpushed branch — so the
+# corpus is the test suite. Flipping this to True is R2, gated on the survey's findings.
+_REJECT_ON_INVALID_TOOL_ARGS = False
+
+# Pydantic v2 errors are verbose, and a malformed component tree yields one entry per bad
+# node plus a long `msg` naming every valid AnyComponent tag. Render only the first few and
+# say how many were dropped — the agent needs the first offending field, not the census.
+# (AnyComponent's `type` discriminator keeps an unknown tag to ONE error rather than one
+# per union member; the cap is for breadth of errors, not for union fan-out.)
+_MAX_ARG_ERRORS_SHOWN = 3
+_MAX_ARG_ERROR_MSG_CHARS = 100
+_MAX_ARG_ERROR_CHARS = 480
+
+
+def _render_validation_error(tool_name: str, exc: ValidationError) -> str:
+    """Render a ValidationError as a short, actionable, agent-facing message.
+
+    Follows the house style of the missing-required-args return below: say what is
+    wrong AND what to do. In R1 this string is only logged, but it is written as the
+    thing R2 will *return*, so flipping ``_REJECT_ON_INVALID_TOOL_ARGS`` is a flag flip
+    rather than a rewrite.
+    """
+    errors = exc.errors()
+    parts = []
+    for err in errors[:_MAX_ARG_ERRORS_SHOWN]:
+        loc = ".".join(str(p) for p in err.get("loc", ())) or "(root)"
+        msg = str(err.get("msg", "invalid"))[:_MAX_ARG_ERROR_MSG_CHARS]
+        parts.append(f"{loc}: {msg}")
+    rendered = "; ".join(parts)
+    dropped = len(errors) - _MAX_ARG_ERRORS_SHOWN
+    if dropped > 0:
+        rendered += f" (+{dropped} more)"
+    message = (
+        f"Invalid argument(s) for '{tool_name}': {rendered}. "
+        "Fix them against the tool's schema and call the tool again."
+    )
+    return message[:_MAX_ARG_ERROR_CHARS]
+
+
+def _validate_tool_input(tool_name: str, tool_input: dict) -> str | None:
+    """Parse agent-supplied tool args against the tool's Pydantic input model.
+
+    Returns a rendered error string, or None when there is nothing to report.
+
+    Keyed on the MODEL's existence, not on the tool's backend. That covers internal
+    MCP tools plus the ``_special`` passthrough, and naturally skips external MCP and
+    composite tools (which have no model) with no backend branching — and it cannot
+    drift from the registry, because ``validate_registry()`` already fails startup if
+    an internal tool is missing from TOOL_INPUT_MODELS.
+    """
+    from src.tools.schemas import TOOL_INPUT_MODELS
+
+    model = TOOL_INPUT_MODELS.get(tool_name)
+    if model is None:
+        # No model → nothing to validate. External MCP tools are covered instead by
+        # _missing_required_args against their persisted JSON Schema; composite tools
+        # (web_search) are Muldro-internal and have neither.
+        return None
+    try:
+        model.model_validate(tool_input)
+    except ValidationError as exc:
+        return _render_validation_error(tool_name, exc)
+    except Exception:
+        # Fail OPEN. A field_validator that raises something pydantic does not wrap
+        # (only ValueError/AssertionError become ValidationError) would otherwise
+        # escape execute_tool above its own try/except and kill a dispatch that
+        # worked yesterday. A survey may not be able to break the thing it surveys —
+        # and in R2 a broken validator must not become a blocked tool.
+        logger.exception("[toolargs] %s validation raised; treating as valid", tool_name)
+        return None
+    return None
 
 
 @lru_cache(maxsize=1)
@@ -344,6 +419,19 @@ class ToolExecutor:
         if not tool.enabled:
             logger.warning("[mcp] tool disabled: %s", tool_name)
             return {"error": f"Tool '{tool_name}' is disabled", "blocked": True}
+
+        # Typed-argument parse against TOOL_INPUT_MODELS, which until now was consulted
+        # only by startup registry validation and never at call time. It runs HERE — on
+        # the agent-supplied input, above the SPECIAL early-return and above
+        # _enrich_internal_input — because the context args (user_id / workspace_id) are
+        # deliberately absent from the LLM-facing models: validating after injection
+        # would flag every internal call. SURVEY MODE: log, do not reject (see
+        # _REJECT_ON_INVALID_TOOL_ARGS).
+        arg_error = _validate_tool_input(tool_name, tool_input)
+        if arg_error:
+            logger.warning("[toolargs] %s would be rejected: %s", tool_name, arg_error)
+            if _REJECT_ON_INVALID_TOOL_ARGS:
+                return {"error": arg_error, "error_code": "invalid_tool_args"}
 
         # Resolve the stored backend string to the typed dispatch discriminator.
         # An unrecognized value (e.g. a future or garbled backend) coerces to None
