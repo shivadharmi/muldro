@@ -11,8 +11,11 @@ uv run python -m scripts.model_bench.selftest               # prove the scorers 
 uv run python -m scripts.model_bench --candidate openai/gpt-5-mini --trials 3
 ```
 
-Keys are read from `backend/.env`: `MULDRO_ANTHROPIC_API_KEY`, `OPENAI_API_KEY`,
-`OLLAMA_API_KEY`. A candidate whose key is missing fails loudly and is skipped.
+Keys are read from `backend/.env`. Each provider is tried under the `MULDRO_` prefix
+first and then bare — `MULDRO_ANTHROPIC_API_KEY`, `MULDRO_OPENAI_API_KEY` /
+`OPENAI_API_KEY`, `MULDRO_OLLAMA_API_KEY` / `OLLAMA_API_KEY` — so the bench keeps
+working whichever naming the app settings use. A candidate whose key is missing under
+both names fails loudly and is skipped.
 
 ## The tasks
 
