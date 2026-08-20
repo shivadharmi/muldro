@@ -16,6 +16,10 @@ enforcement safe:
   LLM-facing models, so validating after injection would reject every internal call;
 * a validator that raises something pydantic does not wrap still fails OPEN — under
   enforcement a broken validator would otherwise turn into a permanently blocked tool.
+
+``TestSizeAnnotation`` covers the second half of the bargain: a rejection is only useful
+if the model can repair it in one attempt, which means telling it how far over a limit
+it was — and never, under any circumstances, echoing the offending value back.
 """
 
 import logging
@@ -452,3 +456,173 @@ async def test_a_validator_that_raises_does_not_break_dispatch(caplog):
     call_internal.assert_awaited_once()
     assert result == {"status": "ok"}
     assert not [r for r in _toolargs_records(caplog) if "rejected" in r.getMessage()]
+
+
+class TestSizeAnnotation:
+    """A rejected call must say how far over the limit it was, not just the limit.
+
+    Measured live on 2026-08-20 (gpt-5-mini, all tiers): a model repairing an overlong
+    ``subtitle`` against ``max_length=120`` went 123 -> 141 -> 128 -> 109 chars. Attempt
+    two was WORSE than attempt one, and the surface was lost one retry short of success.
+    It was guessing, because "String should have at most 120 characters" does not tell
+    it what it sent. Pydantic knows: ``err["input"]`` is the offending value.
+    """
+
+    def _render(self, tool_name: str, tool_input: dict) -> str:
+        from src.orchestrator.tool_executor import _validate_tool_input
+
+        rendered = _validate_tool_input(tool_name, tool_input)
+        assert rendered is not None, "expected a violation"
+        return rendered
+
+    def test_an_overlong_string_is_told_its_own_length(self):
+        """The exact live case: 141 characters against a 120-character limit."""
+        subtitle = (
+            "Draft: comprehensive history, communications, decisions, outstanding items, "
+            "and recommended next steps. Missing private calendars and emails."
+        )
+        assert len(subtitle) == 141, "the reproduction must not be reflowed"
+
+        rendered = self._render("render_surface", {**_VALID_RENDER_SURFACE, "subtitle": subtitle})
+
+        assert "120" in rendered, "the limit must still be stated"
+        assert "141" in rendered, f"the agent was not told what it sent: {rendered}"
+
+    def test_never_echoes_the_offending_value_only_its_size(self):
+        """SECURITY. The measure travels; the content never does.
+
+        The values reaching ``_render_validation_error`` are user content — email
+        bodies, meeting notes, contact details — and the string it produces is BOTH
+        returned into the model's context AND written to ``logger.warning``. Echoing the
+        value to explain the violation would write user content into the logs. So this
+        builds a violation out of a distinctive secret-shaped payload and demands that
+        not one recognisable fragment of it survives, while its length does.
+        """
+        secret = "sk-live-9f3a" + "Qx7ZmNp4Kd" * 15  # 162 chars, unmistakable if leaked
+        assert len(secret) == 162
+
+        rendered = self._render("render_surface", {**_VALID_RENDER_SURFACE, "subtitle": secret})
+
+        assert "162" in rendered, "the size must be reported"
+        assert secret not in rendered
+        assert "sk-live" not in rendered, f"the value leaked into the message: {rendered}"
+        assert "Qx7ZmNp4Kd" not in rendered
+        # Not even a truncated prefix: any 8-char window of the secret is a leak.
+        for i in range(len(secret) - 8):
+            assert secret[i : i + 8] not in rendered, f"leaked window at {i}: {rendered}"
+
+    def test_a_too_short_string_is_told_its_own_length_too(self):
+        """The bound in the other direction is the same guessing problem, reversed.
+
+        No shipped input model carries a ``min_length`` today, so this drives it through
+        a synthetic one — the annotation must key off the pydantic error type, not off
+        the fields ``render_surface`` happens to declare.
+        """
+        from pydantic import BaseModel, Field
+
+        class _MinLenInput(BaseModel):
+            slug: str = Field(min_length=10)
+
+        with patch.dict(
+            "src.tools.schemas.TOOL_INPUT_MODELS", {"render_surface": _MinLenInput}, clear=False
+        ):
+            rendered = self._render("render_surface", {"slug": "abc"})
+
+        assert "10" in rendered
+        assert "(got 3)" in rendered, f"the agent was not told what it sent: {rendered}"
+
+    def test_an_unmeasurable_input_renders_without_raising(self):
+        """``input`` may be ANY object, and this path must never raise.
+
+        ``_validate_tool_input`` catches non-ValidationError explosions, but a raise
+        from the RENDERER happens inside its ``except ValidationError`` block, so it
+        propagates out of ``execute_tool`` above its own try/except and kills the whole
+        turn — a strictly worse outcome than the tool error it was trying to describe.
+        Both shapes are covered: an object with no ``__len__``, and one whose ``__len__``
+        raises (a lazily-hydrated ORM collection is the realistic version of the second).
+        """
+        from pydantic import ValidationError
+
+        from src.orchestrator.tool_executor import _render_validation_error
+
+        class _LenExplodes:
+            def __len__(self):
+                raise RuntimeError("detached from session")
+
+        for bad_input in (12345, _LenExplodes()):
+            exc = ValidationError.from_exception_data(
+                "RenderSurfaceInput",
+                [
+                    {
+                        "type": "string_too_long",
+                        "loc": ("subtitle",),
+                        "input": bad_input,
+                        "ctx": {"max_length": 120},
+                    }
+                ],
+            )
+            rendered = _render_validation_error("render_surface", exc)
+            assert "subtitle" in rendered
+            assert "120" in rendered
+            assert "(got" not in rendered, f"invented a size for {bad_input!r}: {rendered}"
+
+    def test_errors_that_are_not_about_size_are_not_annotated(self):
+        """A size is noise wherever the message already says everything actionable.
+
+        ``missing`` has no value to measure; ``union_tag_invalid`` and ``literal_error``
+        already enumerate the admissible values; a ``*_type`` error is about the KIND of
+        the value, for which its size explains nothing. Annotating any of them would
+        spend the agent's attention without narrowing its next attempt.
+        """
+        cases = {
+            "missing (no title)": {"kind": "message", "sections": []},
+            "union_tag_invalid (unknown component tag)": {
+                **_VALID_RENDER_SURFACE,
+                "sections": [{"id": "t1", "type": "Bogus", "properties": {"text": "x"}}],
+            },
+            "literal_error (unknown kind)": {**_VALID_RENDER_SURFACE, "kind": "not_a_kind"},
+            "string_type (title is a number)": {**_VALID_RENDER_SURFACE, "title": 5},
+        }
+        for label, bad in cases.items():
+            rendered = self._render("render_surface", bad)
+            assert "(got" not in rendered, f"{label} was annotated with a size: {rendered}"
+
+    def test_a_too_long_list_is_not_annotated_because_pydantic_already_counts_it(self):
+        """Collection bounds are excluded on evidence, not by oversight.
+
+        ``too_long``/``too_short`` (list, dict, set) put the actual count in their OWN
+        ``msg`` — "should have at most 4 items after validation, not 5". Annotating them
+        would say the same number twice and read as two different facts.
+        """
+        five_metrics = [{"label": f"m{i}", "value": str(i)} for i in range(5)]
+
+        bad = {**_VALID_RENDER_SURFACE, "metrics": five_metrics}
+
+        rendered = self._render("render_surface", bad)
+
+        assert "not 5" in rendered, f"pydantic stopped reporting the count: {rendered}"
+        assert "(got" not in rendered, f"the count was stated twice: {rendered}"
+
+    def test_the_annotation_does_not_crowd_out_the_tag_list(self):
+        """The cap arithmetic must still hold when an annotated error shares the message.
+
+        The unknown-component-tag error is the single most actionable message in the
+        system — one error, 260 chars, naming all 17 valid tags — and the 900-char cap
+        was sized to fit it whole. Here it arrives alongside an annotated ``subtitle``
+        violation, which sorts FIRST (field order), so any bloat the annotation adds is
+        spent before the tag list is rendered.
+        """
+        from src.orchestrator.tool_executor import _MAX_ARG_ERROR_CHARS
+
+        rendered = self._render(
+            "render_surface",
+            {
+                **_VALID_RENDER_SURFACE,
+                "subtitle": "x" * 141,
+                "sections": [{"id": "t1", "type": "Bogus", "properties": {"text": "x"}}],
+            },
+        )
+
+        assert "(got 141)" in rendered
+        assert "'Divider'" in rendered, f"the tag list was truncated: {rendered}"
+        assert len(rendered) <= _MAX_ARG_ERROR_CHARS, f"{len(rendered)} chars: {rendered}"

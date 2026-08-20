@@ -44,6 +44,50 @@ _MAX_ARG_ERRORS_SHOWN = 3
 _MAX_ARG_ERROR_MSG_CHARS = 280
 _MAX_ARG_ERROR_CHARS = 900
 
+# Pydantic's string-length errors state the LIMIT but not the SIZE of what was sent, so
+# a model repairing one has to guess how much to cut. Measured live on 2026-08-20
+# (gpt-5-mini, a 120-char `subtitle` bound): 123 -> 141 -> 128 -> 109 chars. Attempt two
+# was WORSE than attempt one and the surface was lost one retry short of valid. Told
+# "at most 120 characters (got 141)" the cut is arithmetic instead of a guess.
+#
+# The set is an ALLOWLIST chosen by inspecting real `exc.errors()` output, because a
+# size is only signal where the message does not already carry it:
+#   * `too_long` / `too_short` (list, dict, set) ALREADY say the count in their own
+#     `msg` — "List should have at most 4 items after validation, not 5" — so annotating
+#     them would state one number twice and read as two facts;
+#   * `missing` has no value to measure;
+#   * `union_tag_invalid` / `literal_error` already enumerate the admissible values, and
+#     the unknown-component-tag message is the most actionable string in the system —
+#     adding to it would only crowd it against the caps below;
+#   * every `*_type` error is about the KIND of the value, which its size cannot fix;
+#   * `bytes_too_long` / `bytes_too_short` are unreachable — a JSON tool call cannot
+#     carry bytes, and no input model declares a bytes field.
+#
+# The caps above are unaffected and deliberately NOT retuned: the annotation is ~11
+# chars and can only ever attach to a string-length `msg` (~45 chars), never to the
+# 260-char tag list, so the "375 for a single tag-list error" arithmetic still holds.
+_SIZED_ERROR_TYPES = frozenset({"string_too_long", "string_too_short"})
+
+
+def _size_hint(err: dict) -> str:
+    """Return e.g. ``" (got 141)"`` for a length-bound error, or ``""``.
+
+    SECURITY: this deliberately renders only the SIZE of the offending value and NEVER
+    the value itself. The payloads reaching this function are user content (email
+    bodies, meeting notes, contact details) and the string it feeds is both returned
+    into the model's context and written to ``logger.warning`` — echoing the value
+    would put user content into the logs.
+    """
+    if err.get("type") not in _SIZED_ERROR_TYPES:
+        return ""
+    try:
+        # `input` may be ANY object: one with no `__len__`, or one whose `__len__`
+        # raises. A raise HERE escapes `_validate_tool_input`'s `except ValidationError`
+        # block and kills the turn, so an unmeasurable value simply gets no annotation.
+        return f" (got {len(err['input'])})"
+    except Exception:
+        return ""
+
 
 def _render_validation_error(tool_name: str, exc: ValidationError) -> str:
     """Render a ValidationError as a short, actionable, agent-facing message.
@@ -57,7 +101,7 @@ def _render_validation_error(tool_name: str, exc: ValidationError) -> str:
     for err in errors[:_MAX_ARG_ERRORS_SHOWN]:
         loc = ".".join(str(p) for p in err.get("loc", ())) or "(root)"
         msg = str(err.get("msg", "invalid"))[:_MAX_ARG_ERROR_MSG_CHARS]
-        parts.append(f"{loc}: {msg}")
+        parts.append(f"{loc}: {msg}{_size_hint(err)}")
     rendered = "; ".join(parts)
     dropped = len(errors) - _MAX_ARG_ERRORS_SHOWN
     if dropped > 0:
