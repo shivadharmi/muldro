@@ -44,6 +44,7 @@ from src.deep_runtime.middleware.muldro_tool_dispatcher import (
 )
 from src.deep_runtime.middleware.permission_gate import make_permission_gate_middleware
 from src.deep_runtime.middleware.readback import make_readback_middleware
+from src.deep_runtime.middleware.repair_cap import make_repair_cap_middleware
 from src.deep_runtime.middleware.trust_gate import _resolve_tool_def, make_trust_gate_middleware
 from src.deep_runtime.middleware.unavailable_server import make_unavailable_server_middleware
 from src.deep_runtime.middleware.write_lock import make_write_lock_middleware
@@ -586,7 +587,13 @@ class AgentInvoker:
         # same resolved dispatcher fn the tool chain uses — real / ledger-wrapped), so a
         # read honors the turn's execution context. Reuses _resolve_cap (fail-open cap|None, same
         # as write_lock) + _assess_risk. CONFIRMED + gated → the deep trust-increment helper.
-        gated_chain: tuple[Any, ...] = (write_lock, dispatcher)
+        #
+        # R3a: the tool-argument repair loop is capped per tool, per turn — installed
+        # immediately OUTER of the dispatcher so it reads the dispatcher's normalized
+        # ToolMessage, and INNER of read_back (which passes status=="error" straight
+        # through, so a capped call is never mistaken for an unverified write).
+        repair_cap = make_repair_cap_middleware()
+        gated_chain: tuple[Any, ...] = (write_lock, repair_cap, dispatcher)
         if self._settings.deep_readback_enabled:
 
             async def _record_confirmed_outcome(*, capability, risk_level):
@@ -612,13 +619,13 @@ class AgentInvoker:
                 ),
                 record_confirmed_outcome=_record_confirmed_outcome,
             )
-            gated_chain = (write_lock, read_back, dispatcher)
+            gated_chain = (write_lock, read_back, repair_cap, dispatcher)
 
         # Order (outer→inner). capability_scope is installed FIRST by build_deep_agent, so the full
         # tool chain is:
         #   capability_scope → governor_audit → unavailable_server → trust_gate
         #     [→ permission_gate (only for ask/auto)] → write_lock
-        #     [→ read_back (only when deep_readback_enabled)] → dispatcher
+        #     [→ read_back (only when deep_readback_enabled)] → repair_cap → dispatcher
         # librarian_extract + budget_mw are @after_model (tuple position irrelevant to tool chain).
         extra_middleware: tuple[Any, ...] = (
             governor_audit,
