@@ -1,4 +1,4 @@
-"""R1 survey: ToolExecutor parses tool arguments against TOOL_INPUT_MODELS — log-only.
+"""ToolExecutor enforces TOOL_INPUT_MODELS at dispatch time: invalid args are rejected.
 
 ``TOOL_INPUT_MODELS`` (src/tools/schemas.py) was consulted at startup by
 ``validate_registry()`` and nowhere else at call time, so an internal tool's typed
@@ -6,13 +6,16 @@ schema never actually constrained a call. ``render_surface`` is the sharp edge:
 FastMCP only checks that ``sections`` is a ``list[dict]``, so ``{"type": "Bogus"}``
 publishes cleanly and the frontend renders ``[Unknown: Bogus]``.
 
-R1 adds the parse in SURVEY mode: every violation is logged with a greppable
-``[toolargs]`` prefix, and NOTHING is rejected. These tests pin that property —
-an invalid call is logged AND still dispatched — plus the ordering decision that
-makes the parse safe: validation runs on the AGENT-supplied input, before
-``_enrich_internal_input`` injects user_id/workspace_id. Those context args are
-deliberately absent from the LLM-facing models, so validating after injection
-would reject every internal call.
+The parse now REJECTS: a call whose arguments fail their model never reaches the
+tool, and the agent gets back an ``invalid_tool_args`` error naming the offending
+field, which it can act on. These tests pin that, plus the two properties that make
+enforcement safe:
+
+* the parse runs on the AGENT-supplied input, before ``_enrich_internal_input``
+  injects user_id/workspace_id — those context args are deliberately absent from the
+  LLM-facing models, so validating after injection would reject every internal call;
+* a validator that raises something pydantic does not wrap still fails OPEN — under
+  enforcement a broken validator would otherwise turn into a permanently blocked tool.
 """
 
 import logging
@@ -98,11 +101,11 @@ def _toolargs_records(caplog) -> list[logging.LogRecord]:
 
 
 @pytest.mark.asyncio
-async def test_invalid_args_are_logged_but_still_dispatched(caplog):
-    """The R1 safety property: a violation is reported, never enforced.
+async def test_invalid_args_are_rejected_before_dispatch(caplog):
+    """A violation is enforced, not merely reported.
 
     ``sections`` carries a component type outside the AnyComponent union — the exact
-    shape that renders as ``[Unknown: Bogus]`` — yet the call still reaches the tool.
+    shape that renders as ``[Unknown: Bogus]`` — so the call must never reach the tool.
     """
     caplog.set_level(logging.WARNING)
     bad_input = {
@@ -116,33 +119,71 @@ async def test_invalid_args_are_logged_but_still_dispatched(caplog):
     assert len(logged) == 1, f"expected exactly one [toolargs] warning, got {logged}"
     assert "render_surface" in logged[0].getMessage()
 
-    call_internal.assert_awaited_once()
-    assert result == {"status": "ok"}
-    # The agent-supplied args reach the tool untouched apart from context injection.
-    assert call_internal.await_args.args[1]["sections"] == bad_input["sections"]
+    call_internal.assert_not_awaited()
+    assert result["error_code"] == "invalid_tool_args"
+    assert "sections" in result["error"]
 
 
 @pytest.mark.asyncio
-async def test_missing_required_field_is_logged_but_still_dispatched(caplog):
-    """A structurally incomplete call (no ``title``) is surveyed, not blocked."""
+async def test_missing_required_field_is_rejected_before_dispatch(caplog):
+    """A structurally incomplete call (no ``title``) is blocked, and the error says so.
+
+    This is the end-to-end half of ``TestRenderedError.test_names_the_offending_field``:
+    the field name has to survive all the way out of ``execute_tool``, not just out of
+    ``_render_validation_error``.
+    """
     caplog.set_level(logging.WARNING)
     bad_input = {"kind": "message", "sections": []}
 
     result, call_internal = await _run_internal("render_surface", bad_input)
 
     assert len(_toolargs_records(caplog)) == 1
-    call_internal.assert_awaited_once()
-    assert result == {"status": "ok"}
+    call_internal.assert_not_awaited()
+    assert result["error_code"] == "invalid_tool_args"
+    assert "title" in result["error"]
+    assert "render_surface" in result["error"]
 
 
 @pytest.mark.asyncio
-async def test_valid_call_logs_nothing(caplog):
+async def test_overlong_subtitle_from_the_live_corpus_is_rejected(caplog):
+    """Regression built from the one real violation in the live corpus.
+
+    Captured 2026-08-20 from a live backend with all three model tiers bound to OpenAI
+    ``gpt-5-mini``: across 18 chat turns, 13 ``render_surface`` calls carrying 133
+    components, exactly one payload failed its model — a 153-character ``subtitle``
+    against ``max_length=120``. PRESENTER_VOICE rule 12 already says "under 120
+    characters" in prose; the prose did not hold, which is the case for enforcing the
+    schema. This is the exact string the model emitted.
+    """
+    caplog.set_level(logging.WARNING)
+    subtitle = (
+        "Draft: comprehensive history, communications, decisions, outstanding items, "
+        "and recommended next steps. Missing private sources (email, calendar, Slack)."
+    )
+    assert len(subtitle) == 153, "the corpus string must not be reflowed"
+
+    result, call_internal = await _run_internal(
+        "render_surface", {**_VALID_RENDER_SURFACE, "subtitle": subtitle}
+    )
+
+    call_internal.assert_not_awaited()
+    assert result["error_code"] == "invalid_tool_args"
+    assert "subtitle" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_valid_call_is_dispatched_untouched(caplog):
+    """The other side of enforcement: a conforming payload is not disturbed."""
     caplog.set_level(logging.WARNING)
 
-    _, call_internal = await _run_internal("render_surface", dict(_VALID_RENDER_SURFACE))
+    result, call_internal = await _run_internal("render_surface", dict(_VALID_RENDER_SURFACE))
 
     assert _toolargs_records(caplog) == []
     call_internal.assert_awaited_once()
+    assert result == {"status": "ok"}
+    assert "error" not in result
+    # The agent-supplied args reach the tool untouched apart from context injection.
+    assert call_internal.await_args.args[1]["sections"] == _VALID_RENDER_SURFACE["sections"]
 
 
 @pytest.mark.asyncio
@@ -236,7 +277,10 @@ async def test_special_backend_passthrough_is_validated(caplog):
         )
 
     assert len(_toolargs_records(caplog)) == 1
-    assert result == bad_input, "log-only: the passthrough still returns its input"
+    assert result["error_code"] == "invalid_tool_args", (
+        "the passthrough must return the error, not echo an invalid verdict"
+    )
+    assert result != bad_input
 
 
 @pytest.mark.asyncio
@@ -293,7 +337,7 @@ async def test_composite_tool_without_a_model_is_untouched(caplog):
 
 
 class TestRenderedError:
-    """The rendered string is what R2 will RETURN, so it is pinned now."""
+    """The rendered string is what ``execute_tool`` RETURNS to the agent."""
 
     def _render(self, tool_name: str, tool_input: dict) -> str:
         from src.orchestrator.tool_executor import _validate_tool_input
@@ -352,12 +396,29 @@ class TestRenderedError:
 
         assert _validate_tool_input("search_gmail_messages", {"whatever": 1}) is None
 
+    def test_an_unknown_component_tag_keeps_its_whole_tag_list(self):
+        """The most actionable message in the system must survive the per-error cap.
 
-def test_reject_flag_is_off():
-    """R1 ships in survey mode. Flipping this is R2, gated on the survey's findings."""
-    from src.orchestrator.tool_executor import _REJECT_ON_INVALID_TOOL_ARGS
+        An unknown ``type`` produces exactly ONE pydantic error whose ``msg`` names every
+        valid AnyComponent tag — measured at 260 characters. Truncated, the agent is told
+        the first few tags and then cut mid-word, which destroys the only thing that lets
+        it repair the call. Asserting on the LAST tag is deliberate: asserting on the
+        first would pass under a 100-character cap and prove nothing.
+        """
+        from src.ui.contracts import ComponentType
 
-    assert _REJECT_ON_INVALID_TOOL_ARGS is False
+        rendered = self._render(
+            "render_surface",
+            {
+                **_VALID_RENDER_SURFACE,
+                "sections": [{"id": "t1", "type": "Bogus", "properties": {"text": "x"}}],
+            },
+        )
+        assert "'Divider'" in rendered, f"tag list was truncated: {rendered}"
+        # ...and it really is the whole list, not just a longer prefix of it.
+        for tag in ("Text", "Table", "ExecutionTrace", "Divider"):
+            assert f"'{tag}'" in rendered
+        assert len(ComponentType) >= 17
 
 
 @pytest.mark.asyncio
@@ -366,8 +427,8 @@ async def test_a_validator_that_raises_does_not_break_dispatch(caplog):
 
     Pydantic wraps ValueError/AssertionError into ValidationError, but not, say, a
     TypeError from a field_validator. That would escape ``execute_tool`` ABOVE its own
-    try/except and kill a dispatch that worked yesterday. A survey may not break the
-    thing it surveys — and in R2 a broken validator must not become a blocked tool.
+    try/except and kill the whole turn. This matters MORE under enforcement, not less:
+    a validator that explodes must not silently become a permanently blocked tool.
     """
     caplog.set_level(logging.WARNING)
 
@@ -390,4 +451,4 @@ async def test_a_validator_that_raises_does_not_break_dispatch(caplog):
 
     call_internal.assert_awaited_once()
     assert result == {"status": "ok"}
-    assert not [r for r in _toolargs_records(caplog) if "would be rejected" in r.getMessage()]
+    assert not [r for r in _toolargs_records(caplog) if "rejected" in r.getMessage()]

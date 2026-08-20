@@ -26,28 +26,31 @@ logger = logging.getLogger(__name__)
 # LLM-facing schemas in schemas.py deliberately omit them.
 _CONTEXT_ARGS = ("user_id", "workspace_id")
 
-# R1 is a SURVEY: parse every tool call's arguments, report what would be rejected, reject
-# nothing. There is no production traffic to survey — this is an unpushed branch — so the
-# corpus is the test suite. Flipping this to True is R2, gated on the survey's findings.
-_REJECT_ON_INVALID_TOOL_ARGS = False
-
 # Pydantic v2 errors are verbose, and a malformed component tree yields one entry per bad
 # node plus a long `msg` naming every valid AnyComponent tag. Render only the first few and
 # say how many were dropped — the agent needs the first offending field, not the census.
 # (AnyComponent's `type` discriminator keeps an unknown tag to ONE error rather than one
 # per union member; the cap is for breadth of errors, not for union fan-out.)
+#
+# The per-error cap is sized off a MEASUREMENT, because the longest message is also the
+# most actionable one: an unknown component tag produces exactly one error whose `msg` is
+# 260 chars and lists all 17 valid AnyComponent tags. At the old 100-char cap the agent
+# was told three tags and then cut mid-word, destroying the one thing that lets it repair
+# the call. 280 = 260 measured + room for a few more component types.
+# The overall cap survives that intact: envelope (42) + loc (~12) + 260 + trailer (61) =
+# 375 for a single tag-list error, so 900 fits it whole with room for two neighbours,
+# while still bounding a broadly-malformed payload to ~225 tokens.
 _MAX_ARG_ERRORS_SHOWN = 3
-_MAX_ARG_ERROR_MSG_CHARS = 100
-_MAX_ARG_ERROR_CHARS = 480
+_MAX_ARG_ERROR_MSG_CHARS = 280
+_MAX_ARG_ERROR_CHARS = 900
 
 
 def _render_validation_error(tool_name: str, exc: ValidationError) -> str:
     """Render a ValidationError as a short, actionable, agent-facing message.
 
     Follows the house style of the missing-required-args return below: say what is
-    wrong AND what to do. In R1 this string is only logged, but it is written as the
-    thing R2 will *return*, so flipping ``_REJECT_ON_INVALID_TOOL_ARGS`` is a flag flip
-    rather than a rewrite.
+    wrong AND what to do. This string is returned to the model as the tool result, so
+    it is the agent's only chance to repair the call — name the field, keep the reason.
     """
     errors = exc.errors()
     parts = []
@@ -90,11 +93,12 @@ def _validate_tool_input(tool_name: str, tool_input: dict) -> str | None:
     except ValidationError as exc:
         return _render_validation_error(tool_name, exc)
     except Exception:
-        # Fail OPEN. A field_validator that raises something pydantic does not wrap
-        # (only ValueError/AssertionError become ValidationError) would otherwise
-        # escape execute_tool above its own try/except and kill a dispatch that
-        # worked yesterday. A survey may not be able to break the thing it surveys —
-        # and in R2 a broken validator must not become a blocked tool.
+        # Fail OPEN — and this matters MORE now that the parse rejects, not less. A
+        # field_validator that raises something pydantic does not wrap (only
+        # ValueError/AssertionError become ValidationError) would escape execute_tool
+        # above its own try/except and kill the whole turn; failing open at worst lets
+        # through a call that used to work, while failing closed would turn one broken
+        # validator into a permanently blocked tool.
         logger.exception("[toolargs] %s validation raised; treating as valid", tool_name)
         return None
     return None
@@ -425,13 +429,13 @@ class ToolExecutor:
         # the agent-supplied input, above the SPECIAL early-return and above
         # _enrich_internal_input — because the context args (user_id / workspace_id) are
         # deliberately absent from the LLM-facing models: validating after injection
-        # would flag every internal call. SURVEY MODE: log, do not reject (see
-        # _REJECT_ON_INVALID_TOOL_ARGS).
+        # would flag every internal call. A failing parse REJECTS: the error goes back to
+        # the model as the tool result (agents self-correct on tool errors), which is what
+        # the prose constraints in prompts.py could not enforce on their own.
         arg_error = _validate_tool_input(tool_name, tool_input)
         if arg_error:
-            logger.warning("[toolargs] %s would be rejected: %s", tool_name, arg_error)
-            if _REJECT_ON_INVALID_TOOL_ARGS:
-                return {"error": arg_error, "error_code": "invalid_tool_args"}
+            logger.warning("[toolargs] %s rejected: %s", tool_name, arg_error)
+            return {"error": arg_error, "error_code": "invalid_tool_args"}
 
         # Resolve the stored backend string to the typed dispatch discriminator.
         # An unrecognized value (e.g. a future or garbled backend) coerces to None

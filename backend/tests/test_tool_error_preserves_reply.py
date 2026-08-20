@@ -1,7 +1,6 @@
 """A tool that RETURNS an error keeps the turn alive — and keeps the reply already written.
 
-R2 flips ``tool_executor._REJECT_ON_INVALID_TOOL_ARGS`` to ``True``, at which point
-``ToolExecutor.execute_tool`` starts RETURNING ``{"error": ..., "error_code":
+``ToolExecutor.execute_tool`` RETURNS ``{"error": ..., "error_code":
 "invalid_tool_args"}`` for an internal tool whose arguments fail a Pydantic parse — most
 often ``render_surface``, the tool the chat lead uses to draw a workspace card. That is only
 safe if a rejected tool call costs the lead its CARD and not its PROSE.
@@ -62,7 +61,7 @@ TOOL_NAME = "render_surface"
 COMMITTED_PROSE = "Here is the comparison you asked for."
 CORRECTIVE_PROSE = " I could not draw the card, so here it is as plain text instead."
 
-# What R2 will return once _REJECT_ON_INVALID_TOOL_ARGS is True. Shaped exactly like
+# What ToolExecutor returns for a failed argument parse. Shaped exactly like
 # ToolExecutor's own rendering (_render_validation_error) so the assertion below is about the
 # real payload the model would have to read.
 INVALID_ARGS_ERROR = {

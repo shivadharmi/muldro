@@ -86,9 +86,13 @@ async def render_surface(
 ) -> dict:
     """Render a rich workspace surface from typed A2UI components.
 
-    The arguments have already been validated against `RenderSurfaceInput` by the tool layer,
-    so an invalid component tree never reaches here — it is returned to the model as a tool
-    error instead, which is the whole point of moving off the fenced-markdown channel.
+    `ToolExecutor.execute_tool` (src/orchestrator/tool_executor.py) parses these arguments
+    against `RenderSurfaceInput` before it dispatches, so an invalid component tree is
+    returned to the model as an `invalid_tool_args` tool error instead of reaching here —
+    which is the whole point of moving off the fenced-markdown channel, where a bad tree
+    died in a logger.debug and the author never learned it had failed. That parse fails
+    OPEN if validation itself raises, so treat this as a strong guarantee, not an
+    invariant this body may assume.
 
     kind: Surface kind (message, summary, briefing, alert, recommendation)
     title: Surface title

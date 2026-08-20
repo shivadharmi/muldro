@@ -4,6 +4,7 @@ The channel it replaces was fenced markdown in the reply text: an unparseable tr
 `None` and pushed an empty surface behind a `logger.debug`, so the author never learned it
 had failed. A tool is the only channel that reports back — `muldro_tool_dispatcher` sets
 `ToolMessage(status="error")` when a result carries an error, and the agent loop can retry.
+That last claim is exercised in `tests/test_tool_error_preserves_reply.py`, not here.
 
 A tool rather than `response_format`, because the lead's reply is prose PLUS optional UI;
 `response_format` would force the whole reply to be JSON and destroy `<always_reply>`.
