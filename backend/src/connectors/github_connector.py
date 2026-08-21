@@ -249,9 +249,20 @@ class GitHubConnector(BaseConnector):
             # and the frame composes the headline from the two.
             title=title,
             summary=f"{reason}: {title} in {repo}",
-            # The commenter is not in the notifications payload. Marking this
-            # a repository rather than "system" stops the headline builder
-            # presenting a repo name as though it were a person.
+            # The commenter is not in the notifications payload, so the repo
+            # is the only counterparty github gives us - and the frame wants
+            # one, because the title above is now the bare subject and
+            # `frame_for_event` composes "<actor> - <subject>" from the two.
+            #
+            # `type` is descriptive only: NOTHING READS IT. `_actor_name`
+            # takes `name`/`canonical_name` whatever the type says, so the
+            # headline is "acme/web - Add retry to poller", formatted exactly
+            # like "Sarah Chen - Series A term sheet". Marking it "repository"
+            # does not stop that and was never going to; it records what the
+            # value is for a future consumer (entity resolution, which should
+            # not mint a Person for a repo). Making the frame skip a
+            # non-person actor would delete the repo name from every github
+            # headline, which is the opposite of why it is here.
             actor={"type": "repository", "name": repo},
             raw_payload={
                 "notification_id": notification_id,

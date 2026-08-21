@@ -59,15 +59,33 @@ def test_falls_back_to_the_notification_id_when_the_url_is_unparseable():
     assert raw.entity_id == "notif_999"
 
 
-def test_actor_names_the_repo_but_marks_it_as_a_repository():
-    """The human commenter is not in the notifications payload.
+def test_actor_names_the_repo_so_the_frame_can_compose_a_headline():
+    """The human commenter is not in the notifications payload, so the repo is
+    the only counterparty github offers - and the frame needs one, because the
+    title is now the bare subject.
 
-    Recording actor type as 'repository' rather than 'system' keeps the
-    headline builder from presenting a repo name as if it were a person.
+    `type` is descriptive only and NOTHING READS IT: this asserted the field
+    under a docstring claiming it stopped the headline builder presenting a
+    repo as a person, which it never did. The headline is asserted below,
+    since that is the behaviour the claim was about.
     """
     raw = GitHubConnector._normalize_notification(_notification())
-    assert raw.actor["type"] == "repository"
     assert raw.actor["name"] == "shivadharmi/muldrov1"
+    assert raw.actor["type"] == "repository"
+
+
+def test_the_headline_names_the_repo_and_the_subject():
+    """What the founder actually sees. A github notification reads
+    "acme/web - Add retry to poller", formatted exactly like a person's
+    "Sarah Chen - Series A term sheet" - by design: dropping a non-person
+    actor would delete the repo from every github headline, and the repo is
+    the only thing distinguishing one notification from another.
+    """
+    from src.view.frame import frame_for_event
+
+    raw = GitHubConnector._normalize_notification(_notification())
+
+    assert frame_for_event(raw).headline == "shivadharmi/muldrov1 - Single-lead cutover"
 
 
 def test_notification_id_is_retained_in_the_payload():

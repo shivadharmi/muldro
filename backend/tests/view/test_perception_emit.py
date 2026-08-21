@@ -80,8 +80,22 @@ def test_pre_ingest_raw_events_group_and_stay_attributed():
     assert [q.who for q in units[0].quotes] == ["Sarah Chen", "Sarah Chen"]
 
 
-def test_a_raw_event_has_no_importance_yet():
-    """The scorer runs at ingest; a pre-ingest frame must not invent one."""
+def test_a_units_frame_never_takes_importance_from_the_event():
+    """Spec §10 invariants 4 and 8: importance is CALLER-supplied, always.
+
+    An earlier version of this test read as though a pre-ingest frame were the
+    special case ("the scorer runs at ingest"). It is not: `importance` is no
+    longer read off the event at any stage, so a NormalizedEvent carrying an
+    LLM-authored `importance_score` scores exactly the same 0.0 as a RawEvent
+    that has none. That score is derived from the event's title and summary -
+    the attacker-controlled subject and body - so carrying it would let
+    external prose raise its own rank. `units_from_events` supplies no
+    importance, and will until §6's ranker does.
+    """
+    scored = _event()
+    assert scored.importance_score == 0.6  # the event really does carry one
+
+    assert units_from_events([scored])[0].frame.importance == 0.0
     assert units_from_events([_raw_event()])[0].frame.importance == 0.0
 
 
