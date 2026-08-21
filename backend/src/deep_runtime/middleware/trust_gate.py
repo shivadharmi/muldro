@@ -61,7 +61,7 @@ from src.deep_runtime.middleware.approval_persistence import (
     build_legibility_refs,
     prepared_approval_overrides,
 )
-from src.integrations.capabilities import is_read_only_capability
+from src.integrations.capabilities import SYSTEM_ACTION_CAPABILITIES, is_read_only_capability
 from src.services.tool_registry import ToolRegistry
 from src.services.trust_engine import TrustEngine
 from src.services.verification.predicate import is_write_verification_required
@@ -299,6 +299,16 @@ def make_trust_gate_middleware(
                 name=name,
                 status="error",
             )
+        # system.* internal action tools (set_goal / set_instruction / schedule_reminder /
+        # add_to_brief) write into Muldro's own data layer — the user's own memory, reversible,
+        # `self` blast radius. ALWAYS-ALLOWED, exactly as on the chat path (permission_gate),
+        # because "is this an internal system action?" is the same fact for both gates even
+        # though they otherwise ask different questions. Matched against the EXPLICIT set, not
+        # a `system.` prefix, so a future system.* capability stays gated until deliberately
+        # exempted. Without this an autonomous step that adds a brief item would PREPARE it —
+        # staging the user's own note for the user's own review.
+        if capability in SYSTEM_ACTION_CAPABILITIES:
+            return await handler(request)
         if not capability or is_read_only_capability(capability):
             return await handler(request)
 

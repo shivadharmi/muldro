@@ -99,6 +99,12 @@ class TestSingleGateApprovalRequired:
         executor._trust_gate.create_approval_and_pause = AsyncMock()
         executor._surface_emitter.emit_event = AsyncMock()
         executor._store.checkpoint = AsyncMock()
+        # Pausing is now conditional on a human being reachable. With nobody
+        # present the verdict PREPAREs instead — see
+        # tests/test_autonomous_gate_liveness.py, which owns that half of the
+        # contract. This test covers the interrupt half, so it states its
+        # precondition rather than relying on the default.
+        executor._dag_runner._presence = "present"
 
         step = _make_step()
         run = _make_run()
@@ -327,6 +333,9 @@ class TestGateIntegrationApprovalResume:
         executor = _make_executor(settings, mock_db, trust_engine=mock_trust_engine)
         executor._surface_emitter.emit_event = AsyncMock()
         executor._store.checkpoint = AsyncMock()
+        # The pause path requires a reachable human; with nobody present the
+        # write is PREPARED instead (tests/test_autonomous_gate_liveness.py).
+        executor._dag_runner._presence = "present"
 
         step = _make_step(capability="email.send")
         run = _make_run()
