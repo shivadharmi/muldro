@@ -108,7 +108,8 @@ class Frame(BaseModel):
     source: str
     occurred_at: datetime
     updated_at: datetime
-    importance: float             # §6
+    importance: float             # §6 supplies this. NOT NormalizedEvent.importance_score,
+                                  # which is LLM-authored from the subject line (inv. 4 and 8).
     affordances: list[Affordance] # real capabilities, code-authored labels
 
 class Quote(BaseModel):
@@ -468,7 +469,21 @@ Stated so they can be tested.
 1. **A view is a pure function of a domain row.** No view reads a cache. Corollary: Glance and Full
    cannot disagree, and *"card shows info, modal shows nothing"* is unrepresentable.
 2. **`frame.headline` is plain text.** It is never passed to a markdown renderer.
-3. **No external-origin value reaches a frame field.** Enforced at the type boundary, not by review.
+3. **No external-origin value reaches a frame field un-neutralized.** Enforced two ways, and it is
+   worth being exact about which is which, because the difference is what is testable:
+   - **`headline` is enforced at the type boundary.** Its validator refuses every construct
+     `remark-gfm` would turn into emphasis, strikethrough, a heading or a live link — including all
+     three GFM autolink forms (`https?://`, `www.`, bare email) and the CommonMark `<scheme:>` form —
+     plus raw newlines and control/bidi-override characters. It also bounds length rather than
+     refusing it, because a refused headline is a card the founder never sees.
+   - **Every other field rests on there being exactly one construction site.** `frame_for_event` is
+     the only place a `Frame` is built from perception, and it neutralizes external text before
+     construction. This is a *structural* guarantee, not a type-level one: a plain `str` carries no
+     origin, so nothing in the type system distinguishes a code-authored string from an external one.
+     `key` in particular is built **from** an external `entity_id` by construction and must be.
+
+   The stronger form — an origin-carrying type (`External = NewType("External", str)`) that `Frame`
+   fields refuse — would make this enforceable rather than merely disciplined. It is not built.
 4. **The model authors exactly one field.** `body`. It authors no structure, no kind, no capability, no
    count, no score.
 5. **Every affordance names a capability in `CAPABILITY_CATALOG`.** A label is code-authored. An
@@ -479,10 +494,14 @@ Stated so they can be tested.
 9. **Nothing expires.** No `expires_at` anywhere in this design.
 10. **Promotion is structural, never semantic.** *(Kept from `message_promotion.py`.)*
 
-Test surface: `frame.key` determinism and github's PR-not-notification key (6); a property test that no
-`external` value constructs a `Frame` field (3); `rank()` against ordering cases rather than eyeballing
-(§6); lede-budget overrun triggers repair rather than truncation (7); an affordance with an unknown
-capability is dropped (5).
+Test surface: `frame.key` determinism and github's PR-not-notification key (6); for (3), a fuzz over
+adversarial subjects asserting `frame_for_event` never yields a headline its own validator would
+refuse and never raises — which pins the *relationship* between the neutralizer and the validator, so
+changing either alone fails; a differential test that the backend `lede_of` and the frontend `ledeOf`
+agree on one corpus (7, and invariant 1's corollary — two implementations of "paragraph 1" that
+disagree is how the Glance and the Full drift apart); `rank()` against ordering cases rather than
+eyeballing (§6); lede-budget overrun triggers repair rather than truncation (7); an affordance with an
+unknown capability is dropped (5).
 
 ---
 
@@ -540,7 +559,7 @@ parallel path is how this was arrived at.
 | # | Step | Gate |
 |---|---|---|
 | 1 | `Frame` from `NormalizedEvent`; github keys on the PR | property test: same event → same key; three duplicate cards become one that updates |
-| 2 | `body` as one markdown field; headline plain text; `quotes` band | property test: no `external` value constructs a `Frame` field |
+| 2 | `body` as one markdown field; headline plain text; `quotes` band | fuzz: no adversarial subject yields a headline the validator would refuse, and none raises |
 | 3 | Glance renderer; delete the 19 slots and the private token maps | every card of a kind is the same shape; `kindStyle()` is the only definition |
 | 4 | List-ranker over derived features | `rank()` unit-tested against ordering cases; no external prose in its inputs |
 | 5 | Full view, Conversation archetype | covers gmail, slack and github discussions — three of five sources in one renderer |
