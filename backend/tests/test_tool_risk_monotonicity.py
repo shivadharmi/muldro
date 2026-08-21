@@ -1,16 +1,16 @@
 """Characterization tests for tool-vs-capability risk monotonicity (TOOL-P3-3).
 
 Per-tool ``risk_level`` may intentionally diverge from the capability-level risk in
-``CAPABILITY_CATALOG`` (tool granularity is more precise than capability granularity —
-e.g. ``browser_tabs`` is ``low`` but maps to ``browser.open``/``medium``). That divergence
+``CAPABILITY_CATALOG`` (tool granularity is more precise than capability granularity — a
+read-shaped tool on a write-capable capability can honestly be lower risk). That divergence
 is deliberate but was previously untested, so a future edit could silently understate a
 write tool's risk enough to drop it out of the approval gate.
 
 These tests pin the safety-relevant invariants:
 
 1. **Approval monotonicity (bands):** ``none``/``low`` never require approval; ``high``/
-   ``critical`` always do. ``medium`` is the discretionary band (browser-family writes are
-   intentionally approval-exempt).
+   ``critical`` always do. ``medium`` is the discretionary band, where a tool may be a
+   write and still not warrant a prompt.
 2. **Dangerous-capability monotonicity (the headline):** when a tool's *capability* is
    ``high``/``critical`` risk, the tool still requires approval even if the tool's own
    ``risk_level`` is lower. A downward risk divergence can never drop a dangerous
@@ -106,16 +106,14 @@ def test_downward_risk_divergence_is_allowlisted():
     is to force review, since a downward divergence is the only direction that can weaken a
     gate. (Upward divergence — tool stricter than capability — is always safe.)
     """
-    # name -> (tool_risk, capability_risk). Every entry below is verified safe: browser
-    # ops belong to the approval-exempt browser family. See src/tools/catalog.py
-    # risk-divergence note. The gmail native label/filter-management tools that used to
+    # name -> (tool_risk, capability_risk). Every entry below is verified safe. The
+    # browser_* entries that used to live here went with the Playwright MCP server; the
+    # whole browser capability family is gone, so those divergences cannot recur.
+    # The gmail native label/filter-management tools that used to
     # diverge downward from email.send (high) were deleted when google-workspace moved
     # to the gateway; the gateway's gmail action set has no label/filter-management
     # action, so that divergence no longer exists.
     expected = {
-        "browser_tabs": ("low", "medium"),
-        "browser_close": ("low", "medium"),
-        "browser_resize": ("low", "medium"),
         # render_surface publishes to the founder's own workspace UI and nothing else; the
         # capability inherits the internal family's default `low`, the tool is honestly
         # `none`. Both bands are ungated, so this divergence cannot weaken a gate.

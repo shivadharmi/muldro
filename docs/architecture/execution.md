@@ -184,7 +184,7 @@ Step action request
         │
         ├── external_mcp → MCP Bridge (external servers)
         │   Google Workspace, GitHub, Slack, Notion,
-        │   Atlassian, Playwright — real MCP names, no normalization
+        │   Atlassian — real MCP names, no normalization
         │
         └── composite → Multi-MCP orchestration (e.g., web_search)
 ```

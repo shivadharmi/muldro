@@ -102,7 +102,6 @@ Defined as `ExternalToolSeed` entries in `catalog.py`. Served via external MCP s
 | GitHub | No | snake_case (`create_pull_request`, `list_issues`, etc.) |
 | Slack | No | snake_case (`slack_post_message`, `slack_get_channel_history`) |
 | Notion | Yes | `API-` kebab-case (`API-post-page`, `API-patch-page`) |
-| Playwright | Yes | `browser_` snake_case (`browser_navigate`, `browser_snapshot`) |
 | Atlassian | No | camelCase (`getJiraIssue`, `createJiraIssue`) |
 | Composite | N/A | `web_search` (multi-MCP orchestration) |
 
@@ -153,7 +152,7 @@ External MCP servers run on demand with no Docker dependency:
 | GitHub | Remote HTTP (Bearer token) | `https://api.githubcopilot.com/mcp/` |
 | Atlassian | Remote HTTP (Bearer token) | Remote hosted |
 | Google Workspace | On-demand local process | `uvx workspace-mcp` via `LocalMCPProcessManager` |
-| Slack, Notion, Playwright | stdio | `npx` (version-pinned) |
+| Slack, Notion | stdio | `npx` (version-pinned) |
 
 `LocalMCPProcessManager` (`src/integrations/local_process_manager.py`) manages the Google Workspace process with reference counting; the process starts on first use within a turn and is torn down when all references are released. An idle reaper in the scheduler's `run_health_tick` is the safety net for leaked sessions. A startup preflight (`src/integrations/runtime_preflight.py`) warns if `uvx` or `npx` are absent from the host.
 

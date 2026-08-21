@@ -9,7 +9,9 @@ class TestDeriveSlug:
         assert derive_slug("google", "google-workspace") == "google"
 
     def test_falls_back_to_server_name(self):
-        assert derive_slug(None, "playwright") == "playwright"
+        # Deliberately hyphen-free: a hyphen would trip the descriptor-suffix strip that
+        # test_strips_descriptor_suffix covers, and this case is the plain fallback.
+        assert derive_slug(None, "customserver") == "customserver"
 
     def test_strips_descriptor_suffix(self):
         assert derive_slug(None, "google-workspace") == "google"
@@ -86,8 +88,8 @@ class TestUnifiedIntegrationResponse:
 
     def test_local_category(self):
         resp = UnifiedIntegrationResponse(
-            server_name="playwright",
-            display_name="Playwright Browser",
+            server_name="custom-stdio",
+            display_name="Custom stdio server",
             provider=None,
             category="local",
             configured=True,

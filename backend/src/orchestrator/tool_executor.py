@@ -229,12 +229,12 @@ class ToolExecutor:
         """
         tools = self._build_internal_tool_definitions()
 
-        # Composite web_search tool (uses Playwright MCP internally)
+        # Composite web_search tool (one HTTPS GET to DuckDuckGo's HTML endpoint)
         tools.append(
             {
                 "name": "web_search",
                 "description": (
-                    "Search the web using DuckDuckGo via a headless browser. "
+                    "Search the web using DuckDuckGo. "
                     "Returns structured results with titles, URLs, and snippets. "
                     "Use this when you need to find information on the web."
                 ),
@@ -396,7 +396,7 @@ class ToolExecutor:
     ) -> dict:
         """Dispatch composite tools (multi-MCP orchestration)."""
         if tool_name == "web_search":
-            from src.browser.web_search import web_search
+            from src.services.web_search import web_search
 
             return await web_search(
                 query=tool_input.get("query", ""),

@@ -6,7 +6,6 @@ from src.models.audit import AuditLog
 from src.models.base import Base
 from src.models.briefing_feedback import BriefingFeedback
 from src.models.briefings import Briefing
-from src.models.browser_sessions import BrowserAction
 from src.models.connection_map import ConnectionMap
 from src.models.conversations import Conversation, Message
 from src.models.dead_letter import DeadLetterEntry
@@ -90,8 +89,6 @@ __all__ = [
     "Trigger",
     # Artifacts
     "Artifact",
-    # Browser automation
-    "BrowserAction",
     # Tool definitions
     "ToolDefinition",
     # Integration platform

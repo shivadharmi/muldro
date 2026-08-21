@@ -122,8 +122,9 @@ def servers_for_provider(provider: str) -> list[str]:
 def provider_for_server(server_name: str) -> str:
     """Infer the OAuth provider from an MCP server name.
 
-    Falls back to the (unmodified) server name when no fragment matches, so
-    no-auth servers (e.g. playwright) map to themselves.
+    Falls back to the (unmodified) server name when no fragment matches, so a
+    no-auth server maps to itself. Every seeded server needs auth today; this
+    fallback exists for admin-registered ones.
     """
     name_lower = server_name.lower().replace("-", "_")
     for fragments, provider in _SERVER_NAME_FRAGMENTS:

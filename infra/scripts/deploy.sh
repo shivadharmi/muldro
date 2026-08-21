@@ -140,7 +140,6 @@ sudo -u ubuntu bash -c '
   export PATH="/home/ubuntu/.local/bin:$PATH"
   timeout 120 uvx workspace-mcp==1.21.3 --help >/dev/null 2>&1 || true
   timeout 120 npx -y slack-mcp-server@1.3.0 --help >/dev/null 2>&1 || true
-  timeout 120 npx -y @playwright/mcp@0.0.76 --help >/dev/null 2>&1 || true
   timeout 120 npx -y @modelcontextprotocol/server-filesystem@2026.1.14 --help >/dev/null 2>&1 || true
   timeout 120 npx -y @notionhq/notion-mcp-server@2.4.0 --help >/dev/null 2>&1 || true
 ' || true

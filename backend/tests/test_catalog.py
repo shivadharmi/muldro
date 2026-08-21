@@ -199,14 +199,14 @@ def test_special_tool_properties():
 
 
 def test_external_tool_seeds_count():
-    """Verify exactly 87 external tool seeds are registered."""
-    assert len(EXTERNAL_TOOL_SEEDS) == 87
+    """Verify exactly 65 external tool seeds are registered."""
+    assert len(EXTERNAL_TOOL_SEEDS) == 65
 
 
 def test_verified_seeds_count():
-    """Verify exactly 65 seeds are verified."""
+    """Verify exactly 43 seeds are verified."""
     verified = get_verified_seeds()
-    assert len(verified) == 65
+    assert len(verified) == 43
 
 
 def test_no_duplicate_external_names_per_server():
@@ -240,7 +240,6 @@ def test_seeds_for_server_counts():
         "github": 8,
         "slack": 8,
         "notion": 22,
-        "playwright": 22,
         "atlassian": 13,
         "_composite": 1,
     }
@@ -267,7 +266,7 @@ def test_get_seeds_for_server_helper():
 def test_get_verified_seeds_helper():
     """Verify get_verified_seeds only returns verified=True entries."""
     verified = get_verified_seeds()
-    assert len(verified) == 65
+    assert len(verified) == 43
 
     # All returned seeds should be verified
     for seed in verified:
@@ -277,7 +276,7 @@ def test_get_verified_seeds_helper():
     # and github are gateway-only servers; their derived seeds are all
     # verified=True (adapter warm-start is the ground truth for these names).
     verified_servers = {seed.server for seed in verified}
-    expected_verified = {"notion", "playwright", "google-workspace", "github"}
+    expected_verified = {"notion", "google-workspace", "github"}
     assert expected_verified.issubset(verified_servers)
 
     # Verify unverified servers are NOT in verified seeds
@@ -293,7 +292,6 @@ def test_seed_server_names_match_installations():
         "github",
         "slack",
         "notion",
-        "playwright",
         "atlassian",
         "_composite",  # special case for composite tools
     }
@@ -311,10 +309,10 @@ def test_high_risk_tools_require_approval():
 
 
 def test_verified_tool_servers():
-    """Verify exactly 4 servers have verified tools."""
+    """Verify exactly 3 servers have verified tools."""
     verified = get_verified_seeds()
     verified_servers = {seed.server for seed in verified}
-    assert verified_servers == {"notion", "playwright", "google-workspace", "github"}
+    assert verified_servers == {"notion", "google-workspace", "github"}
 
 
 def test_composite_tools():

@@ -52,7 +52,7 @@ class TestCallCompositeTool:
     @pytest.mark.asyncio
     async def test_composite_web_search(self, orchestrator):
         """web_search dispatches to the web_search module."""
-        with patch("src.browser.web_search.web_search", new_callable=AsyncMock) as mock_ws:
+        with patch("src.services.web_search.web_search", new_callable=AsyncMock) as mock_ws:
             mock_ws.return_value = {"results": [{"title": "test", "url": "http://example.com"}]}
             result = await orchestrator._tool_executor.call_composite_tool(
                 "web_search", {"query": "test"}, user_id="usr_1", workspace_id="ws_1"

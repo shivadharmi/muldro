@@ -72,7 +72,7 @@ flowchart TD
     REG -->|external_mcp| BRIDGE["mcp_bridge.call_mcp_tool"]
 
     BRIDGE --> POOL["UserMCPSessionPool.get_or_create_session<br/>SEAM: fastmcp.Client(url, auth=BearerAuth)"]
-    POOL --> EXT["External MCP servers<br/>github, atlassian, google-workspace, slack, notion, playwright"]
+    POOL --> EXT["External MCP servers<br/>github, atlassian, google-workspace, slack, notion"]
 
     style POOL fill:#b45309,color:#fff
     style MW fill:#1d4ed8,color:#fff
@@ -91,7 +91,6 @@ Credentials at rest: `oauth_tokens` table, Fernet-encrypted with a single key `M
 | atlassian | remote streamable-http | OAuth → `BearerAuth` + `cloudId` merged into tool input | header |
 | slack | stdio (`npx`) | static token → **env var** | `ps aux` visible |
 | notion | stdio (`npx`) | OAuth → env `NOTION_TOKEN` | `ps aux` visible |
-| playwright | stdio (`npx`) | none | — |
 
 **Key gaps a gateway would fix:** stdio env-var token exposure (`ps aux`), single symmetric key with no per-tenant boundary or rotation, and no custom-header outbound path.
 

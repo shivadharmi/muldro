@@ -24,7 +24,6 @@ _FAMILY_DISPLAY: dict[str, str] = {
     "doc": "doc — Notion/Drive/Atlassian",
     "workflow": "workflow — Atlassian",
     "messaging": "messaging — Slack",
-    "browser": "browser — Playwright",
     "search": "search — Web",
     "internal": "internal",
     "system": "system",

@@ -39,7 +39,7 @@ graph TB
     subgraph TOOLS["Tool Layer"]
         CAT[Tool Catalog<br/>catalog.py]
         INT[Internal FastMCP<br/>2 servers]
-        MCP[MCP Bridge<br/>Google · GitHub · Slack<br/>Notion · Atlassian · Playwright]
+        MCP[MCP Bridge<br/>Google · GitHub · Slack<br/>Notion · Atlassian]
     end
 
     subgraph SVC["Services"]

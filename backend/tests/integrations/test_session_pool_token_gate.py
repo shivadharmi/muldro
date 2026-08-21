@@ -85,10 +85,16 @@ async def test_slack_stdio_with_token_spawns_client():
 
 
 async def test_no_auth_stdio_server_still_spawns_without_token():
-    """No-auth stdio servers (auth_provider=none) must still spawn without a token."""
+    """No-auth stdio servers (auth_provider=none) must still spawn without a token.
+
+    The server name here is a stand-in for an admin-registered server, not a seeded one:
+    Playwright was the last auth-free seeded server and it is gone, so this test is now
+    the only coverage of that spawn branch. Naming it "custom-stdio" would imply the
+    catalog still ships one.
+    """
     pool = UserMCPSessionPool()
     pool.register_server_config(
-        "playwright",
+        "custom-stdio",
         {"transport": "stdio", "auth_provider": "none", "command": "npx", "args": ["pw-mcp"]},
         workspace_id="ws_1",
     )
@@ -104,7 +110,7 @@ async def test_no_auth_stdio_server_still_spawns_without_token():
         patch("src.integrations.session_pool.Client", client_mock),
         patch.object(pool, "_register_discovered_tools", AsyncMock()),
     ):
-        entry = await pool.get_or_create_session("playwright", user_id="u1", workspace_id="ws_1")
+        entry = await pool.get_or_create_session("custom-stdio", user_id="u1", workspace_id="ws_1")
 
     client_mock.assert_called_once()
-    assert entry.server_name == "playwright"
+    assert entry.server_name == "custom-stdio"

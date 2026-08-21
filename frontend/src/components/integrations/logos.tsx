@@ -93,18 +93,6 @@ export function AtlassianLogo({ className }: LogoProps) {
   );
 }
 
-export function PlaywrightLogo({ className }: LogoProps) {
-  return (
-    <svg className={className} viewBox="0 0 24 24" fill="none">
-      <circle cx="8" cy="9" r="7" fill="#2EAD33" opacity="0.9" />
-      <circle cx="16" cy="9" r="7" fill="#D65348" opacity="0.9" />
-      <ellipse cx="8" cy="8.5" rx="1.5" ry="2" fill="white" />
-      <ellipse cx="16" cy="8.5" rx="1.5" ry="2" fill="white" />
-      <path d="M6 14c1 2 3 3 6 3s5-1 6-3" stroke="#333" strokeWidth="1.2" strokeLinecap="round" fill="none" />
-    </svg>
-  );
-}
-
 export function FolderIcon({ className }: LogoProps) {
   return (
     <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">

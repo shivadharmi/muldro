@@ -109,8 +109,11 @@ class TestToolToCapability:
             assert cap.startswith("messaging."), f"Slack tool '{tool}' maps to '{cap}'"
 
     def test_mapping_not_empty(self):
+        # A loose floor, not a count: this asserts the catalog loaded and mapped, and must
+        # not need editing every time a tool is added or a server is dropped. The exact
+        # per-server counts are pinned in test_catalog.py, which is where they belong.
         tool_to_cap = self._build_tool_to_cap()
-        assert len(tool_to_cap) > 100
+        assert len(tool_to_cap) > 50
 
 
 class TestHelpers:

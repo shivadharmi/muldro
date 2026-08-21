@@ -446,8 +446,8 @@ def _ext(
 
 
 # Per-tool risk_level may intentionally differ from the capability-level risk in
-# CAPABILITY_CATALOG. Example: browser_tabs maps to browser.open (medium) but is
-# itself low-risk. Tool-granularity risk is more accurate than capability-granularity.
+# CAPABILITY_CATALOG. Example: a read-shaped tool on a write-capable capability can be
+# low-risk. Tool-granularity risk is more accurate than capability-granularity.
 EXTERNAL_TOOL_SEEDS: list[ExternalToolSeed] = [
     # _ext(name, capability, server, risk, approval, verified)
     # google-workspace and github are gateway-only (OpenConnector) -- see the
@@ -485,29 +485,6 @@ EXTERNAL_TOOL_SEEDS: list[ExternalToolSeed] = [
     _ext("API-get-user", "doc.get_user", "notion", "low", False, True),
     _ext("API-get-users", "doc.get_users", "notion", "low", False, True),
     _ext("API-post-search", "doc.search", "notion", "low", False, True),
-    # playwright (22 tools, verified=True)
-    _ext("browser_navigate", "browser.open", "playwright", "medium", False, True),
-    _ext("browser_snapshot", "browser.snapshot", "playwright", "low", False, True),
-    _ext("browser_click", "browser.click", "playwright", "medium", False, True),
-    _ext("browser_type", "browser.type", "playwright", "medium", False, True),
-    _ext("browser_tabs", "browser.open", "playwright", "low", False, True),
-    _ext("browser_press_key", "browser.type", "playwright", "medium", False, True),
-    _ext("browser_select_option", "browser.click", "playwright", "medium", False, True),
-    _ext("browser_hover", "browser.click", "playwright", "medium", False, True),
-    _ext("browser_drag", "browser.click", "playwright", "medium", False, True),
-    _ext("browser_handle_dialog", "browser.click", "playwright", "medium", False, True),
-    _ext("browser_file_upload", "browser.submit", "playwright", "high", True, True),
-    _ext("browser_close", "browser.open", "playwright", "low", False, True),
-    _ext("browser_resize", "browser.open", "playwright", "low", False, True),
-    _ext("browser_network_requests", "browser.snapshot", "playwright", "low", False, True),
-    _ext("browser_console_messages", "browser.snapshot", "playwright", "low", False, True),
-    _ext("browser_evaluate", "browser.execute", "playwright", "high", True, True),
-    _ext("browser_run_code", "browser.execute", "playwright", "high", True, True),
-    _ext("browser_install", "browser.install", "playwright", "medium", False, True),
-    _ext("browser_navigate_back", "browser.navigate_back", "playwright", "low", False, True),
-    _ext("browser_take_screenshot", "browser.screenshot", "playwright", "low", False, True),
-    _ext("browser_wait_for", "browser.wait", "playwright", "low", False, True),
-    _ext("browser_fill_form", "browser.type", "playwright", "medium", False, True),
     # atlassian (13 tools, verified=False)
     _ext("getJiraIssue", "issue.get", "atlassian", "low", False, False),
     _ext("searchJiraIssuesUsingJql", "issue.search", "atlassian", "low", False, False),

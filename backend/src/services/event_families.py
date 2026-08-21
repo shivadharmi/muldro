@@ -55,12 +55,6 @@ CONNECTOR_WEBHOOK_RECEIVED = "connector.webhook_received"
 CONNECTOR_ERROR = "connector.error"
 CONNECTOR_ACTION_COMPLETED = "connector.action_completed"
 
-# Browser events
-BROWSER_SESSION_OPENED = "browser.session_opened"
-BROWSER_SESSION_CLOSED = "browser.session_closed"
-BROWSER_ACTION_COMPLETED = "browser.action_completed"
-BROWSER_ERROR = "browser.error"
-
 # Notification events
 NOTIFICATION_CREATED = "notification.created"
 NOTIFICATION_SENT = "notification.sent"
