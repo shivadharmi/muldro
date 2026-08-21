@@ -58,10 +58,16 @@ def make_idempotency_key(raw: RawEvent) -> str:
     """Build a unique idempotency key for an event.
 
     Includes message_id when available (e.g., Gmail) for per-message
-    granularity within threads. For Notion, includes last_edited_time so
-    repeat edits of the same page produce distinct events (the same page_id
-    edited twice would otherwise collapse into one). Falls back to
-    source:entity_id:event_type for sources without finer-grained IDs.
+    granularity within threads. Notion mixes in last_edited_time and GitHub
+    mixes in updated_at (carried on ``occurred_at``) for one reason: their
+    entity_id names a durable THING - a page, or a pull request rather than
+    the notification about it - so with no per-event field every later event
+    on it takes the key the first already claimed and is dropped as a
+    duplicate, and the card never updates. updated_at is chosen over GitHub's
+    notification id because GitHub REUSES a thread's id for new activity on
+    the same subject: the id is stable in exactly the case that collides.
+    Falls back to source:entity_id:event_type otherwise - a GitHub event with
+    no parseable updated_at degrades to the collision, never to a now().
     """
     payload = raw.raw_payload or {}
     message_id = payload.get("message_id", "")
@@ -71,6 +77,8 @@ def make_idempotency_key(raw: RawEvent) -> str:
         last_edited_time = payload.get("last_edited_time", "")
         if last_edited_time:
             return f"{raw.source}:{raw.entity_id}:{last_edited_time}:{raw.event_type}"
+    if raw.source == "github" and raw.occurred_at is not None:
+        return f"{raw.source}:{raw.entity_id}:{raw.occurred_at.isoformat()}:{raw.event_type}"
     return f"{raw.source}:{raw.entity_id}:{raw.event_type}"
 
 

@@ -1,10 +1,12 @@
 """Tests for EventProcessor — scoring, dedup, normalization."""
 
 import json
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from src.connectors.github_connector import GitHubConnector
 from src.services.event_processor import DEFAULT_SCORES, EventProcessor, make_idempotency_key
 from tests.conftest import TEST_USER_ID, make_mock_settings, make_raw_event
 
@@ -280,7 +282,11 @@ async def test_idempotency_key_fallback_no_message_id(settings, mock_db):
         await processor._process_inner(raw_no_mid, TEST_USER_ID)
 
     stored = mock_db.add.call_args[0][0]
-    assert stored.idempotency_key == "github:pr_001:pr_opened"
+    # No message_id, so the message_id branch is skipped - but github has its
+    # own per-event branch now (its entity_id names the PR, not the
+    # notification), so the key carries occurred_at. The slack case above is
+    # the 3-part fallback this test is named for.
+    assert stored.idempotency_key == "github:pr_001:2026-03-13T08:00:00+00:00:pr_opened"
 
 
 def test_make_idempotency_key_with_message_id():
@@ -303,6 +309,78 @@ def test_make_idempotency_key_without_message_id():
         raw_payload=None,
     )
     assert make_idempotency_key(raw) == "calendar:cal_evt_123:meeting_scheduled"
+
+
+# ── GitHub: entity_id is the PULL REQUEST now, so the key needs a per-event
+# field ────────────────────────────────────────────────────────────────────
+#
+# github_connector's entity_id became "owner/repo#number" so that every
+# notification on one PR lands on one card. That is right for the card and
+# fatal for the dedup key: without a per-notification field, every later
+# notification on that PR hashes to the key the first one already claimed and
+# _process_inner discards it as a duplicate. The card then never updates,
+# which is the opposite of what frame_key's docstring promises.
+#
+# Notion hit exactly this and mixes in last_edited_time. GitHub mixes in
+# updated_at, which the connector parses onto RawEvent.occurred_at.
+
+
+def _github_notification(**overrides):
+    """A real GitHub notifications-API item through the real normalizer."""
+    notif = {
+        "id": "notif_111",
+        "updated_at": "2026-08-20T09:00:00Z",
+        "reason": "review_requested",
+        "repository": {"full_name": "acme/web"},
+        "subject": {
+            "type": "PullRequest",
+            "title": "Frame and body",
+            "url": "https://api.github.com/repos/acme/web/pulls/42",
+        },
+    }
+    notif.update(overrides)
+    return GitHubConnector._normalize_notification(notif)
+
+
+def test_two_notifications_on_one_pull_request_get_distinct_keys():
+    first = _github_notification(id="notif_111", updated_at="2026-08-20T09:00:00Z")
+    second = _github_notification(id="notif_222", updated_at="2026-08-21T09:00:00Z")
+
+    assert first.entity_id == second.entity_id == "acme/web#42"
+    assert make_idempotency_key(first) != make_idempotency_key(second)
+
+
+def test_the_same_github_notification_twice_keeps_one_key():
+    """Dedup must still dedup - the point is not simply to make keys unique."""
+    once = _github_notification()
+    twice = _github_notification()
+    assert make_idempotency_key(once) == make_idempotency_key(twice)
+
+
+def test_the_github_key_carries_the_notification_timestamp():
+    key = make_idempotency_key(_github_notification())
+    assert key == "github:acme/web#42:2026-08-20T09:00:00+00:00:pr_updated"
+
+
+def test_a_github_event_with_no_timestamp_falls_back_to_the_three_part_key():
+    """An unparseable updated_at leaves occurred_at None. That degrades to the
+    old colliding key rather than raising or inventing a now() that would
+    make every poll of the same PR a new event."""
+    raw = _github_notification(updated_at="not a date")
+    assert raw.occurred_at is None
+    assert make_idempotency_key(raw) == "github:acme/web#42:pr_updated"
+
+
+def test_a_message_id_still_wins_over_the_github_timestamp():
+    """The message_id branch is first and stays first."""
+    raw = make_raw_event(
+        source="github",
+        entity_id="acme/web#42",
+        event_type="pr_updated",
+        occurred_at=datetime(2026, 8, 20, 9, 0, tzinfo=timezone.utc),
+        raw_payload={"message_id": "msg_xyz"},
+    )
+    assert make_idempotency_key(raw) == "github:acme/web#42:msg_xyz:pr_updated"
 
 
 def test_make_idempotency_key_empty_message_id():
