@@ -13,7 +13,7 @@ import { useMuldroWs } from "@/hooks/use-muldro-ws";
 import { useSurfaceStore } from "@/stores/surface-store";
 import type { WorkspaceSurface } from "@/stores/surface-store";
 import { normalizeSurfaceKind } from "@/lib/types/surfaces";
-import { unitFromSurface } from "@/lib/types/unit";
+import { unitFromSurface } from "@/lib/types/unit-bridge";
 import { sortSurfacesActiveFirst } from "@/lib/surface-merge";
 import { useWsActionStore } from "@/stores/ws-action-store";
 import { formatApiError, type ParsedApiError } from "@/lib/api-error";

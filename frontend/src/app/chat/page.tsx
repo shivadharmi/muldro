@@ -17,7 +17,7 @@ import { useToast } from "@/components/ui/toast";
 import type { WorkspaceSurfacePush, SurfacePreview, SurfaceUpdate } from "@/lib/a2ui-types";
 import { normalizeSurfaceKind } from "@/lib/types/surfaces";
 // TEMPORARY bridge — see unitFromSurface. Removed with the surface store.
-import { unitFromSurface } from "@/lib/types/unit";
+import { unitFromSurface } from "@/lib/types/unit-bridge";
 import { sortSurfacesActiveFirst } from "@/lib/surface-merge";
 
 export default function ChatPage() {
