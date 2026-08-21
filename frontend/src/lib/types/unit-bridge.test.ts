@@ -59,3 +59,47 @@ test("created_at is the timestamp fallback, never the epoch", () => {
   expect(u.frame.occurred_at).toBe("2026-08-19T08:00:00Z");
   expect(u.frame.updated_at).toBe("2026-08-19T08:00:00Z");
 });
+
+test("a surface with no preview does not throw", () => {
+  // `addSurface` guards only `id` and `kind`, so a `workspace_surface_push`
+  // carrying `{id, kind, created_at}` and no preview lands in the store. This
+  // function runs above the per-card ErrorBoundary: a TypeError here blanks the
+  // whole workspace page instead of costing one card.
+  const malformed = {
+    id: "sur_bad",
+    kind: "alert",
+    created_at: "2026-08-19T08:00:00Z",
+  } as unknown as WorkspaceSurface;
+
+  const u = unitFromSurface(malformed);
+
+  expect(u.frame.key).toBe("sur_bad");
+  expect(u.frame.headline).toBe("");
+  expect(u.frame.source).toBe("muldro");
+  expect(u.frame.entity_type).toBe("alert");
+  expect(u.frame.occurred_at).toBe("2026-08-19T08:00:00Z");
+  expect(u.body).toBe("");
+});
+
+test("a surface with a partial preview does not throw", () => {
+  const partial = {
+    id: "sur_partial",
+    kind: "alert",
+    created_at: "2026-08-19T08:00:00Z",
+    preview: { title: "Half a preview" },
+  } as unknown as WorkspaceSurface;
+
+  const u = unitFromSurface(partial);
+
+  expect(u.frame.headline).toBe("Half a preview");
+  expect(u.frame.source).toBe("muldro");
+  expect(u.body).toBe("");
+});
+
+test("a surface with neither preview nor created_at still yields a Unit", () => {
+  // An empty timestamp renders as `--` through TimeAgo rather than throwing.
+  const u = unitFromSurface({ id: "sur_min", kind: "alert" } as unknown as WorkspaceSurface);
+
+  expect(u.frame.occurred_at).toBe("");
+  expect(u.frame.updated_at).toBe("");
+});

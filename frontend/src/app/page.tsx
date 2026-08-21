@@ -102,7 +102,10 @@ export default function WorkspacePage() {
 
   const approvalCount = allSurfaces.filter((s) => s.kind === "approval").length;
   const briefing = allSurfaces.find((s) => s.kind === "briefing");
-  const headline = briefing?.preview.title ?? null;
+  // Optional all the way down: this runs in the page body, above the per-card
+  // ErrorBoundary, so a briefing surface pushed without a `preview` would blank
+  // the whole workspace rather than one card.
+  const headline = briefing?.preview?.title ?? null;
   // First-load state: onboarding (no source yet), gathering (source connected,
   // briefing pending), or active (briefing exists). See resolveFirstRunState.
   const firstRunState = resolveFirstRunState(sourceCount, Boolean(briefing));

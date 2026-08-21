@@ -18,27 +18,45 @@
 import type { WorkspaceSurface } from "@/stores/surface-store";
 import type { Unit } from "./unit";
 
+/**
+ * TOTAL against a missing or partial `preview`, and it must stay that way.
+ *
+ * The store's `addSurface` guards only `id` and `kind`, so a malformed
+ * `workspace_surface_push` carrying no `preview` reaches this function — and
+ * this function runs in the *page* body, above the per-card `ErrorBoundary`.
+ * A `TypeError` here does not cost one card; it blanks the whole workspace.
+ *
+ * The alternative fix was to map inside `WorkspaceCanvas`'s boundary, but that
+ * would make the durable canvas take `WorkspaceSurface[]` — coupling it to the
+ * store this bridge exists to outlive, and leaving the chat panel's call site
+ * unguarded anyway. Totality here covers both call sites and keeps the delete
+ * a one-file `rm`.
+ *
+ * Missing fields degrade to empty, never to invented copy: an empty headline
+ * renders an empty line and an empty timestamp renders `--` via `TimeAgo`.
+ */
 // TODO(view-layer): delete with the surface store once the Unit transport lands.
 export function unitFromSurface(s: WorkspaceSurface): Unit {
-  // `created_at` is always present on a WorkspaceSurface; the epoch would
-  // render as "20000d ago" on every card that lacks a preview timestamp.
-  const occurred = s.preview.timestamp ?? s.created_at;
+  const preview: Partial<WorkspaceSurface["preview"]> = s.preview ?? {};
+  // `created_at` is present on every well-formed WorkspaceSurface; the epoch
+  // would render as "20000d ago" on every card that lacks a preview timestamp.
+  const occurred = preview.timestamp ?? s.created_at ?? "";
   return {
     frame: {
       key: s.id,
       group_key: null,
       kind: "record",
       status: "seen",
-      headline: s.preview.title,
-      source: s.preview.tags[0] ?? "muldro",
+      headline: preview.title ?? "",
+      source: preview.tags?.[0] ?? "muldro",
       entity_type: s.kind,
       occurred_at: occurred,
-      updated_at: s.preview.updated_at ?? occurred,
+      updated_at: preview.updated_at ?? occurred,
       importance: 0,
       event_count: 1,
       affordances: [],
     },
-    body: s.preview.subtitle ?? "",
+    body: preview.subtitle ?? "",
     quotes: [],
   };
 }
