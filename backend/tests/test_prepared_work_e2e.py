@@ -72,7 +72,7 @@ async def test_a_write_nobody_could_confirm_becomes_finished_reviewable_work():
         resolve_capability=resolve_capability,
         assess_risk=AsyncMock(name="assess_risk"),
         db_factory=_persist_db_factory(),
-        lead_scope=LEAD_SCOPE,
+        acting_agent_scope=LEAD_SCOPE,
         presence="absent",
     )
 

@@ -121,7 +121,7 @@ async def _persist_permission_approval(
     db_factory,
     context_block: str,
     permission_mode: str,
-    lead_scope,
+    acting_agent_scope,
     user_message: str = "",
     tool_input: dict | None = None,
     presence: Presence = "absent",
@@ -165,19 +165,22 @@ async def _persist_permission_approval(
         # autonomous trust_gate's rows; NO migration — artifact_refs is JSONB).
         "permission_mode": permission_mode,
         # Read by ``resume_deep_lead`` — do NOT merge with ``capability_scope`` below.
-        # Same value today, different readers and different intent: this one is the
+        # Both persist ``acting_agent_scope`` and cannot drift in value (one parameter, one
+        # binding), but they have different readers and different intent: this one is the
         # chat-resume authority envelope, that one is prepared-action replay authority.
-        # Deleting either breaks a path the other's tests do not cover.
-        "lead_scope": sorted(lead_scope),
+        # Deleting either breaks a path the other's tests do not cover. The KEY NAMES are
+        # frozen wire/DB contract — pending rows written before a rename would still carry
+        # them — so the parameter was renamed off ``lead_scope`` and these were not.
+        "lead_scope": sorted(acting_agent_scope),
         # A1: the ORIGINAL user message, so an approved resume can fire the
         # interaction-learner (bounded like context_block to keep the row lean).
         "user_message": user_message[:_MAX_PERSISTED_CONTEXT_CHARS],
         # Legibility (step 1) + Trap 2 (snapshot, never re-derive — written under the
-        # neutral key name the prepared-action executor reads; ``lead_scope`` above
+        # neutral key name the prepared-action executor reads; the ``lead_scope`` KEY above
         # stays as-is because ``resume_deep_lead`` reads THAT key and must not change):
         # the four keys both gates persist identically, shared via
         # ``build_legibility_refs`` so they cannot drift.
-        **build_legibility_refs(tool_input, lead_scope, presence, prepared=prepared),
+        **build_legibility_refs(tool_input, acting_agent_scope, presence, prepared=prepared),
     }
     if not prepared:
         # Routes this approval to POST /v1/muldro/chat/resume. A PREPARED action has no live
@@ -241,14 +244,14 @@ def make_permission_gate_middleware(
     assess_risk,
     resolve_capability,
     context_block: str = "",
-    lead_scope=frozenset(),
+    acting_agent_scope=frozenset(),
     user_message: str = "",
     presence: Presence = "absent",
 ) -> AgentMiddleware:
     """Build the action-time permission gate for one chat turn.
 
     ``permission_mode`` / ``workspace_id`` / ``user_id`` / ``thread_id`` / ``agent_name`` /
-    ``lead_scope`` are captured in the closure — never LLM-supplied. The gate is normally
+    ``acting_agent_scope`` are captured in the closure — never LLM-supplied. The gate is normally
     installed only for ``permission_mode in ("ask", "auto")`` (``bypass``/``None`` never
     install it); it is nonetheless self-defending — ``bypass`` short-circuits to a no-op.
 
@@ -266,8 +269,14 @@ def make_permission_gate_middleware(
         resolve_capability: Async ``(name) -> (lookup_ok, capability | None)``. The gate FAILS
             CLOSED on ``(False, None)`` (block the write).
         context_block: The turn's assembled ContextPack, persisted (capped) onto the Approval.
-        lead_scope: The lead's ``capability_scope`` — persisted (sorted) onto the Approval so
-            the resume path knows the turn's authorized envelope.
+        acting_agent_scope: The ``capability_scope`` of the agent THIS chain wraps — the
+            middleware chain is built per agent, so on a chat turn that is the lead, but the
+            parameter is not lead-specific. Pass ``agent.capability_scope`` and nothing wider:
+            it is persisted (sorted) onto the Approval under BOTH ``lead_scope`` (the resume
+            path's authority envelope) and ``capability_scope`` (the snapshot
+            ``prepared_actions`` replays against), and a value derived from the plan's
+            capability union rather than the acting agent would retroactively widen the
+            authority a prepared write is confirmed under.
         user_message: The turn's ORIGINAL user message — persisted (capped) onto the Approval so
             an approved resume can fire the interaction-learner (parity with the non-paused tail).
         presence: ``present`` | ``absent`` for this turn. Selects between INTERRUPTING (a
@@ -377,7 +386,7 @@ def make_permission_gate_middleware(
             db_factory=db_factory,
             context_block=context_block,
             permission_mode=permission_mode,
-            lead_scope=lead_scope,
+            acting_agent_scope=acting_agent_scope,
             user_message=user_message,
             tool_input=args,
             presence=presence,

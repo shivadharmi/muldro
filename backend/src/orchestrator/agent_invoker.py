@@ -484,7 +484,9 @@ class AgentInvoker:
                 assess_risk=_assess_risk,
                 resolve_capability=_gate_cap,
                 context_block=context_block,
-                lead_scope=agent.capability_scope,
+                # The ACTING agent's own scope, never the plan's capability union — this is
+                # snapshotted onto any prepared Approval and replayed against at confirm time.
+                acting_agent_scope=agent.capability_scope,
                 user_message=user_message,
                 presence=presence,
             )

@@ -193,7 +193,7 @@ def _gate(
     assess_risk,
     db_factory,
     thread_id: str = THREAD_ID,
-    lead_scope=LEAD_SCOPE,
+    acting_agent_scope=LEAD_SCOPE,
     context_block: str = "",
     user_message: str = "",
     presence: str = "present",
@@ -216,7 +216,7 @@ def _gate(
         assess_risk=assess_risk,
         resolve_capability=resolve_capability,
         context_block=context_block,
-        lead_scope=lead_scope,
+        acting_agent_scope=acting_agent_scope,
         user_message=user_message,
         presence=presence,
     )
@@ -476,7 +476,7 @@ async def test_ask_interrupts_every_write_without_assessing_risk():
         assess_risk=assess_risk,
         db_factory=_persist_db_factory(),
         thread_id=thread_id,
-        lead_scope=frozenset({"email.send", "calendar.create"}),
+        acting_agent_scope=frozenset({"email.send", "calendar.create"}),
         context_block="CTX",
         user_message="book me a flight",
     )
@@ -711,7 +711,7 @@ async def test_persist_is_idempotent_reuses_existing():
             db_factory=_persist_db_factory(existing=existing),
             context_block="",
             permission_mode="auto",
-            lead_scope=frozenset({"email.send"}),
+            acting_agent_scope=frozenset({"email.send"}),
             # The reuse this pins happens on the RESUME REPLAY, and only a PRESENT turn ever
             # resumes — so the live record shape is the honest annotation here.
             presence="present",
@@ -756,7 +756,7 @@ async def test_persist_reselects_on_integrity_error():
             db_factory=_factory,
             context_block="",
             permission_mode="auto",
-            lead_scope=frozenset({"email.send"}),
+            acting_agent_scope=frozenset({"email.send"}),
             # permission_gate is the CHAT gate, which runs with a human on the turn — the live
             # record shape is what this race actually races to write.
             presence="present",
@@ -789,7 +789,7 @@ async def test_persist_ask_mode_defaults_reversible_and_blast_radius():
             db_factory=_persist_db_factory(),
             context_block="X" * 20000,
             permission_mode="ask",
-            lead_scope=frozenset({"calendar.create", "email.send"}),
+            acting_agent_scope=frozenset({"calendar.create", "email.send"}),
             # This test pins the LIVE (interrupt) record shape, so it now says so explicitly —
             # the parameter's own default is the fail-safe ``absent``, which PREPARES instead.
             presence="present",
@@ -967,7 +967,7 @@ async def test_a_prepared_approval_is_typed_and_not_chat_flagged():
     """The PREPARED record: typed ``prepared_action`` with a TTL, flagged ``prepared``, and
     WITHOUT the ``chat`` flag — it has no live thread to resume, so it belongs on the standard
     approval endpoints (``_guard_not_chat_approval`` 409s anything carrying ``chat``).
-    ``lead_scope`` MUST survive: ``resume_deep_lead`` denies a resume without it."""
+    ``acting_agent_scope`` MUST survive: ``resume_deep_lead`` denies a resume without it."""
     captured: dict = {}
 
     async def fake_create_approval(db, **kwargs):
@@ -988,7 +988,7 @@ async def test_a_prepared_approval_is_typed_and_not_chat_flagged():
             db_factory=_persist_db_factory(),
             context_block="",
             permission_mode="ask",
-            lead_scope=frozenset({"calendar.create", "email.send"}),
+            acting_agent_scope=frozenset({"calendar.create", "email.send"}),
             presence="absent",
         )
 
@@ -1025,7 +1025,7 @@ async def test_a_live_approval_still_carries_the_chat_flag():
             db_factory=_persist_db_factory(),
             context_block="",
             permission_mode="ask",
-            lead_scope=frozenset({"email.send"}),
+            acting_agent_scope=frozenset({"email.send"}),
             presence="present",
         )
 
@@ -1133,7 +1133,7 @@ async def test_persist_twice_yields_exactly_one_row_real_db():
                 db_factory=factory,
                 context_block="",
                 permission_mode="auto",
-                lead_scope=frozenset({"email.send"}),
+                acting_agent_scope=frozenset({"email.send"}),
                 # The replay this simulates is a RESUME, and only a PRESENT turn resumes — a
                 # prepared write is never replayed, so the live shape is the honest annotation.
                 presence="present",

@@ -94,7 +94,7 @@ async def test_permission_gate_persists_redacted_tool_input():
             db_factory=lambda: _FakeDbCtx(),
             context_block="",
             permission_mode="ask",
-            lead_scope=frozenset({"email.send"}),
+            acting_agent_scope=frozenset({"email.send"}),
             user_message="send it",
             tool_input={"to": "a@b.com", "authorization": "Bearer x"},
             presence="present",
@@ -140,7 +140,7 @@ async def test_presence_defaults_to_absent_when_a_caller_omits_it():
             db_factory=lambda: _FakeDbCtx(),
             context_block="",
             permission_mode="ask",
-            lead_scope=frozenset({"email.send"}),
+            acting_agent_scope=frozenset({"email.send"}),
             # presence deliberately NOT passed
         )
 
@@ -177,7 +177,7 @@ async def test_an_oversized_payload_is_persisted_truncated_and_flagged():
             db_factory=lambda: _FakeDbCtx(),
             context_block="",
             permission_mode="ask",
-            lead_scope=frozenset({"email.send"}),
+            acting_agent_scope=frozenset({"email.send"}),
             tool_input={"to": "a@b.com", "body": "x" * 9000},
             presence="present",
         )
