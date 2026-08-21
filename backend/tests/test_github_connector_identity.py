@@ -6,12 +6,15 @@ three review comments minted three identities. subject.url already names the
 PR itself.
 """
 
+from datetime import datetime, timezone
+
 from src.connectors.github_connector import GitHubConnector
 
 
 def _notification(**overrides):
     notif = {
         "id": "notif_999",
+        "updated_at": "2026-08-21T14:14:00Z",
         "reason": "review_requested",
         "repository": {"full_name": "shivadharmi/muldrov1"},
         "subject": {
@@ -157,3 +160,58 @@ def test_a_non_string_url_falls_back_without_raising():
     assert _parse(None, "fb") == "fb"
     assert _parse(12345, "fb") == "fb"
     assert _parse({"url": "x"}, "fb") == "fb"
+
+
+# --- occurred_at: the notification's updated_at IS the event's timestamp ----
+#
+# Without it every GitHub RawEvent carried occurred_at=None, and the two
+# consumers disagree about what that means: the frame builder falls back to
+# now() while the feed grouper sorts a missing timestamp at datetime.min. One
+# event would render "just now" on a card the feed had ordered at year-1.
+
+
+def test_occurred_at_comes_from_updated_at():
+    raw = GitHubConnector._normalize_notification(_notification())
+    assert raw.occurred_at == datetime(2026, 8, 21, 14, 14, tzinfo=timezone.utc)
+
+
+def test_occurred_at_is_timezone_aware():
+    """Notion is the one connector that forgot this; do not become the second.
+
+    A naive value here raises on any comparison against an aware one.
+    """
+    raw = GitHubConnector._normalize_notification(_notification())
+    assert raw.occurred_at is not None
+    assert raw.occurred_at.tzinfo is not None
+
+
+def test_a_missing_updated_at_is_none_and_does_not_raise():
+    notif = _notification()
+    del notif["updated_at"]
+    raw = GitHubConnector._normalize_notification(notif)
+    assert raw.occurred_at is None
+
+
+def test_an_unparseable_updated_at_is_none_and_does_not_raise():
+    """A crash here would take down the whole poll for the source."""
+    raw = GitHubConnector._normalize_notification(_notification(updated_at="not a date"))
+    assert raw.occurred_at is None
+
+
+def test_an_empty_or_non_string_updated_at_is_none():
+    for bad in ("", "   ", None, 1755787200, {"at": "now"}):
+        raw = GitHubConnector._normalize_notification(_notification(updated_at=bad))
+        assert raw.occurred_at is None, bad
+
+
+def test_a_naive_updated_at_is_coerced_to_utc_rather_than_left_naive():
+    raw = GitHubConnector._normalize_notification(_notification(updated_at="2026-08-21T14:14:00"))
+    assert raw.occurred_at == datetime(2026, 8, 21, 14, 14, tzinfo=timezone.utc)
+
+
+def test_an_offset_updated_at_is_normalized_to_utc():
+    raw = GitHubConnector._normalize_notification(
+        _notification(updated_at="2026-08-21T19:44:00+05:30")
+    )
+    assert raw.occurred_at == datetime(2026, 8, 21, 14, 14, tzinfo=timezone.utc)
+    assert raw.occurred_at.tzinfo is timezone.utc

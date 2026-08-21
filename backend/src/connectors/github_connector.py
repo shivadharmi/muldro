@@ -164,6 +164,31 @@ class GitHubConnector(BaseConnector):
         return "/v1/auth/oauth/github/authorize"
 
     @staticmethod
+    def _occurred_at_from_updated_at(value: object) -> datetime | None:
+        """Parse a notification's ``updated_at`` into a tz-aware UTC datetime.
+
+        GitHub sends ISO-8601 with a trailing ``Z``. Without this every GitHub
+        event carried ``occurred_at=None``, and the two consumers of that None
+        disagree: the frame builder falls back to ``now()`` while the feed
+        grouper sorts a missing timestamp at ``datetime.min`` - so one event
+        would render "just now" on a card the feed had ordered at year-1.
+
+        Always aware, never naive: a naive value raises on any comparison
+        against an aware one downstream. Always total, never raising: a bad
+        timestamp must cost this one event its time, not take down the whole
+        poll for the source.
+        """
+        if not isinstance(value, str) or not value.strip():
+            return None
+        try:
+            parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+
+    @staticmethod
     def _entity_id_from_subject_url(url: str | None, fallback: str) -> str:
         """Derive a durable "owner/repo#number" id from a subject API URL.
 
@@ -219,6 +244,7 @@ class GitHubConnector(BaseConnector):
             entity_id=GitHubConnector._entity_id_from_subject_url(
                 subject.get("url"), notification_id
             ),
+            occurred_at=GitHubConnector._occurred_at_from_updated_at(notif.get("updated_at")),
             # The repo travels in actor now, so the title is the bare subject
             # and the frame composes the headline from the two.
             title=title,
