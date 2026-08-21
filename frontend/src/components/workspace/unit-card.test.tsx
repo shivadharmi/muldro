@@ -1,8 +1,30 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { test, expect, vi } from "vitest";
-import { UnitCard } from "./unit-card";
+import { UnitCard, ledeOf } from "./unit-card";
 import type { Unit } from "@/lib/types/unit";
+
+// Shared corpus: backend/src/view/body.py::lede_of and this file's ledeOf
+// must agree on "what is paragraph 1". Read directly off disk with node:fs
+// (not a static JSON import, and not `new URL(..., import.meta.url)` — Vite
+// statically rewrites that pattern for asset bundling and mishandles a
+// target outside the frontend package root) so this works regardless of any
+// bundler restriction on reaching outside the frontend package boundary. See
+// unit-card.tsx::ledeOf for why the pair must change together.
+const LEDE_CORPUS_PATH = join(
+  import.meta.dirname,
+  "../../../../backend/tests/view/fixtures/lede_corpus.json",
+);
+
+interface LedeCase {
+  name: string;
+  body: string;
+  lede: string;
+}
+
+const ledeCorpus: { cases: LedeCase[] } = JSON.parse(readFileSync(LEDE_CORPUS_PATH, "utf-8"));
 
 function unit(partial: Partial<Unit> = {}): Unit {
   return {
@@ -64,33 +86,8 @@ test("renders only the first paragraph of the body", () => {
   expect(screen.queryByText(/More detail here/)).toBeNull();
 });
 
-test("splits paragraphs on a CRLF blank line, like the backend does", () => {
-  const u = unit({ body: "Para one is the claim.\r\n\r\nPara two is detail." });
-  render(<UnitCard unit={u} onOpen={vi.fn()} />);
-  expect(screen.getByText("Para one is the claim.")).toBeInTheDocument();
-  expect(screen.queryByText(/Para two is detail/)).toBeNull();
-});
-
-test("splits paragraphs on a blank line that carries whitespace", () => {
-  const u = unit({ body: "Para one is the claim.\n \t \nPara two is detail." });
-  render(<UnitCard unit={u} onOpen={vi.fn()} />);
-  expect(screen.getByText("Para one is the claim.")).toBeInTheDocument();
-  expect(screen.queryByText(/Para two is detail/)).toBeNull();
-});
-
-test("skips a leading heading — a label is not the claim", () => {
-  const u = unit({ body: "# Heading label\n\nThe claim itself lives here." });
-  render(<UnitCard unit={u} onOpen={vi.fn()} />);
-  expect(screen.getByText("The claim itself lives here.")).toBeInTheDocument();
-  expect(screen.queryByText(/Heading label/)).toBeNull();
-});
-
-test("joins soft-wrapped lines of the first paragraph with a space", () => {
-  const u = unit({ body: "The claim starts here\nand wraps to a second line.\n\nDetail." });
-  render(<UnitCard unit={u} onOpen={vi.fn()} />);
-  expect(
-    screen.getByText("The claim starts here and wraps to a second line."),
-  ).toBeInTheDocument();
+test.each(ledeCorpus.cases)("ledeOf: $name", ({ body, lede }) => {
+  expect(ledeOf(body)).toBe(lede);
 });
 
 test("renders the context line with the event count", () => {

@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from src.view.contracts import Quote, Unit
-from src.view.frame import event_actor_name, frame_for_event, frame_key
+from src.view.frame import ensure_aware_utc, event_actor_name, frame_for_event, frame_key
 
 logger = logging.getLogger(__name__)
 
@@ -47,21 +47,19 @@ class EventGroup:
 def _occurred(event: Any) -> datetime:
     """Never raises, always returns a tz-aware datetime.
 
-    Missing timestamps sort oldest (see _NO_TIMESTAMP above). A NAIVE
-    timestamp is coerced to UTC rather than left alone: comparing a naive
-    and an aware datetime raises the same TypeError a missing one would,
-    and calendar.py already established the fix for this codebase - "so
-    occurred_at is uniformly aware and downstream comparisons never raise
-    on mixed naive/aware values." notion_connector.py is the live source of
-    a naive value here: it parses last_edited_time with no normalization,
-    so any timestamp lacking an offset reaches this function as-is.
+    The coercion itself is `frame.py::ensure_aware_utc` - the view layer's
+    ONE timestamp policy - not a second implementation of it. This function
+    adds exactly one thing on top: an ORDERING sentinel. A value the policy
+    calls absent sorts oldest (see _NO_TIMESTAMP above) so `sorted` never
+    raises on a mixed naive/aware list and `latest` still means "the newest
+    event that has a time" whenever any event in the group has one.
+
+    The sentinel is for ordering ONLY. Anything that DISPLAYS a timestamp
+    must ask `ensure_aware_utc` directly and treat None as absent - see
+    `quotes_from_events`, which drops a quote it cannot date rather than
+    showing the sentinel.
     """
-    value = getattr(event, "occurred_at", None)
-    if value is None:
-        return _NO_TIMESTAMP
-    if value.tzinfo is None:
-        return value.replace(tzinfo=timezone.utc)
-    return value
+    return ensure_aware_utc(getattr(event, "occurred_at", None)) or _NO_TIMESTAMP
 
 
 def group_events_by_key(events: list[Any]) -> list[EventGroup]:
@@ -164,6 +162,15 @@ def quotes_from_events(events: list[Any]) -> list[Quote]:
     attribution, not a harmless default - worse than the quote not
     appearing at all.
 
+    "No real timestamp" is decided by `ensure_aware_utc`, NOT by testing the
+    raw attribute against None. The two are not the same question: a
+    non-datetime `occurred_at` - a string, an int, whatever a malformed
+    external payload carried - is not None, but it is just as undatable, and
+    an `is None` test would let it through to be rendered as the year-1
+    sentinel. The policy that decides a timestamp is absent must be the same
+    one that produced the sentinel, or the guard protects against one half of
+    what the sentinel covers.
+
     Which field holds that text is a per-source FACT, declared in
     `VERBATIM_TEXT_FIELD`; an unlisted source yields nothing. See that map
     for why silence rather than a guess.
@@ -185,7 +192,8 @@ def quotes_from_events(events: list[Any]) -> list[Quote]:
     """
     quotes: list[Quote] = []
     for event in sorted(events, key=_occurred):
-        if getattr(event, "occurred_at", None) is None:
+        when = ensure_aware_utc(getattr(event, "occurred_at", None))
+        if when is None:
             continue
         text = _quote_text(event)
         if not text:
@@ -193,7 +201,7 @@ def quotes_from_events(events: list[Any]) -> list[Quote]:
         who = event_actor_name(event)
         if not who:
             continue
-        quotes.append(Quote(text=text, who=who, when=_occurred(event)))
+        quotes.append(Quote(text=text, who=who, when=when))
     return quotes[-MAX_QUOTES:]
 
 

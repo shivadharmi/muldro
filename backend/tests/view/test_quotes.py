@@ -140,6 +140,22 @@ def test_an_event_with_no_real_timestamp_produces_no_quote():
     assert quotes_from_events([event]) == []
 
 
+def test_a_non_datetime_timestamp_produces_no_quote_either():
+    """The same rule, decided by the same policy rather than by `is None`.
+
+    `occurred_at` arrives from external payloads, so it can be a string or an
+    int as easily as it can be missing. `ensure_aware_utc` calls all three
+    absent and `_occurred` gives all three the year-1 ordering sentinel - so
+    a guard that tested the raw attribute against None would drop the missing
+    one and render the malformed one dated to year 1, which is the fabricated
+    attribution this rule exists to prevent.
+    """
+    for value in ("2026-08-21T14:00:00Z", 1755784800, object()):
+        event = _event()
+        event.occurred_at = value
+        assert quotes_from_events([event]) == [], value
+
+
 # --- Real connector output --------------------------------------------------
 #
 # Everything above drives a hand-written `raw_payload={"snippet": ...}`. That

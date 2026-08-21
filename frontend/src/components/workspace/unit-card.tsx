@@ -148,25 +148,39 @@ export function UnitCard({ unit, onOpen, onAct, onDismiss }: Props) {
   );
 }
 
-/** A blank line may itself carry whitespace — mirrors backend `_PARAGRAPH_BREAK`. */
-const PARAGRAPH_BREAK = /\n\s*\n/;
+/**
+ * A blank line may itself carry spaces or tabs — deliberately NOT `\s`:
+ * mirrors backend `_PARAGRAPH_BREAK`. Python's `\s`/`str.strip()` and
+ * JavaScript's `\s`/`trim()` classify different characters (U+FEFF is
+ * whitespace to JavaScript but not Python; U+001C-U+001F and U+0085 are
+ * whitespace to Python but not JavaScript), so spelling out spaces-and-tabs
+ * is what makes the two agree — and it is CommonMark's own definition of a
+ * blank line, not either language's.
+ */
+const PARAGRAPH_BREAK = /\n[ \t]*\n/;
+
+/** Trim spaces and tabs only — never `.trim()`, whose character set is JavaScript's alone. */
+const trimSpaceTab = (s: string): string => s.replace(/^[ \t]+|[ \t]+$/g, "");
 
 /**
  * Paragraph one of the body, soft-wraps joined.
  *
- * Mirrors `backend/src/view/body.py::lede_of` exactly — line endings
- * normalized first, a whitespace-bearing blank line still a paragraph break,
- * leading ATX headings skipped. If the two drift, the card's lede and the
- * lede the backend budgeted become two projections of one string that
- * disagree, which is the defect this layer exists to remove.
+ * Mirrors `backend/src/view/body.py::lede_of` exactly. Both implement
+ * CommonMark's own rule for a blank line and a trimmed line — spaces and
+ * tabs only — rather than either language's native whitespace class, which
+ * the two disagree about (see `PARAGRAPH_BREAK` above). Line endings are
+ * normalized first, a spaces-and-tabs-only blank line is still a paragraph
+ * break, leading ATX headings are skipped. Both sides are pinned by one
+ * shared fixture, `backend/tests/view/fixtures/lede_corpus.json`, read by
+ * both test suites — change either implementation and the corpus together,
+ * or the two projections of one string will disagree again.
  */
-function ledeOf(body: string): string {
+export function ledeOf(body: string): string {
   const normalized = body.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
   for (const block of normalized.split(PARAGRAPH_BREAK)) {
-    const lines = block
-      .trim()
+    const lines = trimSpaceTab(block)
       .split("\n")
-      .map((line) => line.trim())
+      .map(trimSpaceTab)
       .filter((line) => line && !line.startsWith("#"));
     if (lines.length > 0) return lines.join(" ");
   }

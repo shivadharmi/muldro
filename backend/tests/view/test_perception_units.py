@@ -135,3 +135,20 @@ def test_naive_timestamp_is_treated_as_utc_not_as_missing():
     groups = group_events_by_key([earlier_aware, later_naive])
     assert len(groups) == 1
     assert groups[0].latest.title == "later naive"
+
+
+def test_a_non_datetime_timestamp_sorts_oldest_instead_of_raising():
+    """`occurred_at` comes off an external payload, so it can be a string.
+
+    The coercion is `frame.py::ensure_aware_utc`, which calls a non-datetime
+    absent; `_occurred` then gives it the same oldest-possible sentinel a
+    missing one gets. Reading `.tzinfo` off the raw value instead would raise
+    AttributeError inside `sorted` and cost the whole poll, not one card.
+    """
+    real = _event(minute=1, title="real time")
+    junk = _event(minute=5, title="junk time")
+    junk.occurred_at = "2026-08-21T14:05:00Z"
+    groups = group_events_by_key([junk, real])
+    assert len(groups) == 1
+    # The junk timestamp sorts oldest, so the event that HAS a time is latest.
+    assert groups[0].latest.title == "real time"
