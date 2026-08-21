@@ -29,7 +29,10 @@ _ENV_KEY_ATTR = {
 }
 
 # Providers that authenticate without an API key (local endpoints keyed by base_url).
-# Single source of truth shared by the resolver and the credential API.
+# Encoded twice: here, and as auth_kind == "keyless_base_url" in provider_catalog.py.
+# Docs standard is durable intent, not inventory, so we don't merge them into one
+# import; tests/test_provider_catalog.py::test_keyless_providers_agree_with_the_resolver
+# is what stops the two encodings from drifting apart.
 KEYLESS_PROVIDERS = frozenset({"ollama"})
 
 

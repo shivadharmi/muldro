@@ -1,5 +1,7 @@
 """Provider catalog facts, and the invariants that keep it in step with its siblings."""
 
+import pytest
+
 from src.config.model_catalog import MODEL_CATALOG
 from src.config.provider_catalog import (
     PROVIDER_CATALOG,
@@ -14,8 +16,22 @@ def test_every_catalogued_provider_has_a_spec():
 
 
 def test_display_names_are_human_readable():
+    """Guards B5: the UI was rendering raw provider slugs (e.g. "google_genai")
+    instead of human names. No provider's display_name may equal its own slug, so a
+    newly-added provider that forgets a display name fails this test."""
     assert PROVIDER_CATALOG["google_genai"].display_name == "Google Gemini"
     assert PROVIDER_CATALOG["anthropic"].display_name == "Anthropic"
+    for provider, spec in PROVIDER_CATALOG.items():
+        assert spec.display_name != provider
+
+
+def test_catalogs_reject_mutation():
+    """Immutable by construction, not by convention: a frozen ProviderSpec inside a
+    mutable dict is still reassignable, so the mapping is frozen too."""
+    with pytest.raises(TypeError):
+        PROVIDER_CATALOG["anthropic"] = None  # type: ignore[index]
+    with pytest.raises(TypeError):
+        MODEL_CATALOG["anthropic"] = ()  # type: ignore[index]
 
 
 def test_keyless_providers_agree_with_the_resolver():

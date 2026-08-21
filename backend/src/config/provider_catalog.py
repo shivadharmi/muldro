@@ -14,7 +14,9 @@ this declaration.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Literal
 
 AuthKind = Literal["api_key", "keyless_base_url", "aws_sigv4", "azure_deployment"]
@@ -50,39 +52,41 @@ _API_KEY = CredentialField("api_key", "API key", "secret", True, "sk-…")
 _BASE_URL_OPTIONAL = CredentialField("base_url", "Base URL — optional", "url", False, None)
 
 
-PROVIDER_CATALOG: dict[str, ProviderSpec] = {
-    "anthropic": ProviderSpec(
-        provider="anthropic",
-        display_name="Anthropic",
-        auth_kind="api_key",
-        credential_fields=(_API_KEY, _BASE_URL_OPTIONAL),
-        docs_url="https://console.anthropic.com/settings/keys",
-    ),
-    "openai": ProviderSpec(
-        provider="openai",
-        display_name="OpenAI",
-        auth_kind="api_key",
-        credential_fields=(_API_KEY, _BASE_URL_OPTIONAL),
-        docs_url="https://platform.openai.com/api-keys",
-    ),
-    "google_genai": ProviderSpec(
-        provider="google_genai",
-        display_name="Google Gemini",
-        auth_kind="api_key",
-        credential_fields=(_API_KEY, _BASE_URL_OPTIONAL),
-        docs_url="https://aistudio.google.com/apikey",
-    ),
-    "ollama": ProviderSpec(
-        provider="ollama",
-        display_name="Ollama",
-        auth_kind="keyless_base_url",
-        # Keyless: the base URL IS the credential. Required, unlike everywhere else.
-        credential_fields=(
-            CredentialField("base_url", "Base URL", "url", True, "http://localhost:11434"),
+PROVIDER_CATALOG: Mapping[str, ProviderSpec] = MappingProxyType(
+    {
+        "anthropic": ProviderSpec(
+            provider="anthropic",
+            display_name="Anthropic",
+            auth_kind="api_key",
+            credential_fields=(_API_KEY, _BASE_URL_OPTIONAL),
+            docs_url="https://console.anthropic.com/settings/keys",
         ),
-        docs_url="https://ollama.com/download",
-    ),
-}
+        "openai": ProviderSpec(
+            provider="openai",
+            display_name="OpenAI",
+            auth_kind="api_key",
+            credential_fields=(_API_KEY, _BASE_URL_OPTIONAL),
+            docs_url="https://platform.openai.com/api-keys",
+        ),
+        "google_genai": ProviderSpec(
+            provider="google_genai",
+            display_name="Google Gemini",
+            auth_kind="api_key",
+            credential_fields=(_API_KEY, _BASE_URL_OPTIONAL),
+            docs_url="https://aistudio.google.com/apikey",
+        ),
+        "ollama": ProviderSpec(
+            provider="ollama",
+            display_name="Ollama",
+            auth_kind="keyless_base_url",
+            # Keyless: the base URL IS the credential. Required, unlike everywhere else.
+            credential_fields=(
+                CredentialField("base_url", "Base URL", "url", True, "http://localhost:11434"),
+            ),
+            docs_url="https://ollama.com/download",
+        ),
+    }
+)
 
 
 def get_provider_spec(provider: str) -> ProviderSpec | None:
@@ -97,7 +101,7 @@ def public_field_keys(provider: str) -> frozenset[str]:
     a non-secret kind. An undeclared key stored in ``extra_config`` is therefore
     treated as a secret and never echoed.
     """
-    spec = PROVIDER_CATALOG.get(provider)
+    spec = get_provider_spec(provider)
     if spec is None:
         return frozenset()
     return frozenset(f.key for f in spec.credential_fields if f.kind != "secret")
