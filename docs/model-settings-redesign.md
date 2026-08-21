@@ -26,7 +26,7 @@ different scale.
 
 ## 2. Decisions
 
-Four forks were settled during design. They are not re-opened by implementation.
+Six forks were settled during design. They are not re-opened by implementation.
 
 ### 2.1 Providers and Tiers become separate tabs
 
@@ -63,18 +63,80 @@ Provider becomes derived metadata, displayed but not separately selected.
 This also removes defect **F1** structurally: there is no longer a way to select a
 provider without simultaneously selecting a model.
 
-### 2.4 A tier bound to an unconfigured provider warns; it does not block
+### 2.6 The binding contract is realigned to its storage model
 
-The save proceeds — the founder may be about to connect the provider — but the warning
-is persistent, server-computed, and states the real consequence (§4.4). It is not
-advisory text: per **B3**, the run-time failure is total.
+`TierBinding` is replaced by `ModelBindingDTO` carrying `scope_type` + `scope_key`, the
+pair the DB already stores.
+
+Today the contract flattens both into a single `tier` field and recovers `scope_type`
+*positionally* — from which array of `ModelConfigResponse` the binding was found in.
+That is a lossy projection of its own storage model, and it is why `_to_tier_binding`
+takes a `tier_binding_cls` parameter, why `put_config` must comment that "the reused
+TierBinding carries the agent name in the `tier` field", and why the field carries a
+two-line apology in `contracts/model_config.py`.
+
+The rename is folded into Phase 1 because §4.6 is **already** a breaking contract change
+— `CatalogResponse.providers` goes from `dict` to `list`, models flatten, `warnings`
+appears, `effort` becomes a `Literal`. Every consumer is rewritten in that phase
+regardless, so aligning the binding shape costs a diff rather than a second breaking
+change. Pre-launch there is nothing to migrate.
+
+### 2.4 A tier can never be *bound* to an unconfigured provider; a *revoked* one warns
+
+Two distinct paths reach "this tier points at a provider with no credential", and they
+need different guards. Save-time validation cannot see the second at all.
+
+| Path | Guard |
+|------|-------|
+| **Bind** — saving a binding for a provider that was never connected | `PUT /v1/model-config` **rejects** with 422, naming the offending `scope_key` and provider |
+| **Revoke** — the binding was valid when saved; the credential is later deleted, or a deployment env key disappears | `GET` returns a persistent server-computed `warnings` entry (§4.4) |
+| **Seed** — a deployment-default binding created at startup, which never passes through `put_config` | same `warnings` entry |
+
+Both guards call `ModelResolver.resolve_credential` — the same call the run-time path
+makes — so validation and reality cannot drift.
+
+`DELETE /v1/providers/{provider}/credentials` additionally returns the bindings that
+depend on that provider, so the UI can state the consequence before proceeding. It
+**informs, it does not block**: a credential the founder cannot revoke is a security
+problem, not a safety feature.
+
+The earlier objection to rejecting at bind time — "the founder may be about to connect
+it" — is answered by §4.4 putting a **Connect** action inside the tier card. The
+connect-then-bind order costs one click and never leaves the tab.
+
+### 2.5 There is no tier-level fallback
+
+A tier binding whose provider is unusable raises `ModelConfigError`. It does not degrade
+to anything. This is a decision, not an omission — `model_resolver.py:70` already states
+it: *"A genuinely broken tier config still raises."*
+
+A defensible fallback does exist: `_pick_binding` prefers the workspace row over the
+NULL-workspace deployment-default row, choosing by **existence** rather than usability,
+and could be extended to fall through when the credential does not resolve. It is
+rejected for three reasons.
+
+1. Once §2.4 rejects bad binds, the only remaining route into the broken state is an
+   explicit revoke, performed on a screen that just named what it would break. Falling
+   back there means the founder is warned, proceeds, and then sees nothing happen —
+   while Planner silently runs on a model they did not choose, at a different price,
+   producing different plans. A loud failure they consented to is better.
+2. `_effective_binding` exists so cache identity and cost attribution report the model
+   *actually running* (see its docstring). Any new fallback must be mirrored there or
+   prompt-cache gating and per-call cost attribution both go wrong.
+3. The articulacy problem is real but separate, and is fixed by **B7** rather than by
+   degradation.
+
+**Revisit trigger:** multi-user workspaces. The argument above rests on the revoker and
+the binding's owner being the same person. Once admin A can revoke a credential admin B's
+tier depends on, the revoke is no longer consented by the affected party, and
+degradation-with-a-visible-signal becomes the better answer.
 
 ---
 
 ## 3. Defects to fix
 
-All twenty are verified against source at the cited locations. Severity: **S1** = data
-loss or run-time failure, **S2** = user-visible incorrectness, **S3** = quality.
+All twenty-one are verified against source at the cited locations. Severity: **S1** =
+data loss or run-time failure, **S2** = user-visible incorrectness, **S3** = quality.
 
 ### 3.1 Backend / data integrity
 
@@ -86,6 +148,7 @@ loss or run-time failure, **S2** = user-visible incorrectness, **S3** = quality.
 | **B4** | S2 | **`effort: "none"` is a legal contract value the UI cannot render.** `TierBinding.effort: str = "none"`; `EFFORT_OPTIONS = ["low","medium","high"]`. `addOverride` seeds `"none"` when no tier binding is found, so the `<select>` shows `low` while state holds `none`, and Save persists `none`. `effort` is an unvalidated `str`. |
 | **B5** | S2 | **Catalog metadata is dropped at the API boundary.** `ModelSpec` carries `context_window`, `input_cost_per_1k`, `output_cost_per_1k`, `supports_prompt_cache`; `CatalogModel` exposes none. There is no provider-level object at all (`providers: dict[str, list[CatalogModel]]`), so the UI has no display name, auth shape, or model count — it renders raw slugs like `google_genai`. |
 | **B6** | S3 | `_provider_statuses` iterates `for provider in MODEL_CATALOG`, so a credential row for a provider absent from the catalog is invisible and unmanageable. |
+| **B7** | S2 | **`ModelConfigError` is caught nowhere.** It is raised at `model_resolver.py:66`, `:92` and `:96`; the only `except` in `src/` is the resolver's own internal one at `:70`. It subclasses `RuntimeError`, so a misconfigured tier surfaces as an unhandled exception at agent-build time — an error frame in chat, a `failed` step in a DAG run — and nothing names the tier, the provider, or the fix. This is the failure mode §2.5 deliberately leaves in place, so it must be made articulate. |
 
 ### 3.2 Frontend correctness
 
@@ -96,7 +159,7 @@ loss or run-time failure, **S2** = user-visible incorrectness, **S3** = quality.
 | **F3** | S2 | **No dirty tracking.** Save is always enabled, nothing indicates a pending edit, and closing the modal discards silently. |
 | **F4** | S2 | **Conditional controls reflow the row.** `showEffort` / `showTemperature` unmount their controls when the model doesn't support them, so switching model changes the control count and shifts everything after it. |
 | **F5** | S3 | **The API key stays in component state after saving.** `ProviderRow` never clears `apiKey`, so the secret lives in React state and in the DOM input for the modal's lifetime. |
-| **F6** | S3 | **`keyOf()` is `binding.tier` for tiers *and* agent overrides.** An agent named `reasoning`/`balanced`/`fast` collides in `updateTier`/`updateOverride`. |
+| **F6** | S3 | **The binding contract is a lossy projection of its storage model.** `TierBinding.tier` carries a tier name *or* an agent name; `scope_type` is recovered positionally from which response array the binding sits in. This is **not** a collision bug — `updateTier` and `updateOverride` map over separate arrays, so an agent named `reasoning` cannot clash, and no agent in `AGENT_MODEL_TIERS` is named after a tier. The cost is clarity: a `tier_binding_cls` parameter on `_to_tier_binding`, an explanatory comment in `put_config`, and a two-line apology in the contract. Resolved by §2.6. |
 
 ### 3.3 Layout and responsiveness
 
@@ -206,8 +269,15 @@ Per-agent overrides remain a collapsed disclosure with an active count, using th
 
 ### 4.4 The unconfigured-provider state
 
-Per §2.4 and **B3**. Computed **server-side** so it survives a reload and cannot drift
-from the resolver's own rule:
+Per §2.4, §2.5 and **B3**. Three mechanisms, all deriving from one call —
+`ModelResolver.resolve_credential`, the same one the run-time path makes.
+
+**Bind is rejected.** `PUT /v1/model-config` validates, per binding, that the provider
+resolves a credential (or is in `KEYLESS_PROVIDERS`). A failure is a 422 naming the
+`scope_key` and provider. The client surfaces it on the offending tier card, not as a
+toast, so the founder sees which binding was refused.
+
+**Revoke is warned.** Computed server-side so it survives a reload:
 
 ```python
 class ConfigWarning(BaseModel):
@@ -218,15 +288,34 @@ class ConfigWarning(BaseModel):
 ```
 
 `ModelConfigResponse` gains `warnings: list[ConfigWarning]`, populated on **both** GET
-and PUT by re-using `ModelResolver.resolve_credential` — the same call the run-time path
-makes, so the two cannot disagree.
+and PUT. This is not a softer version of the reject — it is the guard for the two paths
+a save-time check cannot see: a credential deleted after the binding was saved, and a
+deployment-default binding seeded at startup that never passed through `put_config`.
 
 A warned tier card renders with an amber border and a footer row stating the real
 consequence — *"Groq is not connected. There is no tier fallback — every agent on Fast
 will fail until you connect it."* — plus a **Connect Groq** action that switches to the
-Providers tab with that provider pre-expanded.
+Providers tab with that provider pre-expanded. The copy must not promise a fallback;
+per §2.5 there is none.
 
-The copy must not promise a fallback. There is none for tier bindings.
+**Revoke is informed before it happens.** `DELETE /v1/providers/{provider}/credentials`
+returns the dependent bindings alongside the resulting `ProviderStatus`:
+
+```python
+class CredentialDeleteResponse(BaseModel):
+    status: ProviderStatus
+    orphaned_bindings: list[ConfigWarning]
+```
+
+The UI confirms first — *"Removing Groq breaks the Fast tier"* — then proceeds. It never
+blocks: a credential the founder cannot revoke is a security problem.
+
+**The remaining failure is made articulate (B7).** `ModelConfigError` is caught at the
+agent-build boundary in `deep_runtime/model_factory.py` and re-raised as a typed error
+carrying `scope_type`, `scope_key`, `provider` and a remediation string. Chat renders it
+as an actionable message naming the tier; an autonomous step records it on the
+`TaskStep` before transitioning to `failed`, so a broken tier is diagnosable from the run
+rather than only from the logs.
 
 ### 4.5 Providers tab
 
@@ -327,10 +416,20 @@ class ProviderStatus(BaseModel):
     extra_config_public: dict[str, str] = {} # NEW — values for NON-secret fields
     extra_config_secret_keys: list[str] = [] # NEW — names only, for secret fields
 
-class TierBinding(BaseModel):
-    ...
+class ModelBindingDTO(BaseModel):        # WAS TierBinding — §2.6, F6
+    scope_type: Literal["tier", "agent"] # NEW — was recovered positionally
+    scope_key: str                       # WAS `tier`, which carried both meanings
+    provider: str
+    model_id: str
     effort: Literal["none", "low", "medium", "high"] = "none"   # was bare str — B4
+    max_tokens: int = Field(4096, ge=1)
+    temperature: float | None = None
 ```
+
+`ModelConfigResponse.tiers` / `.agent_overrides` keep their split (the UI renders two
+sections), but each entry now states its own scope rather than depending on which list it
+arrived in. `_to_tier_binding` loses its `tier_binding_cls` parameter, `put_config` loses
+its explanatory comment, and the contract loses its apology.
 
 The extra-config split is what makes the schema-driven form round-trippable without
 leaking. `CredentialField.kind` classifies each field: values for `text`/`url` fields
@@ -390,9 +489,26 @@ unmarked coroutines, and CLAUDE.md's `asyncio_mode = "auto"` note is stale.
   unconfigure it.
 - `GET /v1/model-config` returns `base_url` and non-secret `extra_config_public` values,
   and **never** the value of a field whose `CredentialField.kind == "secret"`.
-- `warnings` is populated for a tier whose provider has no resolvable credential, on
-  both GET and PUT, and agrees with `ModelResolver.resolve_credential`.
+- `PUT /v1/model-config` **rejects** with 422 a binding whose provider resolves no
+  credential, and the detail names the `scope_key` and the provider (§2.4, bind path).
+- A keyless provider (`ollama`) with only a `base_url` is **accepted** by that same
+  validation — `KEYLESS_PROVIDERS` must be honoured, or the reject breaks local models.
+- `warnings` is populated for a tier whose credential was deleted **after** the binding
+  was saved, on both GET and PUT, and agrees with `ModelResolver.resolve_credential`
+  (§2.4, revoke path — the case save-time validation cannot reach).
+- A deployment-default binding seeded with no matching credential produces a warning
+  without ever passing through `put_config` (§2.4, seed path).
+- `DELETE /v1/providers/{p}/credentials` returns `orphaned_bindings` naming every tier
+  and agent override that depended on it, and still deletes.
+- `ModelConfigError` from a broken tier is caught at the agent-build boundary and
+  re-raised carrying `scope_type`, `scope_key` and `provider` — never as a bare
+  `RuntimeError` (B7).
+- A tier binding whose provider is unusable **raises**; it does not silently resolve to
+  the deployment-default row (§2.5 — a regression guard against re-adding a fallback).
 - `effort` outside the Literal is rejected with 422.
+- `ModelBindingDTO` round-trips `scope_type`, and an agent override named after a tier
+  (`scope_type="agent", scope_key="reasoning"`) is stored and returned distinctly from
+  the tier of the same name (§2.6).
 - `CatalogResponse.models` is flat, carries `provider`, and exposes the four new fields.
 - A credential row for a non-catalogued provider appears in `provider_statuses` (B6).
 
@@ -422,8 +538,10 @@ component boundaries rather than patched.
 Each phase is independently reviewable and leaves the app working.
 
 1. **Backend contract** — `ProviderSpec`/`CredentialField`, flat `models`, the four
-   catalog fields, `base_url`/`extra_config_keys` on `ProviderStatus`, the `effort`
-   Literal, `warnings`, the partial-update fix, B6. Tests first.
+   catalog fields, `base_url` + the `extra_config` split on `ProviderStatus`, the
+   `effort` Literal, `ModelBindingDTO` (§2.6), bind-time rejection and `warnings`
+   (§2.4), `orphaned_bindings` on DELETE, the partial-update fix (B1), B6, and the
+   typed `ModelConfigError` boundary (B7). Tests first.
 2. **Shell** — responsive frame, `dvh` height chain, focus trap, mobile push-list,
    decomposition of `settings-modal.tsx` into shell + `use-model-config`.
 3. **Providers tab** — new tab, list, search, filter, schema-driven credential form.
@@ -444,22 +562,23 @@ Phase 1 is a prerequisite for 3 and 4. Phases 3 and 4 are independent of each ot
   only; nothing in this spec changes cache behaviour.
 - Adding actual new providers. The spec makes fifteen *representable*; the roster beyond
   the four in `MODEL_CATALOG` is not part of this work.
-- Any change to `ModelResolver` precedence or the agent-override degradation path. B3 is
-  fixed by warning at the UI/API boundary, not by inventing a tier-level fallback —
-  a silent tier fallback would hide a misconfiguration behind a model the founder did not
-  choose and is not paying attention to.
+- **Any change to `ModelResolver` precedence, or a new tier-level fallback.** Settled in
+  §2.5, including the one fallback that would not have been invented (extending
+  `_pick_binding`'s workspace→default ladder to skip an unusable row) and why it is still
+  rejected. `_effective_binding`'s agent-override degradation is unchanged.
+- **`AGENT_MODEL_TIERS` and the tier taxonomy.** `reasoning` / `balanced` / `fast` and
+  which agent sits on which are code facts this work displays; it does not change them.
 
 ---
 
-## 8. Judgement calls flagged for the founder
+## 8. Open questions
 
-- **F6 (`keyOf` collision).** The honest fix renames `TierBinding` to a discriminated
-  `scope_type` + `scope_key` shape, matching the DB, and drops the comment in
-  `contracts/model_config.py` apologising for reusing `tier` to carry an agent name. That
-  touches contracts, the service, the routes and the frontend types. Contained, and
-  pre-launch is the cheapest it will ever be — but it is scope beyond the layout brief,
-  so it is called out rather than assumed. The fallback is an in-memory
-  `` `${scope}:${name}` `` key, which fixes the collision without touching the contract.
-- **B3 policy.** Warn-and-allow is specified. Reject-on-save is the stricter alternative
-  and would make the failure impossible rather than merely visible, at the cost of
-  blocking a legitimate connect-next-then-bind order.
+None. The three calls previously flagged here — the binding-contract rename, the
+bind-time policy, and the tier-fallback question — are resolved in §2.6, §2.4 and §2.5
+respectively, with their reasoning recorded there rather than left to implementation.
+
+One correction is worth recording, because the first draft of this spec asserted it:
+**F6 was described as a key collision, and it is not.** `updateTier` and `updateOverride`
+map over separate arrays with separate setters, so an agent named after a tier cannot
+clash, and no agent in `AGENT_MODEL_TIERS` is so named. The rename in §2.6 is justified
+by the lossy contract projection, not by a bug.
