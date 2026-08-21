@@ -7,6 +7,7 @@ cards.
 """
 
 import json
+import re
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
@@ -205,6 +206,110 @@ ADVERSARIAL_SUBJECTS = [
     "**",  # entirely markdown: nothing survives
     "‮",  # entirely bidi: nothing survives
 ]
+
+
+def _strip_verbose_comments(pattern: str) -> str:
+    """Remove re.VERBOSE `#` comments, respecting escapes and character classes."""
+    out: list[str] = []
+    escaped = in_class = in_comment = False
+    for ch in pattern:
+        if in_comment:
+            if ch == "\n":
+                in_comment = False
+                out.append(ch)
+            continue
+        if escaped:
+            out.append(ch)
+            escaped = False
+            continue
+        if ch == "\\":
+            out.append(ch)
+            escaped = True
+            continue
+        if in_class:
+            out.append(ch)
+            if ch == "]":
+                in_class = False
+            continue
+        if ch == "[":
+            in_class = True
+            out.append(ch)
+            continue
+        if ch == "#":
+            in_comment = True
+            continue
+        out.append(ch)
+    return "".join(out)
+
+
+def _top_level_alternatives(pattern: str) -> list[str]:
+    """Split a verbose regex into its top-level `|` alternatives.
+
+    READ OFF the compiled pattern rather than restated as a second list. A
+    hand-written copy of the alternatives would be a third thing to keep in
+    sync, and the entire point of the test below is that no alternative can be
+    added on one side alone.
+    """
+    parts: list[str] = []
+    current: list[str] = []
+    depth = 0
+    escaped = in_class = False
+    for ch in _strip_verbose_comments(pattern):
+        if escaped:
+            current.append(ch)
+            escaped = False
+            continue
+        if ch == "\\":
+            current.append(ch)
+            escaped = True
+            continue
+        if in_class:
+            current.append(ch)
+            if ch == "]":
+                in_class = False
+            continue
+        if ch == "[":
+            in_class = True
+        elif ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+        elif ch == "|" and depth == 0:
+            parts.append("".join(current))
+            current = []
+            continue
+        current.append(ch)
+    parts.append("".join(current))
+    return [" ".join(p.split()) for p in parts if p.split()]
+
+
+HEADLINE_ALTERNATIVES = _top_level_alternatives(_MARKDOWN_IN_HEADLINE.pattern)
+
+
+def test_the_alternatives_are_parsed_off_the_compiled_pattern():
+    """A splitter that silently returned [] would make the witness test vacuous."""
+    assert len(HEADLINE_ALTERNATIVES) > 1
+    for alternative in HEADLINE_ALTERNATIVES:
+        re.compile(alternative, re.VERBOSE | re.MULTILINE)  # each stands alone
+
+
+@pytest.mark.parametrize("alternative", HEADLINE_ALTERNATIVES)
+def test_every_refused_construct_has_a_witness_in_the_corpus(alternative):
+    """The corpus must EXERCISE the validator, not merely coexist with it.
+
+    `test_adversarial_subject_always_yields_a_frame` asserts the right thing
+    over a fixed list, so an alternative added to _MARKDOWN_IN_HEADLINE with no
+    matching corpus entry - `\\|` for GFM tables, `!\\[` for images - leaves the
+    suite green while frame_for_event starts raising ValidationError on real
+    subjects, which units_from_events swallows as a silently dropped card.
+    Every refused construct therefore needs at least one subject that contains
+    it; the pairing above then proves _plain removes it.
+    """
+    matcher = re.compile(alternative, re.VERBOSE | re.MULTILINE)
+    assert any(matcher.search(subject) for subject in ADVERSARIAL_SUBJECTS), (
+        f"_MARKDOWN_IN_HEADLINE refuses {alternative!r} but no ADVERSARIAL_SUBJECTS "
+        "entry contains it, so nothing checks that _plain removes it"
+    )
 
 
 @pytest.mark.parametrize("subject", ADVERSARIAL_SUBJECTS)
