@@ -164,6 +164,35 @@ class GitHubConnector(BaseConnector):
         return "/v1/auth/oauth/github/authorize"
 
     @staticmethod
+    def _entity_id_from_subject_url(url: str | None, fallback: str) -> str:
+        """Derive a durable "owner/repo#number" id from a subject API URL.
+
+        A notification is an occurrence; the pull request or issue is the
+        thing. Keying on the notification meant one PR collecting three
+        review comments minted three identities and three cards.
+
+        A wrong id is worse than the fallback - it silently merges two
+        different things onto one card - so this only accepts the exact
+        ``.../repos/{owner}/{repo}/{kind}/{number}`` shape and falls back on
+        everything else. In particular the number must sit in the number
+        POSITION: ``.../issues/comments/12345`` is a comment, not issue
+        12345, and matching on trailing digits would collapse every comment
+        thread in a repo onto a single identity.
+        """
+        if not isinstance(url, str):
+            return fallback
+        path = url.split("?", 1)[0].split("#", 1)[0]
+        parts = [p for p in path.split("/") if p]
+        # The API prefix is always the first "repos" segment, so an owner or
+        # repo of that name (.../repos/repos/repos/pulls/7) still resolves.
+        if "repos" not in parts:
+            return fallback
+        i = parts.index("repos")
+        if len(parts) != i + 5 or not parts[i + 4].isdigit():
+            return fallback
+        return f"{parts[i + 1]}/{parts[i + 2]}#{parts[i + 4]}"
+
+    @staticmethod
     def _normalize_notification(notif: dict) -> RawEvent | None:
         """Convert a GitHub notification to a RawEvent."""
         subject = notif.get("subject", {})
@@ -181,17 +210,25 @@ class GitHubConnector(BaseConnector):
         }
         event_type = type_map.get(notif_type, "github_notification")
 
+        notification_id = notif.get("id", "")
         return RawEvent(
             source="github",
             source_account_id="github_primary",
             event_type=event_type,
             entity_type=notif_type.lower() if notif_type else "notification",
-            entity_id=notif.get("id", ""),
-            title=f"[{repo}] {title}",
+            entity_id=GitHubConnector._entity_id_from_subject_url(
+                subject.get("url"), notification_id
+            ),
+            # The repo travels in actor now, so the title is the bare subject
+            # and the frame composes the headline from the two.
+            title=title,
             summary=f"{reason}: {title} in {repo}",
-            actor={"type": "system", "name": repo},
+            # The commenter is not in the notifications payload. Marking this
+            # a repository rather than "system" stops the headline builder
+            # presenting a repo name as though it were a person.
+            actor={"type": "repository", "name": repo},
             raw_payload={
-                "notification_id": notif.get("id"),
+                "notification_id": notification_id,
                 "reason": reason,
                 "repo": repo,
                 "url": subject.get("url"),

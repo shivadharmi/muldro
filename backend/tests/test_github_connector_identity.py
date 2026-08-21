@@ -1,0 +1,159 @@
+"""GitHub is the one connector that keys on an occurrence, not a thing.
+
+gmail keys on threadId, slack on thread_ts, calendar on the event id, notion
+on the page id. github keyed on the NOTIFICATION id, so one PR collecting
+three review comments minted three identities. subject.url already names the
+PR itself.
+"""
+
+from src.connectors.github_connector import GitHubConnector
+
+
+def _notification(**overrides):
+    notif = {
+        "id": "notif_999",
+        "reason": "review_requested",
+        "repository": {"full_name": "shivadharmi/muldrov1"},
+        "subject": {
+            "type": "PullRequest",
+            "title": "Single-lead cutover",
+            "url": "https://api.github.com/repos/shivadharmi/muldrov1/pulls/19",
+        },
+    }
+    notif.update(overrides)
+    return notif
+
+
+def test_entity_id_is_the_pull_request_not_the_notification():
+    raw = GitHubConnector._normalize_notification(_notification())
+    assert raw.entity_id == "shivadharmi/muldrov1#19"
+    assert raw.entity_id != "notif_999"
+
+
+def test_two_notifications_on_one_pr_share_an_entity_id():
+    first = GitHubConnector._normalize_notification(_notification(id="notif_1"))
+    second = GitHubConnector._normalize_notification(_notification(id="notif_2"))
+    assert first.entity_id == second.entity_id
+
+
+def test_issue_url_is_parsed_too():
+    raw = GitHubConnector._normalize_notification(
+        _notification(
+            subject={
+                "type": "Issue",
+                "title": "Card opens to nothing",
+                "url": "https://api.github.com/repos/shivadharmi/muldrov1/issues/42",
+            }
+        )
+    )
+    assert raw.entity_id == "shivadharmi/muldrov1#42"
+
+
+def test_falls_back_to_the_notification_id_when_the_url_is_unparseable():
+    raw = GitHubConnector._normalize_notification(
+        _notification(subject={"type": "Release", "title": "v2", "url": None})
+    )
+    assert raw.entity_id == "notif_999"
+
+
+def test_actor_names_the_repo_but_marks_it_as_a_repository():
+    """The human commenter is not in the notifications payload.
+
+    Recording actor type as 'repository' rather than 'system' keeps the
+    headline builder from presenting a repo name as if it were a person.
+    """
+    raw = GitHubConnector._normalize_notification(_notification())
+    assert raw.actor["type"] == "repository"
+    assert raw.actor["name"] == "shivadharmi/muldrov1"
+
+
+def test_notification_id_is_retained_in_the_payload():
+    raw = GitHubConnector._normalize_notification(_notification())
+    assert raw.raw_payload["notification_id"] == "notif_999"
+
+
+def test_title_is_the_bare_subject_with_no_repo_prefix():
+    """The repo travels in actor now; the frame composes the headline.
+
+    A connector that pre-formats "[repo] subject" is writing user-facing
+    text, which is the frame's job.
+    """
+    raw = GitHubConnector._normalize_notification(_notification())
+    assert raw.title == "Single-lead cutover"
+
+
+def test_entity_type_stays_the_raw_lowercased_subject_type():
+    """frame.key is (source, entity_type, entity_id); the archetype mapping
+    reads entity_type. Do not prettify it to 'pull_request'."""
+    raw = GitHubConnector._normalize_notification(_notification())
+    assert raw.entity_type == "pullrequest"
+
+
+# --- the parser itself: a wrong id is worse than a fallback -----------------
+#
+# A wrong id silently merges two different things into one card, which is the
+# exact defect this change exists to remove. Every malformed shape below must
+# reach the fallback rather than invent an id or raise.
+
+
+def _parse(url, fallback):
+    # Resolved at call time so a missing helper fails these tests rather than
+    # erroring out collection of the whole module.
+    return GitHubConnector._entity_id_from_subject_url(url, fallback)
+
+
+def test_parses_a_well_formed_pull_request_url():
+    assert (
+        _parse("https://api.github.com/repos/shivadharmi/muldrov1/pulls/19", "fb")
+        == "shivadharmi/muldrov1#19"
+    )
+
+
+def test_a_trailing_slash_still_parses():
+    assert (
+        _parse("https://api.github.com/repos/shivadharmi/muldrov1/pulls/19/", "fb")
+        == "shivadharmi/muldrov1#19"
+    )
+
+
+def test_a_query_string_still_parses():
+    assert (
+        _parse("https://api.github.com/repos/shivadharmi/muldrov1/pulls/19?foo=1", "fb")
+        == "shivadharmi/muldrov1#19"
+    )
+
+
+def test_an_owner_or_repo_literally_named_repos_is_not_confused():
+    """The API prefix is always the FIRST /repos/ segment."""
+    assert _parse("https://api.github.com/repos/repos/repos/pulls/7", "fb") == "repos/repos#7"
+
+
+def test_a_deeper_url_falls_back_rather_than_returning_the_comment_id():
+    """The number must sit in the number POSITION, not merely at the end.
+
+    .../issues/comments/12345 is a comment, not issue 12345 - keying on the
+    trailing digits there would merge every comment thread onto one card.
+    """
+    url = "https://api.github.com/repos/shivadharmi/muldrov1/issues/comments/12345"
+    assert _parse(url, "fb") == "fb"
+
+
+def test_a_commit_sha_url_falls_back():
+    url = "https://api.github.com/repos/shivadharmi/muldrov1/commits/abc123def"
+    assert _parse(url, "fb") == "fb"
+
+
+def test_a_url_with_no_repos_segment_falls_back():
+    assert _parse("https://github.com/shivadharmi/muldrov1/discussions/5", "fb") == "fb"
+
+
+def test_a_truncated_url_falls_back():
+    assert _parse("https://api.github.com/repos/shivadharmi", "fb") == "fb"
+    assert _parse("https://api.github.com/repos", "fb") == "fb"
+    assert _parse("", "fb") == "fb"
+
+
+def test_a_non_string_url_falls_back_without_raising():
+    assert _parse(None, "fb") == "fb"
+    assert _parse(12345, "fb") == "fb"
+    assert _parse({"url": "x"}, "fb") == "fb"
