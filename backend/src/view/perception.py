@@ -87,20 +87,65 @@ def group_events_by_key(events: list[Any]) -> list[EventGroup]:
 MAX_QUOTES = 3
 
 
-def _quote_text(payload: dict[str, Any]) -> str:
-    """The quotable text in a payload, or "" when there isn't a usable one.
+# Which sources carry VERBATIM, HUMAN-AUTHORED text, and on which field.
+#
+# A source absent from this map yields NO quote. That is deliberate and it is
+# the fail-closed half of the same rule that drops an unattributed quote: a
+# Quote is external text shown under a named human's name, so guessing which
+# field holds it risks attributing MULDRO's own composed prose to a person -
+# a misattribution, which is worse than a missing quote.
+#
+# The three sources deliberately absent, and what each puts in `summary`:
+#   calendar - f"{title} from {start} to {end} with {attendees}" (calendar.py)
+#   github   - f"{reason}: {title} in {repo}"     (github_connector.py)
+#   notion   - f"Notion page: {title}"            (notion_connector.py)
+# All three are muldro's own composition over structured fields; not one word
+# of any of them was typed by the human whose name the quote would carry.
+#
+# A NEW CONNECTOR: answer this question explicitly before adding a line here -
+# which field, if any, holds text a person actually wrote? "None" is a valid
+# and common answer, and it is the default.
+VERBATIM_TEXT_FIELD: dict[str, str] = {
+    "gmail": "summary",  # _snippet_of(message)[:500] - the message snippet
+    "slack": "summary",  # text[:500] - the message text
+}
 
-    `payload.get(...)` is untrusted external shape - a snippet or body field
+# Read only when the source's declared field is empty. No connector writes
+# either key today - gmail's raw_payload carries message_id/labels/headers and
+# slack's carries channel_id/channel_name/ts - so this is a fallback for
+# shapes that DO carry one (a future connector, a hand-built event), never the
+# production path.
+_PAYLOAD_TEXT_KEYS = ("snippet", "body")
+
+
+def _quote_text(event: Any) -> str:
+    """The verbatim external text on an event, or "" when there isn't any.
+
+    Both reads are untrusted external shape - a summary, snippet or body field
     can be a dict, a list, or None just as easily as a string (malformed
     upstream data, a connector schema change). Calling `.strip()` on a
-    non-string would raise and take the whole perception tick down with it,
-    so a non-string value is treated as absent rather than fatal, falling
-    through to `body` exactly as an empty/missing `snippet` would.
+    non-string would raise and take the whole perception tick down with it, so
+    a non-string value is treated as absent rather than fatal and falls
+    through to the next candidate exactly as an empty one would.
     """
-    for key in ("snippet", "body"):
-        value = payload.get(key)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
+    source = getattr(event, "source", None)
+    if not isinstance(source, str):
+        return ""
+    field = VERBATIM_TEXT_FIELD.get(source)
+    if field is None:
+        return ""
+
+    value = getattr(event, field, None)
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+
+    payload = getattr(event, "raw_payload", None)
+    if not isinstance(payload, dict):
+        return ""
+    for key in _PAYLOAD_TEXT_KEYS:
+        candidate = payload.get(key)
+        if isinstance(candidate, str) and candidate.strip():
+            return candidate.strip()
     return ""
 
 
@@ -119,6 +164,18 @@ def quotes_from_events(events: list[Any]) -> list[Quote]:
     attribution, not a harmless default - worse than the quote not
     appearing at all.
 
+    Which field holds that text is a per-source FACT, declared in
+    `VERBATIM_TEXT_FIELD`; an unlisted source yields nothing. See that map
+    for why silence rather than a guess.
+
+    KNOWN LIMITATION - quotes can only be built PRE-INGEST, from RawEvents.
+    `NormalizedEvent` has no payload column and keeps only `title` and
+    `summary`, so a Unit rebuilt from stored rows can quote gmail and slack
+    (whose verbatim text IS the summary) and nothing richer - no second
+    message of a thread, no body beyond the connector's truncation. Carrying
+    quotes past ingest is the Unit transport work's problem to solve, not
+    this function's.
+
     `who` is read via frame.py's `event_actor_name`, not a second extractor:
     production stores `actor_entities` as a LIST of dicts despite the model
     annotating `dict | None` (Task 3), and a pre-ingest RawEvent calls the
@@ -130,8 +187,7 @@ def quotes_from_events(events: list[Any]) -> list[Quote]:
     for event in sorted(events, key=_occurred):
         if getattr(event, "occurred_at", None) is None:
             continue
-        payload = getattr(event, "raw_payload", None) or {}
-        text = _quote_text(payload)
+        text = _quote_text(event)
         if not text:
             continue
         who = event_actor_name(event)

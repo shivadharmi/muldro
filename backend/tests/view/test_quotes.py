@@ -2,12 +2,23 @@
 
 Spec §2.1: the body slot never carries external provenance because external
 values arrive on a different field that only code renders. This is the field.
+
+Two shapes are exercised below and they are NOT equally real. The
+``_event`` fixture hand-writes ``raw_payload={"snippet": ...}``; no connector
+in this codebase writes that key, so those cases pin the FALLBACK branch. The
+"real connector output" section at the bottom drives the actual normalizers
+and is the path production takes.
 """
 
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
+from src.connectors.calendar import CalendarConnector
+from src.connectors.gmail import GmailConnector
+from src.connectors.notion_connector import NotionConnector
+from src.connectors.slack_connector import SlackConnector
 from src.view.perception import quotes_from_events
+from tests.conftest import TEST_USER_ID, make_mock_settings
 
 
 def _event(snippet="Can you get back to me by Friday?", who="Sarah Chen", minute=0):
@@ -126,4 +137,152 @@ def test_an_event_with_no_real_timestamp_produces_no_quote():
     """
     event = _event()
     event.occurred_at = None
+    assert quotes_from_events([event]) == []
+
+
+# --- Real connector output --------------------------------------------------
+#
+# Everything above drives a hand-written `raw_payload={"snippet": ...}`. That
+# shape is nobody's: gmail's raw_payload carries message_id / labels / headers,
+# slack's carries channel_id / channel_name / ts, and `NormalizedEvent` has no
+# raw_payload column at all. The tests below drive the connectors' own
+# normalizers, so they fail if the field a source actually puts verbatim text
+# on ever moves.
+
+
+def _gmail_raw(text="Can you get back to me by Friday?", sender="Sarah Chen <sarah@acme.com>"):
+    """One OpenConnector Gmail DTO through the real normalizer.
+
+    `preview` is the schema-declared optional text object (see
+    tests/test_gmail_connector.py's header for the recorded outputSchema).
+    `sender` is an RFC 5322 From - a display name plus an address - which is
+    what a real inbox mostly carries; see the bare-address test below for what
+    happens when the display name is absent.
+    """
+    conn = GmailConnector(settings=make_mock_settings(), caller=None)
+    return conn._to_event(
+        {
+            "messageId": "msg_001",
+            "threadId": "thr_001",
+            "labelIds": ["INBOX", "UNREAD"],
+            "subject": "Series A term sheet",
+            "sender": sender,
+            "to": "founder@muldro.example",
+            "messageTimestamp": "2026-08-21T14:00:00Z",
+            "preview": {"text": text},
+        }
+    )
+
+
+def _slack_raw(text="Can you review the deck before standup?"):
+    return SlackConnector._normalize_message(
+        {"text": text, "user": "U08SARAH", "ts": "1755784800.000100"},
+        "C01FOUNDERS",
+        "founders",
+    )
+
+
+def test_a_real_gmail_event_produces_an_attributed_quote():
+    """The regression this section exists for: gmail's raw_payload has no
+    `snippet` and no `body` key, so reading only those produced zero quotes on
+    every real event. The snippet lands on `summary`."""
+    quotes = quotes_from_events([_gmail_raw()])
+    assert len(quotes) == 1
+    assert quotes[0].text == "Can you get back to me by Friday?"
+    assert quotes[0].who == "Sarah Chen"
+    assert quotes[0].when == datetime(2026, 8, 21, 14, 0, tzinfo=timezone.utc)
+
+
+def test_a_gmail_sender_with_no_display_name_loses_its_quote():
+    """Characterization, NOT an endorsement - and not this module's to fix.
+
+    gmail's actor name is the raw From value, and `frame.py::_plain` strips a
+    bare address as an autolink, so `event_actor_name` returns "" and the
+    unattributed-quote rule then drops the quote. The text is present and
+    correct; only the name is gone. Fixing it means teaching the actor
+    extractor to keep the local part (or the connector to split the From),
+    both of which live in files this change does not own.
+    """
+    raw = _gmail_raw(sender="sarah@acme.com")
+    assert raw.summary == "Can you get back to me by Friday?"
+    assert quotes_from_events([raw]) == []
+
+
+def test_a_real_slack_event_produces_an_attributed_quote():
+    quotes = quotes_from_events([_slack_raw()])
+    assert len(quotes) == 1
+    assert quotes[0].text == "Can you review the deck before standup?"
+    # slack_connector puts the slack user id in actor["name"] - an account,
+    # which spec §2.2 allows for `who`, rather than an unattributed quote.
+    assert quotes[0].who == "U08SARAH"
+
+
+def test_markdown_in_a_real_gmail_event_is_still_verbatim():
+    quotes = quotes_from_events([_gmail_raw(text="**URGENT** [click](http://x.example)")])
+    assert quotes[0].text == "**URGENT** [click](http://x.example)"
+
+
+def test_a_real_calendar_event_is_never_quoted_because_its_summary_is_muldros_prose():
+    """calendar's `summary` is f"{title} from {start} to {end} with {attendees}"
+    - composed by muldro, not typed by a human. Quoting it under the
+    organizer's name would put muldro's own words in a person's mouth, which
+    is a misattribution, not a missing feature."""
+    raw = CalendarConnector._normalize_event(
+        {
+            "id": "cal_001",
+            "status": "confirmed",
+            "summary": "Board meeting",
+            "start": {"dateTime": "2026-08-21T14:00:00Z"},
+            "end": {"dateTime": "2026-08-21T15:00:00Z"},
+            "organizer": {"email": "sarah@acme.com", "displayName": "Sarah Chen"},
+            "attendees": [{"displayName": "Sarah Chen"}],
+        },
+        TEST_USER_ID,
+    )
+    assert "Board meeting from" in raw.summary  # the composed string exists
+    assert quotes_from_events([raw]) == []
+
+
+def test_a_real_notion_event_is_never_quoted_because_its_summary_is_muldros_prose():
+    """notion's `summary` is f"Notion page: {title}"."""
+    raw = NotionConnector._normalize_page(
+        {
+            "id": "page_001",
+            "url": "https://notion.so/page_001",
+            "created_time": "2026-08-20T10:00:00.000Z",
+            "last_edited_time": "2026-08-21T14:00:00.000Z",
+            "last_edited_by": {"type": "person", "name": "Sarah Chen"},
+            "properties": {"title": {"title": [{"plain_text": "Fundraise plan"}]}},
+        }
+    )
+    assert raw.summary == "Notion page: Fundraise plan"
+    assert quotes_from_events([raw]) == []
+
+
+def test_an_unknown_source_produces_no_quote():
+    """Fail closed. A connector nobody has mapped yet must stay silent rather
+    than have this module guess which of its fields a human actually wrote."""
+    event = SimpleNamespace(
+        source="linear",
+        entity_type="issue",
+        entity_id="ENG-1",
+        title="Card opens to nothing",
+        occurred_at=datetime(2026, 8, 21, 14, 0, tzinfo=timezone.utc),
+        actor={"name": "Sarah Chen"},
+        summary="whatever linear decides to put here",
+        raw_payload={"snippet": "and whatever it puts here"},
+    )
+    assert quotes_from_events([event]) == []
+
+
+def test_a_blank_source_produces_no_quote():
+    event = _event()
+    event.source = ""
+    assert quotes_from_events([event]) == []
+
+
+def test_a_non_dict_raw_payload_does_not_raise():
+    """raw_payload is external shape like everything else in it."""
+    event = _event()
+    event.raw_payload = "not a dict"
     assert quotes_from_events([event]) == []
