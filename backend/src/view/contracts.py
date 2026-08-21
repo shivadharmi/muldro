@@ -15,18 +15,31 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 FrameKind = Literal["proposal", "finding", "run", "record", "briefing"]
 FrameStatus = Literal["needs_you", "scheduled", "running", "done", "failed", "new", "seen"]
 
-# A headline is plain text. These patterns are markdown constructs or bare URLs
-# that a markdown renderer would turn into emphasis or a live link. An email
-# subject reaching this field is the phishing vector described in spec §1, so
-# the type refuses them rather than trusting a caller to sanitize.
+# A headline is plain text, line-clamped, and never passed to a markdown
+# renderer. These alternatives refuse everything remark-gfm would turn into
+# emphasis, strikethrough, a heading or a live link — including all three GFM
+# autolink forms (bare https?://, www., and bare email) and the CommonMark
+# <scheme:...> protocol autolink — plus raw newlines (which close setext
+# headings and lists on their own) and control/bidi-override characters that
+# can spoof plain text with no markdown involved at all. An email subject
+# reaching this field is the phishing vector described in spec §1, so the
+# type refuses these constructs rather than trusting a caller to sanitize.
 _MARKDOWN_IN_HEADLINE = re.compile(
     r"""
-      \*\*            # bold
-    | (?<!\w)_[^_]+_  # underscore emphasis
-    | \[[^\]]*\]\(    # link
-    | ^\s*\#          # heading
-    | `               # code span
-    | https?://       # bare URL (remark-gfm autolinks these)
+      \*\*                       # bold
+    | (?<!\w)\*[^*]+\*           # single-asterisk emphasis
+    | (?<!\w)_[^_]+_             # underscore emphasis
+    | ~~                         # strikethrough
+    | \[[^\]]*\]\(               # inline link
+    | ^\s*\#                     # heading
+    | `                          # code span
+    | https?://                  # bare URL autolink
+    | www\.                      # GFM www autolink
+    | <[a-zA-Z][a-zA-Z0-9+.-]*:  # CommonMark protocol autolink, e.g. <mailto:
+    | \S+@\S+\.\S+               # GFM email autolink
+    | \n                         # newline: closes setext headings / lists
+    | [\x00-\x1f\x7f-\x9f]       # C0/C1 control characters
+    | [\u202a-\u202e\u2066-\u2069]  # bidi overrides / isolates (e.g. RLO can reverse a headline)
     """,
     re.VERBOSE | re.MULTILINE,
 )
@@ -49,7 +62,20 @@ class Affordance(BaseModel):
 
 
 class Frame(BaseModel):
-    """Built by code from a domain row. No field here is model-authored."""
+    """Built by code from a domain row. No field here is model-authored.
+
+    Callers construct a Frame from raw external data (e.g. an email subject)
+    via `frame_for_event` (arriving in Task 3), which neutralizes external
+    text before it ever reaches `headline`. The validator below also refuses
+    ordinary, non-malicious strings — e.g. "Fix `parse_url` crash" or
+    "PR #22: refactor _internal_ cache" — and a refusal means the founder
+    sees no card at all, so a caller that skips neutralization risks silently
+    losing cards, not spoofing them.
+
+    The plain-text guarantee holds for normal construction only:
+    `Frame.model_construct(...)` and `frame.model_copy(update={...})` both
+    bypass validation.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -64,7 +90,7 @@ class Frame(BaseModel):
     updated_at: datetime
     importance: float = Field(default=0.0, ge=0.0, le=1.0)
     event_count: int = Field(default=1, ge=1)
-    affordances: list[Affordance] = Field(default_factory=list)
+    affordances: tuple[Affordance, ...] = Field(default_factory=tuple)
 
     @field_validator("headline")
     @classmethod
@@ -97,4 +123,4 @@ class Unit(BaseModel):
 
     frame: Frame
     body: str = ""
-    quotes: list[Quote] = Field(default_factory=list)
+    quotes: tuple[Quote, ...] = Field(default_factory=tuple)
