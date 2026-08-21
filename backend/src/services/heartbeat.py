@@ -25,6 +25,7 @@ from src.models.perception_state import PerceptionState
 from src.models.plans import Plan
 from src.models.schedules import Schedule
 from src.models.task_graph import TaskRun
+from src.services.execution_state import InvalidTransitionError, transition_run
 
 logger = logging.getLogger(__name__)
 
@@ -177,13 +178,37 @@ class HeartbeatService:
             approval.status = "expired"
             approval.decided_at = now
 
-            # Cancel the associated execution
+            # Cancel the associated execution. Goes through ``transition_run`` —
+            # never a direct status assignment — so the transition is VALIDATED and
+            # the run records both when it ended and why. A bare ``cancelled`` with
+            # no ``completed_at`` and no ``error`` is indistinguishable from a
+            # user-cancelled run, which is precisely how a stalled autonomous run
+            # reads to its owner as an unexplained failure.
             exec_result = await self._db.execute(
                 select(TaskRun).where(TaskRun.run_id == approval.execution_id)
             )
             run = exec_result.scalar_one_or_none()
             if run and run.status == "awaiting_approval":
-                run.status = "cancelled"
+                try:
+                    transition_run(run, "cancelled")
+                except InvalidTransitionError:
+                    logger.warning(
+                        "Could not cancel run %s on approval expiry (status=%s)",
+                        run.run_id,
+                        run.status,
+                    )
+                    continue
+                run.completed_at = now
+                run.error = {
+                    "type": "approval_expired",
+                    "message": (
+                        "Cancelled — the approval this run was waiting on expired "
+                        f"unanswered at {approval.expires_at.isoformat()}"
+                        if approval.expires_at
+                        else "Cancelled — the approval this run was waiting on expired unanswered"
+                    ),
+                    "approval_id": approval.approval_id,
+                }
 
         if approvals:
             await self._db.flush()
