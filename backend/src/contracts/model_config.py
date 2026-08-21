@@ -44,6 +44,10 @@ class ProviderStatus(BaseModel):
     for a workspace-owned row and not for one inherited from the deployment
     default row or a process env var — DELETE only ever removes the workspace
     row, so offering it elsewhere is a control that silently does nothing.
+
+    The response envelope stays write-only for secrets: ``extra_config_public``
+    carries values only for DECLARED non-secret fields, while every other stored
+    key appears in ``extra_config_secret_keys`` by name alone.
     """
 
     model_config = ConfigDict(extra="ignore")
@@ -55,6 +59,9 @@ class ProviderStatus(BaseModel):
     # "env"       — the per-provider env fallback key (not deletable at all)
     # "none"      — no credential resolves; `configured` is False
     source: Literal["workspace", "default", "env", "none"] = "none"
+    base_url: str | None = None
+    extra_config_public: dict[str, str] = Field(default_factory=dict)
+    extra_config_secret_keys: list[str] = Field(default_factory=list)
 
 
 class ModelConfigResponse(BaseModel):

@@ -30,7 +30,16 @@ def _db_returning(rows: list) -> MagicMock:
 
 
 def _cred(provider: str, workspace_id: str | None, status: str = "valid") -> SimpleNamespace:
-    return SimpleNamespace(provider=provider, workspace_id=workspace_id, status=status)
+    # base_url/extra_config mirror ProviderCredential's nullable columns (both default
+    # None on a real row) so this stub keeps matching _provider_statuses's attribute
+    # access as it grows -- these tests assert on source/configured only.
+    return SimpleNamespace(
+        provider=provider,
+        workspace_id=workspace_id,
+        status=status,
+        base_url=None,
+        extra_config=None,
+    )
 
 
 async def _statuses(rows: list, *, env_providers: set[str] = frozenset()) -> dict:

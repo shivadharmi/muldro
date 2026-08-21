@@ -912,3 +912,78 @@ def test_explicit_empty_agent_overrides_clears_them():
             assert got.json()["agent_overrides"] == []
     finally:
         app.dependency_overrides.clear()
+
+
+@pytest.mark.skipif(not _db_reachable(), reason="Postgres not reachable")
+def test_provider_status_exposes_base_url_but_never_a_secret(monkeypatch):
+    """B2: a client cannot preserve what it cannot see. Non-secret values come back;
+    secret ones come back as key names only.
+
+    Sets a throwaway master key before app startup: create_app()'s §4.3 guard
+    (src/api/app.py) fails loud if ANY provider_credentials row in the DB has a
+    non-null api_key_encrypted while MULDRO_CONFIG_ENCRYPTION_KEY is unset -- and
+    this test seeds exactly such a row before the app boots. Nothing in the
+    GET /v1/model-config path decrypts it; the key only satisfies that startup
+    check. The row is deleted in `finally` so it can't trip the same guard for
+    any test that creates an app afterwards.
+    """
+    monkeypatch.setattr(get_settings(), "config_encryption_key", "test-master-key")
+    factory, ws = _ws_factory()
+
+    async def _seed_cred():
+        async with factory() as db:
+            db.add(
+                ProviderCredential(
+                    workspace_id=ws,
+                    provider="anthropic",
+                    api_key_encrypted="ciphertext",
+                    base_url="https://proxy.internal/v1",
+                    extra_config={"api_key": "leaked-if-echoed", "region": "eu-west-1"},
+                    status="valid",
+                    enabled=True,
+                )
+            )
+            await db.commit()
+
+    asyncio.run(_seed_cred())
+    app = _ws_app(factory, ws)
+
+    try:
+        with TestClient(app) as c:
+            body = c.get("/v1/model-config").json()
+            anthropic = next(p for p in body["providers"] if p["provider"] == "anthropic")
+
+            assert anthropic["base_url"] == "https://proxy.internal/v1"
+            # api_key is a declared secret field -> name only.
+            assert "api_key" in anthropic["extra_config_secret_keys"]
+            assert "api_key" not in anthropic["extra_config_public"]
+            # region is NOT a declared field for anthropic -> fails closed, hidden too.
+            assert "region" in anthropic["extra_config_secret_keys"]
+            assert anthropic["extra_config_public"] == {}
+            assert "leaked-if-echoed" not in c.get("/v1/model-config").text
+    finally:
+        app.dependency_overrides.clear()
+
+        async def _cleanup():
+            async with factory() as db:
+                await db.execute(
+                    delete(ProviderCredential).where(ProviderCredential.workspace_id == ws)
+                )
+                await db.commit()
+
+        asyncio.run(_cleanup())
+
+
+@pytest.mark.skipif(not _db_reachable(), reason="Postgres not reachable")
+def test_provider_without_a_credential_returns_empty_collections_not_null():
+    """The client indexes these directly; null would crash the Providers list."""
+    factory, ws = _ws_factory()
+    app = _ws_app(factory, ws)
+    try:
+        with TestClient(app) as c:
+            body = c.get("/v1/model-config").json()
+            for p in body["providers"]:
+                assert isinstance(p["extra_config_public"], dict)
+                assert isinstance(p["extra_config_secret_keys"], list)
+    finally:
+        app.dependency_overrides.clear()

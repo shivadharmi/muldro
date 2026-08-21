@@ -17,6 +17,7 @@ from sqlalchemy import delete, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.config.model_catalog import MODEL_CATALOG
+from src.config.provider_catalog import public_field_keys
 from src.config.settings import get_settings
 from src.contracts.model_config import Effort, ModelBindingDTO, ModelConfigResponse, ProviderStatus
 from src.models.model_binding import ModelBinding
@@ -26,6 +27,21 @@ from src.services.model_resolver import _ENV_KEY_ATTR
 logger = logging.getLogger(__name__)
 
 TIER_ORDER = ("reasoning", "balanced", "fast")
+
+
+def _split_extra_config(provider: str, extra: dict | None) -> tuple[dict[str, str], list[str]]:
+    """Split a stored extra_config into returnable values and secret key NAMES.
+
+    Fails closed: a key is public only if it is a DECLARED non-secret field for this
+    provider. An undeclared key is therefore treated as a secret and never echoed,
+    so adding a field to a provider's schema is what makes it visible — not storing it.
+    """
+    if not extra:
+        return {}, []
+    allowed = public_field_keys(provider)
+    public = {k: str(v) for k, v in extra.items() if k in allowed}
+    hidden = sorted(k for k in extra if k not in allowed)
+    return public, hidden
 
 
 class ModelConfigService:
@@ -203,12 +219,19 @@ class ModelConfigService:
                 configured, status, source = True, "valid", "env"
             else:
                 configured, status, source = False, "unconfigured", "none"
+            base_url = cred.base_url if cred is not None else None
+            public, secret_keys = _split_extra_config(
+                provider, cred.extra_config if cred is not None else None
+            )
             statuses.append(
                 provider_status_cls(
                     provider=provider,
                     configured=configured,
                     status=status,
                     source=source,
+                    base_url=base_url,
+                    extra_config_public=public,
+                    extra_config_secret_keys=secret_keys,
                 )
             )
         return statuses
