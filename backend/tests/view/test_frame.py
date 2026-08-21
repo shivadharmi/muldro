@@ -6,13 +6,14 @@ thing, which is why three polls of one inbox produced three "New activity"
 cards.
 """
 
-from datetime import datetime, timezone
+import json
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
 
 from src.view.contracts import _MARKDOWN_IN_HEADLINE, MAX_HEADLINE_CHARS
-from src.view.frame import frame_for_event
+from src.view.frame import ensure_aware_utc, frame_for_event
 
 
 def _event(**overrides):
@@ -299,3 +300,80 @@ def test_an_unbroken_token_is_hard_cut():
 
     assert len(frame.headline) == MAX_HEADLINE_CHARS
     assert set(frame.headline) == {"A"}
+
+
+# --- a frame's two timestamps share ONE tz policy -------------------------
+#
+# `occurred_at` and `updated_at` are frequently derived from the same event by
+# different call sites. When only one of them coerced naive -> UTC, a single
+# Frame carried a naive `occurred_at` beside an aware `updated_at`: comparing
+# the frame's own two fields raised TypeError, and `model_dump_json()` emitted
+# "…T10:00:00" for one and "…T10:00:00Z" for the other. JavaScript reads the
+# offsetless form as LOCAL time, so the card renders one instant hours apart
+# (5.5h for an IST founder). notion_connector.py is the live source of a naive
+# value; github_connector.py already closed the same hazard at its boundary.
+
+_NAIVE = datetime(2026, 8, 21, 10, 0, 0)
+
+
+def test_a_naive_occurred_at_reaches_the_frame_as_an_aware_datetime():
+    frame = frame_for_event(_event(occurred_at=_NAIVE))
+    assert frame.occurred_at.tzinfo is not None
+    assert frame.occurred_at == _NAIVE.replace(tzinfo=timezone.utc)
+
+
+def test_a_naive_updated_at_reaches_the_frame_as_an_aware_datetime():
+    frame = frame_for_event(_event(), updated_at=_NAIVE)
+    assert frame.updated_at.tzinfo is not None
+    assert frame.updated_at == _NAIVE.replace(tzinfo=timezone.utc)
+
+
+@pytest.mark.parametrize(
+    "occurred_at,updated_at",
+    [
+        (_NAIVE, None),
+        (_NAIVE, _NAIVE),
+        (_NAIVE, datetime(2026, 8, 21, 11, 0, tzinfo=timezone.utc)),
+        (datetime(2026, 8, 21, 9, 0, tzinfo=timezone.utc), _NAIVE),
+        (None, None),
+        ("not a datetime", None),
+    ],
+)
+def test_a_frames_two_timestamps_are_always_both_aware(occurred_at, updated_at):
+    """The invariant, stated as the operation that used to raise."""
+    frame = frame_for_event(_event(occurred_at=occurred_at), updated_at=updated_at)
+
+    assert frame.occurred_at.tzinfo is not None
+    assert frame.updated_at.tzinfo is not None
+    frame.updated_at - frame.occurred_at  # must not raise
+
+
+def test_serialized_timestamps_both_carry_an_offset():
+    """The silent half of the bug: an offsetless timestamp is parsed as LOCAL
+    time by JavaScript, so the card renders the same instant hours apart."""
+    payload = json.loads(frame_for_event(_event(occurred_at=_NAIVE)).model_dump_json())
+
+    for field in ("occurred_at", "updated_at"):
+        assert payload[field].endswith("Z") or payload[field][-6] in "+-", payload[field]
+
+
+def test_an_offset_that_is_present_is_preserved_not_rewritten():
+    """The instant is what matters; the source's own offset is information."""
+    ist = timezone(timedelta(hours=5, minutes=30))
+    stamped = datetime(2026, 8, 21, 15, 30, tzinfo=ist)
+
+    assert frame_for_event(_event(occurred_at=stamped)).occurred_at == stamped
+
+
+def test_a_missing_occurred_at_is_dated_now_and_is_aware():
+    frame = frame_for_event(_event(occurred_at=None))
+    assert frame.occurred_at.tzinfo is not None
+    assert (datetime.now(timezone.utc) - frame.occurred_at).total_seconds() < 60
+
+
+def test_ensure_aware_utc_treats_a_non_datetime_as_absent():
+    """External payloads are the source of these values. A malformed one costs
+    its own event, never the poll."""
+    assert ensure_aware_utc("2026-08-21T10:00:00") is None
+    assert ensure_aware_utc(None) is None
+    assert ensure_aware_utc(1755777600) is None

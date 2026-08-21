@@ -52,6 +52,39 @@ def _plain(text: str | None) -> str:
     return " ".join(out.split())
 
 
+def ensure_aware_utc(value: Any) -> datetime | None:
+    """Coerce an event timestamp to a tz-aware datetime, or None. Never raises.
+
+    ONE timestamp policy for the view layer. A Frame carries two datetimes
+    (`occurred_at`, `updated_at`) which are frequently derived from the same
+    event by different call sites; when only one of them coerced, a single
+    Frame ended up with a naive `occurred_at` and an aware `updated_at`.
+    Subtracting the frame's own two fields then raised TypeError, and - worse,
+    because it is silent - `model_dump_json()` emitted "…T10:00:00" for one and
+    "…T10:00:00Z" for the other. JavaScript parses the offsetless form as LOCAL
+    time, so the same instant renders hours apart on the card (5.5h for an IST
+    reader).
+
+    A naive value is assumed UTC rather than rejected: notion_connector.py
+    parses `last_edited_time` with no offset guarantee, and github_connector.py
+    already articulates this exact hazard at its own boundary. An offset that
+    is present is preserved rather than converted - it names the same instant,
+    and the source's own offset is information.
+
+    A non-datetime is treated as absent rather than fatal: external payloads
+    are the source of these values, and a malformed one must cost its own
+    event, not the poll.
+
+    `perception.py::_occurred` and `frame_for_event` are both expected to route
+    through here, so a Frame's two timestamps cannot disagree about tz policy.
+    """
+    if not isinstance(value, datetime):
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value
+
+
 def _actor_name(actor_entities: Any) -> str:
     """The counterparty's name, or '' when the event names nobody usable.
 
@@ -208,7 +241,11 @@ def frame_for_event(
     # After composition, not before: the actor prefix spends the same budget.
     headline = _clamp_headline(headline)
 
-    occurred = getattr(event, "occurred_at", None) or datetime.now(timezone.utc)
+    # Both timestamps go through the SAME normalizer: a Frame whose two
+    # datetimes disagree about tz-awareness cannot be compared with itself and
+    # serializes to two different wire formats. See `ensure_aware_utc`.
+    occurred = ensure_aware_utc(getattr(event, "occurred_at", None)) or datetime.now(timezone.utc)
+    updated = ensure_aware_utc(updated_at) or occurred
 
     return Frame(
         key=frame_key(event.source, event.entity_type, event.entity_id),
@@ -219,7 +256,7 @@ def frame_for_event(
         source=event.source,
         entity_type=event.entity_type,
         occurred_at=occurred,
-        updated_at=updated_at or occurred,
+        updated_at=updated,
         importance=_importance(importance),
         event_count=event_count,
         affordances=affordances or [],
