@@ -929,6 +929,7 @@ def test_provider_status_exposes_base_url_but_never_a_secret(monkeypatch):
     """
     monkeypatch.setattr(get_settings(), "config_encryption_key", "test-master-key")
     factory, ws = _ws_factory()
+    app = None
 
     async def _seed_cred():
         async with factory() as db:
@@ -945,10 +946,10 @@ def test_provider_status_exposes_base_url_but_never_a_secret(monkeypatch):
             )
             await db.commit()
 
-    asyncio.run(_seed_cred())
-    app = _ws_app(factory, ws)
-
     try:
+        asyncio.run(_seed_cred())
+        app = _ws_app(factory, ws)
+
         with TestClient(app) as c:
             body = c.get("/v1/model-config").json()
             anthropic = next(p for p in body["providers"] if p["provider"] == "anthropic")
@@ -962,7 +963,59 @@ def test_provider_status_exposes_base_url_but_never_a_secret(monkeypatch):
             assert anthropic["extra_config_public"] == {}
             assert "leaked-if-echoed" not in c.get("/v1/model-config").text
     finally:
-        app.dependency_overrides.clear()
+        if app is not None:
+            app.dependency_overrides.clear()
+
+        async def _cleanup():
+            async with factory() as db:
+                await db.execute(
+                    delete(ProviderCredential).where(ProviderCredential.workspace_id == ws)
+                )
+                await db.commit()
+
+        asyncio.run(_cleanup())
+
+
+@pytest.mark.skipif(not _db_reachable(), reason="Postgres not reachable")
+def test_null_extra_config_value_is_omitted_not_stringified():
+    """A stored JSON null must not become the literal string "None".
+
+    ``extra_config`` is untyped JSONB, so a stored ``null`` is a real possibility
+    for any declared-public field. ``str(None)`` would pre-fill the credential
+    form's text box with the four-character word "None" -- a value the user never
+    typed -- which then round-trips back as a real value on the next Save. The
+    key must be omitted entirely instead.
+    """
+    factory, ws = _ws_factory()
+    app = None
+
+    async def _seed_cred():
+        async with factory() as db:
+            db.add(
+                ProviderCredential(
+                    workspace_id=ws,
+                    provider="anthropic",
+                    base_url=None,
+                    extra_config={"base_url": None},
+                    status="valid",
+                    enabled=True,
+                )
+            )
+            await db.commit()
+
+    try:
+        asyncio.run(_seed_cred())
+        app = _ws_app(factory, ws)
+
+        with TestClient(app) as c:
+            body = c.get("/v1/model-config").json()
+            anthropic = next(p for p in body["providers"] if p["provider"] == "anthropic")
+
+            assert "base_url" not in anthropic["extra_config_public"]
+            assert anthropic["extra_config_public"].get("base_url") != "None"
+    finally:
+        if app is not None:
+            app.dependency_overrides.clear()
 
         async def _cleanup():
             async with factory() as db:

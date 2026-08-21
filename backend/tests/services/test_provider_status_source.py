@@ -16,7 +16,6 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
-from src.contracts.model_config import ProviderStatus
 from src.services.model_config_service import ModelConfigService
 
 
@@ -45,7 +44,7 @@ def _cred(provider: str, workspace_id: str | None, status: str = "valid") -> Sim
 async def _statuses(rows: list, *, env_providers: set[str] = frozenset()) -> dict:
     svc = ModelConfigService(_db_returning(rows))
     svc._env_key_set = staticmethod(lambda p: p in env_providers)  # type: ignore[method-assign]
-    out = await svc._provider_statuses("ws_1", provider_status_cls=ProviderStatus)
+    out = await svc._provider_statuses("ws_1")
     return {s.provider: s for s in out}
 
 

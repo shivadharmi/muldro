@@ -39,7 +39,22 @@ def _split_extra_config(provider: str, extra: dict | None) -> tuple[dict[str, st
     if not extra:
         return {}, []
     allowed = public_field_keys(provider)
-    public = {k: str(v) for k, v in extra.items() if k in allowed}
+    public: dict[str, str] = {}
+    for k, v in extra.items():
+        if k not in allowed:
+            continue  # not a declared field -> stays hidden, unchanged
+        if v is None:
+            # A stored JSON null means "no value". str(None) == "None" would
+            # pre-fill the credential form's text box with the literal word
+            # "None", which then round-trips back as a real value on Save --
+            # so the key is omitted entirely rather than stringified.
+            continue
+        if not isinstance(v, str | int | float | bool):
+            logger.warning(
+                "dropping non-scalar extra_config value for %s.%s: %r", provider, k, type(v)
+            )
+            continue
+        public[k] = str(v)
     hidden = sorted(k for k in extra if k not in allowed)
     return public, hidden
 
@@ -134,7 +149,7 @@ class ModelConfigService:
             self._to_binding_dto(r) for r in agent_by_key.values() if r.workspace_id is not None
         ]
 
-        providers = await self._provider_statuses(workspace_id, provider_status_cls=ProviderStatus)
+        providers = await self._provider_statuses(workspace_id)
 
         return ModelConfigResponse(
             tiers=tiers,
@@ -186,9 +201,9 @@ class ModelConfigService:
 
         Exposed so the credentials routes can report the state that actually remains
         after a write or delete, instead of asserting one."""
-        return await self._provider_statuses(workspace_id, provider_status_cls=ProviderStatus)
+        return await self._provider_statuses(workspace_id)
 
-    async def _provider_statuses(self, workspace_id, *, provider_status_cls) -> list:
+    async def _provider_statuses(self, workspace_id) -> list[ProviderStatus]:
         stmt = select(ProviderCredential).where(
             or_(
                 ProviderCredential.workspace_id == workspace_id,
@@ -224,7 +239,7 @@ class ModelConfigService:
                 provider, cred.extra_config if cred is not None else None
             )
             statuses.append(
-                provider_status_cls(
+                ProviderStatus(
                     provider=provider,
                     configured=configured,
                     status=status,
