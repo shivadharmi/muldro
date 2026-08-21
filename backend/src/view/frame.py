@@ -28,7 +28,11 @@ from src.view.contracts import MAX_HEADLINE_CHARS, Affordance, Frame, FrameKind,
 # caller. The two must stay aligned: whatever the validator refuses, _plain has
 # already removed. tests/view/test_frame.py pins that relationship against the
 # validator's own pattern so neither side can be changed alone.
-_STRIP_CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f‪-‮⁦-⁩]")
+_STRIP_CONTROL = re.compile(
+    r"[\x00-\x1f\x7f-\x9f"  # C0 / C1 control characters, newline included
+    r"\u202a-\u202e"  # bidi embedding + override (RLO can reverse a headline)
+    r"\u2066-\u2069]"  # bidi isolates
+)
 _STRIP_LINK = re.compile(r"\[([^\]]*)\]\([^)]*\)")
 _STRIP_MARKS = re.compile(r"[*_`#\[\]()~<>]")
 # Trailing `\S*` (not `\S+`) so a bare truncated scheme - "https://" with
