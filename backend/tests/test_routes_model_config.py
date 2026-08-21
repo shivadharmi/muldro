@@ -1040,3 +1040,59 @@ def test_provider_without_a_credential_returns_empty_collections_not_null():
                 assert isinstance(p["extra_config_secret_keys"], list)
     finally:
         app.dependency_overrides.clear()
+
+
+@pytest.mark.skipif(not _db_reachable(), reason="Postgres not reachable")
+def test_credential_for_uncatalogued_provider_is_still_visible(monkeypatch):
+    """B6: _provider_statuses iterated MODEL_CATALOG, so a row for a provider that
+    was removed from the catalog became invisible and unmanageable.
+
+    Sets a throwaway master key before app startup: create_app()'s §4.3 guard
+    (src/api/app.py) fails loud if ANY provider_credentials row in the DB has a
+    non-null api_key_encrypted while MULDRO_CONFIG_ENCRYPTION_KEY is unset -- and
+    this test seeds exactly such a row before the app boots. The row is deleted in
+    `finally` so it can't trip the same guard for any test that creates an app
+    afterwards.
+    """
+    monkeypatch.setattr(get_settings(), "config_encryption_key", "test-master-key")
+    factory, ws = _ws_factory()
+    app = None
+
+    async def _seed_cred():
+        async with factory() as db:
+            db.add(
+                ProviderCredential(
+                    workspace_id=ws,
+                    provider="retired_vendor",
+                    api_key_encrypted="ciphertext",
+                    status="valid",
+                    enabled=True,
+                )
+            )
+            await db.commit()
+
+    try:
+        asyncio.run(_seed_cred())
+        app = _ws_app(factory, ws)
+
+        with TestClient(app) as c:
+            body = c.get("/v1/model-config").json()
+            names = [p["provider"] for p in body["providers"]]
+            assert "retired_vendor" in names
+            # Catalogued providers keep their order; strays are appended.
+            assert names.index("anthropic") < names.index("retired_vendor")
+    finally:
+        if app is not None:
+            app.dependency_overrides.clear()
+
+        async def _cleanup():
+            async with factory() as db:
+                await db.execute(
+                    delete(ProviderCredential).where(
+                        ProviderCredential.workspace_id == ws,
+                        ProviderCredential.provider == "retired_vendor",
+                    )
+                )
+                await db.commit()
+
+        asyncio.run(_cleanup())

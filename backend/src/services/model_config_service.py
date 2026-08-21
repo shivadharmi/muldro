@@ -219,8 +219,12 @@ class ModelConfigService:
             if current is None or (current.workspace_id is None and c.workspace_id is not None):
                 cred_by_provider[c.provider] = c
 
+        # Catalogued providers first, in catalog order; then any provider that has a
+        # credential row but is no longer catalogued, so an orphaned row stays visible
+        # and therefore removable.
+        strays = sorted(p for p in cred_by_provider if p not in MODEL_CATALOG)
         statuses = []
-        for provider in MODEL_CATALOG:
+        for provider in [*MODEL_CATALOG, *strays]:
             cred = cred_by_provider.get(provider)
             if cred is not None:
                 # A real credential row always wins (its own status). Only a row
