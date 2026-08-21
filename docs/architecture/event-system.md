@@ -6,7 +6,7 @@
 sequenceDiagram
     participant S as Source (Gmail/Slack/GitHub)
     participant EP as EventProcessor
-    participant C as Claude (Scoring)
+    participant C as Model layer (Scoring)
     participant DLQ as DeadLetterService
     participant WM as WorldModel
     participant MS as MemoryService
@@ -23,8 +23,8 @@ sequenceDiagram
     EP->>EP: Generate idempotency_key (source:entity_id:event_type)
     EP->>EP: Check for duplicate (skip if exists)
 
-    Note over EP,C: Score Event (rules-first triage, Haiku on ambiguous remainder)
-    EP->>C: Triage batch (rules-first), ambiguous events scored via Haiku
+    Note over EP,C: Score Event (rules-first triage, fast-tier LLM on ambiguous remainder)
+    EP->>C: Triage batch (rules-first), ambiguous events scored on the fast tier
     C-->>EP: {importance: 0-1, urgency: 0-1, confidence: 0-1} + triage fields
     EP->>EP: Store NormalizedEvent (triage fields in importance_signals)
 
@@ -76,7 +76,7 @@ The scheduler retries DLQ items every 5th tick (~150s).
 
 ## Event Scoring
 
-Batch event scoring is **rules-first triage** (`TriageService.triage_batch`): deterministic rules classify each event, and only the ambiguous remainder is sent to Haiku (tiered triage-before-extract). Triage fields (`category`, `tier`, `actionable`) are carried in `importance_signals`. Scoring produces three dimensions:
+Batch event scoring is **rules-first triage** (`TriageService.triage_batch`): deterministic rules classify each event, and only the ambiguous remainder is sent to the LLM (utility `fast` tier) (tiered triage-before-extract). Triage fields (`category`, `tier`, `actionable`) are carried in `importance_signals`. Scoring produces three dimensions:
 
 | Dimension | Range | Signals |
 |-----------|-------|---------|
@@ -84,7 +84,7 @@ Batch event scoring is **rules-first triage** (`TriageService.triage_batch`): de
 | **Urgency** | 0.0 - 1.0 | Time-sensitive, requires immediate response, blocking others |
 | **Confidence** | 0.0 - 1.0 | How certain the scoring is (data quality, context available) |
 
-Default scores (on Claude error): `{importance: 0.5, urgency: 0.3, confidence: 0.3}`
+Default scores (on scoring-call error): `{importance: 0.5, urgency: 0.3, confidence: 0.3}`
 
 The only importance floor in ingestion is the `>= 0.3` embedding gate below. Proactive auto-planning is driven by the `InitiativeScorer` composite score (`>= 0.70`), and the perception-cycle Planner is gated by a triage "actionable" check — not by an importance threshold.
 
@@ -153,8 +153,8 @@ Final score is capped at 1.0.
 
 | Signal | How It's Computed |
 |--------|-------------------|
-| `importance` | From event scoring (Claude) |
-| `urgency` | From event scoring (Claude) |
+| `importance` | From event scoring (LLM) |
+| `urgency` | From event scoring (LLM) |
 | `goal_relevance` | Keyword overlap between event title/summary and active user goals |
 | `entity_significance` | Importance score of actors in event (via WorldModel.find_entity) |
 | `novelty` | Constant `0.9` when no related memories are found; `1.0 - top_score` when related memories exist |

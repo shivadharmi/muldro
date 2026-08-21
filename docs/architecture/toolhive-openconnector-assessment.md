@@ -78,7 +78,7 @@ flowchart TD
     style MW fill:#1d4ed8,color:#fff
 ```
 
-**Sync vs durable:** the **chat path** runs one lead per turn with `authorization_source=DIRECT_USER_REQUEST`, which keeps `trust_gate` dormant — the user's message is the turn's authorization. `permission_gate` **is** active there: it is installed whenever the turn's effective `permission_mode` is `ask` or `auto`, and `auto` is the default. Chat safety therefore rests on always-on `capability_scope` (fail-closed) + `write_lock` **plus** action-time confirmation. The **autonomous path** persists `TaskRun`s and gates **every step** through `TrustEngine.evaluate` at the DAG level and the `trust_gate` middleware; because `permission_gate` sits inner of `trust_gate` and never consults trust, a risky autonomous write is staged for review at every trust level. When no human is on the turn, a gate that must stop a write **prepares** it rather than interrupting or executing.
+**Sync vs durable:** the **chat path** runs one lead per turn with `authorization_source=DIRECT_USER_REQUEST`, which keeps `trust_gate` dormant — the user's message is the turn's authorization. `permission_gate` **is** active there: it is installed whenever the turn's effective `permission_mode` is `ask` or `auto`, and `auto` is the default. Chat safety therefore rests on always-on `capability_scope` (fail-closed) + `write_lock` **plus** action-time confirmation. The **autonomous path** persists `TaskRun`s and gates **every step** through `TrustEngine.evaluate` at the DAG level and the `trust_gate` middleware; `permission_gate` is **not** installed there (`run_autonomous_deep_step` passes no `permission_mode`), so a step's own pre-approved capability is gated by trust alone. The inner-`permission_gate` fall-through — which stages a risky write at every trust level because that gate never consults trust — applies to turns carrying a `permission_mode`: chat, and the `process_message` batch entry. When no human is on the turn, a gate that must stop a write **prepares** it rather than interrupting or executing.
 
 ### 3.3 Secrets and per-server outbound auth (today)
 
@@ -97,7 +97,7 @@ Credentials at rest: `oauth_tokens` table, Fernet-encrypted with a single key `M
 
 ### 3.4 Approvals (unchanged by this work)
 
-`TrustEngine.evaluate` (4×4 trust × risk matrix, `trust_engine.py:105-157`) + `RiskAssessor` (Haiku, Redis 24h cache, **fail-closed to `high`** at three sites) + `Approval` model with a partial-unique idempotency fence (`approvals.py:47-54`). This stays exactly as-is: the gateway/connector operate **below** the approval boundary — a call only reaches the outbound seam *after* TrustEngine/permission_gate has cleared it.
+`TrustEngine.evaluate` (4×4 trust × risk matrix, `trust_engine.py:105-157`) + `RiskAssessor` (fast tier, Redis 24h cache, **fail-closed to `high`** at three sites) + `Approval` model with a partial-unique idempotency fence (`approvals.py:47-54`). This stays exactly as-is: the gateway/connector operate **below** the approval boundary — a call only reaches the outbound seam *after* TrustEngine/permission_gate has cleared it.
 
 ## 4. Verified capability matrix (primary sources)
 

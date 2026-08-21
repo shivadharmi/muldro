@@ -6,7 +6,7 @@ All tools are served through MCP. When an agent requests a tool, the orchestrato
 
 ```mermaid
 sequenceDiagram
-    participant A as Agent (Claude)
+    participant A as Agent (LLM)
     participant O as Orchestrator
     participant H as Governor Pre-Hook (Audit-Only)
     participant R as ToolRegistry (DB)

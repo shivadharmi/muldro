@@ -25,7 +25,7 @@ sequenceDiagram
             SCH->>SCH: Skip (budget exhausted)
         else mode = normal or degraded
             SCH->>POL: poll(source) from cursor
-            Note over POL: Direct connector poll — no Claude/agent call
+            Note over POL: Direct connector poll — no LLM/agent call
             POL-->>SCH: observations (new emails, events, messages)
 
             SCH->>RA: assess_relevance(observations, user_context)
@@ -228,7 +228,7 @@ Every 10th scheduler tick (~5 minutes), the Persona agent runs a batch preferenc
 
 The routine perception cycle is **not** a three-agent chain:
 
-1. **Polling** is a direct connector poll (`self._poller.poll`) — no Perceiver agent or Claude/LLM call. Cursors advance via `self._poller.update_cursor`.
+1. **Polling** is a direct connector poll (`self._poller.poll`) — no Perceiver agent or LLM call. Cursors advance via `self._poller.update_cursor`.
 2. **Entity/memory extraction is not run in-cycle** (`librarian_result = None`). It is owned by the tier-gated worker consumers (`entity_extractor`, `memory_extractor`) on the event stream.
 3. **The Planner agent is the only agent invoked**, and only conditionally (`run_planner`) when the polled events are actionable.
 

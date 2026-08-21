@@ -13,7 +13,7 @@ Multi-agent hub-and-spoke: a central `MuldroOrchestrator` (`backend/src/orchestr
 ```
 User <-> Next.js Frontend (A2UI)
               |
-         MuldroOrchestrator (Claude API)
+         MuldroOrchestrator (provider-configurable model layer)
          Chat turn      -> ONE plan-scoped lead
          Autonomous run -> Perceiver, Librarian, Planner,
                            Executor, Presenter, Persona
@@ -124,16 +124,18 @@ side-effect rule, and OSS hygiene. Read it before structural changes. Summary be
 
 ## Agent Boundaries (do not violate)
 
-| Agent | Model | Role | Write Scope |
-|-------|-------|------|-------------|
-| Perceiver | Sonnet | Gather information from any source — email, calendar, Slack, GitHub, web, internal knowledge (read-only) | normalized_events |
-| Librarian | Sonnet | Extract entities, update world model, store memories | entities, relationships, memories |
-| Planner | Opus | Produce capability-based plans (structured PlanOutput JSON) via PLANNER_PROMPT_V2 | plans, plan_tasks, goal memories |
-| Executor | Sonnet | Execute approved plans via tools, scoped per step (reads context first; offered only the current step's capability tools, not the full write union) | task_runs, task_steps |
-| Presenter | Sonnet | Generate user-facing text output | briefings, A2UI surfaces (via SurfaceService + renderer.py) |
-| Persona | Haiku | Learn and store preferences (batched every 10th scheduler tick, min 5 interactions) | memories (preference type) |
+| Agent | Tier | Role | Write Scope |
+|-------|------|------|-------------|
+| Perceiver | balanced | Gather information from any source — email, calendar, Slack, GitHub, web, internal knowledge (read-only) | normalized_events |
+| Librarian | balanced | Extract entities, update world model, store memories | entities, relationships, memories |
+| Planner | reasoning | Produce capability-based plans (structured PlanOutput JSON) via PLANNER_PROMPT_V2 | plans, plan_tasks, goal memories |
+| Executor | balanced | Execute approved plans via tools, scoped per step (reads context first; offered only the current step's capability tools, not the full write union) | task_runs, task_steps |
+| Presenter | balanced | Generate user-facing text output | briefings, A2UI surfaces (via SurfaceService + renderer.py) |
+| Persona | fast | Learn and store preferences (batched every 10th scheduler tick, min 5 interactions) | memories (preference type) |
 
 **Only Planner decides intent.** The table above is the **autonomous** path's cast: only the Executor performs external actions (scoped to the step's capability) and only Presenter talks to the user. A **chat** turn routes to none of them — it builds one synthetic `lead` (`orchestrator/lead_builder.py`, not a registry row) scoped to the plan's capability union, and that lead acts and answers for itself. **Every external write is gated at action time** — `trust_gate` (TrustEngine, per capability) on the autonomous path, `permission_gate` (per action) on chat — and with no human on the turn a gated write is *prepared* for review rather than executed.
+
+Tiers are **provider-neutral** (`reasoning` / `balanced` / `fast`, `AGENT_MODEL_TIERS` in `orchestrator/agents.py`). Which model backs a tier is DB data (`ModelBinding`, per-workspace overridable via `PUT /v1/model-config`); the seeded defaults are Claude Opus / Sonnet / Haiku, and OpenAI, Gemini and local Ollama are in `config/model_catalog.py`.
 
 *The Governor is not a routed cognitive agent — its deterministic policy service (`services/governor.py`) and audit-only pre-tool hook (`hooks.py::governor_pre_tool_hook`, always `allowed: True` except disabled tools) remain as non-agent machinery.*
 
@@ -202,12 +204,12 @@ System prompts (`src/orchestrator/prompts.py`):
 
 Only the Planner sees `PLANNER_PROMPT_V2`. Other agents receive `MULDRO_SOUL_CORE` + their role prompt. The Planner also receives a ~200-token capability summary (via `generate_capability_summary()`) instead of 15-20K raw tool schemas.
 
-**Thinking budgets** (`src/orchestrator/agents.py`): Planner=8192, Perceiver=6144, Librarian=4096, Presenter=4096, Executor=2048, Persona=2048.
+**Reasoning depth** is set by the tier binding's `effort` (`reasoning`=high, `balanced`=medium, `fast`=low), translated per provider by `config/capability_map.py`. `AGENT_THINKING` in `orchestrator/agents.py` still carries per-agent `budget_tokens`, but only `thinking.enabled` reaches model construction (`deep_runtime/model_factory.py`) — the numbers no longer size the budget.
 
 ## Intent Classification
 
-Fast Haiku-based intent classification is extracted into `src/orchestrator/intent_classifier.py`:
-- `classify_intent()` — calls Haiku, returns `(intent, confidence, sources)`
+Fast intent classification (utility `fast` tier — Haiku by default) is extracted into `src/orchestrator/intent_classifier.py`:
+- `classify_intent()` — one `complete_text(tier="haiku")` call (mapped onto the resolver's `fast` tier), returns `(intent, confidence, sources)`
 - `intent_to_plan()` — synthesizes lightweight PlanOutput from fast intents (replaces `intent_to_decision`)
 - `extract_plan()` — parses structured JSON from Planner response text (replaces `extract_decision`)
 - `_match_read_capability()` — keyword-to-capability mapping for fast-path single reads
@@ -277,7 +279,7 @@ fetchWorkspaceSurfaces() or useMuldroWs hook (surface_update message type)
 ## Trust Infrastructure & Approval
 
 The autonomous path's deterministic approval gate is `TrustEngine` (`src/services/trust_engine.py`). It is not the only gate — see "One runtime, gated at action-time" below for how it composes with `permission_gate`:
-- **RiskAssessor** (`src/services/risk_assessor.py`): Haiku-based risk assessment with Redis-cached 24h TTL. Returns `RiskAssessment` (risk_level, reasoning, reversible, blast_radius).
+- **RiskAssessor** (`src/services/risk_assessor.py`): risk assessment on the utility `fast` tier (`complete_text(tier="haiku")`, Haiku by default) with Redis-cached 24h TTL. Returns `RiskAssessment` (risk_level, reasoning, reversible, blast_radius).
 - **TrustState** model (`src/models/trust_state.py`): Per-workspace, per-capability trust tracking (approved/rejected counts, trust_level, cooldown).
 - **TrustEngine.evaluate()**: 4×4 matrix (trust_level × risk_level) → `PolicyDecision` (approval_required, auto_execute_notify, auto_execute_silent, blocked).
 - **Trust graduation**: 3 approved → learning, 10 approved (<10% reject) → trusted, 25 approved (<5% reject) → autonomous. Where `permission_gate` is also installed (chat and the `process_message` batch entry) graduation does **not** reach past it — it sits inner of `trust_gate` and never consults trust, so an irreversible, external/public, or high-risk write is still staged at the `autonomous` level. On **GraphExecutor DAG steps** no `permission_gate` is installed, but the step's capability is pre-approved **only when the DAG gate actually cleared it** — a graduated capability still reaches the inner `trust_gate`'s irreversible-union override on any verdict that wanted a human. Graduation there speeds up what trust already covers; it does not silence an irreversible write. Note also what does **not** feed graduation: a PREPARED step records no approval (nothing was reviewed and nothing necessarily executed), and exempt reads / `system.*` actions are never evaluated at all. See "One runtime, gated at action-time" below.
@@ -361,7 +363,7 @@ The `SchedulerLoop` (`src/services/scheduler.py`) runs a `_tick_background_tasks
 
 ## Conversation Context
 
-`_load_conversation_history` loads up to 20 messages (8000 chars) including `metadata_` column. Assistant messages are annotated with their decision type (e.g., `Assistant [create_task]: ...`), giving downstream agents execution lineage. When history overflows, older messages are summarized via Haiku (`_summarize_history`) and prepended as `[Earlier conversation summary]`. Most recent 5 messages are kept verbatim.
+`_load_conversation_history` loads up to 20 messages (8000 chars) including `metadata_` column. Assistant messages are annotated with their decision type (e.g., `Assistant [create_task]: ...`), giving downstream agents execution lineage. When history overflows, older messages are summarized on the utility `fast` tier (`_summarize_history` in `orchestrator/context_assembler.py`) and prepended as `[Earlier conversation summary]`. Most recent 5 messages are kept verbatim.
 
 ## Intelligence Loop (Soul)
 

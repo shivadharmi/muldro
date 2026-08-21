@@ -36,8 +36,8 @@ flowchart LR
     end
 
     subgraph Planning
-        D[Intent Classifier<br/>Haiku - fast path]
-        E[Planner Agent<br/>Opus - full path]
+        D[Intent Classifier<br/>fast tier - fast path]
+        E[Planner Agent<br/>reasoning tier - full path]
         F[PlanOutput<br/>goal + steps + gaps]
     end
 
@@ -80,7 +80,7 @@ flowchart TD
     subgraph "Source 1: User Message"
         U[User sends chat message] --> API["POST /v1/muldro/chat"]
         API --> PM["process_message_stream()"]
-        PM --> IC["classify_intent() — Haiku"]
+        PM --> IC["classify_intent() — fast tier"]
         IC -->|"Fast intent<br/>(confidence ≥ 0.7)"| ITP["intent_to_plan()<br/>→ 1-step PlanOutput"]
         IC -->|"Complex intent<br/>(confidence < 0.7)"| PL["_call_agent('planner')<br/>→ multi-step PlanOutput"]
     end
@@ -149,8 +149,8 @@ sequenceDiagram
     participant User
     participant API as FastAPI Router
     participant Orch as Orchestrator
-    participant IC as IntentClassifier<br/>(Haiku)
-    participant PL as Planner<br/>(Opus)
+    participant IC as IntentClassifier<br/>(fast tier)
+    participant PL as Planner<br/>(reasoning tier)
     participant CR as CapabilityResolver
     participant DB as Postgres
 
@@ -200,9 +200,9 @@ sequenceDiagram
 
 | Stage                 | Input                            | Output                          | Key Logic                                   |
 | --------------------- | -------------------------------- | ------------------------------- | ------------------------------------------- |
-| Intent Classification | User message + history           | `(intent, confidence, sources)` | Haiku single-turn call, JSON parse          |
+| Intent Classification | User message + history           | `(intent, confidence, sources)` | fast-tier single-turn call, JSON parse      |
 | Fast Path             | Intent string + message          | `PlanOutput` (1 step)           | Static mapping: intent → capability         |
-| Full Planning         | Message + context + capabilities | `PlanOutput` (N steps)          | Opus multi-turn with tool_use               |
+| Full Planning         | Message + context + capabilities | `PlanOutput` (N steps)          | reasoning-tier multi-turn with tool_use     |
 | Plan Extraction       | Raw LLM text                     | Validated `PlanOutput`          | JSON parse → Pydantic validation → fallback |
 | Persistence           | `PlanOutput`                     | `Plan` + `PlanTask[]` rows      | Step→Task mapping, dependency resolution    |
 | Routing               | `step.capability`                | `(agent_name, tool_dicts)`      | DB lookup: capability → tools → agent       |
@@ -618,7 +618,7 @@ The `TrustEngine` (`src/services/trust_engine.py`) is the autonomous path's dete
 
 ```mermaid
 flowchart TD
-    STEP[Step ready for execution] --> RISK["RiskAssessor.get_or_assess_risk()<br/>(Haiku LLM + Redis cache 24h)"]
+    STEP[Step ready for execution] --> RISK["RiskAssessor.get_or_assess_risk()<br/>(fast-tier LLM + Redis cache 24h)"]
     RISK --> RL["RiskAssessment<br/>risk_level, reasoning,<br/>reversible, blast_radius"]
 
     RL --> TE["TrustEngine.evaluate()<br/>(trust_level × risk_level)"]
@@ -1001,7 +1001,7 @@ After run completion, `_writeback_memories()` extracts facts from step outputs:
 
 1. Collect `output_data` from all completed steps
 2. Call `MemoryService.extract_and_store()` with output text
-3. Claude extracts structured facts (memory_type, fact_text, confidence)
+3. The model extracts structured facts (memory_type, fact_text, confidence)
 4. Deduplication check against existing memories
 5. Embed and store in Qdrant + Postgres
 6. Link to relevant entity_ids from the context pack
@@ -1051,7 +1051,7 @@ SchedulerLoop (every 30s)
 | **Execution State**     | `src/services/execution_state.py`                               | State machine, transition validation                                  |
 | **Capability Resolver** | `src/services/capability_resolver.py`                           | Capability → agent + tools routing                                    |
 | **Trust Engine**        | `src/services/trust_engine.py`                                  | 4×4 matrix, trust graduation/demotion                                 |
-| **Risk Assessor**       | `src/services/risk_assessor.py`                                 | Haiku-based risk assessment, Redis cache                              |
+| **Risk Assessor**       | `src/services/risk_assessor.py`                                 | fast-tier risk assessment, Redis cache                                |
 | **Approval Service**    | `src/services/approval_service.py`                              | Create/query approvals                                                |
 | **Notifier**            | `src/services/notifier.py`                                      | Priority scoring, rate limiting, delivery                             |
 | **Scheduler**           | `src/services/scheduler.py`                                     | Background tasks, perception, DLQ                                     |

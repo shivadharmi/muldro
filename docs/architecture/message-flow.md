@@ -9,8 +9,8 @@ sequenceDiagram
     participant U as User
     participant API as FastAPI /v1/muldro/chat
     participant O as Orchestrator
-    participant IC as IntentClassifier (Haiku)
-    participant P as Planner (Opus)
+    participant IC as IntentClassifier (fast tier)
+    participant P as Planner (reasoning tier)
     participant L as Lead (deep runtime)
     participant PG as permission_gate
     participant IL as InteractionLearner
@@ -21,13 +21,13 @@ sequenceDiagram
     O->>O: start_trace(trigger=user_message)
     O->>O: resolve effective presence, then effective permission_mode
 
-    Note over O,IC: Step 1 - Intent classification (fast Haiku, before any Planner call)
+    Note over O,IC: Step 1 - Intent classification (fast tier, before any Planner call)
     O->>IC: classify_intent(message)
     IC-->>O: (intent, confidence, sources)
     alt fast intent (skip Planner)
         O->>O: intent_to_plan() -> lightweight PlanOutput
     else use_planner is true
-        O->>P: run PLANNER_PROMPT_V2 (Opus)
+        O->>P: run PLANNER_PROMPT_V2 (reasoning tier)
         P-->>O: PlanOutput {goal, reasoning, achievable, priority, steps[], capability_gaps[]}
     end
 
@@ -68,7 +68,7 @@ sequenceDiagram
 >
 > On the chat path `trust_gate` (TrustEngine) is **dormant** — a user-typed turn carries `authorization_source=DIRECT_USER_REQUEST`, the one literal that short-circuits it, because the user's message *is* the authorization. Non-chat callers of `process_message` (scheduler dispatch, the WebSocket unknown-action fallback) declare `AUTONOMOUS` instead, which wakes the gate for the turn's **lead** — the Planner leg runs through `call_agent_stream`, which hardcodes `DIRECT_USER_REQUEST` and installs no `permission_gate`. Those turns are also `presence="absent"`, so an `approval_required` verdict becomes PREPARE. Chat creates **no** `GraphExecutor` run (`run_id = None`), though a DB `Plan` record *is* persisted for multi-step or write-risky turns.
 >
-> The **autonomous path** (scheduler/perception-triggered runs) persists a DB `Plan`, drives it per-step via `GraphExecutor` (`create_run()` / `execute_run()`), and gates every step with TrustEngine's 4×4 trust_level × risk_level matrix (`PolicyDecision`: `auto_execute_silent` / `auto_execute_notify` / `approval_required` / `blocked`). Because `permission_gate` sits **inner** of `trust_gate` and never consults trust, an auto-execute verdict falls *through* to it — so an irreversible, external/public, or high-risk write is staged at every trust level, `autonomous` included.
+> The **autonomous path** (scheduler/perception-triggered runs) persists a DB `Plan`, drives it per-step via `GraphExecutor` (`create_run()` / `execute_run()`), and gates every step with TrustEngine's 4×4 trust_level × risk_level matrix (`PolicyDecision`: `auto_execute_silent` / `auto_execute_notify` / `approval_required` / `blocked`). **On DAG steps that matrix is the whole gate**: `run_autonomous_deep_step` passes no `permission_mode`, so `permission_gate` is never installed, and `pre_approved_capabilities={step.capability}` short-circuits the deep `trust_gate` before its irreversible-union override. Graduation to `autonomous` therefore does silence an irreversible write there. The fall-through composition — `trust_gate` **outer**, `permission_gate` **inner** and never consulting trust, so a risky write is staged at every trust level — holds only on turns that *carry* a `permission_mode`: chat, and the `process_message` batch entry used by scheduler dispatch. Do not generalise either half to "the autonomous path"; see `execution.md` § the DAG-level gate and CLAUDE.md's "Which gates are actually installed".
 
 ## SSE Event Stream
 
@@ -137,7 +137,7 @@ sequenceDiagram
 | `trace` | `TraceStarted` | `{trace_id}` | Trace created |
 | `intent` | `IntentClassified` | `{intent, confidence}` | Fast classification done |
 | `agent_start` | `AgentStarted` | `{agent, model}` | Agent begins work |
-| `thinking` | `AgentThinking` | `{agent, text, is_thinking: true}` | Reasoning blocks (every agent, not Opus-only) |
+| `thinking` | `AgentThinking` | `{agent, text, is_thinking: true}` | Reasoning blocks (every agent, not the reasoning tier only) |
 | `text_delta` | `AgentTextDelta` | `{agent, text}` | Incremental text output |
 | `tool_call` | `AgentToolCall` | `{agent, tool, input}` | Tool invocation |
 | `tool_result` | `AgentToolResult` | `{agent, tool, result, blocked, latency_ms}` | Tool output; `blocked` ← `ToolMessage.status == "error"` |
@@ -180,7 +180,7 @@ class PlanStep(BaseModel):
 
 Both `PlanOutput` and `PlanStep` are frozen (`frozen=True`, `extra="ignore"`). The `actor` field distinguishes a step performed by Muldro from one that must be performed by the user — `actor == "user"` steps are reported to the user and never executed. On the **autonomous** path the agent that executes a Muldro step is assigned from the step's `capability` via `CapabilityResolver`; on the **chat** path no per-step assignment happens at all — every Muldro step folds into the single lead's `capability_scope`.
 
-The Planner uses Claude's `tool_use` structured output with a text fallback parser (`extract_plan`) for resilience. A circular dependency validator ensures step DAGs are acyclic.
+The Planner uses the model's structured tool-call output (Anthropic `tool_use`, or the provider equivalent) with a text fallback parser (`extract_plan`) for resilience. A circular dependency validator ensures step DAGs are acyclic.
 
 ## Capability Resolution
 
@@ -233,7 +233,7 @@ The `ContextBuilder` also accepts `graph_engine` (Neo4j) and `vector_store` (Qdr
 Streaming is a LangGraph stream translated into the frozen SSE shapes, not a direct Anthropic SDK stream. `stream_adapter.py` consumes the compiled deep agent with `stream_mode=["messages", "updates"]` and emits the frozen frames:
 
 - **agent_start** — synthesized before the stream, once the agent and model are known
-- **thinking** — `AIMessageChunk` blocks of type `thinking`, with `is_thinking: true` (enabled for every agent, Sonnet and Haiku included)
+- **thinking** — `AIMessageChunk` blocks of type `thinking`, with `is_thinking: true` (enabled for every agent, at every tier)
 - **text_delta** — plain-string chunk content or `text` blocks (both shapes occur; thinking turns yield block lists)
 - **tool_call** / **tool_result** — `AIMessage.tool_calls` from an `updates` payload and the matching `ToolMessage`; `blocked` is set from `ToolMessage.status == "error"`, and latency is monotonic-clocked between the two
 - **agent_done** — synthesized at stream end from telemetry summed over `usage_metadata`: `cost_usd`, `cache_creation_input_tokens`, `cache_read_input_tokens`, `thinking_tokens`

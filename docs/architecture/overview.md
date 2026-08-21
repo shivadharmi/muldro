@@ -87,12 +87,12 @@ These six are the **autonomous** path's cast: `GraphExecutor` routes each plan s
 
 | Agent | Model Tier | Role | Write Scope | Tool Scope |
 |-------|-----------|------|-------------|------------|
-| **Perceiver** | Sonnet | Read external sources, detect changes, ingest events, deep context gathering | `normalized_events` | Gmail/Calendar/Drive/Slack/GitHub read + cursors, web_search, Playwright browser |
-| **Librarian** | Sonnet | Extract entities, update world model | `entities`, `relationships`, `memories` | update_entity, search |
-| **Planner** | Opus | Determine intent, produce capability-based plans (PlanOutput) | `plans`, `plan_tasks` | plan_command, get_active_plans, search, discover_capabilities |
-| **Executor** | Sonnet | Execute approved plans via tools, scoped to each step's capability | `task_runs`, `task_steps` | Per-step capability tools (Gmail/Calendar/Slack/GitHub sends, etc.) |
-| **Presenter** | Sonnet | Generate user-facing output | `briefings`, `UI payloads` | get_briefing, search, push_ui_update |
-| **Persona** | Haiku | Learn user preferences from interactions | `memories` (preference type) | search, extract_preferences |
+| **Perceiver** | balanced | Read external sources, detect changes, ingest events, deep context gathering | `normalized_events` | Gmail/Calendar/Drive/Slack/GitHub read + cursors, web_search |
+| **Librarian** | balanced | Extract entities, update world model | `entities`, `relationships`, `memories` | update_entity, search |
+| **Planner** | reasoning | Determine intent, produce capability-based plans (PlanOutput) | `plans`, `plan_tasks` | plan_command, get_active_plans, search, discover_capabilities |
+| **Executor** | balanced | Execute approved plans via tools, scoped to each step's capability | `task_runs`, `task_steps` | Per-step capability tools (Gmail/Calendar/Slack/GitHub sends, etc.) |
+| **Presenter** | balanced | Generate user-facing output | `briefings`, `UI payloads` | get_briefing, search, push_ui_update |
+| **Persona** | fast | Learn user preferences from interactions | `memories` (preference type) | search, extract_preferences |
 
 > The **Governor** is not a routed sub-agent. It is a deterministic policy service (`services/governor.py`) invoked as an audit-only pre-tool hook — see [Design Decisions](decisions.md#19-single-trustengine-gate).
 
@@ -107,11 +107,15 @@ These boundaries are strict and must not be violated:
 
 ### Model Tier Rationale
 
-| Tier | Model | Used By | Rationale |
-|------|-------|---------|-----------|
-| Opus | claude-opus-4-8 | Planner | Deepest reasoning for intent classification and task graph generation |
-| Sonnet | claude-sonnet-4-6 | Perceiver, Librarian, Executor, Presenter | Best balance of capability and cost for most agent work |
-| Haiku | claude-haiku-4-5 | Persona | Lightweight preference extraction, called frequently |
+Tiers are **provider-neutral**. The tier an agent runs at is code (`AGENT_MODEL_TIERS`); the model
+backing that tier is DB data (`ModelBinding`, per-workspace overridable via `PUT /v1/model-config`),
+seeded from `_DEFAULT_TIER_BINDINGS`. OpenAI, Gemini and local Ollama models are in the catalog.
+
+| Tier | Default binding | Effort | Used By | Rationale |
+|------|-----------------|--------|---------|-----------|
+| `reasoning` | anthropic / claude-opus-4-8 | high | Planner | Deepest reasoning for intent classification and task graph generation |
+| `balanced` | anthropic / claude-sonnet-4-6 | medium | Perceiver, Librarian, Executor, Presenter | Best balance of capability and cost for most agent work |
+| `fast` | anthropic / claude-haiku-4-5-20251001 | low | Persona | Lightweight preference extraction, called frequently |
 
 ## Infrastructure Services
 

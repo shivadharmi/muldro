@@ -25,7 +25,7 @@ Services are organized in dependency layers. Higher layers depend on lower layer
 
 **File:** `src/services/event_processor.py`
 
-**Purpose:** Normalizes raw events, scores via Claude, deduplicates, triggers downstream processing.
+**Purpose:** Normalizes raw events, scores via the model layer, deduplicates, triggers downstream processing.
 
 **Constructor:**
 - `settings`, `db`, `world_model?`, `memory_service?`, `dead_letter?`, `event_bus?`, `notifier?`, `planner?`
@@ -51,12 +51,12 @@ Services are organized in dependency layers. Higher layers depend on lower layer
 **Key Methods:**
 | Method | Description |
 |--------|-------------|
-| `extract_from_event(event_id, user_id)` | Claude extraction of entities + relationships from events |
+| `extract_from_event(event_id, user_id)` | LLM extraction of entities + relationships from events |
 | `upsert_entity(...)` | Create/update entity with temporal tracking + fuzzy dedup + Qdrant upsert |
 | `add_relationship(from_id, type, to_id)` | Create entity relationship |
 | `find_entity(user_id, query)` | Search entities by name/alias, ordered by importance |
 
-**Calls:** EmbeddingService, VectorStore (Qdrant), Claude API, EventBus
+**Calls:** EmbeddingService, VectorStore (Qdrant), the model layer, EventBus
 
 ---
 
@@ -72,10 +72,10 @@ Services are organized in dependency layers. Higher layers depend on lower layer
 **Key Methods:**
 | Method | Description |
 |--------|-------------|
-| `extract_and_store(user_id, source_text, source_event_ids, entity_ids)` | Claude extraction + embedding + Qdrant upsert + dedup + store |
+| `extract_and_store(user_id, source_text, source_event_ids, entity_ids)` | LLM extraction + embedding + Qdrant upsert + dedup + store |
 | `retrieve(user_id, query, memory_types, entity_refs, max_results)` | Composite-ranked retrieval via Qdrant |
 | `extract_preferences(user_id, source_text, source_event_ids)` | Preference-specific extraction |
-| `check_contradictions(user_id, new_fact, new_memory_id)` | Contradiction detection via Claude |
+| `check_contradictions(user_id, new_fact, new_memory_id)` | Contradiction detection via the model layer |
 | `consolidate_memories(user_id)` | Merge similar memories (>0.95 similarity) |
 | `refresh_stability(memory_id)` | Increment stability on access |
 
@@ -88,7 +88,7 @@ score = 0.40 * cosine_similarity   (relevance)
       + 0.10 * entity_overlap       (memory.entity_ids ∩ query entity_refs)
 ```
 
-**Calls:** Claude API, EmbeddingService, VectorStore (Qdrant), EventBus
+**Calls:** the model layer, EmbeddingService, VectorStore (Qdrant), EventBus
 
 ---
 
@@ -109,7 +109,7 @@ score = 0.40 * cosine_similarity   (relevance)
 
 **Output:** `PlanOutput` with steps and capability_gaps, validated via Pydantic with text fallback. CapabilityResolver maps step capabilities to agents.
 
-**Calls:** Claude API (tool_use structured output), WorldModel, MemoryService
+**Calls:** the model layer (tool_use structured output), WorldModel, MemoryService
 
 ---
 
@@ -255,11 +255,11 @@ score = 0.40 * cosine_similarity   (relevance)
 **Key Methods:**
 | Method | Description |
 |--------|-------------|
-| `generate_briefing(user_id, briefing_date)` | Daily briefing via Claude |
+| `generate_briefing(user_id, briefing_date)` | Daily briefing via the model layer |
 | `generate_meeting_prep(meeting_id, user_id, next_meeting)` | Meeting preparation doc |
 | `select_view(task_type, output)` | Map task type to A2UI view |
 
-**Calls:** Claude API, Notifier
+**Calls:** the model layer, Notifier
 
 ---
 
