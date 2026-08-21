@@ -15,6 +15,15 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 FrameKind = Literal["proposal", "finding", "run", "record", "briefing"]
 FrameStatus = Literal["needs_you", "scheduled", "running", "done", "failed", "new", "seen"]
 
+# `Frame.headline`'s upper bound, named once and imported by frame.py so the
+# clamp and the field cannot drift apart. This is a TYPE SANITY bound, not a
+# display rule: spec §4.2 gives the headline CSS `line-clamp-2`, which at 13px
+# in a 320px cell shows on the order of 80 characters, so 200 is invisible in
+# practice and exists only to keep the field finite. It is deliberately NOT one
+# of the seven truncation rules §2.3 replaces - those are about what the reader
+# sees, and CSS decides that.
+MAX_HEADLINE_CHARS = 200
+
 # A headline is plain text, line-clamped, and never passed to a markdown
 # renderer. These alternatives refuse everything remark-gfm would turn into
 # emphasis, strikethrough, a heading or a live link — including all three GFM
@@ -83,7 +92,7 @@ class Frame(BaseModel):
     group_key: str | None = None
     kind: FrameKind
     status: FrameStatus
-    headline: str = Field(min_length=1, max_length=200)
+    headline: str = Field(min_length=1, max_length=MAX_HEADLINE_CHARS)
     source: str = Field(min_length=1)
     entity_type: str = ""
     occurred_at: datetime

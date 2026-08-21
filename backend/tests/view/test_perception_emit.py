@@ -90,8 +90,24 @@ def test_no_events_produce_no_units():
 
 
 def test_a_frame_that_refuses_to_build_costs_one_unit_not_the_poll():
-    """Frame.headline caps at 200 chars; a longer real subject must not
-    take the other things in the same poll down with it."""
-    units = units_from_events([_event(entity_id="long", title="A" * 300), _event(entity_id="ok")])
+    """Frame validates on construction - here, `source` refuses to be empty.
+    One unbuildable thing must not take the rest of the poll down with it.
+
+    A long subject used to be the likely trigger for this; it no longer is,
+    because frame.py now clamps the headline rather than letting it raise.
+    The fence stays: it is the class of failure that matters, not the one
+    instance of it that has since been removed."""
+    broken = _event(entity_id="broken")
+    broken.source = ""
+
+    units = units_from_events([broken, _event(entity_id="ok")])
 
     assert [u.frame.headline for u in units] == ["Sarah Chen - Series A term sheet"]
+
+
+def test_a_long_subject_still_produces_a_unit():
+    """The concrete regression: a 258-character subject produced zero units."""
+    units = units_from_events([_event(title="Series A term sheet diligence " * 9)])
+
+    assert len(units) == 1
+    assert units[0].frame.headline

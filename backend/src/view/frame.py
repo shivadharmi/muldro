@@ -14,7 +14,7 @@ import re
 from datetime import datetime, timezone
 from typing import Any
 
-from src.view.contracts import Affordance, Frame, FrameKind, FrameStatus
+from src.view.contracts import MAX_HEADLINE_CHARS, Affordance, Frame, FrameKind, FrameStatus
 
 # Frame.headline's validator REFUSES markdown, all three GFM autolink forms,
 # CommonMark protocol autolinks, control characters and bidi overrides. A real
@@ -72,6 +72,42 @@ def _actor_name(actor_entities: Any) -> str:
             if plain:
                 return plain
     return ""
+
+
+# How far back from the limit to look for a space. A headline that ends on a
+# word is worth losing a few characters for; losing a third of the budget to
+# reach an early space is not, so a subject with no boundary in this window is
+# cut where it falls.
+_WORD_BOUNDARY_WINDOW = 40
+
+
+def _clamp_headline(text: str) -> str:
+    """Bound the composed headline to MAX_HEADLINE_CHARS. Never raises.
+
+    The same rule `_plain` and `_importance` already follow: BOUND, NEVER
+    REFUSE - a refused headline is a card the founder never sees. A 258-char
+    subject really did produce zero Units, silently, via a ValidationError
+    caught upstream.
+
+    The body's overrun IS a validation failure, correctly: the model authors
+    the body, so the typed-generation repair loop can ask it for a shorter
+    one. The headline is authored by CODE from an external subject. There is
+    nobody to repair it, so a raise here has no recovery path at all and can
+    only drop the card.
+
+    Truncation cannot reintroduce a construct the validator refuses: `_plain`
+    has already removed every one of them, and removing a suffix cannot mint
+    a new link, autolink or control character.
+    """
+    if len(text) <= MAX_HEADLINE_CHARS:
+        return text
+    cut = text[:MAX_HEADLINE_CHARS]
+    boundary = cut.rfind(" ", MAX_HEADLINE_CHARS - _WORD_BOUNDARY_WINDOW)
+    if boundary > 0:
+        cut = cut[:boundary]
+    # No ellipsis and no "read more" (spec §2.3): CSS line-clamp-2 already
+    # signals visual truncation, and a "..." says "this was cut" a second time.
+    return cut.rstrip()
 
 
 def event_actor_name(event: Any) -> str:
@@ -159,6 +195,9 @@ def frame_for_event(
         # Both unusable. Name what muldro actually knows rather than inventing
         # a constant like "New activity", which made three cards look alike.
         headline = f"{event.source} {event.entity_type}".strip()
+
+    # After composition, not before: the actor prefix spends the same budget.
+    headline = _clamp_headline(headline)
 
     occurred = getattr(event, "occurred_at", None) or datetime.now(timezone.utc)
 

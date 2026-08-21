@@ -11,7 +11,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from src.view.contracts import _MARKDOWN_IN_HEADLINE
+from src.view.contracts import _MARKDOWN_IN_HEADLINE, MAX_HEADLINE_CHARS
 from src.view.frame import frame_for_event
 
 
@@ -231,3 +231,55 @@ def test_a_pre_ingest_raw_event_still_names_its_counterparty():
     )
 
     assert frame_for_event(event).headline == "Sarah Chen - Series A term sheet"
+
+
+# --- A long subject is bounded, never refused -------------------------------
+#
+# `_plain` neutralizes a hostile subject rather than refusing it, and
+# `_importance` clamps an out-of-range score rather than raising, both because
+# a refusal means the founder never sees the card. Length is the same rule.
+# The headline is code-authored from external text, so unlike the body there
+# is no model to send a repair request to: a raise there can only drop a card.
+
+_LONG_WORDS = "Series A term sheet review and diligence checklist for the board "
+
+
+def test_a_subject_over_the_limit_still_yields_a_frame():
+    frame = frame_for_event(_event(title=_LONG_WORDS * 8, actor_entities=None))
+    assert frame.headline
+    assert len(frame.headline) <= MAX_HEADLINE_CHARS
+
+
+def test_a_clamped_headline_ends_on_a_word_boundary():
+    """Cutting mid-token invents a word the sender never wrote."""
+    subject = _LONG_WORDS * 8
+    headline = frame_for_event(_event(title=subject, actor_entities=None)).headline
+
+    assert subject.startswith(headline)
+    assert subject[len(headline)] == " "
+
+
+def test_a_clamped_headline_carries_no_ellipsis():
+    """Spec §2.3: no ellipsis, no 'read more'. CSS line-clamp already says cut."""
+    headline = frame_for_event(_event(title=_LONG_WORDS * 8, actor_entities=None)).headline
+
+    assert "…" not in headline
+    assert "..." not in headline
+
+
+def test_the_budget_applies_after_the_actor_is_composed_in():
+    """The actor prefix is part of the composed string, so a subject that fits
+    on its own can still overrun once a name is prepended."""
+    subject = "A" * (MAX_HEADLINE_CHARS - 4)
+    frame = frame_for_event(_event(title=subject, actor_entities={"name": "Sarah Chen"}))
+
+    assert frame.headline.startswith("Sarah Chen - ")
+    assert len(frame.headline) <= MAX_HEADLINE_CHARS
+
+
+def test_an_unbroken_token_is_hard_cut():
+    """The word-boundary search must not fail closed when there is no boundary."""
+    frame = frame_for_event(_event(title="A" * 300, actor_entities=None))
+
+    assert len(frame.headline) == MAX_HEADLINE_CHARS
+    assert set(frame.headline) == {"A"}
