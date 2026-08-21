@@ -13,7 +13,8 @@
     "as spaces and tabs only, which is CommonMark's own rule and depends on neither",
     "language's notion of whitespace.",
     "Write every control and Unicode character as an explicit \\uXXXX escape. A literal",
-    "invisible character in this file cannot be reviewed."
+    "invisible character in this file cannot be reviewed.",
+    "PENDING as of this commit: only the backend half reads this file. unit-card.tsx::ledeOf still splits on /\\n\\s*\\n/ and trims with trim(), so it disagrees with three cases below - the two U+FEFF cases and the U+00A0 one. It needs /\\n[ \\t]*\\n/ and a trim of spaces and tabs only."
   ],
   "cases": [
     {
