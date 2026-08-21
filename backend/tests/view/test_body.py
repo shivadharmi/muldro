@@ -12,10 +12,12 @@ how the pair came to disagree on Unicode whitespace.
 
 import json
 from pathlib import Path
+from typing import get_args
 
 import pytest
 
 from src.view.body import LEDE_BUDGETS, BodyBudgetError, lede_of, validate_body
+from src.view.contracts import FrameKind
 
 LEDE_CORPUS = Path(__file__).parent / "fixtures" / "lede_corpus.json"
 _CASES = json.loads(LEDE_CORPUS.read_text(encoding="utf-8"))["cases"]
@@ -38,6 +40,21 @@ def test_lede_of_matches_the_shared_corpus(case):
     Full drifting apart.
     """
     assert lede_of(case["body"]) == case["lede"]
+
+
+def test_frame_kinds_and_lede_budgets_are_the_same_set():
+    """FrameKind is enumerated in five places and pinned in none.
+
+    Adding "alert" to the Literal without adding a budget makes
+    `validate_body(body, "alert")` raise BodyBudgetError for every alert -
+    from a function whose contract is "return `body` unchanged or name the
+    fix". This closes the BACKEND half only. Three frontend enumerations
+    remain unpinned - `FrameKind` in `frontend/src/lib/view/unit.ts` and
+    both `KIND_LABELS` and `kindStyle` in `design-tokens.ts` - and only the
+    transport work (one generated contract) can close those properly; from
+    here, a Python test can do no better than duplicate them.
+    """
+    assert set(get_args(FrameKind)) == set(LEDE_BUDGETS)
 
 
 def test_validate_body_accepts_a_lede_within_budget():
