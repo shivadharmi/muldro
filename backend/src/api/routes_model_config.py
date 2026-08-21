@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.api.deps import get_current_workspace_id, get_session
 from src.config import secret_crypto
 from src.config.model_catalog import MODEL_CATALOG, get_model_spec
+from src.config.provider_catalog import PROVIDER_CATALOG
 from src.contracts.model_config import ModelConfigResponse, ProviderStatus, TierBinding
 from src.llm.model_factory import build_langchain_model
 from src.models.provider_credential import ProviderCredential
@@ -24,11 +25,38 @@ logger = logging.getLogger(__name__)
 
 class CatalogModel(BaseModel):
     model_config = ConfigDict(extra="ignore", protected_namespaces=())
+    # Flat: every model names its own provider, so a client filters one list rather
+    # than walking a dict of lists. At 15+ providers that is the difference between
+    # one search box and a nested traversal.
+    provider: str
     model_id: str
     display_name: str
     thinking_style: str
     accepts_temperature: bool
     suggested_tier: str
+    context_window: int
+    input_cost_per_1k: float
+    output_cost_per_1k: float
+    supports_prompt_cache: bool
+
+
+class CredentialFieldModel(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    key: str
+    label: str
+    kind: str
+    required: bool
+    placeholder: str | None = None
+
+
+class CatalogProvider(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    provider: str
+    display_name: str
+    auth_kind: str
+    credential_fields: list[CredentialFieldModel]
+    model_count: int
+    docs_url: str | None = None
 
 
 class AgentInfo(BaseModel):
@@ -40,28 +68,52 @@ class AgentInfo(BaseModel):
 
 class CatalogResponse(BaseModel):
     model_config = ConfigDict(extra="ignore")
-    providers: dict[str, list[CatalogModel]]
+    providers: list[CatalogProvider]
+    models: list[CatalogModel]
     agents: list[AgentInfo]
 
 
 @router.get("/v1/model-catalog", response_model=CatalogResponse)
 async def get_model_catalog(workspace_id: str = Depends(get_current_workspace_id)):
     return CatalogResponse(
-        providers={
-            p: [
-                CatalogModel(
-                    model_id=s.model_id,
-                    display_name=s.display_name,
-                    thinking_style=s.thinking_style,
-                    accepts_temperature=s.accepts_temperature,
-                    suggested_tier=s.suggested_tier,
-                )
-                for s in specs
-            ]
-            for p, specs in MODEL_CATALOG.items()
-        },
-        # The agent roster + default tiers are code facts (like the model catalog),
-        # so the Settings UI can offer per-agent override creation seeded from the tier.
+        providers=[
+            CatalogProvider(
+                provider=name,
+                display_name=spec.display_name,
+                auth_kind=spec.auth_kind,
+                credential_fields=[
+                    CredentialFieldModel(
+                        key=f.key,
+                        label=f.label,
+                        kind=f.kind,
+                        required=f.required,
+                        placeholder=f.placeholder,
+                    )
+                    for f in spec.credential_fields
+                ],
+                model_count=len(MODEL_CATALOG.get(name, [])),
+                docs_url=spec.docs_url,
+            )
+            for name, spec in PROVIDER_CATALOG.items()
+        ],
+        models=[
+            CatalogModel(
+                provider=s.provider,
+                model_id=s.model_id,
+                display_name=s.display_name,
+                thinking_style=s.thinking_style,
+                accepts_temperature=s.accepts_temperature,
+                suggested_tier=s.suggested_tier,
+                context_window=s.context_window,
+                input_cost_per_1k=s.input_cost_per_1k,
+                output_cost_per_1k=s.output_cost_per_1k,
+                supports_prompt_cache=s.supports_prompt_cache,
+            )
+            for specs in MODEL_CATALOG.values()
+            for s in specs
+        ],
+        # The agent roster and default tiers are code facts, like the model catalog,
+        # so a client can offer per-agent override creation seeded from the tier.
         agents=[
             AgentInfo(name=name, display_name=name.title(), tier=tier)
             for name, tier in AGENT_MODEL_TIERS.items()
