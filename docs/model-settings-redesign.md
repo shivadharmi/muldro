@@ -63,24 +63,6 @@ Provider becomes derived metadata, displayed but not separately selected.
 This also removes defect **F1** structurally: there is no longer a way to select a
 provider without simultaneously selecting a model.
 
-### 2.6 The binding contract is realigned to its storage model
-
-`TierBinding` is replaced by `ModelBindingDTO` carrying `scope_type` + `scope_key`, the
-pair the DB already stores.
-
-Today the contract flattens both into a single `tier` field and recovers `scope_type`
-*positionally* — from which array of `ModelConfigResponse` the binding was found in.
-That is a lossy projection of its own storage model, and it is why `_to_tier_binding`
-takes a `tier_binding_cls` parameter, why `put_config` must comment that "the reused
-TierBinding carries the agent name in the `tier` field", and why the field carries a
-two-line apology in `contracts/model_config.py`.
-
-The rename is folded into Phase 1 because §4.6 is **already** a breaking contract change
-— `CatalogResponse.providers` goes from `dict` to `list`, models flatten, `warnings`
-appears, `effort` becomes a `Literal`. Every consumer is rewritten in that phase
-regardless, so aligning the binding shape costs a diff rather than a second breaking
-change. Pre-launch there is nothing to migrate.
-
 ### 2.4 A tier can never be *bound* to an unconfigured provider; a *revoked* one warns
 
 Two distinct paths reach "this tier points at a provider with no credential", and they
@@ -130,6 +112,24 @@ rejected for three reasons.
 the binding's owner being the same person. Once admin A can revoke a credential admin B's
 tier depends on, the revoke is no longer consented by the affected party, and
 degradation-with-a-visible-signal becomes the better answer.
+
+### 2.6 The binding contract is realigned to its storage model
+
+`TierBinding` is replaced by `ModelBindingDTO` carrying `scope_type` + `scope_key`, the
+pair the DB already stores.
+
+Today the contract flattens both into a single `tier` field and recovers `scope_type`
+*positionally* — from which array of `ModelConfigResponse` the binding was found in.
+That is a lossy projection of its own storage model, and it is why `_to_tier_binding`
+takes a `tier_binding_cls` parameter, why `put_config` must comment that "the reused
+TierBinding carries the agent name in the `tier` field", and why the field carries a
+two-line apology in `contracts/model_config.py`.
+
+The rename is folded into Phase 1 because §4.6 is **already** a breaking contract change
+— `CatalogResponse.providers` goes from `dict` to `list`, models flatten, `warnings`
+appears, `effort` becomes a `Literal`. Every consumer is rewritten in that phase
+regardless, so aligning the binding shape costs a diff rather than a second breaking
+change. Pre-launch there is nothing to migrate.
 
 ---
 
