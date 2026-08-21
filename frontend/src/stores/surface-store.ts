@@ -73,8 +73,16 @@ export const useSurfaceStore = create<SurfaceState>((set) => ({
   openDetailModal: (id) =>
     set({ activeSurfaceId: id, detailModalOpen: true }),
 
+  // Closing DROPS the active surface, so `SurfaceDetailModal` unmounts and its per-open
+  // `tabCache` goes with it. Leaving `activeSurfaceId` set kept the modal mounted and its
+  // fetched detail tabs cached indefinitely — the cache only reset on a surface *id* change,
+  // which never happens for a standing singleton like `prepared_work_{workspace_id}`. The
+  // founder would approve one queued item, close, reopen, and see the approved row still
+  // listed with a live Approve button (the API 409s, so it is a stale view rather than a
+  // double-execute — but the review surface must not report decided work as outstanding).
+  // The cache's purpose is switching tabs within one open session; it should not survive it.
   closeDetailModal: () =>
-    set({ detailModalOpen: false }),
+    set({ detailModalOpen: false, activeSurfaceId: null }),
 
   setSurfaces: (surfaces) =>
     set({ surfaces: surfaces.slice(0, 20) }),

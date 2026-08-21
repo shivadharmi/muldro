@@ -124,7 +124,7 @@ class TestExtractSurfaceData:
   {"type": "Text", "id": "t1", "properties": {"text": "Hello", "variant": "heading"}},
   {"type": "Table", "id": "t2", "properties": {
     "columns": [{"key": "title", "label": "Title"}],
-    "rows": [{"title": "Fix bug"}]
+    "rows": [{"cells": ["Fix bug"]}]
   }}
 ]}
 ```"""
@@ -134,7 +134,7 @@ class TestExtractSurfaceData:
         assert len(data.sections) == 2
         assert data.sections[0].type == "Text"
         assert data.sections[1].type == "Table"
-        assert data.sections[1].properties["rows"] == [{"title": "Fix bug"}]
+        assert data.sections[1].properties["rows"] == [{"cells": ["Fix bug"]}]
 
     def test_returns_none_when_no_data_block(self):
         from src.services.surface_mapping import extract_surface_data

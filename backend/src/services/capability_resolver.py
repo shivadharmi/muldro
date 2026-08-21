@@ -120,10 +120,11 @@ def classify_capability_agent(
 ) -> str:
     """Pure classifier: map a capability to its owning agent using a preloaded tool list.
 
-    This is the single source of truth for capability -> agent routing. Both
-    :func:`route_step` (which loads tools per call) and callers that already hold
-    an enabled-tools snapshot (e.g. ``RuntimeProjectionService.get_active_agents``)
-    delegate here so the rules never drift apart.
+    OBSERVABILITY ONLY. Chat no longer routes on agent identity — every turn runs ONE lead
+    scoped to the plan's capability union — so this survives for callers that report which
+    agent *owns* a capability from an enabled-tools snapshot
+    (``RuntimeProjectionService.get_active_agents``). Do not reintroduce a per-step routing
+    caller on top of it.
 
     ``tools`` must already be filtered to the capability's candidate set — pass the
     full enabled-tools list and this function selects the matches.
@@ -155,15 +156,3 @@ def classify_capability_agent(
         return "perceiver"
 
     return "executor"
-
-
-async def route_step(step_capability: str, resolver: CapabilityResolver) -> str:
-    """Map a plan-step capability to the agent that should execute it.
-
-    Loads the workspace's enabled tools once, then delegates to
-    :func:`classify_capability_agent` for the actual routing decision.
-
-    See :func:`classify_capability_agent` for the routing priority.
-    """
-    tools = await resolver._list_enabled_tools()
-    return classify_capability_agent(step_capability, tools)

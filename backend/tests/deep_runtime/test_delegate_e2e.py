@@ -405,6 +405,7 @@ async def _build_lead_and_stream(
         authorization_source="direct_user_request",
         system_prompt=build_system_message(invoker.build_system_prompt(lead, "")),
         subagents=subagents,
+        presence="absent",
     )
     return [
         frame

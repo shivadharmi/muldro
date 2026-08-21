@@ -543,6 +543,7 @@ class EventProcessor:
         """Score an event using Claude with user context. Falls back to defaults."""
         user_message = await self._build_scoring_message(raw, user_id)
 
+        fallback = {**DEFAULT_SCORES, "summary": raw.summary}
         try:
             text = await complete_text(
                 system=SCORING_SYSTEM_PROMPT,
@@ -551,12 +552,14 @@ class EventProcessor:
                 max_tokens=512,
                 workspace_id=workspace_id,
             )
-            from src.llm_utils import parse_llm_json
-
-            return parse_llm_json(text)
         except Exception:
             logger.warning("Event scoring failed, using defaults", exc_info=True)
-            return {**DEFAULT_SCORES, "summary": raw.summary}
+            return fallback
+        # `parse_llm_object`, not `parse_llm_json`: a JSON ARRAY parses SUCCESSFULLY and
+        # would escape to `process`, which calls `scores.get("summary")` on it.
+        from src.llm_utils import parse_llm_object
+
+        return parse_llm_object(text, default=fallback)
 
     async def _build_scoring_message(self, raw: RawEvent, user_id: str) -> str:
         parts = [f"Source: {raw.source}", f"Type: {raw.event_type}"]

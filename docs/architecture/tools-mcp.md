@@ -6,7 +6,7 @@ All tools are served through MCP. When an agent requests a tool, the orchestrato
 
 ```mermaid
 sequenceDiagram
-    participant A as Agent (Claude)
+    participant A as Agent (LLM)
     participant O as Orchestrator
     participant H as Governor Pre-Hook (Audit-Only)
     participant R as ToolRegistry (DB)
@@ -102,7 +102,6 @@ Defined as `ExternalToolSeed` entries in `catalog.py`. Served via external MCP s
 | GitHub | No | snake_case (`create_pull_request`, `list_issues`, etc.) |
 | Slack | No | snake_case (`slack_post_message`, `slack_get_channel_history`) |
 | Notion | Yes | `API-` kebab-case (`API-post-page`, `API-patch-page`) |
-| Playwright | Yes | `browser_` snake_case (`browser_navigate`, `browser_snapshot`) |
 | Atlassian | No | camelCase (`getJiraIssue`, `createJiraIssue`) |
 | Composite | N/A | `web_search` (multi-MCP orchestration) |
 
@@ -137,7 +136,7 @@ tool_name → ToolRegistry.get_tool() → tool.capability → check agent scope
 Governor hooks (`governor_pre_tool_hook`) are **audit-only** — they always return `{allowed: true}` (unless the tool is explicitly blocked). Approval gating has moved to `TrustEngine` in `GraphExecutor`:
 
 - `TrustEngine` (`src/services/trust_engine.py`) evaluates whether a tool call requires user approval based on trust tier, risk level, and approval history
-- Approval gates fire inside `GraphExecutor` per-step, not at the hook level
+- Approval gates fire per-step inside `GraphExecutor` on the autonomous path, and at tool-execution time via the `permission_gate` middleware on chat — never at the hook level
 - This separation keeps the agent loop fast (no blocking on approval checks) while ensuring all external writes go through proper authorization
 
 ## MCP Bridge
@@ -153,14 +152,14 @@ External MCP servers run on demand with no Docker dependency:
 | GitHub | Remote HTTP (Bearer token) | `https://api.githubcopilot.com/mcp/` |
 | Atlassian | Remote HTTP (Bearer token) | Remote hosted |
 | Google Workspace | On-demand local process | `uvx workspace-mcp` via `LocalMCPProcessManager` |
-| Slack, Notion, Playwright | stdio | `npx` (version-pinned) |
+| Slack, Notion | stdio | `npx` (version-pinned) |
 
 `LocalMCPProcessManager` (`src/integrations/local_process_manager.py`) manages the Google Workspace process with reference counting; the process starts on first use within a turn and is torn down when all references are released. An idle reaper in the scheduler's `run_health_tick` is the safety net for leaked sessions. A startup preflight (`src/integrations/runtime_preflight.py`) warns if `uvx` or `npx` are absent from the host.
 
 ### Session Lifecycle
 
 - Sessions are per `(workspace_id, server_name, user_id)` and scoped to an agent turn via `TurnScope` (ContextVar + refcounting)
-- Wired into both chokepoints: `MuldroOrchestrator._process_core` (chat path) and `GraphExecutor.execute_run` (autonomous path)
+- Opened at four boundaries: `ChatProcessor._process_core` and `_ChatSingleLeadMixin.resume_message_events` (chat), `GraphExecutor._execute_run_body` (autonomous; `execute_run` itself is the single-flight lease), and the scheduler's perception tick
 - Real MCP names stored and dispatched directly — no normalization
 - Circuit breaker per server (consecutive failure tracking, cooldown)
 - Retry with exponential backoff for transient errors

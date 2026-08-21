@@ -455,7 +455,7 @@ def event_timeline(events: list[dict[str, Any]], run_id: str = "") -> A2UICompon
                 f"{base}_timeline",
                 [
                     {
-                        "timestamp": e.get("timestamp") or e.get("ts") or "",
+                        "time": e.get("timestamp") or e.get("ts") or "",
                         "title": e.get("event_type") or e.get("type") or "event",
                         "description": e.get("description") or e.get("summary") or "",
                     }

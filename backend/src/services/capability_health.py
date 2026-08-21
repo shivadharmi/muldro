@@ -49,8 +49,7 @@ class CapabilityHealthReport:
 # KNOWN DEFECT (pre-existing, needs its own change — do not "fix" one half).
 # This one list is consumed by two queries in DIFFERENT namespaces:
 #   _check_installation  -> IntegrationInstallation.server_name  (server names:
-#                           google-workspace, github, slack, playwright,
-#                           notion, atlassian)
+#                           google-workspace, github, slack, notion, atlassian)
 #   _get_last_activity   -> NormalizedEvent.source               (source names:
 #                           gmail, calendar, github, slack, notion)
 # For github/slack/notion/atlassian those two strings are identical, which is
@@ -70,7 +69,6 @@ FAMILY_PROVIDERS: dict[str, list[str]] = {
     "doc": ["notion", "atlassian"],
     "workflow": ["atlassian"],
     "messaging": ["slack"],
-    "browser": ["playwright"],
     "search": ["perplexity"],
     "internal": [],
 }

@@ -26,7 +26,6 @@ import {
   SlackLogo,
   NotionLogo,
   AtlassianLogo,
-  PlaywrightLogo,
   FolderIcon,
 } from "@/components/integrations/logos";
 
@@ -38,7 +37,6 @@ const LOGOS: Record<string, LogoComponent> = {
   slack: SlackLogo,
   notion: NotionLogo,
   atlassian: AtlassianLogo,
-  playwright: PlaywrightLogo,
   filesystem: FolderIcon,
 };
 

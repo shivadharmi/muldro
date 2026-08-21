@@ -85,6 +85,32 @@ UNGATED_PERCEPTION_WRITE = Counter(
     "Perception-sourced write that executed without passing an approval gate",
     ["surface"],
 )
+# R3b: is the typed-argument repair loop buying reliability, or burning tokens?
+# ``deep_runtime/middleware/repair_cap`` caps that loop at MAX_ATTEMPTS per tool per turn on
+# the strength of n=2 live observations. This counter is what lets that number be revisited
+# with data: ``repaired / rejected`` is the reliability ratio, ``exhausted`` is the
+# burning-tokens tail. Outcomes are ``rejected`` (a dispatched call came back
+# ``invalid_tool_args``), ``repaired`` (a tool that had failed earlier in the turn then
+# dispatched successfully) and ``exhausted`` (the cap refused to dispatch).
+#
+# Why a Prometheus counter, rather than a DB table or structured logging:
+#   * This file already exists and ``/metrics`` is already mounted, so answering the question
+#     costs no migration — and the question currently has no users and no queries to serve.
+#   * Declaring a counter ahead of a rich consumer is established practice here: the Step-10
+#     safety-invariant block above ships counters that are still dormant by design.
+#   * ``extra={...}`` logging is disqualified on a measured fact, not a preference.
+#     ``JSONFormatter`` (``src/config/logging.py``) serializes an ALLOWLIST of 13 keys —
+#     trace_id, trigger, agent, span_id, duration_ms, input_tokens, output_tokens, spans,
+#     decision, latency_ms, event_id, plan_id, execution_id — and ``tool``, ``outcome`` and
+#     ``error_code`` are all outside it, so under ``MULDRO_LOG_JSON`` they would be silently
+#     dropped. The middleware therefore logs in printf/bracket style (which survives both
+#     formatters) and puts the labelled facts here.
+TOOL_ARG_REPAIR = Counter(
+    "muldro_tool_arg_repair_total",
+    "Tool-argument repair-loop outcomes, per tool",
+    ["tool", "outcome"],
+)
+
 # Gauges
 ACTIVE_RUNS = Gauge(
     "muldro_active_runs",
@@ -181,6 +207,11 @@ class MetricsService:
     @staticmethod
     def record_tool_call(tool_name: str, status: str = "success") -> None:
         TOOL_CALLS.labels(tool_name=tool_name, status=status).inc()
+
+    @staticmethod
+    def record_tool_arg_repair(tool: str, outcome: str) -> None:
+        """Record one repair-loop outcome: ``rejected`` | ``repaired`` | ``exhausted``."""
+        TOOL_ARG_REPAIR.labels(tool=tool, outcome=outcome).inc()
 
     @staticmethod
     def record_notification_sent(notification_type: str, surface: str = "unknown") -> None:

@@ -36,14 +36,14 @@ flowchart LR
     end
 
     subgraph Planning
-        D[Intent Classifier<br/>Haiku - fast path]
-        E[Planner Agent<br/>Opus - full path]
+        D[Intent Classifier<br/>fast tier - fast path]
+        E[Planner Agent<br/>reasoning tier - full path]
         F[PlanOutput<br/>goal + steps + gaps]
     end
 
     subgraph Execution
         G[GraphExecutor<br/>DAG orchestration]
-        H[Deep Runtime<br/>per-step reasoning]
+        H[Deep Runtime<br/>runs each step]
         I[TrustEngine<br/>approval gates]
     end
 
@@ -80,7 +80,7 @@ flowchart TD
     subgraph "Source 1: User Message"
         U[User sends chat message] --> API["POST /v1/muldro/chat"]
         API --> PM["process_message_stream()"]
-        PM --> IC["classify_intent() — Haiku"]
+        PM --> IC["classify_intent() — fast tier"]
         IC -->|"Fast intent<br/>(confidence ≥ 0.7)"| ITP["intent_to_plan()<br/>→ 1-step PlanOutput"]
         IC -->|"Complex intent<br/>(confidence < 0.7)"| PL["_call_agent('planner')<br/>→ multi-step PlanOutput"]
     end
@@ -123,6 +123,8 @@ The most common source. The orchestrator receives a message via `process_message
 - Follows a 7-step decomposition: parse intent → identify capabilities → decompose → assign actors → assess risk → evaluate achievability → identify gaps
 - Returns structured JSON parsed by `extract_plan()`
 
+Either way, a chat plan is **not** executed step by step. It is used for two things: to split off the steps the *user* must perform (`resolve_plan_routing`) and to derive the authority of the turn's single lead (`derive_lead_scope`). The lead then runs the whole turn itself.
+
 ### 2.2 Perception Signals (Proactive)
 
 The `SchedulerLoop` triggers perception cycles every 30 seconds. When the `Perceiver` agent detects relevant events (email, calendar, Slack, GitHub), the `RelevanceAssessor` routes them by tier:
@@ -147,8 +149,8 @@ sequenceDiagram
     participant User
     participant API as FastAPI Router
     participant Orch as Orchestrator
-    participant IC as IntentClassifier<br/>(Haiku)
-    participant PL as Planner<br/>(Opus)
+    participant IC as IntentClassifier<br/>(fast tier)
+    participant PL as Planner<br/>(reasoning tier)
     participant CR as CapabilityResolver
     participant DB as Postgres
 
@@ -178,11 +180,17 @@ sequenceDiagram
         DB-->>Orch: plan_id assigned
     end
 
-    Note over Orch,CR: Step 4 — Capability Resolution
-    loop For each PlanStep
-        Orch->>CR: route_step(step.capability)
-        CR->>DB: Query ToolDefinition by capability
-        CR-->>Orch: agent_name + tool_dicts
+    Note over Orch,CR: Step 4 — Capability to authority (chat) or to agent (autonomous)
+    alt Chat turn
+        Orch->>CR: capabilities_for_step(c) for each Muldro step
+        CR-->>Orch: capability set
+        Orch->>Orch: derive_lead_scope - UNION becomes the ONE lead's capability_scope
+    else Autonomous run
+        loop For each PlanStep
+            Orch->>CR: resolve_for_step(step.capability)
+            CR->>DB: Query ToolDefinition by capability
+            CR-->>Orch: scoped tool_dicts
+        end
     end
 
     Orch-->>API: PlanOutput ready for execution
@@ -192,9 +200,9 @@ sequenceDiagram
 
 | Stage                 | Input                            | Output                          | Key Logic                                   |
 | --------------------- | -------------------------------- | ------------------------------- | ------------------------------------------- |
-| Intent Classification | User message + history           | `(intent, confidence, sources)` | Haiku single-turn call, JSON parse          |
+| Intent Classification | User message + history           | `(intent, confidence, sources)` | fast-tier single-turn call, JSON parse      |
 | Fast Path             | Intent string + message          | `PlanOutput` (1 step)           | Static mapping: intent → capability         |
-| Full Planning         | Message + context + capabilities | `PlanOutput` (N steps)          | Opus multi-turn with tool_use               |
+| Full Planning         | Message + context + capabilities | `PlanOutput` (N steps)          | reasoning-tier multi-turn with tool_use     |
 | Plan Extraction       | Raw LLM text                     | Validated `PlanOutput`          | JSON parse → Pydantic validation → fallback |
 | Persistence           | `PlanOutput`                     | `Plan` + `PlanTask[]` rows      | Step→Task mapping, dependency resolution    |
 | Routing               | `step.capability`                | `(agent_name, tool_dicts)`      | DB lookup: capability → tools → agent       |
@@ -324,7 +332,7 @@ The `Plan` + `PlanTask` represent the **blueprint**. The `TaskRun` + `TaskStep` 
 
 ## 5. Capability Resolution & Agent Routing
 
-After a `PlanOutput` is created, each step's `capability` field is resolved to a concrete agent and tool set:
+**This section describes the autonomous path.** On the chat path there is no per-step agent routing at all: `derive_lead_scope` folds the plan's steps into one lead's `capability_scope` and the lead discovers its own tools (see [Message Flow](message-flow.md#capability-resolution)). On the autonomous path, each step's `capability` field is resolved to a concrete agent and tool set:
 
 ```mermaid
 flowchart TD
@@ -342,18 +350,19 @@ flowchart TD
         R1["1. Query ToolDefinition<br/>WHERE capability = step.capability"]
         R2["2. Get related read tools<br/>from same capability family"]
         R3["3. Deduplicate by tool name"]
-        R4["4. Return as Claude API<br/>tool dicts"]
+        R4["4. Return as provider-neutral<br/>tool dicts"]
         R1 --> R2 --> R3 --> R4
     end
 
     OP --> R1
 ```
 
-**Key insight:** The routing is purely data-driven. No hardcoded agent-to-capability mappings exist. If you add a new tool with `capability="notion.create"` and `requires_approval=True`, it automatically routes to the Executor agent (per-step scope via `resolve_for_step`).
+**Key insight:** The routing is purely data-driven. No hardcoded agent-to-capability mappings exist. If you add a new tool with `capability="notion.create"` and `requires_approval=True`, an autonomous step carrying that capability is scoped to the Executor agent via `resolve_for_step`, and a chat turn whose plan contains it grants the lead exactly that capability — in both cases without a code change.
 
 **Key files:**
 
-- `src/services/capability_resolver.py` — `CapabilityResolver`, `route_step()`
+- `src/services/capability_resolver.py` — `CapabilityResolver`, `resolve_for_step()`, `capabilities_for_step()`, `classify_capability_agent()` (the last used only by `runtime_projection`)
+- `src/orchestrator/lead_builder.py` — `derive_lead_scope()` (the chat path's equivalent: capability → authority, not capability → agent)
 - `src/orchestrator/capability_summary.py` — `generate_capability_summary()` (compact XML for Planner)
 
 ---
@@ -470,7 +479,7 @@ Each step within the DAG is executed through the **single deep runtime** — the
 flowchart TD
     START["DagRunner picks ready step"] --> RUNNER["StepRunner.run_step_via_deep_agent(step)"]
     RUNNER --> INVOKE["AgentInvoker.run_autonomous_deep_step<br/>authorization_source = AUTONOMOUS"]
-    INVOKE --> BUILD["build_deep_agent()<br/>(LangGraph graph, per-step capability scope)"]
+    INVOKE --> BUILD["build_deep_agent()<br/>LangGraph graph, per-step capability scope"]
 
     subgraph "Deep Runtime (LangGraph agent loop)"
         BUILD --> GRAPH["Agent discovers scoped tools,<br/>reasons multi-turn, calls tools"]
@@ -605,11 +614,11 @@ Checkpoints enable exact-point resumption. The `state_snapshot` contains:
 
 ## 9. Trust & Approval Gates
 
-The `TrustEngine` (`src/services/trust_engine.py`) is the single deterministic approval gate, evaluated once per step inside GraphExecutor:
+The `TrustEngine` (`src/services/trust_engine.py`) is the autonomous path's deterministic approval gate, evaluated once per step inside GraphExecutor:
 
 ```mermaid
 flowchart TD
-    STEP[Step ready for execution] --> RISK["RiskAssessor.get_or_assess_risk()<br/>(Haiku LLM + Redis cache 24h)"]
+    STEP[Step ready for execution] --> RISK["RiskAssessor.get_or_assess_risk()<br/>(fast-tier LLM + Redis cache 24h)"]
     RISK --> RL["RiskAssessment<br/>risk_level, reasoning,<br/>reversible, blast_radius"]
 
     RL --> TE["TrustEngine.evaluate()<br/>(trust_level × risk_level)"]
@@ -640,6 +649,10 @@ flowchart TD
 ### The 4×4 Matrix
 
 Trust levels are `first_use`, `learning`, `trusted`, `autonomous`. Risk levels are `none`, `low`, `medium`, `high` (there is no `critical`).
+
+> **On this path, `auto_execute_*` executes.** The DAG gate is a bare `TrustEngine.evaluate` with no irreversible-union override, and `run_autonomous_deep_step` passes **no `permission_mode`** (so `permission_gate` is never installed) plus `pre_approved_capabilities={step.capability}` (so the deep `trust_gate` short-circuits that capability before reaching its own override). Graduation to `autonomous` therefore does silence an irreversible write here. Any **other** capability the step's agent reaches for still meets the deep `trust_gate`.
+>
+> **Elsewhere it is a pass-through, not a bypass.** On a turn that carries a `permission_mode` — chat, and the `process_message` batch entry used by scheduler dispatch — `trust_gate` sits **outer** of `permission_gate` and its auto-execute verdict is `await handler(request)`, so the call continues into `permission_gate`, which decides on `permission_mode × assessment` alone and **never consults trust**. There an irreversible, external/public, or high-risk write is staged at every trust level, `autonomous` included. The split is deliberate — `trust_gate` asks a per-**capability** question, `permission_gate` a per-**action** one, and letting the first suppress the second would let twenty-five approved self-scoped sends silently authorise a send to a brand-new external counterparty.
 
 |                | **none risk**       | **low risk**        | **medium risk**     | **high risk**     |
 | -------------- | ------------------- | ------------------- | ------------------- | ----------------- |
@@ -683,6 +696,16 @@ sequenceDiagram
         Note over DB: Startup recovery marks expired
     end
 ```
+
+### The third outcome: PREPARE
+
+The lifecycle above is the **DAG-level** gate, which has no concept of `presence` — `approval_required` always pauses the run. PREPARE is a **deep-runtime middleware** behaviour one layer in.
+
+When a middleware gate must stop a write and **nobody is on the turn** (`presence="absent"`), interrupting would either stall the turn or orphan a checkpoint, and executing would be an ungated write. So the gate takes a third option: record the action as an `Approval` with `approval_type="prepared_action"`, carrying the redacted `tool_input` and a **snapshot of the acting agent's `capability_scope`**, return a `status="success"` ToolMessage, and let the turn finish everything else.
+
+Confirming a prepared action **replays the recorded payload** via `src/services/prepared_actions.py` — deliberately not through `GraphExecutor`, because an agent would re-derive the action rather than run the reviewed one. Replay is checked against the scope snapshot (so a since-widened scope cannot retroactively authorise it), fails closed on missing tool name / unknown tool / no capability / registry drift / out-of-scope capability / missing snapshot / truncated payload / unreadable payload, and is exactly-once via the idempotency ledger keyed on the approval id.
+
+Prepared actions surface in the `prepared_work` review queue — the **only** place one can be acted on. The Presenter also injects one pointer line into the briefing's context (LLM-mediated, so the exact line is not guaranteed to survive into the output). They are deliberately not announced per item and have no notification type of their own, and a prepared row is refused by the chat-resume endpoint (it has no thread to resume).
 
 ---
 
@@ -978,7 +1001,7 @@ After run completion, `_writeback_memories()` extracts facts from step outputs:
 
 1. Collect `output_data` from all completed steps
 2. Call `MemoryService.extract_and_store()` with output text
-3. Claude extracts structured facts (memory_type, fact_text, confidence)
+3. The model extracts structured facts (memory_type, fact_text, confidence)
 4. Deduplication check against existing memories
 5. Embed and store in Qdrant + Postgres
 6. Link to relevant entity_ids from the context pack
@@ -1028,7 +1051,7 @@ SchedulerLoop (every 30s)
 | **Execution State**     | `src/services/execution_state.py`                               | State machine, transition validation                                  |
 | **Capability Resolver** | `src/services/capability_resolver.py`                           | Capability → agent + tools routing                                    |
 | **Trust Engine**        | `src/services/trust_engine.py`                                  | 4×4 matrix, trust graduation/demotion                                 |
-| **Risk Assessor**       | `src/services/risk_assessor.py`                                 | Haiku-based risk assessment, Redis cache                              |
+| **Risk Assessor**       | `src/services/risk_assessor.py`                                 | fast-tier risk assessment, Redis cache                                |
 | **Approval Service**    | `src/services/approval_service.py`                              | Create/query approvals                                                |
 | **Notifier**            | `src/services/notifier.py`                                      | Priority scoring, rate limiting, delivery                             |
 | **Scheduler**           | `src/services/scheduler.py`                                     | Background tasks, perception, DLQ                                     |

@@ -14,8 +14,9 @@ from src.tools.catalog import (
 
 
 def test_internal_tools_count():
-    """Verify exactly 29 internal tools are registered (25 + 4 P2.5a system.* tools)."""
-    assert len(INTERNAL_TOOLS) == 29
+    """Verify exactly 30 internal tools are registered (25 + 4 P2.5a system.* tools +
+    render_surface)."""
+    assert len(INTERNAL_TOOLS) == 30
 
 
 def test_internal_tool_names_match_muldro():
@@ -44,6 +45,7 @@ def test_internal_tool_names_match_muldro():
         "discover_capabilities",
         "report_governor_verdict",
         "push_ui_update",
+        "render_surface",
         "get_entity",
         "query_facts",
         "traverse",
@@ -67,13 +69,13 @@ def test_all_input_models_are_pydantic():
 
 
 def test_server_distribution():
-    """Verify correct server counts: 27 intelligence, 1 communication, 1 _special."""
+    """Verify correct server counts: 27 intelligence, 2 communication, 1 _special."""
     server_counts = {}
     for tool in INTERNAL_TOOLS:
         server_counts[tool.server] = server_counts.get(tool.server, 0) + 1
 
     assert server_counts.get("intelligence", 0) == 27, "Expected 27 intelligence tools"
-    assert server_counts.get("communication", 0) == 1, "Expected 1 communication tool"
+    assert server_counts.get("communication", 0) == 2, "Expected 2 communication tools"
     assert server_counts.get("_special", 0) == 1, "Expected 1 _special tool"
 
 
@@ -94,11 +96,11 @@ def test_get_internal_tool_by_name_not_found():
 
 
 def test_get_internal_tools_for_server_communication():
-    """Verify get_internal_tools_for_server returns 1 communication tool."""
+    """Verify get_internal_tools_for_server returns both communication tools."""
     tools = get_internal_tools_for_server("communication")
-    assert len(tools) == 1
+    assert len(tools) == 2
     names = {t.name for t in tools}
-    assert names == {"push_ui_update"}
+    assert names == {"push_ui_update", "render_surface"}
 
 
 def test_get_internal_tools_for_server_intelligence():
@@ -163,11 +165,21 @@ def test_all_tools_have_capabilities():
         assert len(tool.capability.split(".")) == 2, f"{tool.name} capability malformed"
 
 
-def test_communication_tools_have_medium_risk():
-    """Verify all communication tools have medium risk and require approval."""
+# Communication tools that only publish to the founder's OWN workspace UI. Nothing leaves
+# the system and the next push supersedes the last, so they are risk-free and ungated. A new
+# communication tool that reaches anyone else does NOT belong here.
+_UI_PUSH_TOOLS = {"push_ui_update", "render_surface"}
+
+
+def test_communication_tools_that_are_not_ui_pushes_require_approval():
+    """A UI push is risk-free; anything else on this server delivers to a human somewhere
+    and must be gated."""
     comm_tools = get_internal_tools_for_server("communication")
     for tool in comm_tools:
-        if tool.name != "push_ui_update":  # push_ui_update is low-risk, no approval
+        if tool.name in _UI_PUSH_TOOLS:
+            assert tool.risk_level in ("none", "low"), f"{tool.name} should be safe-risk"
+            assert not tool.requires_approval, f"{tool.name} should not require approval"
+        else:
             assert tool.risk_level == "medium", f"{tool.name} should have medium risk_level"
             assert tool.requires_approval, f"{tool.name} should require approval"
 
@@ -187,14 +199,14 @@ def test_special_tool_properties():
 
 
 def test_external_tool_seeds_count():
-    """Verify exactly 87 external tool seeds are registered."""
-    assert len(EXTERNAL_TOOL_SEEDS) == 87
+    """Verify exactly 65 external tool seeds are registered."""
+    assert len(EXTERNAL_TOOL_SEEDS) == 65
 
 
 def test_verified_seeds_count():
-    """Verify exactly 65 seeds are verified."""
+    """Verify exactly 43 seeds are verified."""
     verified = get_verified_seeds()
-    assert len(verified) == 65
+    assert len(verified) == 43
 
 
 def test_no_duplicate_external_names_per_server():
@@ -228,7 +240,6 @@ def test_seeds_for_server_counts():
         "github": 8,
         "slack": 8,
         "notion": 22,
-        "playwright": 22,
         "atlassian": 13,
         "_composite": 1,
     }
@@ -255,7 +266,7 @@ def test_get_seeds_for_server_helper():
 def test_get_verified_seeds_helper():
     """Verify get_verified_seeds only returns verified=True entries."""
     verified = get_verified_seeds()
-    assert len(verified) == 65
+    assert len(verified) == 43
 
     # All returned seeds should be verified
     for seed in verified:
@@ -265,7 +276,7 @@ def test_get_verified_seeds_helper():
     # and github are gateway-only servers; their derived seeds are all
     # verified=True (adapter warm-start is the ground truth for these names).
     verified_servers = {seed.server for seed in verified}
-    expected_verified = {"notion", "playwright", "google-workspace", "github"}
+    expected_verified = {"notion", "google-workspace", "github"}
     assert expected_verified.issubset(verified_servers)
 
     # Verify unverified servers are NOT in verified seeds
@@ -281,7 +292,6 @@ def test_seed_server_names_match_installations():
         "github",
         "slack",
         "notion",
-        "playwright",
         "atlassian",
         "_composite",  # special case for composite tools
     }
@@ -299,10 +309,10 @@ def test_high_risk_tools_require_approval():
 
 
 def test_verified_tool_servers():
-    """Verify exactly 4 servers have verified tools."""
+    """Verify exactly 3 servers have verified tools."""
     verified = get_verified_seeds()
     verified_servers = {seed.server for seed in verified}
-    assert verified_servers == {"notion", "playwright", "google-workspace", "github"}
+    assert verified_servers == {"notion", "google-workspace", "github"}
 
 
 def test_composite_tools():

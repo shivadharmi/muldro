@@ -1,10 +1,11 @@
 """Tests for SchedulerLoop — backend-owned dynamic scheduling."""
 
 from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, create_autospec, patch
 
 import pytest
 
+from src.orchestrator.muldro import MuldroOrchestrator
 from src.services.scheduler import SchedulerLoop, compute_next_run
 from tests.conftest import TEST_USER_ID, TEST_WORKSPACE_ID, make_mock_settings
 
@@ -449,8 +450,11 @@ class TestSchedulerTick:
             action_config={"instructions": "Review open PRs"},
         )
 
-        mock_orch = MagicMock()
-        mock_orch.process_message = AsyncMock(return_value={"status": "ok"})
+        # autospec, NOT a bare MagicMock: a bare mock accepts any kwarg, so a dispatch site
+        # passing an argument the real facade does not accept would pass here and TypeError
+        # in production (which _fire's caller swallows into consecutive_failures).
+        mock_orch = create_autospec(MuldroOrchestrator, instance=True)
+        mock_orch.process_message.return_value = {"status": "ok"}
 
         scheduler = SchedulerLoop(settings, orchestrator=mock_orch)
         await scheduler._fire(sched)
@@ -477,8 +481,11 @@ class TestSchedulerTick:
             action_config={},
         )
 
-        mock_orch = MagicMock()
-        mock_orch.process_message = AsyncMock(return_value={"status": "ok"})
+        # autospec, NOT a bare MagicMock: a bare mock accepts any kwarg, so a dispatch site
+        # passing an argument the real facade does not accept would pass here and TypeError
+        # in production (which _fire's caller swallows into consecutive_failures).
+        mock_orch = create_autospec(MuldroOrchestrator, instance=True)
+        mock_orch.process_message.return_value = {"status": "ok"}
 
         scheduler = SchedulerLoop(settings, orchestrator=mock_orch)
         await scheduler._fire(sched)
@@ -573,6 +580,8 @@ class TestPendingNotificationRedelivery:
         mock_notif.workspace_id = TEST_WORKSPACE_ID
         mock_notif.notification_id = "notif_test"
         mock_notif.status = "pending"
+        mock_notif.sent_at = None
+        mock_notif.created_at = datetime.now(timezone.utc) - timedelta(hours=1)
 
         mock_result = MagicMock()
         mock_result.scalars.return_value.all.return_value = [mock_notif]
@@ -585,7 +594,12 @@ class TestPendingNotificationRedelivery:
         mock_factory = MagicMock(return_value=mock_db)
 
         mock_notifier = AsyncMock()
-        mock_notifier.notify = AsyncMock(return_value={"status": "sent"})
+        # Retry re-delivers the EXISTING row. Using notify() here would insert a
+        # duplicate notification on every tick while the original stayed pending —
+        # see tests/test_pending_notification_tick.py.
+        mock_notifier.deliver_existing = AsyncMock(
+            return_value={"status": "sent", "surfaces": ["web"]}
+        )
 
         mock_orch = MagicMock()
         mock_orch._notifier = mock_notifier
@@ -593,14 +607,8 @@ class TestPendingNotificationRedelivery:
         scheduler = SchedulerLoop(settings, orchestrator=mock_orch)
         await scheduler._tick_pending_notifications(mock_factory)
 
-        mock_notifier.notify.assert_called_once_with(
-            user_id=TEST_USER_ID,
-            notification_type="web",
-            title="Follow up",
-            body="Check this",
-            data={},
-            workspace_id=TEST_WORKSPACE_ID,
-        )
+        mock_notifier.deliver_existing.assert_awaited_once_with(mock_notif)
+        mock_notifier.notify.assert_not_awaited()
         assert mock_notif.status == "sent"
 
 

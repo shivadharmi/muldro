@@ -116,10 +116,21 @@ def button(
 def table(
     id: str,
     columns: list[dict],
-    rows: list[dict],
+    rows: list[dict] | list[list[str]],
     sortable: bool = False,
 ) -> A2UIComponent:
-    props = TableProperties(columns=columns, rows=rows, sortable=sortable)
+    """Build a Table component.
+
+    ``rows`` accepts either positional cell lists or the legacy keyed dicts; keyed rows are
+    projected into column order here so callers migrate independently. The wire shape is
+    always positional — a keyed map cannot be expressed in a schema a provider can enforce.
+    """
+    keys = [c["key"] for c in columns]
+    normalized: list[dict] = []
+    for row in rows:
+        cells = row if isinstance(row, list) else [str(row.get(k, "")) for k in keys]
+        normalized.append({"cells": [str(c) for c in cells]})
+    props = TableProperties(columns=columns, rows=normalized, sortable=sortable)
     return A2UIComponent(
         type="Table",
         id=id,
@@ -169,10 +180,22 @@ def entity_card(
     name: str,
     entity_type: str,
     entity_id: str = "",
-    attributes: dict | None = None,
+    attributes: dict | list[dict] | None = None,
 ) -> A2UIComponent:
+    """Build an EntityCard component.
+
+    ``attributes`` accepts either a keyed map or an explicit list of ``{key, value}`` pairs;
+    a keyed map is projected into pairs here so callers migrate independently. The wire shape
+    is always the list — attribute names are entity-dependent and chosen at runtime, and a
+    keyed map cannot be expressed in a schema a provider can enforce.
+    """
+    pairs: list[dict] | None = None
+    if isinstance(attributes, dict):
+        pairs = [{"key": str(k), "value": str(v)} for k, v in attributes.items()]
+    elif attributes is not None:
+        pairs = [{"key": str(a["key"]), "value": str(a["value"])} for a in attributes]
     props = EntityCardProperties(
-        name=name, entity_type=entity_type, entity_id=entity_id, attributes=attributes
+        name=name, entity_type=entity_type, entity_id=entity_id, attributes=pairs
     )
     return A2UIComponent(type="EntityCard", id=id, properties=props.model_dump())
 
@@ -236,6 +259,9 @@ _TABS_BY_KIND: dict[str, list[tuple[str, str]]] = {
     "recommendation": [("overview", "Overview"), ("evidence", "Evidence"), ("context", "Context")],
     "alert": [("overview", "Overview"), ("diagnostics", "Diagnostics")],
     "proactive_insight": [("signal", "Signal"), ("actions", "Actions"), ("context", "Context")],
+    # ONE tab, deliberately. The queue is a list of finished proposals; splitting it into
+    # per-facet tabs would build the cluttered control room the product doc rules out.
+    "prepared_work": [("queue", "Queue")],
 }
 
 

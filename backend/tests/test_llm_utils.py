@@ -114,3 +114,51 @@ class TestParseLlmJsonDefault:
     def test_valid_json_ignores_default(self):
         result = parse_llm_json('{"real": true}', default={"fallback": True})
         assert result == {"real": True}
+
+
+class TestParseLlmObject:
+    """`parse_llm_object` — a total parse for callers that will do `.get()`.
+
+    `parse_llm_json` is honestly typed `dict | list`; callers annotated `-> dict` that
+    wrap it in a try/except written for parse FAILURES let a successful parse of a JSON
+    ARRAY escape to a caller that crashes on `.get()`. This helper makes the dict
+    guarantee unbreakable instead of asking every call site to remember an isinstance
+    check.
+    """
+
+    FALLBACK = {"headline": "fallback"}
+
+    def test_object_parses_through(self):
+        from src.llm_utils import parse_llm_object
+
+        assert parse_llm_object('{"headline": "real"}', default=self.FALLBACK) == {
+            "headline": "real"
+        }
+
+    def test_bare_array_returns_the_default(self):
+        from src.llm_utils import parse_llm_object
+
+        assert parse_llm_object('[{"headline": "x"}]', default=self.FALLBACK) is self.FALLBACK
+
+    def test_unparseable_returns_the_default(self):
+        from src.llm_utils import parse_llm_object
+
+        assert parse_llm_object("not json at all", default=self.FALLBACK) is self.FALLBACK
+
+    def test_empty_returns_the_default(self):
+        from src.llm_utils import parse_llm_object
+
+        assert parse_llm_object("", default=self.FALLBACK) is self.FALLBACK
+
+    def test_scalar_json_returns_the_default(self):
+        """A bare string or number is valid JSON and still not an object."""
+        from src.llm_utils import parse_llm_object
+
+        assert parse_llm_object('"just a string"', default=self.FALLBACK) is self.FALLBACK
+        assert parse_llm_object("42", default=self.FALLBACK) is self.FALLBACK
+
+    def test_it_never_raises(self):
+        from src.llm_utils import parse_llm_object
+
+        for text in ("", "   ", "[", "{", "null", "```json\n[]\n```"):
+            assert isinstance(parse_llm_object(text, default=self.FALLBACK), dict)

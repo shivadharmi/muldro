@@ -14,7 +14,7 @@
  * Every assertion snapshots what renderer.tsx does right now — they PASS on write.
  */
 
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { test, expect, vi } from "vitest";
 import { A2UIRenderer } from "./renderer";
 import type { A2UIComponent, A2UISurface } from "@/lib/a2ui-types";
@@ -108,4 +108,209 @@ test("TRIPWIRE: Chart is a dead type and renders the [Unknown] fallback", () => 
     />,
   );
   expect(screen.getByText(/\[Unknown: Chart\]/)).toBeInTheDocument();
+});
+
+// ─── Table: positional cells (Task 5a) ───────────────────────────────────────
+// The wire shape is now `rows: [{ cells: [...] }]`, positionally aligned to `columns`.
+// The legacy keyed shape must keep rendering for surfaces persisted before the change,
+// so BOTH are pinned here.
+
+const TABLE_COLUMNS = [
+  { key: "name", label: "Company" },
+  { key: "raised", label: "Funding" },
+];
+
+test("Table renders positional cell rows", () => {
+  render(
+    <A2UIRenderer
+      surface={surface([
+        comp({
+          type: "Table",
+          id: "tbl-positional",
+          properties: { columns: TABLE_COLUMNS, rows: [{ cells: ["Acme", "$10M"] }] },
+        }),
+      ])}
+      onAction={vi.fn()}
+    />,
+  );
+  expect(screen.getByText("Acme")).toBeInTheDocument();
+  expect(screen.getByText("$10M")).toBeInTheDocument();
+});
+
+test("Table still renders a LEGACY keyed row (back-compat for persisted surfaces)", () => {
+  render(
+    <A2UIRenderer
+      surface={surface([
+        comp({
+          type: "Table",
+          id: "tbl-legacy",
+          properties: { columns: TABLE_COLUMNS, rows: [{ name: "Acme", raised: "$10M" }] },
+        }),
+      ])}
+      onAction={vi.fn()}
+    />,
+  );
+  expect(screen.getByText("Acme")).toBeInTheDocument();
+  expect(screen.getByText("$10M")).toBeInTheDocument();
+});
+
+test("a sortable Table actually REORDERS positional rows when a header is clicked", () => {
+  // Regression guard: the sort comparator used to index rows by COLUMN KEY. Against the
+  // positional shape every lookup returns undefined, so every comparison returns 0 and the
+  // rows never move — a silent no-op with no error anywhere. The comparator must read the
+  // cell positionally, exactly like the cell render does.
+  render(
+    <A2UIRenderer
+      surface={surface([
+        comp({
+          type: "Table",
+          id: "tbl-sort",
+          properties: {
+            columns: TABLE_COLUMNS,
+            rows: [{ cells: ["Zeta", "$1M"] }, { cells: ["Acme", "$10M"] }],
+            sortable: true,
+          },
+        }),
+      ])}
+      onAction={vi.fn()}
+    />,
+  );
+
+  const firstCellText = () =>
+    screen.getAllByRole("row")[1].querySelectorAll("td")[0].textContent;
+
+  expect(firstCellText()).toBe("Zeta");
+  fireEvent.click(screen.getByText("Company"));
+  expect(firstCellText()).toBe("Acme");
+});
+
+// ─── Timeline: the closed event shape (Task 5b) ──────────────────────────────
+// `TimelineProperties.events` was `list[dict]`, so the producer
+// (`backend/src/ui/units.py::event_timeline`) emitted `timestamp`/`title`/`description`
+// while this renderer read `time`/`title`/`source`. Only `title` matched: every run-events
+// timeline drew a BLANK time line and silently dropped its description, and no test on
+// either side could notice. These pin all three fields the closed `TimelineEvent` declares.
+
+test("Timeline renders time, title AND description for an event", () => {
+  render(
+    <A2UIRenderer
+      surface={surface([
+        comp({
+          type: "Timeline",
+          id: "tl-full",
+          properties: {
+            events: [
+              {
+                time: "2026-08-20T09:00:00",
+                title: "step_started",
+                description: "Drafting the reply",
+              },
+            ],
+          },
+        }),
+      ])}
+      onAction={vi.fn()}
+    />,
+  );
+  expect(screen.getByText("2026-08-20T09:00:00")).toBeInTheDocument();
+  expect(screen.getByText("step_started")).toBeInTheDocument();
+  expect(screen.getByText("Drafting the reply")).toBeInTheDocument();
+});
+
+test("Timeline omits the optional lines when they are absent", () => {
+  render(
+    <A2UIRenderer
+      surface={surface([
+        comp({
+          type: "Timeline",
+          id: "tl-minimal",
+          properties: { events: [{ time: "09:00", title: "approval_requested" }] },
+        }),
+      ])}
+      onAction={vi.fn()}
+    />,
+  );
+  expect(screen.getByText("approval_requested")).toBeInTheDocument();
+  // Only the time and title lines — no empty supporting paragraphs.
+  expect(document.querySelectorAll("p")).toHaveLength(2);
+});
+
+// ─── EntityCard + ExecutionTrace: the last two closed shapes (Task 5c) ───────
+// `EntityCardProperties.attributes` was a bare `dict` and `ExecutionTraceProperties.steps`
+// was a `list[dict]`. Closing them is what makes the component schema provider-enforceable
+// at all — and closing the trace exposed that its only producer wrote `label` while this
+// renderer reads `title`, so every step drew the positional fallback "Step 1", "Step 2"
+// instead of its own name.
+
+test("EntityCard renders attributes as key/value pairs", () => {
+  render(
+    <A2UIRenderer
+      surface={surface([
+        comp({
+          type: "EntityCard",
+          id: "ent-pairs",
+          properties: {
+            name: "Acme",
+            entity_type: "organization",
+            entity_id: "ent_1",
+            attributes: [
+              { key: "revenue", value: "$10M" },
+              { key: "stage", value: "Series B" },
+            ],
+          },
+        }),
+      ])}
+      onAction={vi.fn()}
+    />,
+  );
+  expect(screen.getByText("revenue:")).toBeInTheDocument();
+  expect(screen.getByText("$10M")).toBeInTheDocument();
+  expect(screen.getByText("stage:")).toBeInTheDocument();
+  expect(screen.getByText("Series B")).toBeInTheDocument();
+});
+
+test("EntityCard still renders a LEGACY keyed attribute map (back-compat)", () => {
+  render(
+    <A2UIRenderer
+      surface={surface([
+        comp({
+          type: "EntityCard",
+          id: "ent-legacy",
+          properties: {
+            name: "Acme",
+            entity_type: "organization",
+            attributes: { revenue: "$10M" },
+          },
+        }),
+      ])}
+      onAction={vi.fn()}
+    />,
+  );
+  expect(screen.getByText("revenue:")).toBeInTheDocument();
+  expect(screen.getByText("$10M")).toBeInTheDocument();
+});
+
+test("ExecutionTrace shows a step's own NAME, not the positional 'Step 1' fallback", () => {
+  render(
+    <A2UIRenderer
+      surface={surface([
+        comp({
+          type: "ExecutionTrace",
+          id: "trace-named",
+          properties: {
+            status: "completed",
+            steps: [
+              { title: "Draft the reply", status: "completed", description: "Reply to Acme" },
+              { title: "Send it", status: "pending" },
+            ],
+          },
+        }),
+      ])}
+      onAction={vi.fn()}
+    />,
+  );
+  expect(screen.getByText("Draft the reply")).toBeInTheDocument();
+  expect(screen.getByText("Send it")).toBeInTheDocument();
+  expect(screen.getByText("Reply to Acme")).toBeInTheDocument();
+  expect(screen.queryByText("Step 1")).not.toBeInTheDocument();
 });

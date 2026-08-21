@@ -38,12 +38,6 @@ _DEFAULT_TRUST_RECORDS: list[dict] = [
         "status": "active",
     },
     {
-        "server_name": "playwright",
-        "trust_tier": "T1",
-        "verified_by": "microsoft",
-        "status": "active",
-    },
-    {
         "server_name": "notion",
         "trust_tier": "T1",
         "verified_by": "notion",

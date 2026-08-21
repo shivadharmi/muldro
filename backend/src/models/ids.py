@@ -40,7 +40,6 @@ ID_PREFIXES = {
     "goal": "goal",
     "conv": "conversation",
     "msg": "message",
-    "bs": "browser_session",
     "proc": "procedure",
     "ts": "trust_score",
     "watcher": "watcher",

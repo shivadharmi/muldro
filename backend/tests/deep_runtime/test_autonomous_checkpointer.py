@@ -460,6 +460,7 @@ async def test_same_thread_resume_fires_write_exactly_once():
                     system_prompt="exec",
                     execute_tool=_crash_ledger_execute_tool(),
                     pre_approved_capabilities=frozenset({"email.send"}),
+                    presence="absent",
                 )
 
             with patch(

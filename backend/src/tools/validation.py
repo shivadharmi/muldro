@@ -74,8 +74,8 @@ def validate_registry(
     # No tool is ever 'critical' today, so a critical-only check was dead. High-risk
     # tools are always writes (Check 6 pins read-only tools to none/low), so this
     # catches a dangerous write tool that forgot to declare requires_approval. Medium
-    # is intentionally excluded — interactive browser_* tools are medium-without-approval
-    # by design.
+    # is intentionally excluded: it is the discretionary band, where a tool may be a write
+    # and still not warrant a prompt.
     high_risk_levels = ("high", "critical")
     for tool in internal_tools:
         if tool.risk_level in high_risk_levels and not tool.requires_approval:

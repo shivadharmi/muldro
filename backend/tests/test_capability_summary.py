@@ -86,9 +86,6 @@ class TestFamilyDisplayName:
     def test_messaging(self):
         assert _family_display_name("messaging") == "messaging — Slack"
 
-    def test_browser(self):
-        assert _family_display_name("browser") == "browser — Playwright"
-
     def test_search(self):
         assert _family_display_name("search") == "search — Web"
 

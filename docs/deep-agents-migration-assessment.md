@@ -270,6 +270,10 @@ Legend: ✅ native · ◐ partial/needs glue · ❌ must be re-homed as middlewa
   capability → concrete enabled tools (workspace-scoped). This is **capability-based
   routing** — Muldro's distinctive alternative to a supervisor picking subagents by
   description.
+  **Superseded on the chat path.** `route_step` is deleted and chat no longer routes on
+  agent identity at all: `derive_lead_scope` turns the plan into one lead's
+  `capability_scope`. `resolve_for_step` still scopes autonomous steps, and
+  `classify_capability_agent` survives for `runtime_projection`.
 - Model tiers per agent (Planner=opus, Persona=haiku, rest=sonnet) + per-agent thinking
   budgets + a "cheap mode" that downgrades opus→sonnet and halves thinking.
 

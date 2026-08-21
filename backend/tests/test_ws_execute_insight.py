@@ -4,9 +4,9 @@
 attacker-controllable content (an email body, a Slack message). Feeding that string to
 `process_message` relabels it as the founder's own words: `process_message` carries
 `authorization_source=DIRECT_USER_REQUEST`, at which point `trust_gate` returns early
-("the user's message IS the authorization") and `permission_gate` is not installed at all
-(it requires `deep_single_lead`, which is False). One click then produces an ungated
-external write derived from text an attacker influenced.
+("the user's message IS the authorization"), and its `presence="absent"` entry makes
+`permission_gate` PREPARE a confirmable write rather than block it. One click then stages —
+or in `auto` outright runs — an external write derived from text an attacker influenced.
 
 The structured `capability` and `action_input` are already carried on `SuggestedActionRef`.
 These tests pin that they are what executes, and that the prose never reaches the runtime.

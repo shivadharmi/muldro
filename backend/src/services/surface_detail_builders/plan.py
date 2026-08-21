@@ -129,16 +129,19 @@ async def build_plan_execution(db: AsyncSession, surface: Any, **kwargs: Any) ->
     if not steps:
         return _empty_tab("execution", "No execution steps recorded.")
 
-    trace_events = []
-    for step in steps:
-        event: dict[str, str] = {
-            "label": step.name or step.step_type or "step",
+    # Keys are the renderer's, not this builder's: `execution-trace.tsx` reads `title` and
+    # falls back to a positional "Step N", so the `label` this used to emit meant every step
+    # of every trace was drawn nameless. The `result` it also emitted — a truncated repr of
+    # `output_data` — had no slot on the other side at all and is dropped rather than given a
+    # new one; a raw dict repr is not something to start showing a user.
+    trace_events = [
+        {
+            "title": step.name or step.step_type or "step",
             "status": step.status or "pending",
             "description": _truncate(_get_step_desc(step), 80),
         }
-        if step.output_data and isinstance(step.output_data, dict):
-            event["result"] = _truncate(str(step.output_data), 200)
-        trace_events.append(event)
+        for step in steps
+    ]
 
     return DetailTabResponse(
         tab_id="execution",

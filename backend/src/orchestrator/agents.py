@@ -60,10 +60,6 @@ AGENT_CAPABILITY_SCOPES: dict[str, set[str]] = {
         # Knowledge + web search
         "internal.search",
         "search.web",
-        "browser.open",
-        "browser.snapshot",
-        "browser.extract",
-        "browser.screenshot",
         # World-model reads (spec §4.6 item 5)
         "internal.get_entity",
         "internal.query_facts",

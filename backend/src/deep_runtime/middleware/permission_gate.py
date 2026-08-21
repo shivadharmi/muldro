@@ -19,7 +19,7 @@ Mode × risk policy:
     * ``auto``   — assesses risk and interrupts only when the write is NOT reversible, has
                    an EXTERNAL/public blast radius, or is high risk (otherwise auto-executes).
 
-Two hard rules inherited from ``trust_gate`` — do not violate:
+Two hard rules shared with ``trust_gate`` — do not violate:
 
 1. ``interrupt()`` must NOT be called while a DB session/transaction is open, and (in
    ``auto`` mode) risk assessment must run with NO session open. Each DB touch here
@@ -32,10 +32,12 @@ Two hard rules inherited from ``trust_gate`` — do not violate:
    ``uq_approvals_thread_tool_call`` index), and a persisted decision is detected up front
    (the CF-2 replay short-circuit) so the resume replay goes STRAIGHT to ``interrupt()``.
 
-``_find_existing_approval`` / ``_MAX_PERSISTED_CONTEXT_CHARS`` are REUSED from ``trust_gate``
-(the same idempotency key + the same context cap) rather than re-implemented, so the two
-gates can never drift on the shared contract. ``interrupt()`` and ``handler(request)`` are
-intentionally NOT wrapped in try/except so a ``GraphInterrupt`` propagates normally.
+``_find_existing_approval`` / ``_get_or_create_approval`` / ``_MAX_PERSISTED_CONTEXT_CHARS`` /
+``build_legibility_refs`` live in ``approval_persistence`` — a PEER module both this gate and
+``trust_gate`` depend on (the same idempotency key + the same context cap + the same redacted
+payload keys), rather than either gate importing the other's privates. ``interrupt()`` and
+``handler(request)`` are intentionally NOT wrapped in try/except so a ``GraphInterrupt``
+propagates normally.
 """
 
 from __future__ import annotations
@@ -47,11 +49,15 @@ from langchain.agents.middleware import AgentMiddleware, wrap_tool_call
 from langchain_core.messages import ToolMessage
 from langgraph.types import interrupt
 
+from src.config.settings import get_settings
 from src.deep_runtime.builtins import DEEPAGENTS_BUILTIN_NAMES
-from src.deep_runtime.middleware.trust_gate import (
+from src.deep_runtime.confirmation import Presence, prepared_tool_message, resolve_confirmation
+from src.deep_runtime.middleware.approval_persistence import (
     _MAX_PERSISTED_CONTEXT_CHARS,
     _find_existing_approval,
     _get_or_create_approval,
+    build_legibility_refs,
+    prepared_approval_overrides,
 )
 from src.integrations.capabilities import SYSTEM_ACTION_CAPABILITIES, is_read_only_capability
 from src.services.risk_assessor import RiskAssessment
@@ -115,8 +121,10 @@ async def _persist_permission_approval(
     db_factory,
     context_block: str,
     permission_mode: str,
-    lead_scope,
+    acting_agent_scope,
     user_message: str = "",
+    tool_input: dict | None = None,
+    presence: Presence = "absent",
 ) -> str:
     """Idempotently persist the pending Approval for a paused chat write and return its id.
 
@@ -135,6 +143,51 @@ async def _persist_permission_approval(
     blast_radius = assessment.blast_radius if assessment else "self"
     summary = assessment.reasoning if assessment else "User confirmation required (ask mode)."
 
+    # ONE decision, threaded into both Task-4a helpers: a write nobody is present to confirm
+    # is RECORDED (typed + longer-lived) rather than interrupted on.
+    prepared = resolve_confirmation(presence) == "prepare"
+    approval_type, expires_at = prepared_approval_overrides(
+        prepared, get_settings().prepared_action_ttl_days
+    )
+
+    refs = {
+        "thread_id": thread_id,
+        "tool_call_id": tool_call_id,
+        "capability": capability,
+        "reversible": reversible,
+        "blast_radius": blast_radius,
+        "tool_name": name,
+        "agent_name": agent_name,
+        # Bounded echo of the turn's ambient context so the resume path can
+        # re-inject it (kept small to keep the approval row lean).
+        "context_block": context_block[:_MAX_PERSISTED_CONTEXT_CHARS],
+        # Chat-permission provenance (distinguishes these approvals from the
+        # autonomous trust_gate's rows; NO migration — artifact_refs is JSONB).
+        "permission_mode": permission_mode,
+        # Read by ``resume_deep_lead`` — do NOT merge with ``capability_scope`` below.
+        # Both persist ``acting_agent_scope`` and cannot drift in value (one parameter, one
+        # binding), but they have different readers and different intent: this one is the
+        # chat-resume authority envelope, that one is prepared-action replay authority.
+        # Deleting either breaks a path the other's tests do not cover. The KEY NAMES are
+        # frozen wire/DB contract — pending rows written before a rename would still carry
+        # them — so the parameter was renamed off ``lead_scope`` and these were not.
+        "lead_scope": sorted(acting_agent_scope),
+        # A1: the ORIGINAL user message, so an approved resume can fire the
+        # interaction-learner (bounded like context_block to keep the row lean).
+        "user_message": user_message[:_MAX_PERSISTED_CONTEXT_CHARS],
+        # Legibility (step 1) + Trap 2 (snapshot, never re-derive — written under the
+        # neutral key name the prepared-action executor reads; the ``lead_scope`` KEY above
+        # stays as-is because ``resume_deep_lead`` reads THAT key and must not change):
+        # the four keys both gates persist identically, shared via
+        # ``build_legibility_refs`` so they cannot drift.
+        **build_legibility_refs(tool_input, acting_agent_scope, presence, prepared=prepared),
+    }
+    if not prepared:
+        # Routes this approval to POST /v1/muldro/chat/resume. A PREPARED action has no live
+        # thread to resume, so it must NOT carry this flag — it belongs on the standard
+        # approval endpoints, which `_guard_not_chat_approval` would otherwise 409.
+        refs["chat"] = True
+
     async with db_factory() as db:
         return await _get_or_create_approval(
             db,
@@ -146,26 +199,9 @@ async def _persist_permission_approval(
             workspace_id=workspace_id,
             thread_id=thread_id,
             tool_call_id=tool_call_id,
-            artifact_refs={
-                "thread_id": thread_id,
-                "tool_call_id": tool_call_id,
-                "capability": capability,
-                "reversible": reversible,
-                "blast_radius": blast_radius,
-                "tool_name": name,
-                "agent_name": agent_name,
-                # Bounded echo of the turn's ambient context so the resume path can
-                # re-inject it (kept small to keep the approval row lean).
-                "context_block": context_block[:_MAX_PERSISTED_CONTEXT_CHARS],
-                # Chat-permission provenance (distinguishes these approvals from the
-                # autonomous trust_gate's rows; NO migration — artifact_refs is JSONB).
-                "permission_mode": permission_mode,
-                "chat": True,
-                "lead_scope": sorted(lead_scope),
-                # A1: the ORIGINAL user message, so an approved resume can fire the
-                # interaction-learner (bounded like context_block to keep the row lean).
-                "user_message": user_message[:_MAX_PERSISTED_CONTEXT_CHARS],
-            },
+            artifact_refs=refs,
+            approval_type=approval_type,
+            expires_at=expires_at,
         )
 
 
@@ -208,13 +244,14 @@ def make_permission_gate_middleware(
     assess_risk,
     resolve_capability,
     context_block: str = "",
-    lead_scope=frozenset(),
+    acting_agent_scope=frozenset(),
     user_message: str = "",
+    presence: Presence = "absent",
 ) -> AgentMiddleware:
     """Build the action-time permission gate for one chat turn.
 
     ``permission_mode`` / ``workspace_id`` / ``user_id`` / ``thread_id`` / ``agent_name`` /
-    ``lead_scope`` are captured in the closure — never LLM-supplied. The gate is normally
+    ``acting_agent_scope`` are captured in the closure — never LLM-supplied. The gate is normally
     installed only for ``permission_mode in ("ask", "auto")`` (``bypass``/``None`` never
     install it); it is nonetheless self-defending — ``bypass`` short-circuits to a no-op.
 
@@ -232,10 +269,20 @@ def make_permission_gate_middleware(
         resolve_capability: Async ``(name) -> (lookup_ok, capability | None)``. The gate FAILS
             CLOSED on ``(False, None)`` (block the write).
         context_block: The turn's assembled ContextPack, persisted (capped) onto the Approval.
-        lead_scope: The lead's ``capability_scope`` — persisted (sorted) onto the Approval so
-            the resume path knows the turn's authorized envelope.
+        acting_agent_scope: The ``capability_scope`` of the agent THIS chain wraps — the
+            middleware chain is built per agent, so on a chat turn that is the lead, but the
+            parameter is not lead-specific. Pass ``agent.capability_scope`` and nothing wider:
+            it is persisted (sorted) onto the Approval under BOTH ``lead_scope`` (the resume
+            path's authority envelope) and ``capability_scope`` (the snapshot
+            ``prepared_actions`` replays against), and a value derived from the plan's
+            capability union rather than the acting agent would retroactively widen the
+            authority a prepared write is confirmed under.
         user_message: The turn's ORIGINAL user message — persisted (capped) onto the Approval so
             an approved resume can fire the interaction-learner (parity with the non-paused tail).
+        presence: ``present`` | ``absent`` for this turn. Selects between INTERRUPTING (a
+            human is on the turn to answer) and PREPARING (nobody is, so the write is
+            recorded for later review and the turn carries on). Defaults to ``absent``
+            (fail-safe).
 
     Returns:
         An ``AgentMiddleware`` exposing an async ``wrap_tool_call`` hook.
@@ -290,6 +337,16 @@ def make_permission_gate_middleware(
         # pass already ran. Reads bypass ABOVE, so a read never pays for this extra SELECT.
         existing = await _find_existing_approval(workspace_id, thread_id, tool_call_id, db_factory)
         if existing is not None:
+            # An absent turn never resumes, so this replay branch is unreachable for one in
+            # principle — but an un-branched interrupt() inside a gate is not a safety
+            # argument, it is a turn that would suspend forever if it ever WERE reached.
+            if resolve_confirmation(presence) == "prepare":
+                return prepared_tool_message(
+                    name=name,
+                    tool_call_id=tool_call_id,
+                    approval_id=existing.approval_id,
+                    capability=capability,
+                )
             verdict = interrupt(
                 {
                     "approval_id": existing.approval_id,
@@ -329,9 +386,24 @@ def make_permission_gate_middleware(
             db_factory=db_factory,
             context_block=context_block,
             permission_mode=permission_mode,
-            lead_scope=lead_scope,
+            acting_agent_scope=acting_agent_scope,
             user_message=user_message,
+            tool_input=args,
+            presence=presence,
         )
+
+        # PREPARE: the verdict says this write needs a human and none is on the turn. The
+        # Approval is ALREADY persisted above, so the action is recorded, reviewable, and
+        # replayable. Return a SUCCESS ToolMessage so the lead finishes the rest of the turn —
+        # a prepared write is staged, not failed. See confirmation.prepared_tool_message for
+        # why the status must not become "error".
+        if resolve_confirmation(presence) == "prepare":
+            return prepared_tool_message(
+                name=name,
+                tool_call_id=tool_call_id,
+                approval_id=approval_id,
+                capability=capability,
+            )
 
         # Suspend for confirmation. Called OUTSIDE any DB session/transaction. On resume the
         # gate body replays from the top; the durable path takes the CF-2 branch above, while

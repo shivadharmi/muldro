@@ -64,6 +64,7 @@ async def test_deep_branch_uses_shells_dispatcher_systemmessage_and_provider():
     sentinel_saver = object()
     sentinel_dispatcher = object()
     sentinel_write_lock = object()
+    sentinel_repair_cap = object()
     sentinel_gate = object()
     sentinel_governor = object()
     sentinel_librarian = object()
@@ -105,6 +106,10 @@ async def test_deep_branch_uses_shells_dispatcher_systemmessage_and_provider():
             "src.orchestrator.agent_invoker.make_write_lock_middleware",
             return_value=sentinel_write_lock,
         ) as mock_write_lock,
+        patch(
+            "src.orchestrator.agent_invoker.make_repair_cap_middleware",
+            return_value=sentinel_repair_cap,
+        ),
         patch(
             "src.orchestrator.agent_invoker.make_governor_audit_middleware",
             return_value=sentinel_governor,
@@ -148,23 +153,25 @@ async def test_deep_branch_uses_shells_dispatcher_systemmessage_and_provider():
     )
 
     # (b) extra_middleware is EXACTLY (governor_audit, unavailable_server, trust_gate, write_lock,
-    # dispatcher, librarian_extract, budget_mw) — audit OUTER-MOST, then the Step 7C
+    # repair_cap, dispatcher, librarian_extract, budget_mw) — audit OUTER-MOST, then the Step 7C
     # unavailable_server breaker (OUTER of the gate so a known-down write is short-circuited before
-    # approval), gate next, write lock, dispatcher INNER for the wrap_tool_call chain (Step 7B1 P1 +
-    # 6C Task 1.2 + 7C P3); build_deep_agent installs capability_scope ahead of all. read_back is
-    # absent (deep_readback_enabled=False). librarian_extract (7B1 P3) + budget_mw (7C P3) are
-    # @after_model hooks — their tuple positions are irrelevant to the tool chain (post-turn hooks).
+    # approval), gate next, write lock, the R3a repair cap, dispatcher INNER for the wrap_tool_call
+    # chain (Step 7B1 P1 + 6C Task 1.2 + 7C P3); build_deep_agent installs capability_scope
+    # first. read_back is absent (deep_readback_enabled=False). librarian_extract (7B1 P3) +
+    # budget_mw (7C P3) are @after_model hooks — their tuple positions are irrelevant to the tool
+    # chain (post-turn hooks).
     assert kw["extra_middleware"] == (
         sentinel_governor,
         sentinel_unavailable,
         sentinel_gate,
         sentinel_write_lock,
+        sentinel_repair_cap,
         sentinel_dispatcher,
         sentinel_librarian,
         sentinel_budget,
     ), (
-        "expected (governor, unavailable, gate, lock, dispatcher, librarian, budget) order, got "
-        f"{kw.get('extra_middleware')!r}"
+        "expected (governor, unavailable, gate, lock, repair_cap, dispatcher, librarian, budget) "
+        f"order, got {kw.get('extra_middleware')!r}"
     )
     # unavailable_server is built with the closure-bound workspace_id (never LLM-supplied).
     assert mock_unavailable.call_args.kwargs["workspace_id"] == "ws"
@@ -226,6 +233,7 @@ async def test_deep_readback_flag_on_inserts_readback_between_write_lock_and_dis
     tool actually runs). The rest of the chain is unchanged."""
     sentinel_dispatcher = object()
     sentinel_write_lock = object()
+    sentinel_repair_cap = object()
     sentinel_gate = object()
     sentinel_governor = object()
     sentinel_librarian = object()
@@ -267,6 +275,10 @@ async def test_deep_readback_flag_on_inserts_readback_between_write_lock_and_dis
         patch(
             "src.orchestrator.agent_invoker.make_write_lock_middleware",
             return_value=sentinel_write_lock,
+        ),
+        patch(
+            "src.orchestrator.agent_invoker.make_repair_cap_middleware",
+            return_value=sentinel_repair_cap,
         ),
         patch(
             "src.orchestrator.agent_invoker.make_governor_audit_middleware",
@@ -311,11 +323,12 @@ async def test_deep_readback_flag_on_inserts_readback_between_write_lock_and_dis
         sentinel_gate,
         sentinel_write_lock,
         sentinel_readback,
+        sentinel_repair_cap,
         sentinel_dispatcher,
         sentinel_librarian,
         sentinel_budget,
     ), f"expected read_back spliced INNER of write_lock, got {kw.get('extra_middleware')!r}"
-    assert len(kw["extra_middleware"]) == 8
+    assert len(kw["extra_middleware"]) == 9
     assert kw["extra_middleware"][4] is sentinel_readback
 
 

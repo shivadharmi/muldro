@@ -1,18 +1,22 @@
-"""Deep single-lead chat helpers — the ``ask``/``auto``/``bypass`` permission path.
+"""The chat lead — how every chat turn actually runs.
 
 Extracted from :class:`~src.orchestrator.chat_processor.ChatProcessor` (P2.2c,
-structure-only) so ``chat_processor.py`` stays under the file-size cap. This mixin owns
-the three pieces that belong to the single-lead permission subsystem and share a
-completion tail:
+structure-only) so ``chat_processor.py`` stays under the file-size cap. ``_process_core``
+does intent → plan; everything after that is here. One lead per turn, scoped to the
+plan's capability union, discovering its own tools — there is no per-step agent routing
+and no Presenter step:
 
-* :meth:`_run_single_lead` — the ``_process_core`` single-lead BRANCH (system.* steps →
-  user actions → build lead → stream → pause seam → re-home the reply → completion tail).
+* :meth:`_run_single_lead` — the PLANNED path (system.* steps → user actions → build lead
+  → stream → pause seam → re-home the reply → completion tail).
+* :meth:`_run_single_lead_planless` — the same, without a plan (``chat_planless``).
 * :meth:`resume_message_events` — the RESUME half of a paused ask/auto turn (drives the
   invoker's ``resume_deep_lead``, re-homes the continuation reply, runs the tail).
 * :meth:`_emit_completion_tail` — the ONE completion tail (run_completed → surface push →
-  optional learner → ``RunCompleted``) shared by ``_run_single_lead``,
-  ``resume_message_events``, and (for the legacy branch) ``_process_core``. Co-locating
-  the two lead paths kills the tail duplication they used to carry independently.
+  optional learner → ``RunCompleted``) shared by every producer of a terminal reply.
+
+INVARIANT: a non-failing turn ALWAYS ends in a ``Presentation``. ``routes_chat`` persists
+the reply only on that event and the frontend has no other source of terminal text, so a
+dropped ``Presentation`` is an empty chat bubble — a silent failure, not an error.
 
 ``ChatProcessor`` inherits this mixin (split-via-inheritance) — the methods run on a full
 ``ChatProcessor`` instance and reach its collaborators via ``self`` exactly as before.
@@ -24,7 +28,8 @@ from collections.abc import AsyncGenerator
 from typing import Any
 
 from src.connectors.mcp_bridge import close_turn_sessions
-from src.errors import classify, new_correlation_id
+from src.deep_runtime.authorization import AuthorizationSource
+from src.errors import _GENERIC_CODE, _GENERIC_MESSAGE, classify, new_correlation_id
 from src.integrations.turn_scope import turn_scope
 from src.middleware.observability import get_correlation_id
 from src.orchestrator.core_events import (
@@ -42,6 +47,13 @@ from src.orchestrator.core_events import (
 from src.services.surface_mapping import extract_surface_spec, strip_surface_blocks
 
 logger = logging.getLogger(__name__)
+
+# What a turn says when its lead finished but wrote nothing. An EMPTY reply is not the same
+# as a short one: ``routes_chat`` gates the assistant-message insert on truthy reply text, so
+# an empty ``Presentation`` persists nothing and the turn has no answer at all when the
+# conversation is reloaded. This is the honest alternative — a plain statement of what
+# happened, never a stand-in for a reply the lead did not write.
+_NO_REPLY_TEXT = "I finished this turn without producing a reply."
 
 
 class _ChatSingleLeadMixin:
@@ -83,11 +95,19 @@ class _ChatSingleLeadMixin:
             )
         )
 
-        # Push workspace surface (Presenter-driven). Keep presenter_text raw for
-        # extraction — it still carries the fenced surface blocks.
+        # Push workspace surface. DEPRECATED path: the lead now calls the typed
+        # `render_surface` tool, whose schema a provider can enforce. This fenced-block
+        # parser stays for one release because a model may still emit the old shape —
+        # but it logs when it fires, so the fallback's usage is visible, not silent.
+        # ``presenter_text`` is kept raw for extraction.
         surface_id = None
         try:
             surface_spec = extract_surface_spec(presenter_text)
+            if surface_spec is not None:
+                logger.warning(
+                    "lead emitted a legacy fenced surface block instead of calling "
+                    "render_surface; the fenced path is deprecated and unvalidated"
+                )
             if surface_spec and surface_spec.should_surface:
                 surface_id = await self._surfaces.push_presenter_surface(
                     spec=surface_spec,
@@ -126,29 +146,29 @@ class _ChatSingleLeadMixin:
         user_id: str,
         workspace_id: str,
         effective_mode: str,
+        presence: str,
         user_steps,
+        authorization_source: str = AuthorizationSource.DIRECT_USER_REQUEST,
     ) -> AsyncGenerator[CoreEvent, None]:
-        """The deep single-lead chat BRANCH (P2.3): taken for the resolved effective mode
-        (bypass/ask/auto). Same safety posture as today's ungated chat, plus the
-        action-time permission gate (ask/auto) that suspends a write for confirmation.
+        """Run the turn's ONE lead over a plan, for the already-resolved effective mode
+        (bypass/ask/auto) — plus the action-time permission gate (ask/auto) that suspends
+        or prepares a write depending on ``presence``.
 
         The Planner already ran → the plan carries the plan-union scope + the system.*
-        steps. Same safety posture as today's ungated chat, just single-lead execution
-        (one lead vs N per-step calls + presenter). On a normal reply this runs its own
-        completion tail; on a pause it emits ``ApprovalRequired`` and returns WITHOUT the
-        tail (the resume path runs the tail on the terminal reply).
+        steps. On a normal reply this runs its own completion tail; on a pause it emits
+        ``ApprovalRequired`` and returns WITHOUT the tail (the resume path runs the tail
+        on the terminal reply).
         """
         # (a) system.* steps run deterministically here (Planner-produced;
-        # handle_system_capability takes only (step, plan, ...) — no data dep on
-        # agent-step outputs — so running them before the lead is behavior-equivalent to
-        # the per-step loop).
+        # handle_system_capability takes only (step, plan, ...) — no data dep on the
+        # lead's output — so running them before the lead is well-defined).
         for step in plan.steps:
             if getattr(step, "actor", None) != "user" and step.capability.startswith("system."):
                 sys_result = await self._system_capability_handler.handle_system_capability(
                     step, plan, user_id, workspace_id
                 )
                 yield SystemStepResult(key=f"system_{step.capability}", output=sys_result)
-        # (b) user actions (same contract as the legacy path).
+        # (b) user actions — reported to the user, never executed here.
         if user_steps:
             yield UserActionsReady(
                 steps=[
@@ -175,6 +195,8 @@ class _ChatSingleLeadMixin:
             user_id=user_id,
             workspace_id=workspace_id,
             effective_mode=effective_mode,
+            presence=presence,
+            authorization_source=authorization_source,
         ):
             yield evt
 
@@ -189,14 +211,30 @@ class _ChatSingleLeadMixin:
         user_id: str,
         workspace_id: str,
         effective_mode: str,
+        presence: str,
+        authorization_source: str = AuthorizationSource.DIRECT_USER_REQUEST,
     ) -> AsyncGenerator[CoreEvent, None]:
         """Stream a built lead, handle the pause seam, re-home the reply, and run the completion
         tail. Shared verbatim by the planned (:meth:`_run_single_lead`) and planless
-        (:meth:`_run_single_lead_planless`) single-lead paths — the ONLY difference between them
-        is how the lead + ``context_block`` are built, so that setup stays in each caller and this
+        (:meth:`_run_single_lead_planless`) paths — the ONLY difference between them is how the
+        lead + ``context_block`` are built, so that setup stays in each caller and this
         streaming/pause/tail seam lives here once (mirrors how ``_emit_completion_tail`` folds the
-        tail). ``agent_name`` is always None on the single-lead path (no per-step agent)."""
+        tail).
+
+        TERMINAL-TEXT INVARIANT: a turn must never end claiming success with nothing to show
+        for it. One lead now carries BOTH the tool work and the reply, so a single failure
+        anywhere is a lost reply — under the old per-step arm a dedicated Presenter call still
+        ran and spoke. Two ways the reply can go missing, handled below:
+
+        * the stream ends on a sanitized ``error`` frame (``stream_adapter`` catches, yields
+          ``error``, and returns WITHOUT ``agent_done``). That turn FAILED — it emits
+          ``RunFailed``, not the completion tail, so the client is never told ``done``;
+        * ``agent_done`` arrives with empty text. The lead finished but said nothing, which is
+          a real outcome — it gets a plain ``Presentation`` saying so, because an empty one is
+          not persisted at all."""
         presenter_text = ""
+        saw_agent_done = False
+        error_frame: dict | None = None
         async for frame in self._invoker.stream_deep_lead(
             lead,
             message=message,
@@ -206,6 +244,12 @@ class _ChatSingleLeadMixin:
             intent=intent,
             trace=trace,
             permission_mode=effective_mode,
+            # Whether a human is on this turn. `present` keeps today's confirm-and-suspend
+            # behaviour; `absent` makes the gates PREPARE a gated write instead of stalling.
+            presence=presence,
+            # Where this turn came from. Chat's own ``direct_user_request`` keeps trust_gate
+            # dormant; a scheduled / WS-fallback turn declares AUTONOMOUS and the gate wakes.
+            authorization_source=authorization_source,
         ):
             # PAUSE SEAM (P2.3): the action-time permission gate paused this turn for the
             # user's confirmation. Emit the typed pause event and `return` — ending the
@@ -229,14 +273,57 @@ class _ChatSingleLeadMixin:
                     thread_id=frame.get("thread_id"),
                 )
                 return
+            if frame.get("event") == "error":
+                # Remember the LAST error frame so the failure below can reuse its already
+                # client-safe code/message/correlation_id instead of inventing new ones. The
+                # frame is still passed through verbatim (next line) — the client sees it once.
+                error_frame = frame
             yield agent_event_from_sse(frame)
             if frame.get("event") == "agent_done":
+                saw_agent_done = True
                 presenter_text = frame.get("text", "")
                 # RE-HOME the presenter output (C-CORR2): stream_deep_lead emits NO
                 # Presentation frame, so synthesize it here — else the reply is never
                 # persisted (routes_chat persists only on Presentation) and the chat bubble
-                # is empty. Keep presenter_text RAW for the shared tail's surface extraction.
-                yield Presentation(text=strip_surface_blocks(presenter_text))
+                # is empty. Keep presenter_text RAW for the shared tail's surface extraction;
+                # only the CHAT-VISIBLE text falls back when there is nothing to show.
+                reply = strip_surface_blocks(presenter_text).strip()
+                yield Presentation(text=reply or _NO_REPLY_TEXT)
+
+        if not saw_agent_done:
+            # The stream ended without a terminal reply — an ``error`` frame, or (defensively)
+            # any other early end. Either way the turn did NOT succeed, so it must not reach
+            # the completion tail: a ``RunCompleted`` here becomes an SSE ``done`` that tells
+            # the client the turn finished normally while nothing was ever persisted. Emit the
+            # same ``RunFailed`` ``_process_core``'s exception path emits, so the client's
+            # existing error handling applies unchanged. No reply is invented and nothing is
+            # retried: the lead failed, and the turn says so.
+            cid = (error_frame or {}).get("correlation_id") or (
+                get_correlation_id() or new_correlation_id()
+            )
+            code = (error_frame or {}).get("code") or _GENERIC_CODE
+            safe_msg = (error_frame or {}).get("message") or _GENERIC_MESSAGE
+            logger.error(
+                "lead stream ended with no agent_done (workspace=%s user=%s code=%s cid=%s) — "
+                "reporting the turn as failed rather than completed",
+                workspace_id,
+                user_id,
+                code,
+                cid,
+            )
+            self._spawn_background(
+                self._events.emit_runtime_event(
+                    "run_failed",
+                    workspace_id=workspace_id,
+                    user_id=user_id,
+                    run_id=None,
+                    payload={"code": code, "message": safe_msg, "correlation_id": cid},
+                )
+            )
+            yield RunFailed(
+                trace_id=trace.trace_id, code=code, message=safe_msg, correlation_id=cid
+            )
+            return
 
         # COMPLETION TAIL — single-lead: the learner runs with the RAW user message + reply.
         async for evt in self._emit_completion_tail(
@@ -259,6 +346,8 @@ class _ChatSingleLeadMixin:
         user_id: str,
         workspace_id: str,
         effective_mode: str,
+        presence: str,
+        authorization_source: str = AuthorizationSource.DIRECT_USER_REQUEST,
         conversation_id: str | None = None,
     ) -> AsyncGenerator[CoreEvent, None]:
         """The PLANLESS deep single-lead chat BRANCH (P2.5c) — the Planner never ran.
@@ -290,8 +379,10 @@ class _ChatSingleLeadMixin:
         opt-out) the wider standing scope means more connector writes are reachable ungated from
         perception-sourced ``history_block`` content — an EXPANSION of the already-tracked
         perception-injection latent enhancement (CLAUDE.md "Two execution paths"), scoped to
-        bypass. Bounded by: bypass requires workspace entitlement, and ``can_pause=False``
-        autonomous/perception turns never reach this path (they stay on the gated GraphExecutor)."""
+        bypass. Bounded by: bypass requires workspace entitlement; perception-triggered runs stay
+        on the gated GraphExecutor entirely; and a batch turn that DOES reach this path (the
+        scheduler's dispatch actions, the WS action fallback) now declares
+        ``authorization_source=AUTONOMOUS``, which wakes ``trust_gate`` for every write on it."""
         ilog_id = await self._plans.log_interaction(
             user_id,
             workspace_id,
@@ -319,6 +410,8 @@ class _ChatSingleLeadMixin:
             user_id=user_id,
             workspace_id=workspace_id,
             effective_mode=effective_mode,
+            presence=presence,
+            authorization_source=authorization_source,
         ):
             yield evt
 

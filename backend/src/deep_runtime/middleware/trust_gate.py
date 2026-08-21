@@ -1,8 +1,12 @@
 """THE ONE approval gate for the deep chat runtime (Step 6B).
 
 A ``wrap_tool_call`` interceptor placed BETWEEN capability_scope (OUTER) and
-muldro_tool_dispatcher (INNER) — the composed chain is
-``capability_scope → trust_gate → dispatcher``. By the time this gate runs,
+muldro_tool_dispatcher (INNER). The full composed chain is
+``capability_scope → governor_audit → unavailable_server → trust_gate →
+[permission_gate] → write_lock → [read_back] → dispatcher``; note this gate is OUTER
+of ``permission_gate``, and its auto-execute verdict is a PASS-THROUGH into it.
+``permission_gate`` is installed only when the turn carries a ``permission_mode``,
+which GraphExecutor DAG steps do not. By the time this gate runs,
 capability_scope has ALREADY authorized that the tool is inside the agent's
 ``capability_scope``, so the gate never re-checks scope; it only decides *approval*.
 
@@ -45,24 +49,24 @@ from typing import Any
 from langchain.agents.middleware import AgentMiddleware, wrap_tool_call
 from langchain_core.messages import ToolMessage
 from langgraph.types import interrupt
-from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
 
+from src.config.settings import get_settings
 from src.deep_runtime.authorization import is_gated_source
 from src.deep_runtime.builtins import DEEPAGENTS_BUILTIN_NAMES
-from src.integrations.capabilities import is_read_only_capability
-from src.models.approvals import Approval
-from src.services.approval_service import create_approval
+from src.deep_runtime.confirmation import Presence, prepared_tool_message, resolve_confirmation
+from src.deep_runtime.middleware.approval_persistence import (
+    _MAX_PERSISTED_CONTEXT_CHARS,
+    _find_existing_approval,
+    _get_or_create_approval,
+    build_legibility_refs,
+    prepared_approval_overrides,
+)
+from src.integrations.capabilities import SYSTEM_ACTION_CAPABILITIES, is_read_only_capability
 from src.services.tool_registry import ToolRegistry
 from src.services.trust_engine import TrustEngine
 from src.services.verification.predicate import is_write_verification_required
 
 logger = logging.getLogger(__name__)
-
-# Cap the persisted ContextPack echoed onto the Approval's artifact_refs. artifact_refs is
-# JSONB (unbounded), but the context block is re-injected on resume and kept bounded so a
-# large ambient context can never bloat the approval row.
-_MAX_PERSISTED_CONTEXT_CHARS = 8000
 
 
 async def _resolve_tool_def(name: str, workspace_id: str, db_factory) -> tuple[bool, Any]:
@@ -115,88 +119,6 @@ async def _resolve_capability(name: str, workspace_id: str, db_factory) -> tuple
     return (ok, getattr(tool, "capability", None) if tool else None)
 
 
-async def _find_existing_approval(workspace_id, thread_id, tool_call_id, db_factory):
-    """Return the Approval already persisted for this (workspace, thread, tool_call) tuple, or
-    None. Used to detect the RESUME REPLAY: the gate body re-runs on resume, and if the approval
-    already exists we skip the redundant risk assessment + trust evaluation and go straight to
-    ``interrupt()`` (which returns the resume value immediately).
-
-    Keyed on the promoted COLUMNS (CF-3) fenced by the partial UNIQUE index
-    ``uq_approvals_thread_tool_call``. NO status filter: the resume path marks the original
-    approved/rejected BEFORE resuming the graph, so a pending-only filter would miss it. The
-    session is opened and CLOSED here, never held across ``interrupt()``.
-    """
-    async with db_factory() as db:
-        stmt = select(Approval).where(
-            Approval.workspace_id == workspace_id,
-            Approval.thread_id == thread_id,
-            Approval.tool_call_id == tool_call_id,
-        )
-        result = await db.execute(stmt)
-        return result.scalars().first()
-
-
-async def _get_or_create_approval(
-    db,
-    *,
-    name: str,
-    capability: str,
-    summary: str | None,
-    risk_level: str,
-    user_id: str,
-    workspace_id: str,
-    thread_id: str,
-    tool_call_id: str,
-    artifact_refs: dict,
-) -> str:
-    """Idempotent get-or-create of the pending Approval on an ALREADY-OPEN session, returning
-    its id. The replay-safe persist shared by the autonomous ``trust_gate`` and the chat
-    ``permission_gate`` (a DELIBERATE TWIN collapsed onto one helper).
-
-    The CALLER owns the session so the autonomous path can keep ``TrustEngine.evaluate`` in the
-    SAME transaction as the create+commit (evaluate may leave an uncommitted first-use
-    ``TrustState`` INSERT that only the trailing commit persists — opening a fresh session here
-    would strand it). Keyed on the promoted COLUMNS ``(workspace_id, thread_id, tool_call_id)``
-    (fenced by the partial UNIQUE index ``uq_approvals_thread_tool_call``) with NO status filter:
-    the gate body replays on resume and the resume path may already have marked the row
-    approved/rejected, so a pending-only filter would miss it and duplicate. On a lost create
-    race the ``IntegrityError`` rolls back and re-selects the winner (fail LOUD if still absent).
-    """
-    stmt = select(Approval).where(
-        Approval.workspace_id == workspace_id,
-        Approval.thread_id == thread_id,
-        Approval.tool_call_id == tool_call_id,
-    )
-    result = await db.execute(stmt)
-    existing = result.scalars().first()
-    if existing is not None:
-        return existing.approval_id
-
-    approval = await create_approval(
-        db,
-        user_id=user_id,
-        workspace_id=workspace_id,
-        approval_type=f"tool:{name}",
-        title=f"Approve: {capability}",
-        summary=summary,
-        risk_level=risk_level,
-        requested_by=user_id,
-        run_id=None,
-        step_id=None,
-        artifact_refs=artifact_refs,
-    )
-    try:
-        await db.commit()
-    except IntegrityError:
-        await db.rollback()
-        result = await db.execute(stmt)
-        existing = result.scalars().first()
-        if existing is None:
-            raise
-        return existing.approval_id
-    return approval.approval_id
-
-
 async def _decide_and_maybe_persist(
     *,
     name: str,
@@ -209,6 +131,9 @@ async def _decide_and_maybe_persist(
     agent_name: str,
     db_factory,
     context_block: str = "",
+    tool_input: dict | None = None,
+    agent_capability_scope: frozenset[str] = frozenset(),
+    presence: Presence = "absent",
 ) -> tuple[bool, str | None]:
     """Decide whether *this* tool call needs approval and, if so, persist the Approval.
 
@@ -230,6 +155,13 @@ async def _decide_and_maybe_persist(
         require_approval = matrix_requires or irreversible_override
         if not require_approval:
             return (False, None)
+
+        # ONE decision, threaded into both Task-4a helpers: a write nobody is present to
+        # approve is RECORDED (typed + longer-lived) rather than interrupted on.
+        prepared = resolve_confirmation(presence) == "prepare"
+        approval_type, expires_at = prepared_approval_overrides(
+            prepared, get_settings().prepared_action_ttl_days
+        )
 
         # Persist on THIS open session so TrustEngine.evaluate (above) and the create+commit
         # stay in ONE transaction — the shared replay-safe get-or-create (see helper docstring).
@@ -254,7 +186,16 @@ async def _decide_and_maybe_persist(
                 # CF-1: echo the assembled ContextPack so the resume path can re-inject the
                 # original turn's ambient context (bounded to keep the approval row small).
                 "context_block": context_block[:_MAX_PERSISTED_CONTEXT_CHARS],
+                # Legibility (step 1) + Trap 2 (SNAPSHOT the acting agent's scope — re-deriving
+                # it at confirmation time would let a since-WIDENED scope authorise an action
+                # the founder reviewed under narrower authority): the four keys both gates
+                # persist identically, shared via ``build_legibility_refs`` so they cannot drift.
+                **build_legibility_refs(
+                    tool_input, agent_capability_scope, presence, prepared=prepared
+                ),
             },
+            approval_type=approval_type,
+            expires_at=expires_at,
         )
         return (True, approval_id)
 
@@ -271,6 +212,8 @@ def make_trust_gate_middleware(
     resolve_capability=None,
     context_block: str = "",
     pre_approved_capabilities: frozenset[str] = frozenset(),
+    agent_capability_scope: frozenset[str] = frozenset(),
+    presence: Presence = "absent",
 ) -> AgentMiddleware:
     """Build THE approval gate for one turn.
 
@@ -305,6 +248,14 @@ def make_trust_gate_middleware(
             step seam passes ``{step.capability}``); an UN-approved within-step capability still
             falls through to the gate. Defaults to the empty frozenset, so chat/resume callers
             are byte-identical to before this param existed.
+        agent_capability_scope: The acting agent's ``capability_scope``, SNAPSHOTTED onto the
+            Approval (sorted) at persist time. Confirmation checks the recorded capability
+            against THIS, never against a freshly derived scope — a scope that has widened
+            since must not authorise an action reviewed under narrower authority.
+        presence: ``present`` | ``absent`` for this turn. Selects between INTERRUPTING (a
+            human is on the turn to answer) and PREPARING (nobody is, so the write is
+            recorded for later review and the run carries on). Defaults to ``absent``
+            (fail-safe) — the autonomous path is unattended by definition.
 
     Returns:
         An ``AgentMiddleware`` exposing an async ``wrap_tool_call`` hook.
@@ -348,6 +299,16 @@ def make_trust_gate_middleware(
                 name=name,
                 status="error",
             )
+        # system.* internal action tools (set_goal / set_instruction / schedule_reminder /
+        # add_to_brief) write into Muldro's own data layer — the user's own memory, reversible,
+        # `self` blast radius. ALWAYS-ALLOWED, exactly as on the chat path (permission_gate),
+        # because "is this an internal system action?" is the same fact for both gates even
+        # though they otherwise ask different questions. Matched against the EXPLICIT set, not
+        # a `system.` prefix, so a future system.* capability stays gated until deliberately
+        # exempted. Without this an autonomous step that adds a brief item would PREPARE it —
+        # staging the user's own note for the user's own review.
+        if capability in SYSTEM_ACTION_CAPABILITIES:
+            return await handler(request)
         if not capability or is_read_only_capability(capability):
             return await handler(request)
 
@@ -364,6 +325,16 @@ def make_trust_gate_middleware(
         # persisted. Reads bypass ABOVE, so a read never pays for this extra SELECT.
         existing = await _find_existing_approval(workspace_id, thread_id, tool_call_id, db_factory)
         if existing is not None:
+            # An absent turn never resumes, so this replay branch is unreachable for one in
+            # principle — but an un-branched interrupt() inside a gate is not a safety
+            # argument, it is a run that would suspend forever if it ever WERE reached.
+            if resolve_confirmation(presence) == "prepare":
+                return prepared_tool_message(
+                    name=name,
+                    tool_call_id=tool_call_id,
+                    approval_id=existing.approval_id,
+                    capability=capability,
+                )
             verdict = interrupt(
                 {
                     "approval_id": existing.approval_id,
@@ -402,12 +373,28 @@ def make_trust_gate_middleware(
             agent_name=agent_name,
             db_factory=db_factory,
             context_block=context_block,
+            tool_input=args,
+            agent_capability_scope=agent_capability_scope,
+            presence=presence,
         )
 
         # Auto-execute path (both auto_execute_notify and auto_execute_silent land here;
         # notification delivery is out of scope for this gate).
         if not require_approval:
             return await handler(request)
+
+        # PREPARE: the verdict says this write needs a human and none is on the turn. The
+        # Approval is ALREADY persisted above, so the action is recorded, reviewable, and
+        # replayable. Return a SUCCESS ToolMessage so the lead finishes the rest of the turn —
+        # a prepared write is staged, not failed. See confirmation.prepared_tool_message for
+        # why the status must not become "error".
+        if resolve_confirmation(presence) == "prepare":
+            return prepared_tool_message(
+                name=name,
+                tool_call_id=tool_call_id,
+                approval_id=approval_id,
+                capability=capability,
+            )
 
         # Suspend for approval. Called OUTSIDE any DB session/transaction. On resume the
         # gate body replays from the top; this returns the resume value instead of pausing.

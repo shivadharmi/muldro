@@ -12,6 +12,8 @@ import json
 import logging
 from functools import lru_cache
 
+from pydantic import ValidationError
+
 from src.models.tool_definitions import ToolBackend
 from src.orchestrator.agents import SubAgent
 from src.orchestrator.event_publisher import EventPublisher
@@ -23,6 +25,127 @@ logger = logging.getLogger(__name__)
 # supplied by Muldro (from auth/turn context), never invented by the LLM, so the
 # LLM-facing schemas in schemas.py deliberately omit them.
 _CONTEXT_ARGS = ("user_id", "workspace_id")
+
+# Pydantic v2 errors are verbose, and a malformed component tree yields one entry per bad
+# node plus a long `msg` naming every valid AnyComponent tag. Render only the first few and
+# say how many were dropped — the agent needs the first offending field, not the census.
+# (AnyComponent's `type` discriminator keeps an unknown tag to ONE error rather than one
+# per union member; the cap is for breadth of errors, not for union fan-out.)
+#
+# The per-error cap is sized off a MEASUREMENT, because the longest message is also the
+# most actionable one: an unknown component tag produces exactly one error whose `msg` is
+# 260 chars and lists all 17 valid AnyComponent tags. At the old 100-char cap the agent
+# was told three tags and then cut mid-word, destroying the one thing that lets it repair
+# the call. 280 = 260 measured + room for a few more component types.
+# The overall cap survives that intact: envelope (42) + loc (~12) + 260 + trailer (61) =
+# 375 for a single tag-list error, so 900 fits it whole with room for two neighbours,
+# while still bounding a broadly-malformed payload to ~225 tokens.
+_MAX_ARG_ERRORS_SHOWN = 3
+_MAX_ARG_ERROR_MSG_CHARS = 280
+_MAX_ARG_ERROR_CHARS = 900
+
+# Pydantic's string-length errors state the LIMIT but not the SIZE of what was sent, so
+# a model repairing one has to guess how much to cut. Measured live on 2026-08-20
+# (gpt-5-mini, a 120-char `subtitle` bound): 123 -> 141 -> 128 -> 109 chars. Attempt two
+# was WORSE than attempt one and the surface was lost one retry short of valid. Told
+# "at most 120 characters (got 141)" the cut is arithmetic instead of a guess.
+#
+# The set is an ALLOWLIST chosen by inspecting real `exc.errors()` output, because a
+# size is only signal where the message does not already carry it:
+#   * `too_long` / `too_short` (list, dict, set) ALREADY say the count in their own
+#     `msg` — "List should have at most 4 items after validation, not 5" — so annotating
+#     them would state one number twice and read as two facts;
+#   * `missing` has no value to measure;
+#   * `union_tag_invalid` / `literal_error` already enumerate the admissible values, and
+#     the unknown-component-tag message is the most actionable string in the system —
+#     adding to it would only crowd it against the caps below;
+#   * every `*_type` error is about the KIND of the value, which its size cannot fix;
+#   * `bytes_too_long` / `bytes_too_short` are unreachable — a JSON tool call cannot
+#     carry bytes, and no input model declares a bytes field.
+#
+# The caps above are unaffected and deliberately NOT retuned: the annotation is ~11
+# chars and can only ever attach to a string-length `msg` (~45 chars), never to the
+# 260-char tag list, so the "375 for a single tag-list error" arithmetic still holds.
+_SIZED_ERROR_TYPES = frozenset({"string_too_long", "string_too_short"})
+
+
+def _size_hint(err: dict) -> str:
+    """Return e.g. ``" (got 141)"`` for a length-bound error, or ``""``.
+
+    SECURITY: this deliberately renders only the SIZE of the offending value and NEVER
+    the value itself. The payloads reaching this function are user content (email
+    bodies, meeting notes, contact details) and the string it feeds is both returned
+    into the model's context and written to ``logger.warning`` — echoing the value
+    would put user content into the logs.
+    """
+    if err.get("type") not in _SIZED_ERROR_TYPES:
+        return ""
+    try:
+        # `input` may be ANY object: one with no `__len__`, or one whose `__len__`
+        # raises. A raise HERE escapes `_validate_tool_input`'s `except ValidationError`
+        # block and kills the turn, so an unmeasurable value simply gets no annotation.
+        return f" (got {len(err['input'])})"
+    except Exception:
+        return ""
+
+
+def _render_validation_error(tool_name: str, exc: ValidationError) -> str:
+    """Render a ValidationError as a short, actionable, agent-facing message.
+
+    Follows the house style of the missing-required-args return below: say what is
+    wrong AND what to do. This string is returned to the model as the tool result, so
+    it is the agent's only chance to repair the call — name the field, keep the reason.
+    """
+    errors = exc.errors()
+    parts = []
+    for err in errors[:_MAX_ARG_ERRORS_SHOWN]:
+        loc = ".".join(str(p) for p in err.get("loc", ())) or "(root)"
+        msg = str(err.get("msg", "invalid"))[:_MAX_ARG_ERROR_MSG_CHARS]
+        parts.append(f"{loc}: {msg}{_size_hint(err)}")
+    rendered = "; ".join(parts)
+    dropped = len(errors) - _MAX_ARG_ERRORS_SHOWN
+    if dropped > 0:
+        rendered += f" (+{dropped} more)"
+    message = (
+        f"Invalid argument(s) for '{tool_name}': {rendered}. "
+        "Fix them against the tool's schema and call the tool again."
+    )
+    return message[:_MAX_ARG_ERROR_CHARS]
+
+
+def _validate_tool_input(tool_name: str, tool_input: dict) -> str | None:
+    """Parse agent-supplied tool args against the tool's Pydantic input model.
+
+    Returns a rendered error string, or None when there is nothing to report.
+
+    Keyed on the MODEL's existence, not on the tool's backend. That covers internal
+    MCP tools plus the ``_special`` passthrough, and naturally skips external MCP and
+    composite tools (which have no model) with no backend branching — and it cannot
+    drift from the registry, because ``validate_registry()`` already fails startup if
+    an internal tool is missing from TOOL_INPUT_MODELS.
+    """
+    from src.tools.schemas import TOOL_INPUT_MODELS
+
+    model = TOOL_INPUT_MODELS.get(tool_name)
+    if model is None:
+        # No model → nothing to validate. External MCP tools are covered instead by
+        # _missing_required_args against their persisted JSON Schema; composite tools
+        # (web_search) are Muldro-internal and have neither.
+        return None
+    try:
+        model.model_validate(tool_input)
+    except ValidationError as exc:
+        return _render_validation_error(tool_name, exc)
+    except Exception:
+        # Fail OPEN — and this matters MORE now that the parse rejects, not less. A
+        # field_validator that raises something pydantic does not wrap (only
+        # ValueError/AssertionError become ValidationError) would escape execute_tool
+        # above its own try/except and kill the whole turn; failing open at worst lets
+        # through a call that used to work, while failing closed would turn one broken
+        # validator into a permanently blocked tool.
+        logger.exception("[toolargs] %s validation raised; treating as valid", tool_name)
+        return None
+    return None
 
 
 @lru_cache(maxsize=1)
@@ -106,12 +229,12 @@ class ToolExecutor:
         """
         tools = self._build_internal_tool_definitions()
 
-        # Composite web_search tool (uses Playwright MCP internally)
+        # Composite web_search tool (one HTTPS GET to DuckDuckGo's HTML endpoint)
         tools.append(
             {
                 "name": "web_search",
                 "description": (
-                    "Search the web using DuckDuckGo via a headless browser. "
+                    "Search the web using DuckDuckGo. "
                     "Returns structured results with titles, URLs, and snippets. "
                     "Use this when you need to find information on the web."
                 ),
@@ -273,7 +396,7 @@ class ToolExecutor:
     ) -> dict:
         """Dispatch composite tools (multi-MCP orchestration)."""
         if tool_name == "web_search":
-            from src.browser.web_search import web_search
+            from src.services.web_search import web_search
 
             return await web_search(
                 query=tool_input.get("query", ""),
@@ -344,6 +467,19 @@ class ToolExecutor:
         if not tool.enabled:
             logger.warning("[mcp] tool disabled: %s", tool_name)
             return {"error": f"Tool '{tool_name}' is disabled", "blocked": True}
+
+        # Typed-argument parse against TOOL_INPUT_MODELS, which until now was consulted
+        # only by startup registry validation and never at call time. It runs HERE — on
+        # the agent-supplied input, above the SPECIAL early-return and above
+        # _enrich_internal_input — because the context args (user_id / workspace_id) are
+        # deliberately absent from the LLM-facing models: validating after injection
+        # would flag every internal call. A failing parse REJECTS: the error goes back to
+        # the model as the tool result (agents self-correct on tool errors), which is what
+        # the prose constraints in prompts.py could not enforce on their own.
+        arg_error = _validate_tool_input(tool_name, tool_input)
+        if arg_error:
+            logger.warning("[toolargs] %s rejected: %s", tool_name, arg_error)
+            return {"error": arg_error, "error_code": "invalid_tool_args"}
 
         # Resolve the stored backend string to the typed dispatch discriminator.
         # An unrecognized value (e.g. a future or garbled backend) coerces to None

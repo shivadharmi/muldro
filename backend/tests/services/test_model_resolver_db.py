@@ -157,6 +157,10 @@ async def test_resolved_model_id_none_when_no_binding():
 async def test_missing_credential_raises(monkeypatch):
     key = Fernet.generate_key().decode()
     monkeypatch.setattr(secret_crypto, "_config_key", lambda: key)
+    # No openai env fallback, or the provider resolves as configured and never raises.
+    # `resolve_credential` falls back to settings, so a developer with
+    # MULDRO_OPENAI_API_KEY set would otherwise turn this test green-by-accident.
+    monkeypatch.setattr(get_settings(), "openai_api_key", "", raising=False)
     async with _session() as db:
         ws = await _seed_workspace(db)
         db.add(

@@ -55,6 +55,30 @@ SURFACE_RATE_LIMITS: dict[str, int] = {
     "email": 3,
 }
 
+# Types urgent enough to skip the priority + rate-limit filters.
+BYPASS_FILTER_TYPES = ("approval_request", "critical_alert", "auto_execute_notify")
+# Types delivered to ALL active surfaces rather than only the preferred one.
+BROADCAST_TYPES = ("approval_request", "critical_alert")
+
+
+def bypasses_delivery_filters(notification_type: str) -> bool:
+    """True iff this type skips the priority + rate-limit filters."""
+    return notification_type in BYPASS_FILTER_TYPES
+
+
+# A surface result that means the notification did NOT reach the user. Delivery is
+# asserted POSITIVELY (an explicit non-failure status), never assumed from the absence
+# of an exception: ``_deliver`` swallows transport errors into a status dict, so
+# "nothing raised" is not evidence that anything arrived.
+_UNDELIVERED_STATUSES = frozenset({"error", "skipped", "unsupported_surface"})
+
+
+def _surface_took_it(result: dict | None) -> bool:
+    """True iff a surface actually accepted the notification."""
+    if not isinstance(result, dict):
+        return False
+    return result.get("status") not in _UNDELIVERED_STATUSES
+
 
 class Notifier:
     """Coordinates notification delivery across surfaces with persistence."""
@@ -92,6 +116,68 @@ class Notifier:
                 await self._redis.expire(key, 86400)  # 24h TTL
             except Exception:
                 logger.debug("Failed to hold notification for briefing", exc_info=True)
+
+    async def deliver_existing(self, record) -> dict:
+        """Re-attempt delivery of an ALREADY-PERSISTED notification row.
+
+        ``notify()`` is the wrong tool for a retry: it inserts a NEW row every call,
+        so retrying an approval request for an offline user accumulated one duplicate
+        per scheduler tick while the original stayed ``pending`` forever. This
+        delivers the SAME row and persists nothing.
+
+        Returns ``{"status": ...}`` where the status is one of:
+
+        * ``sent``   — at least one surface accepted it (the ONLY status that may be
+          recorded as delivered);
+        * ``queued`` — no surface was reachable; the row stays retryable;
+        * ``failed`` — every surface refused; the row stays retryable.
+
+        Deliberately skips the priority and rate-limit filters. Those decide whether
+        to notify AT ALL, and that decision was already made (and persisted) on the
+        first attempt; re-applying them here would let a rate limit silently discard a
+        pending approval rather than defer it.
+        """
+        notification = Notification(
+            notification_id=record.notification_id,
+            user_id=record.user_id,
+            type=record.channel,
+            title=record.title,
+            body=record.body or "",
+            data=dict(record.payload_json or {}),
+            created_at=record.created_at.isoformat() if record.created_at else "",
+        )
+
+        surfaces = await self._registry.get_active_surfaces(record.user_id)
+        if not surfaces:
+            return {"status": "queued", "surfaces": []}
+
+        if record.channel not in BROADCAST_TYPES:
+            preferred = await self._registry.get_preferred_surface(record.user_id)
+            if not preferred:
+                return {"status": "queued", "surfaces": []}
+            surfaces = [preferred]
+
+        delivered: list[str] = []
+        for surface in surfaces:
+            try:
+                result = await self._deliver(surface, notification)
+            except Exception:
+                logger.debug(
+                    "Re-delivery to %s failed for %s",
+                    surface,
+                    record.notification_id,
+                    exc_info=True,
+                )
+                continue
+            if _surface_took_it(result):
+                delivered.append(surface)
+
+        if not delivered:
+            return {"status": "failed", "surfaces": []}
+
+        for surface in delivered:
+            await self._mark_delivered(record.notification_id, surface)
+        return {"status": "sent", "surfaces": delivered}
 
     async def _check_rate_limit(self, user_id: str, surface: str) -> bool:
         """Check if a notification can be sent to this surface within rate limits.
@@ -177,6 +263,7 @@ class Notifier:
                 logger.debug("Workspace validation skipped", exc_info=True)
 
         # Persist to DB if available
+        notif_record = None
         if self._db:
             try:
                 from src.models.notifications import Notification as NotifModel
@@ -196,12 +283,9 @@ class Notifier:
                 await self._db.flush()
             except Exception:
                 logger.warning("Failed to persist notification", exc_info=True)
+                notif_record = None
 
-        # Types that bypass priority/rate-limit filters
-        _bypass_filter = ("approval_request", "critical_alert", "auto_execute_notify")
-        # Types that deliver to ALL surfaces (not just preferred)
-        _broadcast_types = ("approval_request", "critical_alert")
-        if notification_type not in _bypass_filter:
+        if not bypasses_delivery_filters(notification_type):
             if priority < 0.3:
                 logger.info(
                     "notification_silent",
@@ -225,7 +309,7 @@ class Notifier:
             return {"status": "queued", "surfaces": []}
 
         # Rate-limit filtering: remove surfaces that are over their hourly cap
-        if notification_type not in _bypass_filter:
+        if not bypasses_delivery_filters(notification_type):
             allowed_surfaces = []
             for surface in surfaces:
                 if await self._check_rate_limit(user_id, surface):
@@ -237,7 +321,7 @@ class Notifier:
 
         results = {}
 
-        if notification_type in _broadcast_types:
+        if notification_type in BROADCAST_TYPES:
             # Send to ALL active surfaces
             for surface in surfaces:
                 result = await self._deliver(surface, notification)
@@ -250,6 +334,14 @@ class Notifier:
                 results[preferred] = result
                 # Mark as delivered so other surfaces can pull on demand
                 await self._mark_delivered(notification.notification_id, preferred)
+
+        # Record delivery on the PERSISTED row. Without this the row stays ``pending``
+        # even after a successful push, so nothing downstream can tell a delivered
+        # notification from one that never reached anybody — and the retry tick cannot
+        # know what still needs retrying.
+        if notif_record is not None and any(_surface_took_it(r) for r in results.values()):
+            notif_record.status = "sent"
+            notif_record.sent_at = datetime.now(timezone.utc)
 
         logger.info(
             "notification_sent",

@@ -379,6 +379,7 @@ async def _call_build(invoker):
         thread_id="t1",
         authorization_source="direct_user_request",
         system_prompt="sys",
+        presence="absent",
     )
 
 
@@ -401,9 +402,9 @@ async def test_wiring_flag_on_prepends_critique():
 
     mw_tuple = mock_build.call_args.kwargs["extra_middleware"]
     assert mw_tuple[0] is sentinel  # PREPENDED — outermost
-    # 7C: base chain grew to 7 (governor, unavailable, gate, write_lock, dispatcher, librarian,
-    # budget); critique prepend → 8.
-    assert len(mw_tuple) == 8
+    # R3a: base chain is 8 (governor, unavailable, gate, write_lock, repair_cap, dispatcher,
+    # librarian, budget); critique prepend → 9.
+    assert len(mw_tuple) == 9
 
 
 async def test_wiring_flag_off_no_critique_prepend():
@@ -417,5 +418,6 @@ async def test_wiring_flag_off_no_critique_prepend():
 
     mock_factory.assert_not_called()  # never built when the flag is off
     mw_tuple = mock_build.call_args.kwargs["extra_middleware"]
-    # 7C base chain: governor, unavailable, gate, write_lock, dispatcher, librarian, budget.
-    assert len(mw_tuple) == 7  # no critique prepend when the delegates flag is off
+    # R3a base chain: governor, unavailable, gate, write_lock, repair_cap, dispatcher,
+    # librarian, budget.
+    assert len(mw_tuple) == 8  # no critique prepend when the delegates flag is off

@@ -392,7 +392,7 @@ than hand-editing it if the registry changes:
 | `gmail_get_message` | `email.read` | low | |
 | `gmail_list_threads` | `email.list` | low | |
 | `gmail_list_labels` | `email.list` | low | |
-| `gmail_send_email` | `email.send` | high | **write** — requires approval (TrustEngine gate on the autonomous path, `permission_gate` on chat once `deep_single_lead` is on; `capability_scope` enforces the boundary either way, see CLAUDE.md "Trust Infrastructure & Approval") |
+| `gmail_send_email` | `email.send` | high | **write** — gated (TrustEngine on the autonomous path, `permission_gate` on chat; `capability_scope` enforces the boundary either way, and with no human on the turn the write is *prepared* rather than executed — see CLAUDE.md "Trust Infrastructure & Approval") |
 | `googlecalendar_list_calendars` | `calendar.list` | low | |
 | `googlecalendar_list_events` | `calendar.list` | low | |
 | `googlecalendar_get_event` | `calendar.get` | low | |

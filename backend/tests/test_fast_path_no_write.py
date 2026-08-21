@@ -44,6 +44,34 @@ def test_predicate_classifies_writes_and_unknowns_as_write_fail_closed():
     assert _fast_step_is_write("respond") is False
     assert _fast_step_is_write("reason") is False
     assert _fast_step_is_write("knowledge.search") is False
+
+
+def test_memory_persistence_is_exempt_but_outbound_writes_are_not():
+    """`knowledge.remember` is exempt; nothing outbound gains the same pass.
+
+    The fence stops the INTENT CLASSIFIER — a Haiku call over ten fixed intents — from
+    being what authorizes a write. `knowledge.remember` authorizes only
+    `internal.store_memory` / `internal.store_preference`: internal, workspace-scoped,
+    reversible and asked for in the user's own words. That is the memory analogue of
+    `SYSTEM_ACTION_CAPABILITIES`, which the chat write gates already exempt for the same
+    reason. Every call still crosses the full middleware chain.
+
+    Teeth: the exemption must not have widened to anything that leaves the workspace.
+    """
+    from src.orchestrator.chat_processor import _FAST_SAFE_CAPABILITIES
+
+    assert _fast_step_is_write("knowledge.remember") is False
+    for outbound in ("email.send", "calendar.create", "messaging.send", "repo.create_pr"):
+        assert outbound not in _FAST_SAFE_CAPABILITIES
+        assert _fast_step_is_write(outbound) is True
+
+
+def test_knowledge_remember_grants_no_outbound_capability():
+    """Teeth on the scope itself, not just the name: whatever `knowledge.remember` expands
+    to must stay inside the workspace."""
+    from src.orchestrator.lead_builder import KNOWLEDGE_REMEMBER_CAPABILITIES
+
+    assert all(c.startswith("internal.") for c in KNOWLEDGE_REMEMBER_CAPABILITIES)
     # cataloged read-only stays a non-write:
     from src.integrations.capabilities import CAPABILITY_CATALOG, is_read_only_capability
 
@@ -59,15 +87,14 @@ def _make_chat() -> object:
     """Build a ChatProcessor with every collaborator mocked (golden-test pattern).
 
     ``call_agent_stream`` records the ``(agent_name, message)`` pairs so the test can assert
-    which agent path ran; it yields a minimal ``agent_done`` frame for every agent.
+    which agent path ran; it yields a minimal ``agent_done`` frame for every agent. The lead
+    (``stream_deep_lead``) records under the name ``"lead"``.
     """
     from src.orchestrator.chat_processor import ChatProcessor
 
     chat = ChatProcessor.__new__(ChatProcessor)
 
-    # deep_single_lead=False (explicit) → the P2.3 effective-mode resolution short-circuits
-    # on the cheap flag; the diverted turn runs the legacy path to completion.
-    chat._settings = make_mock_settings(deep_single_lead=False)
+    chat._settings = make_mock_settings()
 
     trace = MagicMock()
     trace.trace_id = "trace_fence"
@@ -89,6 +116,7 @@ def _make_chat() -> object:
 
     chat._context = MagicMock()
     chat._context.load_conversation_history = AsyncMock(return_value="")
+    chat._context.assemble_context = AsyncMock(return_value="")
 
     chat._perception = MagicMock()
     chat._perception._bump_perception_for_sources = AsyncMock()
@@ -115,8 +143,16 @@ def _make_chat() -> object:
         yield {"event": "agent_start", "agent": agent_name, "model": "m"}
         yield {"event": "agent_done", "agent": agent_name, "text": "ok"}
 
+    async def _stream_deep_lead(lead, tools=None, **kw):
+        recorded.append(("lead", kw.get("message", "")))
+        yield {"event": "agent_start", "agent": "lead", "model": "m"}
+        yield {"event": "agent_done", "agent": "lead", "text": "ok"}
+
     chat._invoker = MagicMock()
     chat._invoker.call_agent_stream = _call_agent_stream
+    chat._invoker.build_chat_lead = AsyncMock(return_value=MagicMock(name="lead"))
+    chat._invoker.stream_deep_lead = _stream_deep_lead
+    chat._invoker.has_durable_checkpointer = MagicMock(return_value=True)
     chat._recorded = recorded  # convenience handle for assertions
     return chat
 
@@ -158,7 +194,7 @@ async def test_write_emitting_fast_intent_diverts_to_planner():
         patch(f"{_MOD}.classify_intent", new=AsyncMock(return_value=(fast, 0.95, []))),
         patch(f"{_MOD}.intent_to_plan", new=MagicMock(return_value=write_plan)),
         patch(f"{_MOD}.extract_plan", new=MagicMock(return_value=planner_plan)),
-        patch(f"{_MOD}.resolve_plan_routing", new=AsyncMock(return_value=([], []))),
+        patch(f"{_MOD}.resolve_plan_routing", new=MagicMock(return_value=[])),
     ):
         await _drive(chat)
 

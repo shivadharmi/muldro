@@ -89,9 +89,6 @@ def make_mock_settings(**overrides) -> MagicMock:
         # Step 8: an unset MagicMock bool is truthy, which would route every
         # runtime="deep" test through the slim JIT pack. Default OFF to mirror prod.
         deep_context_jit=False,
-        # Step 10D A-5: MagicMock unset bool is truthy — would flip the single-lead path ON
-        # for every runtime="deep" test. Mirror the real Settings default (False).
-        deep_single_lead=False,
         # Step 10D P2.5c: MagicMock unset bool is truthy — would flip the planless reroute ON
         # for every test, firing the early planless gate in _process_core and skipping the
         # Planner. Mirror the real Settings default (False) so the flag-off path stays exercised.
@@ -226,3 +223,59 @@ def iter_app_routes(routes, _prefix=""):
         path = getattr(r, "path", None)
         if path is not None:
             yield _prefix + path, r
+
+
+_NO_VALUE = object()
+
+
+def _clause_matches(row, clause) -> bool:
+    """Evaluate one compiled WHERE clause against an in-memory row.
+
+    Walks the real ``BinaryExpression`` tree rather than reading bind-parameter names, so
+    the operator is honoured too -- ``approval_type != 'prepared_action'`` and
+    ``approval_type == 'prepared_action'`` compile to the SAME bind name and are only
+    distinguishable this way.
+
+    Raises rather than guessing: a double that silently accepts a clause it cannot evaluate
+    is exactly the blind double this helper exists to replace.
+    """
+    from sqlalchemy.sql.elements import BinaryExpression, BooleanClauseList
+
+    if isinstance(clause, BooleanClauseList):
+        return all(_clause_matches(row, c) for c in clause.clauses)
+    if not isinstance(clause, BinaryExpression):
+        raise AssertionError(f"filtering db cannot evaluate WHERE clause: {clause!r}")
+
+    column = getattr(clause.left, "key", None)
+    value = getattr(clause.right, "value", _NO_VALUE)
+    if column is None or value is _NO_VALUE:
+        raise AssertionError(f"filtering db cannot evaluate WHERE clause: {clause!r}")
+    return bool(clause.operator(getattr(row, column), value))
+
+
+def make_filtering_db(rows: list):
+    """An ``AsyncSession`` double whose ``execute`` actually applies the statement's WHERE.
+
+    A mock that returns its rows regardless of the query cannot tell a correctly-scoped
+    statement from an unscoped one, so every filter the production code applies is invisible
+    to the test: delete ``status == "pending"`` from a query and the suite stays green.
+
+    This double filters ``rows`` in Python using the statement's own WHERE clause, so
+    dropping a filter changes what the test sees. Both result shapes are populated:
+    ``.scalars().all()`` for entity selects and ``.scalar()`` for ``func.count()`` selects.
+
+    It is an ``AsyncMock``, so call assertions (``execute.assert_not_awaited()``) still work.
+    """
+    from unittest.mock import AsyncMock
+
+    async def _execute(stmt):
+        whereclause = stmt.whereclause
+        matched = [row for row in rows if whereclause is None or _clause_matches(row, whereclause)]
+        result = MagicMock()
+        result.scalars.return_value.all.return_value = matched
+        result.scalar.return_value = len(matched)
+        return result
+
+    db = AsyncMock()
+    db.execute = AsyncMock(side_effect=_execute)
+    return db

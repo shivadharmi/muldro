@@ -15,7 +15,7 @@ Responsibilities:
 import logging
 from datetime import date, datetime, timedelta, timezone
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from ulid import ULID
 
@@ -333,6 +333,16 @@ class Presenter:
                 f"## Pending Approvals ({len(approvals)})\n" + "\n".join(approval_lines)
             )
 
+        prepared_count = await self._count_prepared_actions(user_id, workspace_id=workspace_id)
+        if prepared_count:
+            # ONE line. The prepared-work queue is where these are acted on; the briefing
+            # points at it and never re-asks. Deliberately no per-item detail and no payload —
+            # two places to act on one decision is the notification machine, not a second mind.
+            noun = "action" if prepared_count == 1 else "actions"
+            sections.append(
+                f"{prepared_count} {noun} prepared for review — see the prepared-work queue."
+            )
+
         return "\n\n".join(sections)
 
     async def _build_connection_section(self, user_id: str, workspace_id: str) -> str:
@@ -398,17 +408,43 @@ class Presenter:
         return list(result.scalars().all())
 
     async def _get_pending_approvals(self, user_id: str, workspace_id: str = "") -> list[Approval]:
+        # Function-local like the other prepared-work queries: ``approval_persistence`` imports
+        # back into ``src.services``, so the constant is pulled in at call time, not import time.
+        from src.deep_runtime.middleware.approval_persistence import PREPARED_APPROVAL_TYPE
+
         result = await self._db.execute(
             select(Approval)
             .where(
                 Approval.user_id == user_id,
                 Approval.workspace_id == workspace_id,
                 Approval.status == "pending",
+                # Prepared work is pending too, but it belongs to the review queue, not here.
+                # Without this it would be rendered per item ("Approve: <capability>" + risk)
+                # into both the briefing context and Briefing.pending_approvals — a second
+                # place to act on the same decision, which is the one thing this design
+                # forbids. The briefing gets exactly one pointer line instead (below).
+                Approval.approval_type != PREPARED_APPROVAL_TYPE,
             )
             .order_by(Approval.created_at.desc())
             .limit(10)
         )
         return list(result.scalars().all())
+
+    async def _count_prepared_actions(self, user_id: str, workspace_id: str = "") -> int:
+        """Count pending prepared actions for the briefing's one pointer line."""
+        from src.deep_runtime.middleware.approval_persistence import PREPARED_APPROVAL_TYPE
+
+        result = await self._db.execute(
+            select(func.count())
+            .select_from(Approval)
+            .where(
+                Approval.user_id == user_id,
+                Approval.workspace_id == workspace_id,
+                Approval.status == "pending",
+                Approval.approval_type == PREPARED_APPROVAL_TYPE,
+            )
+        )
+        return int(result.scalar() or 0)
 
     async def _get_upcoming_meetings(
         self, user_id: str, limit: int = 10, workspace_id: str = ""
@@ -626,6 +662,14 @@ class Presenter:
 
     async def _call_meeting_prep(self, context: str, workspace_id: str = "") -> dict:
         """Call Claude to generate meeting prep content."""
+        fallback = {
+            "agenda": [],
+            "attendee_briefs": [],
+            "related_threads": [],
+            "action_items": [],
+            "risks": ["Meeting prep generation failed."],
+            "talking_points": [],
+        }
         try:
             text = await complete_text(
                 system=MEETING_PREP_SYSTEM_PROMPT,
@@ -634,25 +678,27 @@ class Presenter:
                 max_tokens=2048,
                 workspace_id=workspace_id,
             )
-            from src.llm_utils import parse_llm_json
-
-            return parse_llm_json(text)
         except Exception:
             logger.warning("Meeting prep generation failed", exc_info=True)
-            return {
-                "agenda": [],
-                "attendee_briefs": [],
-                "related_threads": [],
-                "action_items": [],
-                "risks": ["Meeting prep generation failed."],
-                "talking_points": [],
-            }
+            return fallback
+        # `parse_llm_object`, not `parse_llm_json`: a JSON ARRAY is a SUCCESSFUL parse and
+        # would escape the handler above to a caller that does `.get()`.
+        from src.llm_utils import parse_llm_object
+
+        return parse_llm_object(text, default=fallback)
 
     async def _call_claude(
         self, context: str, style: str = "general", workspace_id: str = ""
     ) -> dict:
         """Call Claude to generate briefing content."""
         system_prompt = BRIEFING_STYLE_PROMPTS.get(style, BRIEFING_SYSTEM_PROMPT)
+        fallback = {
+            "headline": "Unable to generate briefing",
+            "top_priorities": [],
+            "changes_since_last": [],
+            "recommended_actions": ["Check system logs — briefing generation failed."],
+            "full_text": "Muldro was unable to generate today's briefing. Please check the system.",
+        }
         try:
             text = await complete_text(
                 system=system_prompt,
@@ -661,16 +707,13 @@ class Presenter:
                 max_tokens=2048,
                 workspace_id=workspace_id,
             )
-            from src.llm_utils import parse_llm_json
-
-            return parse_llm_json(text)
         except Exception:
             logger.warning("Briefing generation failed", exc_info=True)
-            return {
-                "headline": "Unable to generate briefing",
-                "top_priorities": [],
-                "changes_since_last": [],
-                "recommended_actions": ["Check system logs — briefing generation failed."],
-                "full_text": "Muldro was unable to generate today's briefing. "
-                "Please check the system.",
-            }
+            return fallback
+        # `parse_llm_object`, not `parse_llm_json`: the latter is typed `dict | list` and a
+        # model that answers with a JSON ARRAY parses SUCCESSFULLY, escaping the handler
+        # above to `generate_briefing`'s `.get()` as `AttributeError: 'list' object has no
+        # attribute 'get'`. This fallback exists for exactly that outcome; let it fire.
+        from src.llm_utils import parse_llm_object
+
+        return parse_llm_object(text, default=fallback)

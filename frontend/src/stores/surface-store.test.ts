@@ -114,3 +114,16 @@ test("updateSurface is a no-op for an unknown surface id", () => {
 
   expect(useSurfaceStore.getState().surfaces[0].phase).toBeUndefined();
 });
+
+test("closeDetailModal drops the active surface so the modal unmounts with its tab cache", () => {
+  const store = useSurfaceStore.getState();
+  store.openDetailModal("prepared_work_ws_test");
+  expect(useSurfaceStore.getState().activeSurfaceId).toBe("prepared_work_ws_test");
+
+  store.closeDetailModal();
+
+  // Both must clear: `prepared_work_{workspace_id}` is a standing singleton, so a surviving
+  // activeSurfaceId keeps the modal mounted and its fetched detail cached across opens.
+  expect(useSurfaceStore.getState().detailModalOpen).toBe(false);
+  expect(useSurfaceStore.getState().activeSurfaceId).toBeNull();
+});

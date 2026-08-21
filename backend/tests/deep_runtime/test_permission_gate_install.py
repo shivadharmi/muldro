@@ -75,6 +75,7 @@ async def _capture_middleware(*, permission_mode):
             authorization_source="direct_user_request",
             system_prompt="sys",
             permission_mode=permission_mode,
+            presence="absent",
         )
     mw = bda.call_args.kwargs["extra_middleware"]
     return mw, trust_sentinel, perm_sentinel, make_perm
@@ -120,9 +121,17 @@ async def test_auto_inserts_permission_gate_immediately_after_trust_gate():
     assert mw[idx + 1] is perm_sentinel
 
 
-async def test_permission_gate_built_with_mode_and_lead_scope():
+async def test_permission_gate_built_with_mode_and_acting_agent_scope():
     """The gate is built with the runtime permission_mode + the agent's capability_scope as
-    lead_scope, plus the turn's identity (never LLM-supplied)."""
+    acting_agent_scope, plus the turn's identity (never LLM-supplied).
+
+    The scope assertion is the load-bearing one. That value is snapshotted onto any prepared
+    Approval and is what ``prepared_actions`` replays the recorded call against, so binding it
+    to anything wider than the ACTING agent — the plan's capability union, say, which is what
+    the old ``lead_scope`` parameter name invited — would retroactively widen the authority a
+    staged write is confirmed under. The two-key split on the Approval does not defend against
+    that: both keys are written from this one argument.
+    """
     inv = _make_invoker()
     agent = _agent()
 
@@ -141,11 +150,12 @@ async def test_permission_gate_built_with_mode_and_lead_scope():
             system_prompt="sys",
             context_block="CTX",
             permission_mode="auto",
+            presence="absent",
         )
 
     kwargs = make_perm.call_args.kwargs
     assert kwargs["permission_mode"] == "auto"
-    assert kwargs["lead_scope"] == agent.capability_scope
+    assert kwargs["acting_agent_scope"] == agent.capability_scope
     assert kwargs["workspace_id"] == "ws"
     assert kwargs["user_id"] == "u"
     assert kwargs["thread_id"] == "th"

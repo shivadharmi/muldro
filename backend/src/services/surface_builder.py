@@ -27,6 +27,10 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Rows the grid card counts. Matches the queue tab's own limit so the card never
+# promises more than the tab renders; a bigger number shows as "N+".
+PREPARED_QUEUE_CARD_LIMIT = 25
+
 
 class SurfaceService:
     """Builds workspace surfaces from current DB state."""
@@ -52,6 +56,13 @@ class SurfaceService:
             surfaces.append(briefing)
 
         surfaces.extend(await self._build_insight_surfaces(user_id))
+
+        # The standing review queue. Returns None when nothing is prepared, so an empty
+        # queue is ABSENT from the workspace rather than a card announcing idleness.
+        prepared = await self._build_prepared_work_surface(user_id)
+        if prepared:
+            surfaces.append(prepared)
+
         surfaces.extend(await self._build_alert_surfaces())
         surfaces.extend(await self._build_recommendation_surfaces())
         surfaces.extend(await self._load_persisted_surfaces(user_id))
@@ -385,6 +396,69 @@ class SurfaceService:
             )
 
         return surfaces
+
+    async def _build_prepared_work_surface(self, user_id: str) -> WorkspaceSurfacePush | None:
+        """Build the standing ``prepared_work`` card, or None when nothing is waiting.
+
+        Since the legacy chat arm was deleted, scheduled automation's risky writes are live
+        prepared work: ``schedule_dispatch`` and the WS surface-action fallback run with
+        ``presence="absent"``, so an irreversible / external-blast-radius / high-risk write
+        stages as an ``Approval`` instead of executing. This card is how the founder finds
+        them; the ``queue`` detail tab is the only place they can be acted on.
+
+        Scoped by BOTH the service's ``workspace_id`` and ``user_id`` — a prepared row is
+        one person's decision inside one workspace, and the card's count must not include
+        rows the founder cannot see from here.
+        """
+        from src.deep_runtime.middleware.approval_persistence import PREPARED_APPROVAL_TYPE
+        from src.models.approvals import Approval
+
+        result = await self._db.execute(
+            select(Approval)
+            .where(
+                Approval.workspace_id == self._workspace_id,
+                Approval.user_id == user_id,
+                Approval.approval_type == PREPARED_APPROVAL_TYPE,
+                Approval.status == "pending",
+            )
+            .order_by(Approval.created_at.desc())
+            .limit(PREPARED_QUEUE_CARD_LIMIT)
+        )
+        rows = list(result.scalars().all())
+        if not rows:
+            return None
+
+        count = len(rows)
+        noun = "action" if count == 1 else "actions"
+        capped = "+" if count >= PREPARED_QUEUE_CARD_LIMIT else ""
+        subtitle = (
+            f"{count}{capped} {noun} prepared while you were away. "
+            "Nothing has run — each one is waiting for your decision."
+        )
+
+        risks = {(a.risk_level or "medium") for a in rows}
+        ladder = ("critical", "high", "medium", "low")
+        priority = next((lvl for lvl in ladder if lvl in risks), None)
+
+        newest = rows[0]
+        surface_id = f"prepared_work_{self._workspace_id}"
+        preview = SurfacePreview(
+            title="Prepared for your review",
+            subtitle=subtitle,
+            status="awaiting_approval",
+            priority=priority,
+            updated_at=newest.created_at,
+            tags=["prepared"],
+        )
+        detail_config = build_detail_config("prepared_work", surface_id)
+
+        return WorkspaceSurfacePush(
+            id=surface_id,
+            kind="prepared_work",
+            preview=preview.model_dump(mode="json"),
+            detail_config=detail_config.model_dump(mode="json") if detail_config else None,
+            created_at=newest.created_at.isoformat() if newest.created_at else "",
+        )
 
     async def _build_recommendation_surfaces(self) -> list[WorkspaceSurfacePush]:
         actions: list[dict] = []

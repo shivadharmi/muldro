@@ -18,6 +18,7 @@ if TYPE_CHECKING:
 from src.config.model_catalog import default_model_id_for_tier
 from src.config.settings import Settings
 from src.contracts import PlanOutput, PlanStep
+from src.deep_runtime.authorization import AuthorizationSource
 from src.errors import (
     classify,
     new_correlation_id,
@@ -355,8 +356,17 @@ class MuldroOrchestrator:
         context: dict | None = None,
         mode: str = "plan",
         permission_mode: str = "auto",
+        authorization_source: str = AuthorizationSource.DIRECT_USER_REQUEST,
     ) -> dict:
-        """Facade -> ChatProcessor.process_message (batch chat entry point)."""
+        """Facade -> ChatProcessor.process_message (batch chat entry point).
+
+        THIS is the object every production caller holds — the scheduler's dispatch actions
+        and the WS action fallback call ``process_message`` on the orchestrator, never on
+        ``ChatProcessor`` directly. So a parameter that exists on ``ChatProcessor`` but not
+        here is not merely unforwarded: it is a ``TypeError`` at the call site. Keep this
+        signature in lockstep with ``ChatProcessor.process_message``
+        (``test_autonomous_provenance`` pins the parity).
+        """
         return await self._chat.process_message(
             message,
             user_id,
@@ -366,6 +376,7 @@ class MuldroOrchestrator:
             context=context,
             mode=mode,
             permission_mode=permission_mode,
+            authorization_source=authorization_source,
         )
 
     def process_message_events(
@@ -440,7 +451,6 @@ class MuldroOrchestrator:
         message: str,
         user_id: str,
         trace=None,
-        max_tool_rounds: int = 10,
         workspace_id: str = "",
         capability_summary: str = "",
         tools_override: list[dict] | None = None,
@@ -451,7 +461,6 @@ class MuldroOrchestrator:
             message,
             user_id,
             trace=trace,
-            max_tool_rounds=max_tool_rounds,
             workspace_id=workspace_id,
             capability_summary=capability_summary,
             tools_override=tools_override,
@@ -849,7 +858,6 @@ class MuldroOrchestrator:
         message: str,
         user_id: str,
         trace=None,
-        max_tool_rounds: int = 10,
         workspace_id: str = "",
         capability_summary: str = "",
         tools_override: list[dict] | None = None,
@@ -860,7 +868,6 @@ class MuldroOrchestrator:
             message,
             user_id,
             trace=trace,
-            max_tool_rounds=max_tool_rounds,
             workspace_id=workspace_id,
             capability_summary=capability_summary,
             tools_override=tools_override,

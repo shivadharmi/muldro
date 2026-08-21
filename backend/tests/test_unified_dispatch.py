@@ -52,7 +52,7 @@ class TestCallCompositeTool:
     @pytest.mark.asyncio
     async def test_composite_web_search(self, orchestrator):
         """web_search dispatches to the web_search module."""
-        with patch("src.browser.web_search.web_search", new_callable=AsyncMock) as mock_ws:
+        with patch("src.services.web_search.web_search", new_callable=AsyncMock) as mock_ws:
             mock_ws.return_value = {"results": [{"title": "test", "url": "http://example.com"}]}
             result = await orchestrator._tool_executor.call_composite_tool(
                 "web_search", {"query": "test"}, user_id="usr_1", workspace_id="ws_1"
@@ -183,7 +183,16 @@ class TestExecuteTool:
             db_ctx.__aexit__ = AsyncMock(return_value=False)
             orchestrator._db_factory = MagicMock(return_value=db_ctx)
 
-            input_data = {"verdict": "approved", "reasoning": "low risk"}
+            # Valid against ReportGovernorVerdictInput (schemas.py). The old fixture
+            # ({"verdict": "approved", "reasoning": "low risk"}) never was — "approved"
+            # is not one of the three verdicts, risk_level/justification are required,
+            # and "reasoning" is not a field. Nothing caught it until the dispatcher
+            # started parsing tool args against their typed model.
+            input_data = {
+                "verdict": "auto_execute",
+                "risk_level": "low",
+                "justification": "Read-only lookup, no external side effects.",
+            }
             result = await orchestrator._tool_executor.execute_tool(
                 "report_governor_verdict", input_data, "usr_1", "ws_1"
             )

@@ -28,3 +28,42 @@ DEEPAGENTS_BUILTIN_NAMES: frozenset[str] = frozenset(
         "task",
     }
 )
+
+
+# The subset of the built-ins backed by deepagents' VIRTUAL, per-thread filesystem. Muldro
+# has no filesystem feature, so offering these is offering a place to "save" things that
+# vanishes at end of thread: the model reports success over a write that never happened.
+# Suppressed from every model request by ``make_no_virtual_filesystem_middleware``.
+#
+# NOT suppressed, and deliberately: ``task`` (how a lead reaches a delegate subagent, gated
+# by name in governor_delegate_critique) and ``write_todos`` (an internal planning
+# scratchpad with no data to lose).
+#
+# These names are still in DEEPAGENTS_BUILTIN_NAMES and still exempt from every gate — the
+# middlewares are unchanged. Suppression removes them from what the model is OFFERED; it
+# does not change how a call to one would be handled.
+VIRTUAL_FILESYSTEM_TOOL_NAMES: frozenset[str] = frozenset(
+    {
+        "ls",
+        "read_file",
+        "write_file",
+        "edit_file",
+        "glob",
+        "grep",
+        "execute",
+    }
+)
+
+
+# deepagents' delegation tool. Offered ONLY when a Muldro delegate is actually registered
+# via ``create_deep_agent(subagents=...)``.
+#
+# With no delegate — the live default, since ``deep_delegates_enabled`` is False —
+# deepagents auto-adds its OWN ``general-purpose`` subagent, hands it ``"tools": _tools or
+# []`` (Muldro's inert shells) and a middleware list containing NONE of Muldro's: no
+# capability_scope, no dispatcher, no gates, and not the suppressor either. So ``task``
+# there advertises an agent Muldro never meant to exist, holding shells whose bodies are
+# tripwire AssertionErrors, with its own unfiltered filesystem. Its tool description is
+# several hundred words about that agent, which is what the observed trial that "narrated
+# the task tool's documentation" was reading from.
+DELEGATION_TOOL_NAME = "task"

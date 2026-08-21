@@ -4,6 +4,7 @@ import logging
 
 from sqlalchemy import select
 
+from src.deep_runtime.authorization import AuthorizationSource
 from src.models.database import get_session_factory
 from src.models.schedules import Schedule
 from src.services.heartbeat import HeartbeatService
@@ -82,6 +83,7 @@ class ScheduleDispatchMixin:
                     user_id=sched.user_id,
                     workspace_id=workspace_id,
                     surface="scheduler",
+                    authorization_source=AuthorizationSource.AUTONOMOUS,
                 )
             else:
                 raise RuntimeError("Orchestrator required for meeting_prep")
@@ -137,16 +139,19 @@ class ScheduleDispatchMixin:
         elif action == "custom_agent_task":
             instructions = config.get("instructions", "")
             if self._orchestrator:
-                # Pre-authorized automation: the user authorized these
-                # instructions when creating the schedule, so execute risky
-                # steps rather than skip-and-surface them (no one is present to
-                # approve a background plan). chat-pipeline-fold drift #6 override.
+                # The founder authorized these INSTRUCTIONS when creating the schedule,
+                # not each write they turn out to imply. `mode="execute"` now only means
+                # the plan is not marked `requires_user_input`; it no longer decides
+                # whether a risky step runs. Every write is gated at action time, and
+                # because provenance is AUTONOMOUS and nobody is present, a gated write is
+                # PREPARED into the review queue rather than executed or interrupted on.
                 await self._orchestrator.process_message(
                     message=instructions,
                     user_id=sched.user_id,
                     workspace_id=workspace_id,
                     surface="scheduler",
                     mode="execute",
+                    authorization_source=AuthorizationSource.AUTONOMOUS,
                 )
             else:
                 raise RuntimeError("Orchestrator required for custom_agent_task")
@@ -174,6 +179,7 @@ class ScheduleDispatchMixin:
                     user_id=sched.user_id,
                     workspace_id=workspace_id,
                     surface="scheduler",
+                    authorization_source=AuthorizationSource.AUTONOMOUS,
                 )
         else:
             logger.warning("Unknown action_type: %s for schedule %s", action, sched.schedule_id)

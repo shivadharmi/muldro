@@ -27,6 +27,8 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from src.contracts import ResultSummary, StepResult
+from src.deep_runtime.confirmation import resolve_confirmation
+from src.integrations.capabilities import SYSTEM_ACTION_CAPABILITIES, is_read_only_capability
 from src.integrations.mcp_errors import McpAuthRequiredError
 from src.integrations.provider_map import provider_for_server
 from src.models.task_graph import TaskRun, TaskStep
@@ -84,6 +86,7 @@ class DagRunner:
         emitter: SurfaceEmitter,
         trust_engine_provider,
         reauth_service_provider=None,
+        presence: str = "absent",
     ):
         self._db = db
         self._store = store
@@ -91,6 +94,13 @@ class DagRunner:
         self._runner = runner
         self._learner = learner
         self._emitter = emitter
+        # Whether a human is reachable on THIS run. Every GraphExecutor run is
+        # autonomous (scheduler/perception-triggered), so this is ``absent`` in
+        # practice — but it is a parameter, not a constant, because the branch it
+        # selects is a security decision and an unbranched pause inside a gate is
+        # not a safety argument, it is a run that freezes forever. Defaults to the
+        # fail-SAFE direction: PREPARE the write, never interrupt into a void.
+        self._presence = presence
         # Resolved live via a provider so the coordinator stays the single source
         # of truth (tests reassign executor._trust_engine after construction).
         self._trust_engine_provider = trust_engine_provider
@@ -330,20 +340,81 @@ class DagRunner:
                 )
                 return
 
+            # ── Always-allowed capabilities ──────────────────────────────
+            # Mirrors the chat path's ``permission_gate`` exemptions, in the SAME
+            # order and against the SAME predicates, so the two gates cannot drift:
+            #
+            #   • ``SYSTEM_ACTION_CAPABILITIES`` (set_goal / set_instruction /
+            #     schedule_reminder / add_to_brief) write into Muldro's own data
+            #     layer — the user's own memory, reversible, ``self`` blast radius.
+            #     Matched against the EXPLICIT set, never a ``system.`` prefix, so a
+            #     future ``system.*`` capability is gated until deliberately exempted.
+            #   • read-only capabilities cannot change anything outside Muldro.
+            #
+            # Placed AFTER the fail-closed guard (an unevaluatable step still fails
+            # loudly) and BEFORE risk assessment (which costs an LLM call).
+            #
+            # WHY: without this, ``first_use`` × ``risk=none`` → ``approval_required``
+            # meant a pure ``email.list`` needed a human. Every autonomous perception
+            # run parked on its first step, expired, and was cancelled at 0/N steps —
+            # and since trust graduates only through approvals, it could never
+            # bootstrap out of that. Reads are how perception SEES; gating them makes
+            # the autonomous loop unable to start.
+            if capability in SYSTEM_ACTION_CAPABILITIES or is_read_only_capability(capability):
+                gated = False
+                risk = None
+                decision = None
+            else:
+                gated = True
+
             # ── Single TrustEngine gate ──────────────────────────────────
             # The TrustEngine and capability are both guaranteed present by the
             # fail-closed guard above, so the gate runs unconditionally — there
             # is no ungated fall-through path out of this block.
-            risk = await self._trust_gate.assess_step_risk(capability, step, run)
-            decision = await self._trust_engine.evaluate(
-                capability, risk, workspace_id=run.workspace_id or ""
-            )
-
-            if decision.decision == "approval_required":
-                await self._trust_gate.create_approval_and_pause(
-                    run, step, capability, risk, decision, surface_id=surface_id
+            pre_approve = True
+            if gated:
+                risk = await self._trust_gate.assess_step_risk(capability, step, run)
+                decision = await self._trust_engine.evaluate(
+                    capability, risk, workspace_id=run.workspace_id or ""
                 )
-                return
+
+                if decision.decision == "approval_required":
+                    if resolve_confirmation(self._presence) == "interrupt":
+                        await self._trust_gate.create_approval_and_pause(
+                            run, step, capability, risk, decision, surface_id=surface_id
+                        )
+                        return
+
+                    # ── PREPARE ──────────────────────────────────────────
+                    # The verdict says this needs a human and none is on the run.
+                    # Freezing here is the WORST of the three options: the run
+                    # stops dead, the approval expires unanswered in 24h, and the
+                    # whole run is cancelled having done nothing. So: let the step
+                    # run, but do NOT pre-approve its capability.
+                    #
+                    # That single withheld flag is the whole mechanism. The inner
+                    # deep ``trust_gate`` then evaluates the REAL tool call — which
+                    # carries a tool name, redacted arguments and a capability-scope
+                    # snapshot — and (``presence="absent"``) PREPAREs it into the
+                    # ``prepared_work`` review queue, replayable by
+                    # ``services/prepared_actions.py``. A DAG *step* could never be
+                    # staged that way: it is an agentic unit with no recorded call,
+                    # which is why ``prepared_actions`` states outright that "a
+                    # prepared action has no run and no step".
+                    #
+                    # This closes the gap CLAUDE.md flags under "GraphExecutor DAG
+                    # steps": pre-approving the capability short-circuits the inner
+                    # gate BEFORE its irreversible-union override, so a graduated
+                    # capability could execute an irreversible write unreviewed.
+                    # Withholding it on exactly the verdicts that wanted a human is
+                    # what makes that unreachable.
+                    pre_approve = False
+                    logger.info(
+                        "Step %s (%s) needs approval with nobody present — running it "
+                        "un-pre-approved so the tool call is staged for review",
+                        step.step_id,
+                        capability,
+                    )
 
             # auto_execute_notify or auto_execute_silent — proceed
             transition_step(step, "running")
@@ -365,7 +436,12 @@ class DagRunner:
             t0 = time.monotonic()
             try:
                 output = await asyncio.wait_for(
-                    self._runner.run_step_action(step, run, cancel_event=cancel_event),
+                    self._runner.run_step_action(
+                        step,
+                        run,
+                        cancel_event=cancel_event,
+                        pre_approve_capability=pre_approve,
+                    ),
                     timeout=step_timeout,
                 )
                 elapsed_ms = int((time.monotonic() - t0) * 1000)
@@ -399,7 +475,7 @@ class DagRunner:
             if await self._defer_for_reauth(run, step, output, surface_id=surface_id):
                 return
 
-            if decision.decision == "auto_execute_notify":
+            if decision is not None and decision.decision == "auto_execute_notify":
                 await self._trust_gate.notify_auto_executed(run, step, risk, output)
 
             # Read-back verification BEFORE marking terminal (spec §4.5), shared with
@@ -433,10 +509,19 @@ class DagRunner:
             # ONLY on the auto-execute path (the approved-resume path records trust at
             # approval time in routes_approvals). Task 7 moves the completed_unverified
             # deferred-increment to the tick.
-            risk_level = getattr(risk, "risk_level", risk)
-            if verdict == VerifyVerdict.CONFIRMED:
+            #
+            # ``pre_approve`` is the auto-execute test. It excludes BOTH new paths, and
+            # each for its own reason:
+            #   • PREPARE — the gate ASKED for a human and got none. The write was
+            #     staged, not performed. Counting it as an approval would graduate the
+            #     capability on the strength of writes nobody ever reviewed, and at
+            #     ``autonomous`` they would then execute silently. It must count as
+            #     nothing at all.
+            #   • exempt reads / system actions — never evaluated, so there is no
+            #     verdict to reinforce (``risk``/``decision`` are None here).
+            if pre_approve and decision is not None and verdict == VerifyVerdict.CONFIRMED:
                 await self._trust_gate.record_auto_execution_outcome(
-                    capability, risk_level, run.workspace_id or ""
+                    capability, getattr(risk, "risk_level", risk), run.workspace_id or ""
                 )
             return
 

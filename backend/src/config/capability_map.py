@@ -1,6 +1,18 @@
 """Translate neutral model inputs into provider-specific kwargs, keyed by
-ModelSpec.thinking_style. Drops kwargs the model would reject (temperature on a
-no-temperature model; effort on a non-thinking model) so callers never 400.
+ModelSpec.thinking_style, so callers never 400 and never pay for reasoning they
+asked not to have.
+
+Two different things happen to a kwarg the neutral inputs do not want:
+
+- **Dropped** when the model would *reject* it — temperature on a no-temperature
+  model, a legacy thinking budget that cannot satisfy Anthropic's constraints.
+- **Said explicitly** when omitting it would select a provider *default* rather
+  than nothing. Reasoning models are the case that matters: leaving
+  ``reasoning_effort`` off a gpt-5 call does not disable reasoning, it buys the
+  default amount of it out of the caller's own token budget. See
+  ``_OPENAI_NO_THINKING_EFFORT``.
+
+Silence is not "off" — it is whatever the provider decides "off" means.
 """
 
 from __future__ import annotations
@@ -15,6 +27,20 @@ _EFFORT_LEVELS = {"none", "low", "medium", "high"}
 # budget to be strictly below max_tokens, so a completion sized at or under this
 # floor cannot carry legacy thinking at all.
 _MIN_LEGACY_THINKING_BUDGET = 1024
+
+# How OpenAI says "do not reason". Omitting `reasoning_effort` does NOT disable
+# reasoning on a gpt-5 model — it selects the provider's *default* effort, measured
+# 2026-08-20 on `gpt-5-mini` with the real risk-assessor prompt at 192-384 reasoning
+# tokens (median 256); `"minimal"` measured 0 in 6/6 on the same prompts, and both
+# catalog OpenAI models (`gpt-5`, `gpt-5-mini`) return HTTP 200 for it. Reasoning
+# tokens are drawn from the same max_completion_tokens budget as the visible answer,
+# so an omitted kwarg let a 256-token utility completion be spent entirely on hidden
+# reasoning and come back empty.
+#
+# This is deliberately NOT a member of _EFFORT_LEVELS: "minimal" is one provider's
+# way of expressing the neutral level "none", not a fifth neutral level callers may
+# choose. Every other style expresses "none" by omitting its own thinking kwarg.
+_OPENAI_NO_THINKING_EFFORT = "minimal"
 
 
 def build_model_kwargs(
@@ -56,6 +82,8 @@ def build_model_kwargs(
     if style == "openai_effort":
         if thinking_on:
             kwargs["reasoning_effort"] = effort
+        else:
+            kwargs["reasoning_effort"] = _OPENAI_NO_THINKING_EFFORT
         if spec.accepts_temperature and temperature is not None:
             kwargs["temperature"] = temperature
         return kwargs

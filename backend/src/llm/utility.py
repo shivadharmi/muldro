@@ -97,8 +97,11 @@ async def complete_text_with_usage(
     middleware and are invisible in cost accounting.
 
     The legacy ``tier`` ("haiku"/"resolved"/"sonnet") is mapped onto a ModelResolver
-    tier and resolved inside a short-lived DB session; utility completions never enable
-    thinking.
+    tier and resolved inside a short-lived DB session with ``thinking_enabled=False``.
+    That resolves to each provider's *explicit* "off", not to silence: on a reasoning
+    model the capability map sends ``reasoning_effort="minimal"``, because omitting the
+    kwarg would buy OpenAI's default reasoning out of the ``max_tokens`` this caller
+    sized for its answer — which returned an empty completion for every caller here.
     """
     mapped_tier = _UTILITY_TIER_MAP.get(tier, tier)
     # Several perception callers default workspace_id to "" rather than None. An empty

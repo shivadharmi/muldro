@@ -10,8 +10,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ulid import ULID
 
 from src.api.deps import get_current_user_id, get_current_workspace_id, get_session
+from src.api.routes_approvals_prepared import publish_prepared_decision, run_prepared_action
 from src.api.schemas import ApprovalDecisionRequest, ApprovalDetailResponse, ApprovalResponse
 from src.config.settings import Settings, get_settings
+from src.deep_runtime.middleware.approval_persistence import PREPARED_KEY
 from src.errors import classify, new_correlation_id
 from src.middleware.observability import get_correlation_id
 from src.middleware.security import RATE_LIMIT_APPROVAL_DECISION, per_endpoint_rate_limit
@@ -155,8 +157,13 @@ async def approve_action(
     )
     _guard_not_chat_approval(approval)
 
-    # Idempotent: already approved — return without re-executing (T6)
-    if approval.status == "approved":
+    # Idempotent: already decided in a state that satisfies "approve" — return without
+    # re-executing (T6). `executed` is included because a PREPARED action's successful
+    # replay leaves that status, and falling through here would overwrite the decision
+    # metadata, re-log the audit, re-publish the event and re-enter `run_prepared_action`.
+    # The idempotency ledger keeps the external effect from firing twice; nothing else on
+    # that path is idempotent.
+    if approval.status in ("approved", "executed"):
         return ApprovalResponse(
             approval_id=approval.approval_id,
             status=approval.status,
@@ -216,6 +223,29 @@ async def approve_action(
     approval.artifact_refs = {**(approval.artifact_refs or {}), "decision_type": decision_type}
 
     await db.commit()
+
+    # PREPARED actions: the action was fully derived on the original turn and recorded on this
+    # row. Confirmation REPLAYS that recorded payload — it must NOT be routed through
+    # GraphExecutor, whose agent would re-derive it and could run something other than what
+    # the founder reviewed.
+    if (approval.artifact_refs or {}).get(PREPARED_KEY) is True:
+        await run_prepared_action(approval, user_id=user_id, db=db, settings=settings)
+        await db.commit()
+        await publish_prepared_decision(
+            approval,
+            user_id=user_id,
+            workspace_id=workspace_id,
+            event="approval.approved",
+            settings=settings,
+        )
+        return ApprovalResponse(
+            approval_id=approval.approval_id,
+            status=approval.status,
+            title=approval.title,
+            summary=approval.summary,
+            risk_level=approval.risk_level,
+            created_at=approval.created_at,
+        )
 
     # Embed approval decision into Qdrant
     try:
@@ -440,6 +470,38 @@ async def reject_action(
         )
     except Exception:
         pass
+
+    if (approval.artifact_refs or {}).get(PREPARED_KEY) is True:
+        # A rejected prepared action simply never runs: no graph to resume, and no TrustState
+        # to feed (prepared work is not trust-graduated). It IS audited — refusing a
+        # fully-derived external write is a founder decision, as worth logging as approving
+        # one — and the normal path's audit sits below the machinery this branch returns before.
+        audit = AuditService(db)
+        await audit.log(
+            user_id=user_id,
+            action_type="approval_rejected",
+            workspace_id=workspace_id,
+            approval_id=approval_id,
+            execution_id=approval.execution_id,
+            summary=f"Rejected: {approval.title}",
+            details={"reason": req.reason if req else None},
+        )
+        await db.commit()
+        await publish_prepared_decision(
+            approval,
+            user_id=user_id,
+            workspace_id=workspace_id,
+            event="approval.rejected",
+            settings=settings,
+        )
+        return ApprovalResponse(
+            approval_id=approval.approval_id,
+            status=approval.status,
+            title=approval.title,
+            summary=approval.summary,
+            risk_level=approval.risk_level,
+            created_at=approval.created_at,
+        )
 
     # Cancel the run and transition the step
     effective_run_id = approval.run_id or approval.execution_id
@@ -732,9 +794,23 @@ async def _get_approval(
         raise HTTPException(status_code=410, detail="Approval has expired")
 
     if approval.status != "pending":
-        # Idempotent: if already in the intended terminal state, return it (T6)
-        expected = "approved" if intended_action == "approve" else "rejected"
-        if approval.status == expected:
+        # Idempotent: if already in a terminal state that SATISFIES the intent, return it
+        # (T6) and let the caller short-circuit on the status field.
+        #
+        # `executed` satisfies "approve". It is what a successful confirm of a PREPARED
+        # action leaves behind — approved and then run — so a second click is a double
+        # click, not a conflict. Without it the founder got 400 "Approval already executed"
+        # for an action that HAD run exactly once, and the queue card never refreshed
+        # (its error path does not call onSuccess), so the row sat there looking unactioned
+        # and every further click repeated the error.
+        #
+        # `failed` deliberately still 400s for either intent: a permanent refusal is
+        # information the founder needs, not a double click to absorb. And nothing
+        # satisfies "reject" but `rejected` — you cannot reject what already ran.
+        satisfying = {"approve": {"approved", "executed"}, "reject": {"rejected"}}.get(
+            intended_action, {"rejected"}
+        )
+        if approval.status in satisfying:
             return approval  # caller detects via status field and short-circuits
         raise HTTPException(
             status_code=400,

@@ -45,13 +45,14 @@ router = APIRouter()
 class ChatRequest(BaseModel):
     message: str
     surface: str = "web"
-    # P3b (chat permission model): the legacy ``mode`` (ask/plan/execute) is retired from the
-    # HTTP contract — the user-facing control is now ``permission_mode``. The interactive handler
-    # forwards a fixed ``mode="ask"`` to keep the live legacy per-step path byte-identical for
-    # non-pinned callers; the internal ``mode`` param survives only for the pinned callers
-    # (schedule_dispatch ``execute`` / routes_ws ``ask``), which invoke the orchestrator directly.
-    # Action-time permission mode, INDEPENDENT of the retired ``mode``; only ``"bypass"`` activates
-    # the deep single-lead path. Constrained to the taxonomy so a typo 422s loudly.
+    # Chat permission model: the legacy ``mode`` (ask/plan/execute) is retired from the HTTP
+    # contract — the user-facing control is ``permission_mode``. The interactive handler forwards
+    # a fixed ``mode="ask"``; the internal ``mode`` param survives only for the pinned callers
+    # (schedule_dispatch ``execute`` / routes_ws ``ask``), which invoke the orchestrator directly,
+    # and now only selects ``requires_user_input`` on the plan. Action-time permission mode,
+    # INDEPENDENT of the retired ``mode``: ``ask``/``auto`` install the action-time
+    # ``permission_gate``, ``bypass`` leaves it off. There is ONE chat path — no mode selects a
+    # runtime. Constrained to the taxonomy so a typo 422s loudly.
     # P3c: optional so the interactive handler can substitute the per-workspace default when the
     # client omits it (``None``). An explicit value always wins. Resolved at the handler, never in
     # ``_process_core`` (which pinned callers share), so a workspace ``bypass`` default cannot leak

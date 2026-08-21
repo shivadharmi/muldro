@@ -21,29 +21,20 @@ def _all_catalog_names() -> set[str]:
     return {t.name for t in INTERNAL_TOOLS} | {s.name for s in EXTERNAL_TOOL_SEEDS}
 
 
-class TestNewBrowserCapabilities:
-    def test_new_browser_capabilities_in_catalog(self):
-        for cap in ("browser.execute", "browser.install", "browser.navigate_back", "browser.wait"):
-            assert cap in CAPABILITY_CATALOG, f"Missing capability: {cap}"
+class TestBrowserFamilyIsGone:
+    """The Playwright MCP server and the whole browser capability family were removed.
 
-    def test_new_playwright_tools_mapped(self):
-        expected = {
-            "browser_evaluate": "browser.execute",
-            "browser_run_code": "browser.execute",
-            "browser_install": "browser.install",
-            "browser_navigate_back": "browser.navigate_back",
-            "browser_take_screenshot": "browser.screenshot",
-            "browser_wait_for": "browser.wait",
-            "browser_fill_form": "browser.type",
-        }
-        for tool, cap in expected.items():
-            actual = _get_cap(tool)
-            assert actual == cap, f"{tool} should map to {cap}, got {actual}"
+    This replaces the pair of tests that pinned the browser capabilities and the
+    browser_* tool mappings. Inverting them rather than deleting them keeps the fence:
+    re-adding a browser_* seed without its capability, or a capability with no server to
+    serve it, is exactly the half-migration this file existed to catch.
+    """
 
-    def test_phantom_tools_removed(self):
-        names = _all_catalog_names()
-        assert "browser_pdf_save" not in names, "browser_pdf_save is phantom"
-        assert "browser_wait" not in names, "browser_wait is wrong name"
+    def test_no_browser_capabilities_remain(self):
+        assert not [c for c in CAPABILITY_CATALOG if c.startswith("browser.")]
+
+    def test_no_browser_tools_remain(self):
+        assert not [n for n in _all_catalog_names() if n.startswith("browser_")]
 
 
 class TestNewWorkflowCapabilities:

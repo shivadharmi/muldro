@@ -1,4 +1,4 @@
-"""Tests for CapabilityResolver and route_step."""
+"""Tests for CapabilityResolver."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.services.capability_resolver import CapabilityResolver, route_step
+from src.services.capability_resolver import CapabilityResolver
 
 # -- Mock helpers ----------------------------------------------------------
 
@@ -196,63 +196,3 @@ class TestReadWriteCapability:
         # all() on empty list returns True
         assert await resolver.is_read_capability("nonexistent.cap") is True
         assert await resolver.is_write_capability("nonexistent.cap") is False
-
-
-# -- TestRouteStep ---------------------------------------------------------
-
-
-class TestRouteStep:
-    @pytest.mark.asyncio
-    async def test_reason_routes_to_presenter(self):
-        db = _mock_db_with_tools([])
-        resolver = CapabilityResolver(db)
-        assert await route_step("reason", resolver) == "presenter"
-
-    @pytest.mark.asyncio
-    async def test_respond_routes_to_presenter(self):
-        db = _mock_db_with_tools([])
-        resolver = CapabilityResolver(db)
-        assert await route_step("respond", resolver) == "presenter"
-
-    @pytest.mark.asyncio
-    async def test_none_routes_to_presenter(self):
-        db = _mock_db_with_tools([])
-        resolver = CapabilityResolver(db)
-        assert await route_step("none", resolver) == "presenter"
-
-    @pytest.mark.asyncio
-    async def test_knowledge_routes_to_librarian(self):
-        db = _mock_db_with_tools([])
-        resolver = CapabilityResolver(db)
-        assert await route_step("knowledge.store", resolver) == "librarian"
-
-    @pytest.mark.asyncio
-    async def test_knowledge_search_routes_to_librarian(self):
-        db = _mock_db_with_tools([])
-        resolver = CapabilityResolver(db)
-        assert await route_step("knowledge.search", resolver) == "librarian"
-
-    @pytest.mark.asyncio
-    async def test_read_capability_routes_to_perceiver(self):
-        tools = [
-            _mock_tool("gmail_search", "email.search", requires_approval=False),
-        ]
-        db = _mock_db_with_tools(tools)
-        resolver = CapabilityResolver(db)
-        assert await route_step("email.search", resolver) == "perceiver"
-
-    @pytest.mark.asyncio
-    async def test_write_capability_routes_to_executor(self):
-        tools = [
-            _mock_tool("gmail_send", "email.send", requires_approval=True),
-        ]
-        db = _mock_db_with_tools(tools)
-        resolver = CapabilityResolver(db)
-        assert await route_step("email.send", resolver) == "executor"
-
-    @pytest.mark.asyncio
-    async def test_unknown_capability_returns_empty_string(self):
-        """Unknown capability returns empty string (unroutable) instead of fallback."""
-        db = _mock_db_with_tools([])
-        resolver = CapabilityResolver(db)
-        assert await route_step("totally.unknown", resolver) == ""

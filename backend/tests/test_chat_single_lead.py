@@ -1,17 +1,18 @@
-"""Tests for the deep single-lead chat branch + ``permission_mode`` plumbing (P1 Task B).
+"""Tests for the chat lead + ``permission_mode`` plumbing.
 
-These pin the Step-10D chat-permission-model P1 behavior:
+Every chat turn runs ONE lead. These pin what that means:
 
-* **B1 plumbing** — ``permission_mode`` is a NEW, INDEPENDENT field defaulting to a
+* **plumbing** — ``permission_mode`` is a NEW, INDEPENDENT field defaulting to a
   non-bypass value (``"auto"``), threaded through the facades/adapters, NEVER derived
   from the legacy ``mode`` slot.
-* **B2 single-lead branch** — on ``runtime=="deep"`` AND ``deep_single_lead`` AND
-  ``permission_mode=="bypass"``, ``_process_core`` runs ONE deep lead (system.* steps
-  deterministically, then the lead streams and its reply is re-homed as a
-  ``Presentation``), instead of the per-step loop + presenter step.
-* **Security** — the branch requires ALL THREE conditions; any other ``permission_mode``
-  (the default), ``deep_single_lead=False``, or a non-deep runtime falls to the LEGACY
-  per-step path. The legacy ``mode`` (ask/plan/execute) NEVER activates the branch.
+* **the lead** — ``_process_core`` runs the plan's ``system.*`` steps deterministically,
+  reports the user-actor steps, then streams ONE lead whose reply is re-homed as a
+  ``Presentation``.
+* **Security** — the two authority inputs are ``permission_mode`` and ``presence``, and
+  each may only ever DOWNGRADE. The legacy ``mode`` (ask/plan/execute) grants nothing;
+  ``bypass`` needs a workspace entitlement AND a present user; and a turn with no durable
+  checkpointer is treated as ``absent``, so a gated write is PREPARED rather than
+  interrupted into a thread nothing can re-enter.
 
 Harness modeled on ``tests/test_chat_pipeline_golden.py`` (``ChatProcessor.__new__`` +
 mocked collaborators). Reply coverage asserts EVERY shape yields a ``Presentation``.
@@ -38,8 +39,8 @@ _LEAD = "src.orchestrator.chat_single_lead"
 
 
 class _Recorder:
-    """Captures the ``(agent_name, message)`` pairs the LEGACY path feeds its agents,
-    plus the ``stream_deep_lead`` call kwargs for the single-lead path."""
+    """Captures the ``(agent_name, message)`` pairs fed to per-agent calls (only the
+    Planner makes one), plus the ``stream_deep_lead`` call kwargs for the lead."""
 
     def __init__(self) -> None:
         self.agent_messages: list[tuple[str, str]] = []
@@ -64,16 +65,14 @@ def _make_chat(
     *,
     lead_text: str = "LEAD_REPLY",
     settings_overrides: dict | None = None,
-    runtime: str = "deep",
     durable: bool = True,
 ) -> tuple[object, _Recorder]:
     """Construct a ChatProcessor with every collaborator mocked.
 
-    ``runtime`` is what ``effective_chat_runtime`` resolves to. ``lead_text`` is the
-    text the mocked ``stream_deep_lead`` emits on ``agent_done``. ``settings_overrides``
-    is merged into ``make_mock_settings`` (e.g. ``deep_single_lead=True``). ``durable``
-    is what ``has_durable_checkpointer()`` returns (True by default so ask/auto turns are
-    not downgraded to legacy; set False to exercise the durable-precondition fallback).
+    ``lead_text`` is the text the mocked ``stream_deep_lead`` emits on ``agent_done``.
+    ``settings_overrides`` is merged into ``make_mock_settings``. ``durable`` is what
+    ``has_durable_checkpointer()`` returns (True by default so a present turn stays
+    present; set False to exercise the presence downgrade).
     """
     from src.orchestrator.chat_processor import ChatProcessor
 
@@ -122,8 +121,8 @@ def _make_chat(
     chat._surfaces = MagicMock()
     chat._surfaces.push_presenter_surface = AsyncMock(return_value=None)
 
-    # LEGACY per-step / presenter agent call — records so byte-neutral tests can assert
-    # the per-step loop ran (and the single-lead path did NOT).
+    # Per-agent call — only the Planner makes one. Recorded so a test can assert that no
+    # OTHER agent was invoked (there is no per-step routing left to invoke one).
     async def _call_agent_stream(agent_name, *, message, **kw):
         rec.agent_messages.append((agent_name, message))
         text = f"{agent_name}_out"
@@ -143,6 +142,8 @@ def _make_chat(
         intent=None,
         trace=None,
         permission_mode=None,
+        presence=None,
+        authorization_source=None,
     ):
         rec.lead_calls.append(
             {
@@ -155,6 +156,8 @@ def _make_chat(
                 "intent": intent,
                 "trace": trace,
                 "permission_mode": permission_mode,
+                "presence": presence,
+                "authorization_source": authorization_source,
             }
         )
         yield {"event": "agent_start", "agent": "lead", "model": "m"}
@@ -165,11 +168,10 @@ def _make_chat(
 
     chat._invoker = MagicMock()
     chat._invoker.call_agent_stream = _call_agent_stream
-    chat._invoker.effective_chat_runtime = AsyncMock(return_value=runtime)
     chat._invoker.build_chat_lead = AsyncMock(return_value=fake_lead)
     chat._invoker.stream_deep_lead = _stream_deep_lead
-    # P2.3: durable-checkpointer precondition (sync method). True by default so ask/auto
-    # single-lead turns are not downgraded to legacy in the happy-path tests.
+    # Durable-checkpointer precondition (sync method). True by default so a present turn
+    # stays present in the happy-path tests.
     chat._invoker.has_durable_checkpointer = MagicMock(return_value=durable)
     chat._fake_lead = fake_lead
     return chat, rec
@@ -177,7 +179,6 @@ def _make_chat(
 
 def _patches(
     plan: PlanOutput,
-    routing,
     user_steps,
     *,
     intent="compose_request",
@@ -191,7 +192,7 @@ def _patches(
         patch(f"{_MOD}.classify_intent", new=AsyncMock(return_value=(intent, confidence, []))),
         patch(f"{_MOD}.extract_plan", new=MagicMock(return_value=plan)),
         patch(f"{_MOD}.intent_to_plan", new=MagicMock(return_value=plan)),
-        patch(f"{_MOD}.resolve_plan_routing", new=AsyncMock(return_value=(routing, user_steps))),
+        patch(f"{_MOD}.resolve_plan_routing", new=MagicMock(return_value=user_steps)),
         patch(f"{_MOD}.workspace_allows_bypass", new=AsyncMock(return_value=allow_bypass)),
     ]
 
@@ -244,8 +245,8 @@ _SHAPES = {
 @pytest.mark.parametrize("shape", sorted(_SHAPES))
 async def test_single_lead_every_shape_yields_presentation(shape):
     plan = PlanOutput(goal="g", reasoning="r", steps=_SHAPES[shape])
-    chat, rec = _make_chat(lead_text="THE_REPLY", settings_overrides={"deep_single_lead": True})
-    ctx = _patches(plan, [], [])
+    chat, rec = _make_chat(lead_text="THE_REPLY")
+    ctx = _patches(plan, [])
     for c in ctx:
         c.start()
     try:
@@ -265,8 +266,7 @@ async def test_single_lead_every_shape_yields_presentation(shape):
 
 async def test_single_lead_system_set_goal_runs_deterministically():
     """system.* steps run before the lead (Planner-produced, no data dep); the lead still
-    replies. Driven via the STREAMING single-lead path (P2.3: batch is always legacy, so
-    the single-lead system.* determinism is exercised on the streaming entry)."""
+    replies."""
     plan = PlanOutput(
         goal="remember",
         reasoning="r",
@@ -275,8 +275,8 @@ async def test_single_lead_system_set_goal_runs_deterministically():
             _step("s2", "respond", description="confirm"),
         ],
     )
-    chat, rec = _make_chat(lead_text="Done.", settings_overrides={"deep_single_lead": True})
-    ctx = _patches(plan, [], [])
+    chat, rec = _make_chat(lead_text="Done.")
+    ctx = _patches(plan, [])
     for c in ctx:
         c.start()
     try:
@@ -304,8 +304,8 @@ async def test_single_lead_skips_user_actor_system_steps():
         reasoning="r",
         steps=[_step("s1", "system.set_goal", actor="user", description="user goal")],
     )
-    chat, rec = _make_chat(settings_overrides={"deep_single_lead": True})
-    ctx = _patches(plan, [], [])
+    chat, rec = _make_chat()
+    ctx = _patches(plan, [])
     for c in ctx:
         c.start()
     try:
@@ -321,8 +321,8 @@ async def test_single_lead_emits_user_actions_ready():
     user_steps = [
         _step("u1", "email.reply", actor="user", description="Reply", user_context="urgent")
     ]
-    chat, rec = _make_chat(settings_overrides={"deep_single_lead": True})
-    ctx = _patches(plan, [], user_steps)
+    chat, rec = _make_chat()
+    ctx = _patches(plan, user_steps)
     for c in ctx:
         c.start()
     try:
@@ -341,7 +341,7 @@ async def test_single_lead_rehomes_output_stripped_reply_raw_surface_and_learner
     """The lead's agent_done text is re-homed: Presentation gets the STRIPPED text,
     while the shared tail's surface push + learner receive the RAW text."""
     plan = PlanOutput(goal="g", reasoning="r", steps=[_step("s1", "respond")])
-    chat, rec = _make_chat(lead_text="REPLY_RAW", settings_overrides={"deep_single_lead": True})
+    chat, rec = _make_chat(lead_text="REPLY_RAW")
 
     # Learner records the exact agent_response the shared tail spawns.
     learner = MagicMock()
@@ -351,7 +351,7 @@ async def test_single_lead_rehomes_output_stripped_reply_raw_surface_and_learner
     spec = MagicMock()
     spec.should_surface = True
 
-    ctx = _patches(plan, [], []) + [
+    ctx = _patches(plan, []) + [
         patch(f"{_LEAD}.strip_surface_blocks", new=lambda t: f"STRIPPED::{t}"),
         patch(f"{_LEAD}.extract_surface_spec", new=MagicMock(return_value=spec)),
     ]
@@ -374,13 +374,70 @@ async def test_single_lead_rehomes_output_stripped_reply_raw_surface_and_learner
     assert learner.learn.call_args.kwargs["agent_response"] == "REPLY_RAW"
 
 
+_FENCED_REPLY = """Here you go.
+
+```json:surface
+{"should_surface": true, "kind": "summary", "title": "Open PRs"}
+```"""
+
+
+async def test_a_legacy_fenced_surface_block_logs_a_deprecation_warning(caplog):
+    """The fenced ```json:surface``` path is deprecated in favour of the typed
+    `render_surface` tool, but it is kept for one release because a model may still emit
+    the old shape. A silent fallback is one nobody can decide to remove, so it must log.
+
+    Deliberately drives the REAL `extract_surface_spec` over a real fenced block rather
+    than a mocked spec — a warning that only fires for a MagicMock proves nothing about
+    what the runtime actually sees.
+    """
+    plan = PlanOutput(goal="g", reasoning="r", steps=[_step("s1", "respond")])
+    chat, _ = _make_chat(lead_text=_FENCED_REPLY)
+
+    ctx = _patches(plan, [])
+    for c in ctx:
+        c.start()
+    try:
+        with caplog.at_level("WARNING", logger=_LEAD):
+            await _run_stream(chat, permission_mode="bypass")
+    finally:
+        for c in ctx:
+            c.stop()
+
+    assert any(
+        "legacy fenced surface block" in r.message
+        for r in caplog.records
+        if r.levelname == "WARNING"
+    ), f"no deprecation warning logged; saw {[r.message for r in caplog.records]}"
+    # The deprecated path still WORKS — deprecating it must not break it.
+    chat._surfaces.push_presenter_surface.assert_awaited_once()
+
+
+async def test_an_ordinary_reply_logs_no_deprecation_warning(caplog):
+    """Teeth in the other direction: a warning that fires on every turn is noise, and
+    would let the test above pass without the fenced block being what triggered it."""
+    plan = PlanOutput(goal="g", reasoning="r", steps=[_step("s1", "respond")])
+    chat, _ = _make_chat(lead_text="just a plain reply")
+
+    ctx = _patches(plan, [])
+    for c in ctx:
+        c.start()
+    try:
+        with caplog.at_level("WARNING", logger=_LEAD):
+            await _run_stream(chat, permission_mode="bypass")
+    finally:
+        for c in ctx:
+            c.stop()
+
+    assert not [r for r in caplog.records if "legacy fenced surface block" in r.message]
+
+
 async def test_single_lead_builds_lead_with_plan_steps_scope_and_raw_message():
     """build_chat_lead receives plan.steps (plan-union scope, not a broad scope); the RAW
     user message is the human turn; plan summary + context go into the system context_block."""
     steps = [_step("s1", "calendar.read"), _step("s2", "email.send", risk="high")]
     plan = PlanOutput(goal="THE_GOAL", reasoning="THE_REASON", steps=steps)
-    chat, rec = _make_chat(settings_overrides={"deep_single_lead": True})
-    ctx = _patches(plan, [], [])
+    chat, rec = _make_chat()
+    ctx = _patches(plan, [])
     for c in ctx:
         c.start()
     try:
@@ -410,8 +467,8 @@ async def test_single_lead_builds_lead_with_plan_steps_scope_and_raw_message():
 
 async def test_single_lead_completes_with_run_completed():
     plan = PlanOutput(goal="g", reasoning="r", steps=[_step("s1", "respond")])
-    chat, rec = _make_chat(settings_overrides={"deep_single_lead": True})
-    ctx = _patches(plan, [], [])
+    chat, rec = _make_chat()
+    ctx = _patches(plan, [])
     for c in ctx:
         c.start()
     try:
@@ -422,15 +479,13 @@ async def test_single_lead_completes_with_run_completed():
     assert _events(stream)[-1] == "done"
 
 
-# ── Legacy byte-neutral: the branch is NOT taken unless ALL THREE conditions hold ──
+# ── Authority: permission_mode x presence, each downgrade-only ────────────────────
 
 
-async def test_single_lead_auto_mode_takes_single_lead_when_durable():
-    """P2.3 widens the branch to auto: streaming + deep + flag on + durable checkpointer →
-    single-lead in ``auto`` (the mode is forwarded verbatim to stream_deep_lead)."""
+async def test_auto_mode_is_forwarded_verbatim_to_the_lead():
     plan = PlanOutput(goal="g", reasoning="r", steps=[_step("s1", "respond")])
-    chat, rec = _make_chat(settings_overrides={"deep_single_lead": True})
-    ctx = _patches(plan, [(plan.steps[0], "presenter", [{"name": "t"}])], [])
+    chat, rec = _make_chat()
+    ctx = _patches(plan, [])
     for c in ctx:
         c.start()
     try:
@@ -438,54 +493,59 @@ async def test_single_lead_auto_mode_takes_single_lead_when_durable():
     finally:
         for c in ctx:
             c.stop()
-    assert len(rec.lead_calls) == 1  # single-lead taken in auto
+    assert len(rec.lead_calls) == 1
     assert rec.lead_calls[0]["permission_mode"] == "auto"  # mode forwarded
+    # No per-step agent was invoked — the lead is the only agent after the Planner.
     assert not rec.called_agent("presenter")
+    assert not rec.called_agent("perceiver")
     assert _events(stream)[-1] == "done"
 
 
-async def test_legacy_when_auto_and_no_durable_checkpointer():
-    """Durable precondition: ask/auto need a durable checkpointer to resume a pause. With
-    none (MemorySaver/none → has_durable_checkpointer()==False) the turn downgrades to the
-    legacy path (fail-safe) rather than risk an unresumable pause."""
+@pytest.mark.parametrize("perm", ["ask", "auto"])
+async def test_no_durable_checkpointer_downgrades_presence_to_absent(perm):
+    """Durable precondition: a pause is only worth taking if it can be RESUMED. With no
+    durable checkpointer (MemorySaver/none -> has_durable_checkpointer()==False) the turn
+    still runs its lead, but as ``presence="absent"`` — so a gated write is PREPARED for
+    review instead of interrupting into a thread nothing can re-enter."""
     plan = PlanOutput(goal="g", reasoning="r", steps=[_step("s1", "respond")])
-    chat, rec = _make_chat(settings_overrides={"deep_single_lead": True}, durable=False)
-    ctx = _patches(plan, [(plan.steps[0], "presenter", [{"name": "t"}])], [])
+    chat, rec = _make_chat(durable=False)
+    ctx = _patches(plan, [])
     for c in ctx:
         c.start()
     try:
-        stream = await _run_stream(chat, permission_mode="auto")
+        stream = await _run_stream(chat, permission_mode=perm)
     finally:
         for c in ctx:
             c.stop()
-    assert rec.lead_calls == []  # single-lead NOT taken (downgraded to legacy)
-    assert rec.called_agent("presenter")  # legacy per-step/presenter path ran
+    assert len(rec.lead_calls) == 1
+    assert rec.lead_calls[0]["presence"] == "absent"
+    assert rec.lead_calls[0]["permission_mode"] == perm
     assert _events(stream)[-1] == "done"
 
 
-async def test_legacy_when_ask_and_no_durable_checkpointer():
-    """Durable precondition for ``ask`` too — no durable checkpointer → legacy."""
+async def test_bypass_without_durable_checkpointer_downgrades_to_auto():
+    """``bypass`` promises "do not interrupt me", which is only meaningful with a *me* on
+    the turn. No durable checkpointer -> presence ``absent`` -> bypass becomes ``auto``."""
     plan = PlanOutput(goal="g", reasoning="r", steps=[_step("s1", "respond")])
-    chat, rec = _make_chat(settings_overrides={"deep_single_lead": True}, durable=False)
-    ctx = _patches(plan, [(plan.steps[0], "presenter", [{"name": "t"}])], [])
+    chat, rec = _make_chat(durable=False)
+    ctx = _patches(plan, [])
     for c in ctx:
         c.start()
     try:
-        await _run_stream(chat, permission_mode="ask")
+        await _run_stream(chat, permission_mode="bypass")
     finally:
         for c in ctx:
             c.stop()
-    assert rec.lead_calls == []
-    assert rec.called_agent("presenter")
+    assert len(rec.lead_calls) == 1
+    assert rec.lead_calls[0]["permission_mode"] == "auto"
 
 
 async def test_bypass_non_entitled_workspace_downgrades_to_auto():
-    """Entitlement: bypass on a workspace that has NOT opted in (workspace_allows_bypass →
-    False) downgrades to ``auto`` (fail-safe, never silently granting bypass). With a
-    durable checkpointer the turn still runs single-lead — in auto."""
+    """Entitlement: bypass on a workspace that has NOT opted in (workspace_allows_bypass ->
+    False) downgrades to ``auto`` (fail-safe, never silently granting bypass)."""
     plan = PlanOutput(goal="g", reasoning="r", steps=[_step("s1", "respond")])
-    chat, rec = _make_chat(settings_overrides={"deep_single_lead": True})
-    ctx = _patches(plan, [], [], allow_bypass=False)
+    chat, rec = _make_chat()
+    ctx = _patches(plan, [], allow_bypass=False)
     for c in ctx:
         c.start()
     try:
@@ -498,106 +558,65 @@ async def test_bypass_non_entitled_workspace_downgrades_to_auto():
     assert rec.lead_calls[0]["permission_mode"] == "auto"
 
 
-async def test_legacy_when_deep_single_lead_flag_off():
+async def test_unknown_permission_mode_fails_closed_to_ask():
+    """An unrecognised mode is not an opt-out — it confirms every write."""
     plan = PlanOutput(goal="g", reasoning="r", steps=[_step("s1", "respond")])
-    chat, rec = _make_chat(settings_overrides={"deep_single_lead": False})
-    ctx = _patches(plan, [(plan.steps[0], "presenter", [{"name": "t"}])], [])
+    chat, rec = _make_chat()
+    ctx = _patches(plan, [])
     for c in ctx:
         c.start()
     try:
-        await _run_stream(chat, permission_mode="bypass")
+        await _run_stream(chat, permission_mode="whatever")
     finally:
         for c in ctx:
             c.stop()
-    assert rec.lead_calls == []
-    assert rec.called_agent("presenter")
+    assert len(rec.lead_calls) == 1
+    assert rec.lead_calls[0]["permission_mode"] == "ask"
 
 
 # ── Security: permission_mode is INDEPENDENT of the legacy ``mode`` slot ──────────
 
 
-async def test_legacy_mode_execute_default_permission_mode_is_legacy():
-    """schedule_dispatch custom_agent_task style: mode='execute' (NO user present) with the
-    DEFAULT permission_mode ('auto') must stay legacy — permission_mode is never derived
-    from mode."""
+@pytest.mark.parametrize("legacy_mode", ["execute", "ask", "plan"])
+async def test_legacy_mode_slot_never_grants_authority(legacy_mode):
+    """schedule_dispatch (``mode="execute"``) and routes_ws surface actions (``mode="ask"``)
+    both arrive with the DEFAULT permission_mode. The legacy ``mode`` slot must not be
+    read as authority: whatever it says, the lead is handed ``auto``."""
     plan = PlanOutput(goal="g", reasoning="r", steps=[_step("s1", "respond")])
-    chat, rec = _make_chat(settings_overrides={"deep_single_lead": True})
-    ctx = _patches(plan, [(plan.steps[0], "presenter", [{"name": "t"}])], [])
+    chat, rec = _make_chat()
+    ctx = _patches(plan, [])
     for c in ctx:
         c.start()
     try:
-        await _run_batch(chat, mode="execute", surface="scheduler")
+        await _run_batch(chat, mode=legacy_mode, surface="scheduler")
     finally:
         for c in ctx:
             c.stop()
-    assert rec.lead_calls == []
-    assert rec.called_agent("presenter")
-
-
-async def test_legacy_mode_ask_default_permission_mode_is_legacy():
-    """routes_ws surface-action style: mode='ask' with the DEFAULT permission_mode ('auto')
-    must stay legacy."""
-    plan = PlanOutput(goal="g", reasoning="r", steps=[_step("s1", "respond")])
-    chat, rec = _make_chat(settings_overrides={"deep_single_lead": True})
-    ctx = _patches(plan, [(plan.steps[0], "presenter", [{"name": "t"}])], [])
-    for c in ctx:
-        c.start()
-    try:
-        await _run_batch(chat, mode="ask")
-    finally:
-        for c in ctx:
-            c.stop()
-    assert rec.lead_calls == []
-    assert rec.called_agent("presenter")
+    assert len(rec.lead_calls) == 1
+    assert rec.lead_calls[0]["permission_mode"] == "auto"
 
 
 @pytest.mark.parametrize("perm", ["bypass", "ask", "auto"])
-async def test_batch_guard_stays_legacy_for_every_permission_mode(perm):
-    """Batch guard (P2.3): the batch entry passes ``can_pause=False``, so even with
-    deep_single_lead=True + deep runtime + entitled + durable, NO permission mode enters
-    the single-lead path — batch/scheduled turns have no synchronous user to confirm a
-    pause. All fall to the legacy path."""
+async def test_batch_entry_is_absent_and_never_reaches_bypass(perm):
+    """The batch entry passes ``presence="absent"``: no synchronous user is on the turn to
+    answer a confirmation. The turn still runs its lead (that is the collapse — there is no
+    other arm), but ``absent`` makes the gate PREPARE a confirmable write rather than
+    interrupt into a void, and it downgrades ``bypass`` to ``auto``."""
     plan = PlanOutput(goal="g", reasoning="r", steps=[_step("s1", "respond")])
-    chat, rec = _make_chat(lead_text="BATCH_REPLY", settings_overrides={"deep_single_lead": True})
-    ctx = _patches(plan, [(plan.steps[0], "presenter", [{"name": "t"}])], [])
+    chat, rec = _make_chat(lead_text="BATCH_REPLY")
+    ctx = _patches(plan, [])
     for c in ctx:
         c.start()
     try:
-        await _run_batch(chat, mode="execute", permission_mode=perm)
+        result = await _run_batch(chat, mode="execute", permission_mode=perm)
     finally:
         for c in ctx:
             c.stop()
-    assert rec.lead_calls == []  # single-lead NOT entered on the batch path
-    assert rec.called_agent("presenter")  # legacy path ran
-    # can_pause=False short-circuits BEFORE any runtime/entitlement/checkpointer read.
-    chat._invoker.effective_chat_runtime.assert_not_awaited()
-    chat._invoker.has_durable_checkpointer.assert_not_called()
-
-
-async def test_byte_neutral_flag_off_skips_all_permission_io():
-    """Byte-neutral: with deep_single_lead=False (prod default) the legacy path is taken
-    and NONE of effective_chat_runtime / workspace_allows_bypass / has_durable_checkpointer
-    is consulted — the cheap flag short-circuits first, so the default path does zero extra
-    I/O."""
-    plan = PlanOutput(goal="g", reasoning="r", steps=[_step("s1", "respond")])
-    chat, rec = _make_chat(settings_overrides={"deep_single_lead": False})
-    entitlement = AsyncMock(return_value=True)
-    ctx = _patches(plan, [(plan.steps[0], "presenter", [{"name": "t"}])], [])
-    # Swap the entitlement patch for one we can assert was never awaited.
-    ctx[-1] = patch(f"{_MOD}.workspace_allows_bypass", new=entitlement)
-    for c in ctx:
-        c.start()
-    try:
-        # Even with an explicit bypass request, the flag-off short-circuit wins.
-        await _run_stream(chat, permission_mode="bypass")
-    finally:
-        for c in ctx:
-            c.stop()
-    assert rec.lead_calls == []
-    assert rec.called_agent("presenter")
-    chat._invoker.effective_chat_runtime.assert_not_awaited()
-    chat._invoker.has_durable_checkpointer.assert_not_called()
-    entitlement.assert_not_awaited()
+    assert len(rec.lead_calls) == 1
+    assert rec.lead_calls[0]["presence"] == "absent"
+    assert rec.lead_calls[0]["permission_mode"] != "bypass"
+    # The batch turn still produces its terminal reply.
+    assert result["presentation"] == "BATCH_REPLY"
 
 
 async def test_single_lead_pause_suspends_turn_and_skips_tail():
@@ -606,15 +625,17 @@ async def test_single_lead_pause_suspends_turn_and_skips_tail():
     no ``done`` (RunCompleted), and the surface/learner completion tail is NOT run — while
     finish_trace still runs (the ``finally``)."""
     plan = PlanOutput(goal="g", reasoning="r", steps=[_step("s1", "email.send", risk="high")])
-    chat, rec = _make_chat(settings_overrides={"deep_single_lead": True})
+    chat, rec = _make_chat()
 
     # A learner + surface that MUST NOT be touched on a suspended turn.
     learner = MagicMock()
     learner.learn = MagicMock(return_value=MagicMock())
     chat._interaction_learner = learner
 
-    async def _pausing_stream_deep_lead(lead, tools=None, *, permission_mode=None, **kw):
-        rec.lead_calls.append({"permission_mode": permission_mode})
+    async def _pausing_stream_deep_lead(
+        lead, tools=None, *, permission_mode=None, presence=None, **kw
+    ):
+        rec.lead_calls.append({"permission_mode": permission_mode, "presence": presence})
         yield {"event": "agent_start", "agent": "lead", "model": "m"}
         yield {
             "event": "approval_needed",
@@ -629,7 +650,7 @@ async def test_single_lead_pause_suspends_turn_and_skips_tail():
 
     chat._invoker.stream_deep_lead = _pausing_stream_deep_lead
 
-    ctx = _patches(plan, [], [])
+    ctx = _patches(plan, [])
     for c in ctx:
         c.start()
     try:
@@ -726,10 +747,10 @@ async def test_chat_request_permission_mode_default_is_non_bypass():
 
 # ── P2.5c: planless reroute (MULDRO_CHAT_PLANLESS) ──────────────────────────────────────
 #
-# When chat_planless is ON and the single-lead path is already active, _process_core drops
-# the Planner entirely and routes the turn through ONE connector-scoped lead. Flag-OFF must
-# be byte-identical (the existing tests above, all with chat_planless=False via
-# make_mock_settings, already pin that). These pin the flag-ON behavior.
+# When chat_planless is ON, _process_core drops the Planner entirely and routes the turn
+# through ONE connector-scoped lead. Flag-OFF must be byte-identical (the existing tests
+# above, all with chat_planless=False via make_mock_settings, already pin that). These pin
+# the flag-ON behavior.
 
 
 def _planless_patches(*, allow_bypass: bool = True):
@@ -751,17 +772,15 @@ def _planless_patches(*, allow_bypass: bool = True):
 
 
 def _make_planless_chat(**overrides):
-    chat, rec = _make_chat(
-        settings_overrides={"deep_single_lead": True, "chat_planless": True, **overrides}
-    )
+    chat, rec = _make_chat(settings_overrides={"chat_planless": True, **overrides})
     # _make_chat only wires build_chat_lead; the planless path uses build_planless_lead.
     chat._invoker.build_planless_lead = AsyncMock(return_value=chat._fake_lead)
     return chat, rec
 
 
 async def test_planless_drops_the_planner_entirely():
-    """Flag ON + single-lead active → NONE of the plan machinery runs, no PlanReady, the lead
-    is built from connectors (build_planless_lead), and the turn still replies + completes."""
+    """Flag ON → NONE of the plan machinery runs, no PlanReady, the lead is built from
+    connectors (build_planless_lead), and the turn still replies + completes."""
     chat, rec = _make_planless_chat()
     p = _planless_patches()
     mocks = {k: v.start() for k, v in p.items()}
@@ -823,13 +842,12 @@ async def test_planless_no_system_pre_run_no_user_actions():
 
 
 async def test_planless_flag_off_still_runs_the_planner():
-    """Flag OFF (chat_planless=False) with the SAME single-lead activation → the Planner path
-    runs exactly as today (byte-identical): classify_intent IS called and the planless lead is
-    never built."""
-    chat, rec = _make_chat(settings_overrides={"deep_single_lead": True})  # chat_planless=False
+    """Flag OFF (chat_planless=False) → the Planner path runs exactly as today
+    (byte-identical): classify_intent IS called and the planless lead is never built."""
+    chat, rec = _make_chat()
     chat._invoker.build_planless_lead = AsyncMock(return_value=chat._fake_lead)
     plan = PlanOutput(goal="g", reasoning="r", steps=[_step("s1", "respond")])
-    ctx = _patches(plan, [], [])
+    ctx = _patches(plan, [])
     started = [c.start() for c in ctx]
     try:
         await _run_stream(chat, permission_mode="bypass")
@@ -842,9 +860,9 @@ async def test_planless_flag_off_still_runs_the_planner():
 
 
 async def test_planless_entered_in_auto_mode_not_bypass_only():
-    """The planless gate matches ALL single-lead modes, not just bypass: an `auto`-mode turn
-    (durable checkpointer present) is routed planless too, with permission_mode threaded into
-    the shared stream so ask/auto action-time gating still applies."""
+    """The planless reroute is not bypass-only: an `auto`-mode turn (durable checkpointer
+    present) is routed planless too, with permission_mode threaded into the shared stream so
+    ask/auto action-time gating still applies."""
     chat, rec = _make_planless_chat()  # durable=True by default → auto not downgraded
     p = _planless_patches()
     for v in p.values():

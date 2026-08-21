@@ -16,12 +16,11 @@ reason — the coordinator owns the ``_active_traces`` dict lifecycle.
 
 from __future__ import annotations
 
-import json
 import logging
 
 from src.config.settings import Settings
 from src.llm.utility import complete_text
-from src.llm_utils import parse_llm_json
+from src.llm_utils import parse_llm_object
 from src.models.task_graph import TaskRun, TaskStep
 from src.services.contention import (
     CONTENDED_MESSAGE,
@@ -149,11 +148,21 @@ class StepRunner:
         step: TaskStep,
         run: TaskRun,
         cancel_event=None,
+        pre_approve_capability: bool = True,
     ) -> dict:
         """Execute the actual action for a step.
 
         Routes to agent loop if dependencies are available, otherwise uses
         a minimal single-turn Claude fallback.
+
+        ``pre_approve_capability`` says whether the DAG gate already CLEARED this
+        step's capability. True (the default, and the auto-execute verdict) forwards
+        it as ``pre_approved_capabilities`` so the inner deep ``trust_gate`` does not
+        re-prompt for something already gated at the step level. False means the DAG
+        gate wanted a human and none was reachable: the capability is deliberately
+        WITHHELD so the inner gate evaluates the real tool call and PREPAREs it for
+        review. Never pass True to skip a gate — it is a statement that a gate
+        already ran and said yes.
         """
         input_data = step.input_data or {}
         task_type = input_data.get("capability", input_data.get("task_type", "unknown"))
@@ -168,7 +177,12 @@ class StepRunner:
         # Deep is the ONLY runtime (Step 11 Phase 4). Use the durable deep step runner
         # when it (+ a db_factory) was injected; otherwise the minimal single-turn fallback.
         if self._deep_step_runner is not None and self._db_factory:
-            return await self.run_step_via_deep_agent(step, run, cancel_event=cancel_event)
+            return await self.run_step_via_deep_agent(
+                step,
+                run,
+                cancel_event=cancel_event,
+                pre_approve_capability=pre_approve_capability,
+            )
 
         # Fallback: minimal single-turn Claude call (no deep step runner injected).
         return await self.minimal_claude_action(step, run)
@@ -206,10 +220,10 @@ class StepRunner:
             workspace_id=run.workspace_id,
         )
 
-        try:
-            return parse_llm_json(raw)
-        except json.JSONDecodeError:
-            return {"status": "completed", "result": raw}
+        # `parse_llm_object`, not `parse_llm_json`: a JSON ARRAY parses SUCCESSFULLY, so the
+        # raw-text fallback below would be skipped and a list would escape to a caller that
+        # reads this as a step-result dict.
+        return parse_llm_object(raw, default={"status": "completed", "result": raw})
 
     async def build_executor_tools(self, step_capability: str, workspace_id: str) -> list[dict]:
         """Offer ONLY the current step's capability tools (its primary tool + same-family
@@ -327,12 +341,19 @@ class StepRunner:
             )
         return message
 
-    async def run_step_via_deep_agent(self, step, run, cancel_event=None) -> dict:
-        """Execute a step via the durable deep agent (Step 10C, dormant). Builds the SAME
-        message/context/per-step tools the legacy path builds, then delegates to the injected
-        deep_step_runner (AgentInvoker.run_autonomous_deep_step), which owns the ledger-wrapped
-        build + durable invoke + output mapping. pre_approved_capabilities = the step's single
-        already-step-gated capability (the dag_runner step gate approved it) — never a broad set."""
+    async def run_step_via_deep_agent(
+        self, step, run, cancel_event=None, pre_approve_capability: bool = True
+    ) -> dict:
+        """Execute a step via the durable deep agent. Builds the SAME message/context/per-step
+        tools the legacy path builds, then delegates to the injected deep_step_runner
+        (AgentInvoker.run_autonomous_deep_step), which owns the ledger-wrapped build + durable
+        invoke + output mapping.
+
+        ``pre_approved_capabilities`` is the step's single already-step-gated capability (never
+        a broad set) — and ONLY when the DAG gate actually cleared it. When it did not
+        (``pre_approve_capability=False``: the gate wanted a human and none was present) the
+        set is EMPTY, so the inner deep ``trust_gate`` evaluates the real tool call and stages
+        it for review instead of the DAG waving it through."""
         from src.orchestrator.agents import AGENTS
 
         message = await self._build_step_message(step, run)
@@ -357,7 +378,9 @@ class StepRunner:
             workspace_id=run.workspace_id or "",
             run_id=run.run_id,
             step_id=step.step_id,
-            pre_approved_capabilities=frozenset({step_capability}),
+            pre_approved_capabilities=(
+                frozenset({step_capability}) if pre_approve_capability else frozenset()
+            ),
             cancel_event=cancel_event,
         )
 

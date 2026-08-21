@@ -38,14 +38,17 @@ from langchain_core.tools import tool
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.types import Command
 
+from src.deep_runtime.middleware.approval_persistence import _find_existing_approval
 from src.deep_runtime.middleware.trust_gate import (
     _decide_and_maybe_persist,
-    _find_existing_approval,
     make_trust_gate_middleware,
 )
 from src.services.risk_assessor import RiskAssessment
 
 MODULE = "src.deep_runtime.middleware.trust_gate"
+# ``create_approval`` executes inside the shared ``approval_persistence._get_or_create_approval``
+# helper (A2 dedup), so patch it in its DEFINING module, not ``trust_gate``.
+APPROVAL_PERSISTENCE_MODULE = "src.deep_runtime.middleware.approval_persistence"
 USER_ID = "u_test"
 WORKSPACE_ID = "ws_test"
 THREAD_ID = "chat_thread_1"
@@ -183,7 +186,22 @@ async def _error_tool_messages(agent, cfg) -> list[ToolMessage]:
     return [m for m in msgs if isinstance(m, ToolMessage) and m.status == "error"]
 
 
-def _gate(*, authorization_source: str, db_factory, assess_risk, thread_id: str = THREAD_ID):
+def _gate(
+    *,
+    authorization_source: str,
+    db_factory,
+    assess_risk,
+    thread_id: str = THREAD_ID,
+    presence: str = "present",
+):
+    """Build the gate under test.
+
+    ``presence`` defaults to ``"present"`` HERE, unlike the factory's own fail-safe
+    ``"absent"`` default: every test in this file below the PREPARE section exercises the
+    LIVE approval path (a human is answering), and spelling that out in one place keeps
+    those bodies byte-identical to before presence branched. The PREPARE tests pass
+    ``presence="absent"`` explicitly.
+    """
     return make_trust_gate_middleware(
         authorization_source=authorization_source,
         workspace_id=WORKSPACE_ID,
@@ -192,6 +210,7 @@ def _gate(*, authorization_source: str, db_factory, assess_risk, thread_id: str 
         agent_name="executor",
         db_factory=db_factory,
         assess_risk=assess_risk,
+        presence=presence,
     )
 
 
@@ -313,7 +332,7 @@ async def test_gated_irreversible_write_forces_interrupt_then_approve_executes()
     with (
         patch(f"{MODULE}._resolve_capability", AsyncMock(return_value=(True, "email.send"))),
         patch(f"{MODULE}.TrustEngine", return_value=fake_te),
-        patch(f"{MODULE}.create_approval", side_effect=fake_create_approval),
+        patch(f"{APPROVAL_PERSISTENCE_MODULE}.create_approval", side_effect=fake_create_approval),
     ):
         items = await _drive(
             agent,
@@ -389,7 +408,7 @@ async def test_gated_write_reject_blocks():
     with (
         patch(f"{MODULE}._resolve_capability", AsyncMock(return_value=(True, "email.send"))),
         patch(f"{MODULE}.TrustEngine", return_value=fake_te),
-        patch(f"{MODULE}.create_approval", side_effect=fake_create_approval),
+        patch(f"{APPROVAL_PERSISTENCE_MODULE}.create_approval", side_effect=fake_create_approval),
     ):
         items = await _drive(
             agent,
@@ -434,7 +453,7 @@ async def test_auto_execute_when_trusted_and_reversible(handler):
     with (
         patch(f"{MODULE}._resolve_capability", AsyncMock(return_value=(True, "email.draft"))),
         patch(f"{MODULE}.TrustEngine", return_value=fake_te),
-        patch(f"{MODULE}.create_approval", create_approval_mock),
+        patch(f"{APPROVAL_PERSISTENCE_MODULE}.create_approval", create_approval_mock),
     ):
         result = await _hook(mw)(_request("draft_email", {}, "c1"), handler)
 
@@ -463,7 +482,7 @@ async def test_approval_persistence_is_idempotent_reuses_existing():
 
     with (
         patch(f"{MODULE}.TrustEngine", return_value=fake_te),
-        patch(f"{MODULE}.create_approval", create_approval_mock),
+        patch(f"{APPROVAL_PERSISTENCE_MODULE}.create_approval", create_approval_mock),
     ):
         require_approval, approval_id = await _decide_and_maybe_persist(
             name="echo",
@@ -475,6 +494,10 @@ async def test_approval_persistence_is_idempotent_reuses_existing():
             tool_call_id="call_echo",
             agent_name="executor",
             db_factory=_persist_db_factory(existing=existing),
+            # The reuse this pins happens on the RESUME REPLAY, and only a PRESENT turn ever
+            # resumes (``resume_deep_turn`` rebuilds with ``presence="present"``) — so the live
+            # record shape is the honest annotation here.
+            presence="present",
         )
 
     assert require_approval is True
@@ -525,7 +548,7 @@ async def test_unexpected_decision_requires_approval_fail_closed():
 
     with (
         patch(f"{MODULE}.TrustEngine", return_value=fake_te),
-        patch(f"{MODULE}.create_approval", create_approval_mock),
+        patch(f"{APPROVAL_PERSISTENCE_MODULE}.create_approval", create_approval_mock),
     ):
         require_approval, approval_id = await _decide_and_maybe_persist(
             name="draft_email",
@@ -537,6 +560,10 @@ async def test_unexpected_decision_requires_approval_fail_closed():
             tool_call_id="call_x",
             agent_name="executor",
             db_factory=_persist_db_factory(),
+            # This is the AUTONOMOUS trust matrix failing closed on its FIRST pass, which in
+            # production runs unattended — so ``absent`` is the honest annotation. The verdict
+            # under test is unaffected either way; presence only decides interrupt-vs-prepare.
+            presence="absent",
         )
 
     assert require_approval is True
@@ -577,7 +604,7 @@ async def test_get_or_create_reselects_on_integrity_error():
     create_approval_mock = AsyncMock(return_value=SimpleNamespace(approval_id="apr_loser"))
     with (
         patch(f"{MODULE}.TrustEngine", return_value=fake_te),
-        patch(f"{MODULE}.create_approval", create_approval_mock),
+        patch(f"{APPROVAL_PERSISTENCE_MODULE}.create_approval", create_approval_mock),
     ):
         require_approval, approval_id = await _decide_and_maybe_persist(
             name="echo",
@@ -589,6 +616,9 @@ async def test_get_or_create_reselects_on_integrity_error():
             tool_call_id="call_echo",
             agent_name="executor",
             db_factory=_factory,
+            # A create RACE is two concurrent FIRST passes, which on the autonomous seam run
+            # unattended — ``absent`` is the honest annotation.
+            presence="absent",
         )
     assert require_approval is True
     assert approval_id == "apr_winner"  # the committed winner, NOT apr_loser
@@ -615,3 +645,248 @@ async def test_find_existing_approval_returns_none_when_absent():
         WORKSPACE_ID, THREAD_ID, "call_echo", _persist_db_factory(existing=None)
     )
     assert result is None
+
+
+# ── PREPARE: a CONFIRM verdict with nobody on the turn stages the write ──────
+
+
+def _exploding_interrupt(payload):
+    """A stand-in for ``interrupt()`` that makes an accidental suspend LOUD.
+
+    An autonomous turn has nobody to answer, so reaching ``interrupt()`` at all is the exact
+    failure this branch exists to prevent — in production it is a run that hangs forever,
+    which a silent mock would hide.
+    """
+    raise AssertionError(f"interrupt() must NOT be called on an absent turn: {payload!r}")
+
+
+def _approval_required_engine():
+    te = MagicMock()
+    te.evaluate = AsyncMock(
+        return_value=SimpleNamespace(decision="approval_required", justification="risky")
+    )
+    return te
+
+
+_PREPARE_RISK = RiskAssessment(
+    risk_level="high",
+    reasoning="sends external email",
+    reversible=False,
+    blast_radius="external_single",
+)
+
+
+async def test_an_absent_turn_prepares_instead_of_interrupting(handler):
+    """An autonomous, unattended turn whose trust verdict demands approval: the Approval is
+    recorded and the gate returns a SUCCESS ToolMessage naming it — the tool never runs and
+    the run never suspends."""
+    assess_risk = AsyncMock(return_value=_PREPARE_RISK)
+
+    async def fake_create_approval(db, **kwargs):
+        return SimpleNamespace(approval_id="apr_prepared")
+
+    mw = _gate(
+        authorization_source="autonomous",
+        db_factory=_persist_db_factory(),
+        assess_risk=assess_risk,
+        presence="absent",
+    )
+    with (
+        patch(f"{MODULE}._resolve_capability", AsyncMock(return_value=(True, "email.send"))),
+        patch(f"{MODULE}.TrustEngine", return_value=_approval_required_engine()),
+        patch(f"{MODULE}.interrupt", _exploding_interrupt),
+        patch(f"{APPROVAL_PERSISTENCE_MODULE}.create_approval", side_effect=fake_create_approval),
+    ):
+        result = await _hook(mw)(_request("echo", {"text": "hi"}, "c1"), handler)
+
+    handler.assert_not_awaited()
+    assert isinstance(result, ToolMessage)
+    # LOAD-BEARING: "error" would map to the frozen `blocked` SSE frame and stop the lead.
+    assert result.status == "success"
+    assert result.tool_call_id == "c1"
+    payload = json.loads(result.content)
+    assert payload["prepared"] is True
+    assert payload["approval_id"] == "apr_prepared"
+    assert payload["capability"] == "email.send"
+
+
+async def test_a_present_turn_still_interrupts(handler):
+    """The UNCHANGED live path: a present turn suspends, and an approve verdict reaches the
+    handler. This is the regression guard for the whole pre-existing approval feature."""
+    assess_risk = AsyncMock(return_value=_PREPARE_RISK)
+    seen: list[dict] = []
+
+    def fake_interrupt(payload):
+        seen.append(payload)
+        return "approve"
+
+    async def fake_create_approval(db, **kwargs):
+        return SimpleNamespace(approval_id="apr_live")
+
+    mw = _gate(
+        authorization_source="autonomous",
+        db_factory=_persist_db_factory(),
+        assess_risk=assess_risk,
+        presence="present",
+    )
+    with (
+        patch(f"{MODULE}._resolve_capability", AsyncMock(return_value=(True, "email.send"))),
+        patch(f"{MODULE}.TrustEngine", return_value=_approval_required_engine()),
+        patch(f"{MODULE}.interrupt", fake_interrupt),
+        patch(f"{APPROVAL_PERSISTENCE_MODULE}.create_approval", side_effect=fake_create_approval),
+    ):
+        result = await _hook(mw)(_request("echo", {"text": "hi"}, "c1"), handler)
+
+    assert seen, "a present turn MUST still call interrupt()"
+    assert seen[0]["approval_id"] == "apr_live"
+    handler.assert_awaited_once()
+    assert result is handler.return_value
+
+
+async def test_a_prepared_write_does_not_stop_the_turn(handler):
+    """A prepared write is STAGED, not failed: the very next tool call in the same turn still
+    reaches the dispatcher. This is what ``status="success"`` buys."""
+    caps = {"echo": "email.send", "read_email": "email.read"}
+
+    async def _resolve(name, workspace_id, db_factory):
+        return (True, caps[name])
+
+    async def fake_create_approval(db, **kwargs):
+        return SimpleNamespace(approval_id="apr_prepared")
+
+    mw = _gate(
+        authorization_source="autonomous",
+        db_factory=_persist_db_factory(),
+        assess_risk=AsyncMock(return_value=_PREPARE_RISK),
+        presence="absent",
+    )
+    with (
+        patch(f"{MODULE}._resolve_capability", _resolve),
+        patch(f"{MODULE}.TrustEngine", return_value=_approval_required_engine()),
+        patch(f"{MODULE}.interrupt", _exploding_interrupt),
+        patch(f"{APPROVAL_PERSISTENCE_MODULE}.create_approval", side_effect=fake_create_approval),
+    ):
+        staged = await _hook(mw)(_request("echo", {"text": "hi"}, "c1"), handler)
+        handler.assert_not_awaited()
+        followup = await _hook(mw)(_request("read_email", {}, "c2"), handler)
+
+    assert json.loads(staged.content)["prepared"] is True
+    handler.assert_awaited_once()
+    assert followup is handler.return_value
+
+
+async def test_an_absent_turn_prepares_on_the_replay_path_too(handler):
+    """The CF-2 replay branch SHOULD be unreachable on an absent turn — an absent turn never
+    resumes, so nothing replays it. That is precisely why it is guarded, and precisely why the
+    guard is tested: an un-branched ``interrupt()`` here would suspend the run forever, and an
+    untested guard on an assumed-unreachable path is the one a future refactor deletes as dead
+    code.
+
+    An un-awaited ``assess_risk`` is what proves this test actually entered the replay
+    short-circuit rather than falling through to the first pass (which, against this
+    db_factory, would return the same approval_id and would also skip ``create_approval``).
+    """
+    assess_risk = AsyncMock(name="assess_risk")  # the replay branch skips assessment
+    create_approval_mock = AsyncMock()  # the replay branch skips persist
+
+    existing = SimpleNamespace(
+        approval_id="apr_existing",
+        artifact_refs={"capability": "email.send"},
+        risk_level="high",
+    )
+
+    mw = _gate(
+        authorization_source="autonomous",
+        db_factory=_persist_db_factory(existing=existing),
+        assess_risk=assess_risk,
+        presence="absent",
+    )
+    with (
+        patch(f"{MODULE}._resolve_capability", AsyncMock(return_value=(True, "email.send"))),
+        patch(f"{MODULE}.TrustEngine", return_value=_approval_required_engine()),
+        patch(f"{MODULE}.interrupt", _exploding_interrupt),
+        patch(f"{APPROVAL_PERSISTENCE_MODULE}.create_approval", create_approval_mock),
+    ):
+        result = await _hook(mw)(_request("echo", {"text": "hi"}, "c1"), handler)
+
+    assess_risk.assert_not_awaited()  # proves the REPLAY branch, not the first pass
+    handler.assert_not_awaited()
+    create_approval_mock.assert_not_called()
+    assert isinstance(result, ToolMessage)
+    assert result.status == "success"
+    payload = json.loads(result.content)
+    assert payload["prepared"] is True
+    # The EXISTING row's id — the replay branch names the approval already on record.
+    assert payload["approval_id"] == "apr_existing"
+    assert payload["capability"] == "email.send"
+
+
+async def test_a_prepared_approval_is_typed():
+    """The PREPARED record: typed ``prepared_action`` with a TTL and flagged ``prepared``, with
+    the acting agent's capability_scope snapshot intact (confirmation checks against THAT)."""
+    captured: dict = {}
+
+    async def fake_create_approval(db, **kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(approval_id="apr_prepared")
+
+    with (
+        patch(f"{MODULE}.TrustEngine", return_value=_approval_required_engine()),
+        patch(f"{APPROVAL_PERSISTENCE_MODULE}.create_approval", side_effect=fake_create_approval),
+    ):
+        require_approval, approval_id = await _decide_and_maybe_persist(
+            name="echo",
+            capability="email.send",
+            risk=_PREPARE_RISK,
+            workspace_id=WORKSPACE_ID,
+            user_id=USER_ID,
+            thread_id=THREAD_ID,
+            tool_call_id="call_echo",
+            agent_name="executor",
+            db_factory=_persist_db_factory(),
+            agent_capability_scope=frozenset({"calendar.create", "email.send"}),
+            presence="absent",
+        )
+
+    assert require_approval is True
+    assert approval_id == "apr_prepared"
+    assert captured["approval_type"] == "prepared_action"
+    assert captured["expires_at"] is not None
+    refs = captured["artifact_refs"]
+    assert refs["prepared"] is True
+    assert refs["effective_presence"] == "absent"
+    assert refs["capability_scope"] == ["calendar.create", "email.send"]
+
+
+async def test_a_live_approval_keeps_its_tool_type():
+    """The live (present) path is untouched: the approval keeps its ``tool:<name>`` type and
+    default TTL, and no ``prepared`` marker appears."""
+    captured: dict = {}
+
+    async def fake_create_approval(db, **kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(approval_id="apr_live")
+
+    with (
+        patch(f"{MODULE}.TrustEngine", return_value=_approval_required_engine()),
+        patch(f"{APPROVAL_PERSISTENCE_MODULE}.create_approval", side_effect=fake_create_approval),
+    ):
+        await _decide_and_maybe_persist(
+            name="echo",
+            capability="email.send",
+            risk=_PREPARE_RISK,
+            workspace_id=WORKSPACE_ID,
+            user_id=USER_ID,
+            thread_id=THREAD_ID,
+            tool_call_id="call_echo",
+            agent_name="executor",
+            db_factory=_persist_db_factory(),
+            agent_capability_scope=frozenset({"email.send"}),
+            presence="present",
+        )
+
+    assert captured["approval_type"] == "tool:echo"
+    assert captured["expires_at"] is None
+    refs = captured["artifact_refs"]
+    assert "prepared" not in refs
+    assert refs["effective_presence"] == "present"

@@ -30,7 +30,6 @@ class CapabilityFamily(StrEnum):
     DOC = "doc"
     WORKFLOW = "workflow"
     MESSAGING = "messaging"
-    BROWSER = "browser"
     SEARCH = "search"
     INTERNAL = "internal"
     SYSTEM = "system"
@@ -119,14 +118,6 @@ CAPABILITY_CATALOG: dict[str, CapabilityMeta] = {
     "messaging.search": _cap(CapabilityFamily.MESSAGING, True),
     "messaging.send_template": _cap(CapabilityFamily.MESSAGING, False, "high"),
     "messaging.mark_read": _cap(CapabilityFamily.MESSAGING, False),
-    # Browser
-    "browser.open": _cap(CapabilityFamily.BROWSER, False, "medium"),
-    "browser.snapshot": _cap(CapabilityFamily.BROWSER, True),
-    "browser.extract": _cap(CapabilityFamily.BROWSER, True),
-    "browser.click": _cap(CapabilityFamily.BROWSER, False, "medium"),
-    "browser.type": _cap(CapabilityFamily.BROWSER, False, "medium"),
-    "browser.submit": _cap(CapabilityFamily.BROWSER, False, "high"),
-    "browser.screenshot": _cap(CapabilityFamily.BROWSER, True),
     # Search
     "search.web": _cap(CapabilityFamily.SEARCH, True),
     "search.memory": _cap(CapabilityFamily.SEARCH, True),
@@ -155,6 +146,7 @@ CAPABILITY_CATALOG: dict[str, CapabilityMeta] = {
     "internal.verify_run": _cap(CapabilityFamily.INTERNAL, False),
     "internal.update_execution": _cap(CapabilityFamily.INTERNAL, False),
     "internal.push_ui": _cap(CapabilityFamily.INTERNAL, False),
+    "internal.render_surface": _cap(CapabilityFamily.INTERNAL, False),
     "internal.store_memory": _cap(CapabilityFamily.INTERNAL, False),
     "internal.store_preference": _cap(CapabilityFamily.INTERNAL, False),
     "internal.get_entity": _cap(CapabilityFamily.INTERNAL, True),
@@ -166,11 +158,6 @@ CAPABILITY_CATALOG: dict[str, CapabilityMeta] = {
     "doc.drive_search": _cap(CapabilityFamily.DOC, True),
     "doc.drive_create": _cap(CapabilityFamily.DOC, False, "medium"),
     "doc.drive_delete": _cap(CapabilityFamily.DOC, False, "critical"),
-    # Browser (new — additions to existing browser family)
-    "browser.execute": _cap(CapabilityFamily.BROWSER, False, "high"),
-    "browser.install": _cap(CapabilityFamily.BROWSER, False, "medium"),
-    "browser.navigate_back": _cap(CapabilityFamily.BROWSER, True),
-    "browser.wait": _cap(CapabilityFamily.BROWSER, True),
     # Workflow (new — additions to existing workflow family)
     "workflow.create_issues": _cap(CapabilityFamily.WORKFLOW, False, "medium"),
     "workflow.bulk_update": _cap(CapabilityFamily.WORKFLOW, False, "medium"),

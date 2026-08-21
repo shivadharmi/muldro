@@ -72,13 +72,13 @@ flowchart TD
     REG -->|external_mcp| BRIDGE["mcp_bridge.call_mcp_tool"]
 
     BRIDGE --> POOL["UserMCPSessionPool.get_or_create_session<br/>SEAM: fastmcp.Client(url, auth=BearerAuth)"]
-    POOL --> EXT["External MCP servers<br/>github, atlassian, google-workspace, slack, notion, playwright"]
+    POOL --> EXT["External MCP servers<br/>github, atlassian, google-workspace, slack, notion"]
 
     style POOL fill:#b45309,color:#fff
     style MW fill:#1d4ed8,color:#fff
 ```
 
-**Sync vs durable:** the **chat path** runs with `authorization_source=DIRECT_USER_REQUEST`, `permission_mode=None` by default — so in production **neither `trust_gate` nor `permission_gate` is active**; chat safety rests on always-on `capability_scope` (fail-closed) + `write_lock`. The **autonomous path** persists `TaskRun`s and gates **every step** through `TrustEngine.evaluate` at the DAG level (`dag_runner.py:333-346`) and the `trust_gate` middleware. `permission_gate` (the intended chat gate) is feature-gated behind `settings.deep_single_lead` (**default False**, `settings.py:194`).
+**Sync vs durable:** the **chat path** runs one lead per turn with `authorization_source=DIRECT_USER_REQUEST`, which keeps `trust_gate` dormant — the user's message is the turn's authorization. `permission_gate` **is** active there: it is installed whenever the turn's effective `permission_mode` is `ask` or `auto`, and `auto` is the default. Chat safety therefore rests on always-on `capability_scope` (fail-closed) + `write_lock` **plus** action-time confirmation. The **autonomous path** persists `TaskRun`s and gates **every step** through `TrustEngine.evaluate` at the DAG level and the `trust_gate` middleware; `permission_gate` is **not** installed there (`run_autonomous_deep_step` passes no `permission_mode`), so a step's own pre-approved capability is gated by trust alone. The inner-`permission_gate` fall-through — which stages a risky write at every trust level because that gate never consults trust — applies to turns carrying a `permission_mode`: chat, and the `process_message` batch entry. When no human is on the turn, a gate that must stop a write **prepares** it rather than interrupting or executing.
 
 ### 3.3 Secrets and per-server outbound auth (today)
 
@@ -91,13 +91,12 @@ Credentials at rest: `oauth_tokens` table, Fernet-encrypted with a single key `M
 | atlassian | remote streamable-http | OAuth → `BearerAuth` + `cloudId` merged into tool input | header |
 | slack | stdio (`npx`) | static token → **env var** | `ps aux` visible |
 | notion | stdio (`npx`) | OAuth → env `NOTION_TOKEN` | `ps aux` visible |
-| playwright | stdio (`npx`) | none | — |
 
 **Key gaps a gateway would fix:** stdio env-var token exposure (`ps aux`), single symmetric key with no per-tenant boundary or rotation, and no custom-header outbound path.
 
 ### 3.4 Approvals (unchanged by this work)
 
-`TrustEngine.evaluate` (4×4 trust × risk matrix, `trust_engine.py:105-157`) + `RiskAssessor` (Haiku, Redis 24h cache, **fail-closed to `high`** at three sites) + `Approval` model with a partial-unique idempotency fence (`approvals.py:47-54`). This stays exactly as-is: the gateway/connector operate **below** the approval boundary — a call only reaches the outbound seam *after* TrustEngine/permission_gate has cleared it.
+`TrustEngine.evaluate` (4×4 trust × risk matrix, `trust_engine.py:105-157`) + `RiskAssessor` (fast tier, Redis 24h cache, **fail-closed to `high`** at three sites) + `Approval` model with a partial-unique idempotency fence (`approvals.py:47-54`). This stays exactly as-is: the gateway/connector operate **below** the approval boundary — a call only reaches the outbound seam *after* TrustEngine/permission_gate has cleared it.
 
 ## 4. Verified capability matrix (primary sources)
 
@@ -630,7 +629,7 @@ thv run --name oc-remote --transport streamable-http --url http://localhost:3000
 
 1. **Phase 0 — Decide & spike (1–2 wk).** Resolve ADR-OPEN-1 (credential owner). Run the §14 PoC in staging. Confirm ToolHive cache-invalidation + tool-list behaviour in code. **Gate:** PoC assertions 8 & 10 pass.
 2. **Phase 1 — Adapter + JWT minter (2–3 wk).** Build the Connection Context Adapter (principal→connection map in Muldro control DB, forced `connectionName`, suppressed enumeration, per-tenant routing) and the platform-JWT minter. TDD with two-principal isolation tests. Not wired to prod.
-3. **Phase 2 — Seam plumbing (1–2 wk).** Add the `headers=` path to `session_pool.get_or_create_session`; extend `_installation_to_config` + `IntegrationInstallation` with gateway fields. Behind a feature flag (mirror `deep_single_lead` pattern). One provider (Gmail) end-to-end via ToolHive→adapter→OpenConnector.
+3. **Phase 2 — Seam plumbing (1–2 wk).** Add the `headers=` path to `session_pool.get_or_create_session`; extend `_installation_to_config` + `IntegrationInstallation` with gateway fields. Behind a feature flag. One provider (Gmail) end-to-end via ToolHive→adapter→OpenConnector.
 4. **Phase 3 — Provider migration (rolling).** Move providers one at a time: GitHub/Slack/Notion/Atlassian → gateway-fronted; retire `uvx`/`npx` spawning + stdio env-var injection. Keep Muldro native path as fallback per provider until parity verified.
 5. **Phase 4 — Tenant fleet + HA (2 wk).** Per-tenant OpenConnector provisioning automation, Redis session store, distributed refresh lock, KMS keys, NetworkPolicies. Load/HA test.
 6. **Phase 5 — Cutover & decommission.** Flip flag per tenant tier; monitor audit parity; decommission the replaced `LocalMCPProcessManager`/stdio path once all providers migrated.

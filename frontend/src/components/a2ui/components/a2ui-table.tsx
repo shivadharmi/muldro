@@ -7,27 +7,39 @@ interface Props {
   component: A2UIComponent;
 }
 
+// A row is `{ cells: string[] }`, positionally aligned to `columns`. The legacy keyed shape is
+// still accepted so a surface persisted before this change still renders.
+function cellFor(row: unknown, column: { key: string }, index: number): string {
+  if (row && typeof row === "object" && "cells" in row) {
+    const cells = (row as { cells?: unknown[] }).cells;
+    return Array.isArray(cells) ? String(cells[index] ?? "") : "";
+  }
+  const keyed = row as Record<string, unknown> | null;
+  return keyed ? String(keyed[column.key] ?? "") : "";
+}
+
 export function A2UITable({ component }: Props) {
   const columns = (component.properties.columns as Array<{ key: string; label: string }>) || [];
-  const rows = (component.properties.rows as Array<Record<string, unknown>>) || [];
+  const rows = (component.properties.rows as unknown[]) || [];
   const sortable = component.properties.sortable as boolean;
-  const [sortKey, setSortKey] = useState<string | null>(null);
+  const [sortIndex, setSortIndex] = useState<number | null>(null);
   const [sortAsc, setSortAsc] = useState(true);
 
-  const sortedRows = sortKey
-    ? [...rows].sort((a, b) => {
-        const av = String(a[sortKey] ?? "");
-        const bv = String(b[sortKey] ?? "");
-        return sortAsc ? av.localeCompare(bv) : bv.localeCompare(av);
-      })
-    : rows;
+  const sortedRows =
+    sortIndex !== null && columns[sortIndex]
+      ? [...rows].sort((a, b) => {
+          const av = cellFor(a, columns[sortIndex], sortIndex);
+          const bv = cellFor(b, columns[sortIndex], sortIndex);
+          return sortAsc ? av.localeCompare(bv) : bv.localeCompare(av);
+        })
+      : rows;
 
-  const handleSort = (key: string) => {
+  const handleSort = (index: number) => {
     if (!sortable) return;
-    if (sortKey === key) {
+    if (sortIndex === index) {
       setSortAsc(!sortAsc);
     } else {
-      setSortKey(key);
+      setSortIndex(index);
       setSortAsc(true);
     }
   };
@@ -37,14 +49,14 @@ export function A2UITable({ component }: Props) {
       <table className="w-full text-sm">
         <thead>
           <tr className="border-b border-b-primary bg-surface-1">
-            {columns.map((col) => (
+            {columns.map((col, ci) => (
               <th
                 key={col.key}
-                onClick={() => handleSort(col.key)}
+                onClick={() => handleSort(ci)}
                 className={`px-3 py-2 text-left text-xs font-medium text-t-secondary ${sortable ? "cursor-pointer hover:text-t-primary" : ""}`}
               >
                 {col.label}
-                {sortKey === col.key && (
+                {sortIndex === ci && (
                   <span className="ml-1">{sortAsc ? "\u2191" : "\u2193"}</span>
                 )}
               </th>
@@ -54,9 +66,9 @@ export function A2UITable({ component }: Props) {
         <tbody>
           {sortedRows.map((row, i) => (
             <tr key={i} className="border-b border-b-primary/50 hover:bg-surface-2">
-              {columns.map((col) => (
+              {columns.map((col, ci) => (
                 <td key={col.key} className="px-3 py-2 text-t-primary">
-                  {String(row[col.key] ?? "")}
+                  {cellFor(row, col, ci)}
                 </td>
               ))}
             </tr>

@@ -69,3 +69,64 @@ async def push_ui_update(
     except Exception as e:
         logger.error("push_ui_update failed: %s", e, exc_info=True)
         return {"status": "error", "error": str(e)}
+
+
+@communication.tool(
+    tags={"presenter", "write"},
+    annotations=ToolAnnotations(readOnlyHint=False, idempotentHint=False),
+)
+async def render_surface(
+    kind: str,
+    title: str,
+    sections: list[dict],
+    user_id: str,
+    ctx: Context,
+    subtitle: str | None = None,
+    metrics: list[dict] | None = None,
+) -> dict:
+    """Render a rich workspace surface from typed A2UI components.
+
+    `ToolExecutor.execute_tool` (src/orchestrator/tool_executor.py) parses these arguments
+    against `RenderSurfaceInput` before it dispatches, so an invalid component tree is
+    returned to the model as an `invalid_tool_args` tool error instead of reaching here —
+    which is the whole point of moving off the fenced-markdown channel, where a bad tree
+    died in a logger.debug and the author never learned it had failed. That parse fails
+    OPEN if validation itself raises, so treat this as a strong guarantee, not an
+    invariant this body may assume.
+
+    kind: Surface kind (message, summary, briefing, alert, recommendation)
+    title: Surface title
+    sections: The component tree to render, in display order
+    user_id: User ID for the pub/sub channel
+    subtitle: Optional subtitle
+    metrics: Up to 4 headline numbers shown on the card preview
+    """
+    if not _redis:
+        await ctx.info("Redis not available — skipping surface render")
+        return {"status": "skipped", "reason": "redis_not_available"}
+
+    try:
+        import json
+
+        from ulid import ULID
+
+        surface_id = f"srf_{ULID()}"
+        # `preview` + `kind` put this on push_ui_update's WorkspaceSurfacePush branch,
+        # which is the shape the frontend already consumes.
+        surface = {
+            "surface_id": surface_id,
+            "kind": kind,
+            "preview": {
+                "title": title,
+                "subtitle": subtitle,
+                "metrics": metrics or [],
+            },
+            "sections": sections,
+        }
+
+        channel = f"muldro:a2ui:{user_id}"
+        await _redis.publish(channel, json.dumps({"type": "surface", "surface": surface}))
+        return {"status": "published", "surface_id": surface_id, "channel": channel}
+    except Exception as e:
+        logger.error("render_surface failed: %s", e, exc_info=True)
+        return {"status": "error", "error": str(e)}

@@ -304,6 +304,10 @@ def test_put_credential_stores_encrypted_and_masks(monkeypatch):
 @pytest.mark.skipif(not _db_reachable(), reason="Postgres not reachable")
 def test_delete_credential_unconfigures(monkeypatch):
     _use_test_key(monkeypatch)
+    # Deleting the stored credential only reads as "unconfigured" when there is no env
+    # fallback behind it. `resolve_credential` consults settings last, so a developer with
+    # MULDRO_OPENAI_API_KEY set would see the provider stay configured after the delete.
+    monkeypatch.setattr(get_settings(), "openai_api_key", "", raising=False)
     engine = create_async_engine(get_settings().database_url, poolclass=NullPool)
     factory = async_sessionmaker(engine, expire_on_commit=False)
     ws = asyncio.run(_seed_ws(factory))

@@ -8,6 +8,9 @@ export type SurfaceKind =
   | "alert"
   | "recommendation"
   | "proactive_insight"
+  // The standing review queue for actions prepared on turns with no human present —
+  // the ONLY place a prepared action can be acted on.
+  | "prepared_work"
   // Agent-managed (inline children, no detail API)
   | "message"
   // Legacy kinds retained so existing persisted surfaces still render
@@ -22,6 +25,7 @@ export const SYSTEM_SURFACE_KINDS: ReadonlySet<SurfaceKind> = new Set([
   "alert",
   "recommendation",
   "proactive_insight",
+  "prepared_work",
 ]);
 
 /** Surfaces authored by the agent — children carry the whole detail. */

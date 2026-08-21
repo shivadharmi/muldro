@@ -124,8 +124,12 @@ class TestButtonProperties:
 
 class TestTableProperties:
     def test_valid_table(self):
-        p = TableProperties(columns=[{"key": "name"}], rows=[{"name": "Alice"}])
+        p = TableProperties(
+            columns=[{"key": "name", "label": "Name"}],
+            rows=[{"cells": ["Alice"]}],
+        )
         assert len(p.rows) == 1
+        assert p.rows[0].cells == ["Alice"]
 
     def test_missing_columns_raises(self):
         with pytest.raises(ValidationError):
@@ -138,12 +142,20 @@ class TestTableProperties:
 
 class TestTimelineProperties:
     def test_valid_timeline(self):
-        p = TimelineProperties(events=[{"date": "2026-01-01", "text": "Start"}])
+        p = TimelineProperties(events=[{"time": "2026-01-01", "title": "Start"}])
         assert len(p.events) == 1
+        assert p.events[0].title == "Start"
 
     def test_missing_events_raises(self):
         with pytest.raises(ValidationError):
             TimelineProperties()
+
+    def test_event_without_a_title_raises(self):
+        """This case previously PASSED against `date`/`text` keys, because `events` was
+        `list[dict]` and accepted any shape at all — which is how the producer and the
+        renderer drifted onto different key names without a single failure."""
+        with pytest.raises(ValidationError):
+            TimelineProperties(events=[{"time": "2026-01-01"}])
 
 
 class TestMetricProperties:
@@ -188,11 +200,19 @@ class TestEntityCardProperties:
         with pytest.raises(ValidationError):
             EntityCardProperties(name="x", entity_type="company")
 
-    def test_optional_attributes(self):
+    def test_optional_attributes_are_a_closed_list_of_pairs(self):
         p = EntityCardProperties(
-            name="x", entity_type="y", entity_id="z", attributes={"revenue": "1M"}
+            name="x", entity_type="y", entity_id="z", attributes=[{"key": "revenue", "value": "1M"}]
         )
-        assert p.attributes == {"revenue": "1M"}
+        assert p.attributes[0].key == "revenue"
+        assert p.attributes[0].value == "1M"
+
+    def test_attributes_reject_the_keyed_map(self):
+        """Attribute names are chosen at runtime, so a keyed map cannot be declared in a
+        schema a provider can enforce. ``renderer.entity_card`` projects one into pairs;
+        the model itself does not accept it."""
+        with pytest.raises(ValidationError):
+            EntityCardProperties(name="x", entity_type="y", entity_id="z", attributes={"a": "b"})
 
 
 class TestMemoryCardProperties:
@@ -211,12 +231,22 @@ class TestMemoryCardProperties:
 
 class TestExecutionTraceProperties:
     def test_valid_trace(self):
-        p = ExecutionTraceProperties(steps=[{"name": "step1"}], status="completed")
+        p = ExecutionTraceProperties(
+            steps=[{"title": "Draft the reply", "status": "completed"}], status="completed"
+        )
         assert p.status == "completed"
+        assert p.steps[0].title == "Draft the reply"
+        assert p.steps[0].description is None
 
     def test_missing_steps_raises(self):
         with pytest.raises(ValidationError):
             ExecutionTraceProperties(status="running")
+
+    def test_a_step_without_the_title_the_renderer_reads_raises(self):
+        """A step keyed the producer's old way (``label``) renders nameless. It is rejected
+        at construction now rather than reaching a user as "Step 1"."""
+        with pytest.raises(ValidationError):
+            ExecutionTraceProperties(steps=[{"label": "step1", "status": "ok"}], status="running")
 
 
 class TestPropertyModelsRegistry:

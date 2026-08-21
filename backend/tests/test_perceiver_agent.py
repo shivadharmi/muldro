@@ -41,8 +41,6 @@ class TestPerceiverRegistration:
         # From old researcher scope
         assert "internal.search" in scope
         assert "search.web" in scope
-        assert "browser.open" in scope
-        assert "browser.snapshot" in scope
         assert "repo.search_code" in scope
         assert "repo.list_prs" in scope
 

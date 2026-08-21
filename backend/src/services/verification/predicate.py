@@ -48,6 +48,7 @@ REVERSIBLE_INTERNAL_CAPABILITIES: frozenset[str] = frozenset(
         "internal.verify_run",
         "internal.update_execution",
         "internal.push_ui",
+        "internal.render_surface",
         "internal.store_memory",
         "internal.store_preference",
         # A local draft is not yet sent — internal + reversible.

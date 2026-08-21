@@ -206,13 +206,17 @@ def intent_to_plan(intent: str, message: str, capabilities: list[str]) -> PlanOu
         )
 
     if intent == "memory_operation":
+        # `knowledge.remember` — NOT `knowledge.search`. The description says "store or
+        # recall"; a recall-only capability makes the first half a lie and the memory is
+        # lost without a word to the user. `derive_lead_scope` translates this into the
+        # curated recall+persist capabilities.
         return PlanOutput(
             goal=goal,
             steps=[
                 PlanStep(
                     step_id="s1",
                     description="Store or recall knowledge",
-                    capability="knowledge.search",
+                    capability="knowledge.remember",
                 ),
             ],
         )

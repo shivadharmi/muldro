@@ -22,6 +22,7 @@ const kindLabel: Record<string, string> = {
   alert: "Alert",
   recommendation: "Rec",
   proactive_insight: "Insight",
+  prepared_work: "Prepared",
   // Legacy
   plan: "Plan",
   execution: "Execution",
@@ -35,6 +36,7 @@ const kindColor: Record<string, string> = {
   alert: "bg-j-error-soft text-j-error",
   recommendation: "bg-j-secondary-soft text-j-secondary",
   proactive_insight: "bg-j-secondary-soft text-j-secondary",
+  prepared_work: "bg-j-warning-soft text-j-warning",
   // Legacy
   plan: "bg-j-info-soft text-j-info",
   execution: "bg-j-info-soft text-j-info",
