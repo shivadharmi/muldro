@@ -580,6 +580,8 @@ class TestPendingNotificationRedelivery:
         mock_notif.workspace_id = TEST_WORKSPACE_ID
         mock_notif.notification_id = "notif_test"
         mock_notif.status = "pending"
+        mock_notif.sent_at = None
+        mock_notif.created_at = datetime.now(timezone.utc) - timedelta(hours=1)
 
         mock_result = MagicMock()
         mock_result.scalars.return_value.all.return_value = [mock_notif]
@@ -592,7 +594,12 @@ class TestPendingNotificationRedelivery:
         mock_factory = MagicMock(return_value=mock_db)
 
         mock_notifier = AsyncMock()
-        mock_notifier.notify = AsyncMock(return_value={"status": "sent"})
+        # Retry re-delivers the EXISTING row. Using notify() here would insert a
+        # duplicate notification on every tick while the original stayed pending —
+        # see tests/test_pending_notification_tick.py.
+        mock_notifier.deliver_existing = AsyncMock(
+            return_value={"status": "sent", "surfaces": ["web"]}
+        )
 
         mock_orch = MagicMock()
         mock_orch._notifier = mock_notifier
@@ -600,14 +607,8 @@ class TestPendingNotificationRedelivery:
         scheduler = SchedulerLoop(settings, orchestrator=mock_orch)
         await scheduler._tick_pending_notifications(mock_factory)
 
-        mock_notifier.notify.assert_called_once_with(
-            user_id=TEST_USER_ID,
-            notification_type="web",
-            title="Follow up",
-            body="Check this",
-            data={},
-            workspace_id=TEST_WORKSPACE_ID,
-        )
+        mock_notifier.deliver_existing.assert_awaited_once_with(mock_notif)
+        mock_notifier.notify.assert_not_awaited()
         assert mock_notif.status == "sent"
 
 
