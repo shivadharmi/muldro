@@ -38,14 +38,23 @@ def lede_of(body: str) -> str:
 
     Paragraphs are separated by a blank line, which may itself carry
     whitespace. Line endings (\\r\\n and lone \\r) are normalized to \\n first,
-    so a CRLF-delimited body splits the same way a LF-delimited one does.
+    so a CRLF-delimited body splits the same way a LF-delimited one does. After
+    that normalization, only \\n separates lines within a paragraph -- that is
+    what CommonMark itself recognizes as a line ending (\\n, \\r\\n, \\r; the
+    latter two are already gone by this point). str.splitlines() is
+    deliberately NOT used here: it additionally breaks on characters such as
+    \\u2028 (LINE SEPARATOR), \\x0b (vertical tab) and \\x0c (form feed), none of
+    which is a markdown line break, and doing so would silently turn one line
+    into two. The TypeScript mirror of this function, `ledeOf` in
+    `frontend/src/components/workspace/unit-card.tsx`, splits only on "\\n" for
+    the same reason -- the two must be changed together, or they drift.
 
     Leading ATX headings are skipped: a heading is a label for what follows,
     not the claim itself. Returns "" for an empty or heading-only body.
     """
     normalized = body.replace("\r\n", "\n").replace("\r", "\n")
     for block in _PARAGRAPH_BREAK.split(normalized):
-        lines = [line.strip() for line in block.strip().splitlines()]
+        lines = [line.strip() for line in block.strip().split("\n")]
         lines = [line for line in lines if line and not line.startswith("#")]
         if lines:
             return " ".join(lines)

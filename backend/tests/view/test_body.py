@@ -55,6 +55,17 @@ def test_lede_splits_on_a_blank_line_that_carries_a_tab():
     assert lede_of(body) == "First para."
 
 
+def test_lede_does_not_treat_unicode_or_control_line_separators_as_line_breaks():
+    # CommonMark recognizes only \n, \r\n and \r as line endings. str.splitlines()
+    # additionally breaks on characters such as \u2028 (LINE SEPARATOR), \x0b
+    # (vertical tab) and \x0c (form feed), none of which is a markdown line
+    # break. The TypeScript mirror in unit-card.tsx splits only on "\n", so
+    # using splitlines() here would silently diverge from it.
+    assert lede_of("ls\u2028sep\n\nnext") == "ls\u2028sep"
+    assert lede_of("ls\x0bsep\n\nnext") == "ls\x0bsep"
+    assert lede_of("ls\x0csep\n\nnext") == "ls\x0csep"
+
+
 def test_lede_skips_a_leading_heading():
     body = "# Repository activity\n\nThree repos moved this week."
     assert lede_of(body) == "Three repos moved this week."
