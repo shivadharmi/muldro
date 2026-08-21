@@ -28,6 +28,25 @@ const components: Components = {
       {children}
     </a>
   ),
+  // No markdown renderer fetches a remote image, block prose included.
+  //
+  // This is sharper than a link because it needs no click: a tracking pixel
+  // laundered into rendered markdown fires a remote fetch the moment the
+  // component mounts, leaking the founder's IP and returning a read receipt
+  // confirming the address is live and actively monitored. For a spam or
+  // phishing campaign that receipt is frequently the actual objective.
+  //
+  // It could not stay half-closed at the inline renderer: insight.py's
+  // `signal_summary` renders through `InlineMarkdown` on the card AND through
+  // `markdown()` -> MarkdownRenderer in the detail tab, so the same string
+  // would drop the pixel in one place and fetch it in the other.
+  //
+  // This forecloses images in chat prose, but forecloses nothing that exists:
+  // no backend path emits `![...]` and the frontend renders no <img> anywhere.
+  // When images ARE wanted (charts, diagrams, screenshots) the right shape is
+  // a same-origin or `data:` URI allowlist, built deliberately — not inherited
+  // by accident from a markdown default.
+  img: () => null,
   ul: ({ children }) => <ul className="list-disc list-inside mb-2 space-y-0.5">{children}</ul>,
   ol: ({ children }) => (
     <ol className="list-decimal list-inside mb-2 space-y-0.5">{children}</ol>
@@ -120,16 +139,12 @@ export function MarkdownRenderer({ content }: { content: string }) {
 // in muldro's voice with no sender attributed. `remarkGfm` makes this wider than
 // `[text](url)` — it autolinks bare `www.…` and bare email addresses too. Block
 // prose (`MarkdownRenderer`) keeps its links; inline strings do not get one.
-// `img` is refused for the same reason, only sharper: it needs no click. A
-// tracking pixel laundered into an alert title or an insight summary fires a
-// remote fetch the moment the card renders, leaking the founder's IP and
-// confirming the address is live and actively monitored — which for a spam or
-// phishing campaign is frequently the actual objective, the link being the
-// follow-up. No inline call site has any reason to fetch a remote image.
+// `img` is NOT overridden here: it is refused in the base map above, and
+// inline inherits that by spreading it. Two lines doing one job is how a pair
+// drifts.
 const inlineComponents: Components = {
   ...components,
   a: ({ children }) => <span>{children}</span>,
-  img: () => null,
   p: ({ children }) => <span>{children}</span>,
   h1: ({ children }) => <span className="font-semibold">{children}</span>,
   h2: ({ children }) => <span className="font-semibold">{children}</span>,

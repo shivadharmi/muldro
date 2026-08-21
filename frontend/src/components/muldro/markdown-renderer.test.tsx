@@ -42,10 +42,25 @@ test("MarkdownRenderer still renders block prose links (the control)", () => {
   expect(anchor?.getAttribute("href")).toBe("https://example.com");
 });
 
-// An image is sharper than a link: it needs no click. A tracking pixel
-// laundered into an alert title or an insight summary fires a remote fetch on
-// render — the founder's IP plus a read receipt confirming the address is live
-// and actively monitored.
+// An image is sharper than a link: it needs no click. A tracking pixel laundered
+// into rendered markdown fires a remote fetch on mount — the founder's IP plus a
+// read receipt confirming the address is live and actively monitored.
+//
+// Refused in BOTH renderers. It could not stay half-closed: insight.py's
+// `signal_summary` renders through InlineMarkdown on the card and through
+// MarkdownRenderer in the detail tab, so the same string would have dropped the
+// pixel in one place and fetched it in the other.
+
+test("the harness can see an <img> at all (the control)", () => {
+  // The image assertions below are all negative, and a file of negatives can
+  // pass because the query is blind. This proves it is not: a real <img> in the
+  // tree IS found. The link control above proves the markdown pipeline renders.
+  // A raw <img> is the point here — next/image would defeat the check.
+  // eslint-disable-next-line @next/next/no-img-element
+  const { container } = render(<img alt="" src="https://example.com/p.png" />);
+
+  expect(container.querySelector("img")).not.toBeNull();
+});
 
 test("InlineMarkdown renders no <img> for a bare image tag", () => {
   const { container } = render(
@@ -63,11 +78,18 @@ test("InlineMarkdown renders no <img> for an image with alt text", () => {
   expect(container.querySelector("img")).toBeNull();
 });
 
-test("MarkdownRenderer still renders images (the control)", () => {
-  // Proves the assertions above are not passing because the harness cannot see
-  // images: the same markdown through the block renderer does produce one.
-  // NOT an endorsement of that behaviour — see the img note in the renderer.
-  const { container } = render(<MarkdownRenderer content="![alt](https://example.com/p.png)" />);
+test("MarkdownRenderer renders no <img> for a bare image tag", () => {
+  const { container } = render(
+    <MarkdownRenderer content="![](https://tracker.example/x.gif)" />,
+  );
 
-  expect(container.querySelector("img")).not.toBeNull();
+  expect(container.querySelector("img")).toBeNull();
+});
+
+test("MarkdownRenderer renders no <img> for an image with alt text", () => {
+  const { container } = render(
+    <MarkdownRenderer content="![alt](https://tracker.example/p.png)" />,
+  );
+
+  expect(container.querySelector("img")).toBeNull();
 });
