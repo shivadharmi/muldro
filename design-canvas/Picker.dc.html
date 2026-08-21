@@ -1,0 +1,169 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&display=swap">
+  <style>
+    :root{
+      --bg:hsl(220 20% 7%);--s1:hsl(220 18% 10%);--s2:hsl(220 16% 13%);
+      --s3:hsl(220 14% 17%);--s4:hsl(220 12% 22%);
+      --tp:hsl(220 20% 95%);--ts:hsl(220 12% 72%);--tt:hsl(220 8% 52%);--tm:hsl(220 6% 40%);
+      --bsub:hsl(220 16% 16%);--bdef:hsl(220 14% 22%);--bstr:hsl(220 12% 32%);
+      --pri:hsl(193 100% 62%);--prih:hsl(193 90% 55%);--pris:hsl(193 100% 62% / 0.12);
+      --prifg:hsl(220 20% 7%);--sec:hsl(247 80% 72%);--secs:hsl(247 80% 72% / 0.12);
+      --ok:hsl(155 60% 44%);--oks:hsl(155 60% 44% / 0.12);
+      --warn:hsl(36 90% 60%);--warns:hsl(36 90% 60% / 0.12);
+      --err:hsl(351 90% 68%);
+      --shl:0 12px 40px rgba(0,0,0,.40), 0 2px 8px rgba(0,0,0,.24);
+    }
+    *{box-sizing:border-box}
+    body{margin:0;font-family:Geist,system-ui,-apple-system,sans-serif;background:var(--bg);
+      color:var(--tp);-webkit-font-smoothing:antialiased;font-feature-settings:"ss01","ss02","cv01"}
+    a{color:var(--pri);text-decoration:none}a:hover{color:var(--prih)}
+    .sec-h{font-size:11px;text-transform:uppercase;letter-spacing:.08em;font-weight:500;color:var(--tm);margin:0}
+    .card{border-radius:12px;background:var(--s1);border:1px solid var(--bsub)}
+    .grouphdr{font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--tm);
+      font-weight:500;padding:11px 16px 6px;display:flex;align-items:center;gap:8px}
+    .mrow{display:flex;align-items:center;gap:12px;padding:9px 16px;font-size:13.5px}
+    .mname{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .mnum{font-size:11.5px;color:var(--tm);font-variant-numeric:tabular-nums;text-align:right;flex-shrink:0}
+    .tchip{display:inline-flex;align-items:center;height:18px;padding:0 7px;border-radius:5px;
+      background:var(--s3);color:var(--tt);font-size:10.5px;flex-shrink:0;letter-spacing:.01em}
+    .kbd{display:inline-flex;align-items:center;justify-content:center;min-width:17px;height:17px;
+      padding:0 4px;border-radius:4px;background:var(--s3);border:1px solid var(--bdef);
+      color:var(--tt);font-size:10.5px}
+    .btn-p{height:30px;padding:0 12px;border-radius:8px;background:var(--pri);color:var(--prifg);
+      font-size:12.5px;font-weight:500;border:0;display:flex;align-items:center;white-space:nowrap}
+  </style>
+</helmet>
+
+<div style="width:1000px;height:860px;background:var(--bg);display:flex;align-items:center;justify-content:center;padding:20px;position:relative">
+  <div style="position:absolute;top:12px;left:0;right:0;text-align:center">
+    <span style="font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--tm);font-weight:500">Model picker &mdash; one search across every provider</span>
+  </div>
+
+  <div style="position:relative;width:896px;height:780px;border-radius:16px;overflow:hidden;box-shadow:var(--shl);border:1px solid var(--bsub)">
+
+    <!-- dimmed Model tab behind -->
+    <div style="position:absolute;inset:0;background:var(--s1);display:flex;filter:blur(1.5px);opacity:.4">
+      <div style="width:200px;flex-shrink:0;border-right:1px solid var(--bsub);background:hsl(220 16% 13% / .4)"></div>
+      <div style="flex:1;padding:20px 24px;display:flex;flex-direction:column;gap:12px">
+        <div style="height:34px;background:var(--s2);border-radius:8px;width:60%"></div>
+        <div style="height:118px;background:var(--s2);border-radius:12px"></div>
+        <div style="height:118px;background:var(--s2);border-radius:12px;border:1px solid var(--pri)"></div>
+        <div style="height:118px;background:var(--s2);border-radius:12px"></div>
+      </div>
+    </div>
+    <div style="position:absolute;inset:0;background:hsl(220 20% 7% / .55)"></div>
+
+    <!-- command palette -->
+    <div style="position:absolute;top:78px;left:50%;transform:translateX(-50%);width:560px;
+      background:var(--s1);border:1px solid var(--bstr);border-radius:14px;
+      box-shadow:0 24px 60px rgba(0,0,0,.55);overflow:hidden;display:flex;flex-direction:column">
+
+      <!-- search -->
+      <div style="display:flex;align-items:center;gap:11px;padding:14px 16px;border-bottom:1px solid var(--bsub)">
+        <svg width="15" height="15" viewBox="0 0 12 12" fill="none" stroke="var(--tt)" stroke-width="1.4" stroke-linecap="round" style="flex-shrink:0"><circle cx="5.2" cy="5.2" r="3.3"/><path d="M7.7 7.7l2.1 2.1"/></svg>
+        <span style="flex:1;font-size:15px;color:var(--tm)">Search models by name, provider, context or price</span>
+        <span style="display:flex;align-items:center;gap:5px;flex-shrink:0"><span style="font-size:11px;color:var(--tm)">Balanced tier</span><span class="kbd" style="min-width:26px">esc</span></span>
+      </div>
+
+      <div style="max-height:474px;overflow:hidden">
+
+        <div class="grouphdr"><span>Suggested for Balanced</span><span style="flex:1;height:1px;background:var(--bsub)"></span></div>
+
+        <div class="mrow" style="background:var(--pris);border-left:2px solid var(--pri);padding-left:14px">
+          <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="var(--pri)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><path d="M2.8 7.4l2.7 2.7 5.7-6"/></svg>
+          <span class="mname" style="font-weight:500">Claude Sonnet 4.6</span>
+          <span class="tchip">budgeted thinking</span>
+          <span class="mnum" style="width:52px">200K</span>
+          <span class="mnum" style="width:96px">$3.00 / $15.00</span>
+          <span style="font-size:11.5px;color:var(--tm);width:66px;text-align:right;flex-shrink:0">Anthropic</span>
+        </div>
+
+        <div class="mrow" style="padding-left:16px">
+          <span style="width:13px;flex-shrink:0"></span>
+          <span class="mname">Llama 3.1 <span style="color:var(--tm)">(local)</span></span>
+          <span class="tchip">no thinking</span>
+          <span class="mnum" style="width:52px">128K</span>
+          <span class="mnum" style="width:96px;color:var(--ok)">free</span>
+          <span style="font-size:11.5px;color:var(--tm);width:66px;text-align:right;flex-shrink:0">Ollama</span>
+        </div>
+
+        <div class="grouphdr"><span>Anthropic</span><span style="flex:1;height:1px;background:var(--bsub)"></span><span style="color:var(--tm);letter-spacing:0;text-transform:none;font-size:11px">3 models</span></div>
+        <div class="mrow" style="padding-left:16px">
+          <span style="width:13px;flex-shrink:0"></span>
+          <span class="mname">Claude Opus 4.8</span>
+          <span class="tchip">adaptive thinking</span>
+          <span class="mnum" style="width:52px">200K</span>
+          <span class="mnum" style="width:96px">$5.00 / $25.00</span>
+          <span style="width:66px;flex-shrink:0"></span>
+        </div>
+        <div class="mrow" style="padding-left:16px">
+          <span style="width:13px;flex-shrink:0"></span>
+          <span class="mname">Claude Haiku 4.5</span>
+          <span class="tchip">budgeted thinking</span>
+          <span class="mnum" style="width:52px">200K</span>
+          <span class="mnum" style="width:96px">$1.00 / $5.00</span>
+          <span style="width:66px;flex-shrink:0"></span>
+        </div>
+
+        <div class="grouphdr"><span>OpenAI</span><span style="flex:1;height:1px;background:var(--bsub)"></span><span style="color:var(--tm);letter-spacing:0;text-transform:none;font-size:11px">2 models</span></div>
+        <div class="mrow" style="padding-left:16px">
+          <span style="width:13px;flex-shrink:0"></span>
+          <span class="mname">GPT-5</span>
+          <span class="tchip">reasoning effort</span>
+          <span class="mnum" style="width:52px">400K</span>
+          <span class="mnum" style="width:96px">$1.25 / $10.00</span>
+          <span style="width:66px;flex-shrink:0"></span>
+        </div>
+        <div class="mrow" style="padding-left:16px">
+          <span style="width:13px;flex-shrink:0"></span>
+          <span class="mname">GPT-5 mini</span>
+          <span class="tchip">reasoning effort</span>
+          <span class="mnum" style="width:52px">400K</span>
+          <span class="mnum" style="width:96px">$0.25 / $2.00</span>
+          <span style="width:66px;flex-shrink:0"></span>
+        </div>
+
+        <div class="grouphdr"><span>Google Gemini</span><span style="flex:1;height:1px;background:var(--bsub)"></span><span style="color:var(--tm);letter-spacing:0;text-transform:none;font-size:11px">2 models</span></div>
+        <div class="mrow" style="padding-left:16px">
+          <span style="width:13px;flex-shrink:0"></span>
+          <span class="mname">Gemini 2.5 Pro</span>
+          <span class="tchip">gemini thinking</span>
+          <span class="mnum" style="width:52px;color:var(--pri)">1M</span>
+          <span class="mnum" style="width:96px">$1.25 / $10.00</span>
+          <span style="width:66px;flex-shrink:0"></span>
+        </div>
+        <div class="mrow" style="padding-left:16px;opacity:.75">
+          <span style="width:13px;flex-shrink:0"></span>
+          <span class="mname">Gemini 2.5 Flash</span>
+          <span class="tchip">gemini thinking</span>
+          <span class="mnum" style="width:52px;color:var(--pri)">1M</span>
+          <span class="mnum" style="width:96px">$0.30 / $2.50</span>
+          <span style="width:66px;flex-shrink:0"></span>
+        </div>
+      </div>
+
+      <!-- footer: the unconnected providers stay searchable -->
+      <div style="border-top:1px solid var(--bsub);background:hsl(220 16% 13% / .6);padding:9px 16px;display:flex;align-items:center;gap:12px">
+        <span style="display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--tm)">
+          <span class="kbd">&uarr;</span><span class="kbd">&darr;</span>navigate
+          <span class="kbd" style="margin-left:6px">&crarr;</span>select
+        </span>
+        <span style="margin-left:auto;display:flex;align-items:center;gap:10px">
+          <span style="font-size:11.5px;color:var(--tt)">11 providers not connected</span>
+          <div class="btn-p">Browse all providers</div>
+        </span>
+      </div>
+    </div>
+  </div>
+</div>
+</x-dc>
+</body>
+</html>

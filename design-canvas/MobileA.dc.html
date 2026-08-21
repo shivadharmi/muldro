@@ -1,0 +1,106 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&display=swap">
+  <style>
+    :root{
+      --bg:hsl(220 20% 7%);--s1:hsl(220 18% 10%);--s2:hsl(220 16% 13%);
+      --s3:hsl(220 14% 17%);--s4:hsl(220 12% 22%);
+      --tp:hsl(220 20% 95%);--ts:hsl(220 12% 72%);--tt:hsl(220 8% 52%);--tm:hsl(220 6% 40%);
+      --bsub:hsl(220 16% 16%);--bdef:hsl(220 14% 22%);--bstr:hsl(220 12% 32%);
+      --pri:hsl(193 100% 62%);--prih:hsl(193 90% 55%);--pris:hsl(193 100% 62% / 0.12);
+      --prifg:hsl(220 20% 7%);--sec:hsl(247 80% 72%);--secs:hsl(247 80% 72% / 0.12);
+      --ok:hsl(155 60% 44%);--oks:hsl(155 60% 44% / 0.12);
+      --warn:hsl(36 90% 60%);--err:hsl(351 90% 68%);
+    }
+    *{box-sizing:border-box}
+    body{margin:0;font-family:Geist,system-ui,-apple-system,sans-serif;background:var(--s1);
+      color:var(--tp);-webkit-font-smoothing:antialiased;font-feature-settings:"ss01","ss02","cv01"}
+    a{color:var(--pri);text-decoration:none}a:hover{color:var(--prih)}
+    .sec-h{font-size:11px;text-transform:uppercase;letter-spacing:.08em;font-weight:500;color:var(--tm);margin:0}
+    .ctl{border-radius:8px;background:var(--s2);border:1px solid var(--bsub);
+      padding:0 12px;height:44px;font-size:15px;color:var(--tp);display:flex;align-items:center;
+      justify-content:space-between;gap:6px;overflow:hidden;white-space:nowrap}
+    .ctl-off{background:hsl(220 16% 13% / .45);border-style:dashed;color:var(--tm);font-size:13px}
+    .ctl-lbl{font-size:10px;text-transform:uppercase;letter-spacing:.07em;color:var(--tm);
+      font-weight:500;margin-bottom:6px;display:block}
+    .card{border-radius:12px;background:var(--s1);border:1px solid var(--bsub)}
+    .btn-p{height:44px;padding:0 18px;border-radius:8px;background:var(--pri);color:var(--prifg);
+      font-size:14px;font-weight:500;border:0;display:flex;align-items:center;justify-content:center;white-space:nowrap}
+    .btn-g{height:44px;padding:0 16px;border-radius:8px;background:transparent;color:var(--ts);
+      font-size:14px;border:1px solid var(--bdef);display:flex;align-items:center;justify-content:center;white-space:nowrap}
+    .chip{display:inline-flex;align-items:center;gap:5px;height:20px;padding:0 8px;border-radius:9999px;
+      font-size:11px;font-weight:500}
+    .meta{font-size:11.5px;color:var(--tm);font-variant-numeric:tabular-nums}
+  </style>
+</helmet>
+
+<div style="width:390px;height:844px;background:var(--s1);display:flex;flex-direction:column;overflow:hidden">
+
+  <!-- pushed header: the rail became a list, Model was tapped -->
+  <div style="flex-shrink:0;display:flex;align-items:center;gap:6px;padding:14px 12px 14px 8px;border-bottom:1px solid var(--bsub);background:var(--s1)">
+    <div style="display:flex;align-items:center;gap:4px;color:var(--pri);font-size:15px;height:44px;padding:0 8px">
+      <svg width="17" height="17" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8.5 3L4.5 7l4 4"/></svg>Settings
+    </div>
+    <span style="flex:1;text-align:center;font-size:16px;font-weight:600;margin-left:-58px">Model</span>
+    <div style="width:44px;height:44px;display:flex;align-items:center;justify-content:center;color:var(--tm)">
+      <svg width="17" height="17" viewBox="0 0 16 16" fill="none"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+    </div>
+  </div>
+
+  <!-- scroll body -->
+  <div style="flex:1;min-height:0;overflow:hidden;padding:18px 16px;display:flex;flex-direction:column;gap:18px;background:var(--bg)">
+
+    <section>
+      <h3 class="sec-h" style="margin-bottom:9px">Tiers</h3>
+      <div style="display:flex;flex-direction:column;gap:10px">
+
+        <div class="card" style="padding:14px 16px 12px">
+          <div style="margin-bottom:12px">
+            <span style="display:block;font-size:14px;font-weight:600;letter-spacing:.02em">Reasoning</span>
+            <span style="display:block;font-size:12px;color:var(--tt);margin-top:2px">Deep planning and judgment &middot; Planner</span>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+            <div style="grid-column:span 2"><span class="ctl-lbl">Model</span><div class="ctl"><span style="overflow:hidden;text-overflow:ellipsis">Claude Opus 4.8</span><span style="display:flex;align-items:center;gap:8px;flex-shrink:0"><span style="font-size:12px;color:var(--tm)">Anthropic</span><svg width="13" height="13" viewBox="0 0 12 12" fill="none" stroke="var(--tt)" stroke-width="1.4" stroke-linecap="round"><circle cx="5.2" cy="5.2" r="3.3"/><path d="M7.7 7.7l2.1 2.1"/></svg></span></div></div>
+            <div><span class="ctl-lbl">Effort</span><div class="ctl">high<svg width="11" height="11" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.3" style="flex-shrink:0;color:var(--tt)"><path d="M2.5 4l2.5 2.5L7.5 4"/></svg></div></div>
+            <div><span class="ctl-lbl">Max tokens</span><div class="ctl" style="font-variant-numeric:tabular-nums">8192</div></div>
+            <div style="grid-column:span 2"><span class="ctl-lbl">Temperature</span><div class="ctl ctl-off">Not accepted by adaptive-thinking models</div></div>
+          </div>
+          <div style="margin-top:11px;padding-top:10px;border-top:1px solid var(--bsub);line-height:1.6">
+            <span class="meta">200K context &middot; $5.00 in / $25.00 out per Mtok &middot; adaptive thinking</span>
+          </div>
+        </div>
+
+        <div class="card" style="padding:14px 16px 12px">
+          <div style="margin-bottom:12px">
+            <span style="display:block;font-size:14px;font-weight:600;letter-spacing:.02em">Balanced</span>
+            <span style="display:block;font-size:12px;color:var(--tt);margin-top:2px">Everyday work &middot; Perceiver, Librarian, Executor, Presenter</span>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+            <div style="grid-column:span 2"><span class="ctl-lbl">Model</span><div class="ctl" style="border-color:var(--pri);box-shadow:0 0 0 1px var(--pris)"><span style="overflow:hidden;text-overflow:ellipsis">Claude Sonnet 4.6</span><span style="display:flex;align-items:center;gap:8px;flex-shrink:0"><span style="font-size:12px;color:var(--tm)">Anthropic</span><svg width="13" height="13" viewBox="0 0 12 12" fill="none" stroke="var(--tt)" stroke-width="1.4" stroke-linecap="round"><circle cx="5.2" cy="5.2" r="3.3"/><path d="M7.7 7.7l2.1 2.1"/></svg></span></div></div>
+            <div><span class="ctl-lbl">Effort</span><div class="ctl">medium<svg width="11" height="11" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.3" style="flex-shrink:0;color:var(--tt)"><path d="M2.5 4l2.5 2.5L7.5 4"/></svg></div></div>
+            <div><span class="ctl-lbl">Max tokens</span><div class="ctl" style="font-variant-numeric:tabular-nums">8192</div></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <div style="height:1px;background:linear-gradient(to right, var(--bsub), transparent)"></div>
+  </div>
+
+  <!-- sticky action bar, above the home indicator area -->
+  <div style="flex-shrink:0;border-top:1px solid var(--bsub);background:var(--s2);padding:12px 16px 26px;display:flex;align-items:center;gap:10px">
+    <span style="display:inline-flex;align-items:center;gap:7px;font-size:13px;color:var(--pri);flex-shrink:0"><span style="width:6px;height:6px;border-radius:9999px;background:var(--pri)"></span>1 unsaved</span>
+    <div class="btn-g" style="margin-left:auto">Discard</div>
+    <div class="btn-p">Save</div>
+  </div>
+</div>
+</x-dc>
+</body>
+</html>
