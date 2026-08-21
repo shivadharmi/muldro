@@ -120,9 +120,16 @@ export function MarkdownRenderer({ content }: { content: string }) {
 // in muldro's voice with no sender attributed. `remarkGfm` makes this wider than
 // `[text](url)` — it autolinks bare `www.…` and bare email addresses too. Block
 // prose (`MarkdownRenderer`) keeps its links; inline strings do not get one.
+// `img` is refused for the same reason, only sharper: it needs no click. A
+// tracking pixel laundered into an alert title or an insight summary fires a
+// remote fetch the moment the card renders, leaking the founder's IP and
+// confirming the address is live and actively monitored — which for a spam or
+// phishing campaign is frequently the actual objective, the link being the
+// follow-up. No inline call site has any reason to fetch a remote image.
 const inlineComponents: Components = {
   ...components,
   a: ({ children }) => <span>{children}</span>,
+  img: () => null,
   p: ({ children }) => <span>{children}</span>,
   h1: ({ children }) => <span className="font-semibold">{children}</span>,
   h2: ({ children }) => <span className="font-semibold">{children}</span>,

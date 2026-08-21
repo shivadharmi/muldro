@@ -41,3 +41,33 @@ test("MarkdownRenderer still renders block prose links (the control)", () => {
   expect(anchor).not.toBeNull();
   expect(anchor?.getAttribute("href")).toBe("https://example.com");
 });
+
+// An image is sharper than a link: it needs no click. A tracking pixel
+// laundered into an alert title or an insight summary fires a remote fetch on
+// render — the founder's IP plus a read receipt confirming the address is live
+// and actively monitored.
+
+test("InlineMarkdown renders no <img> for a bare image tag", () => {
+  const { container } = render(
+    <InlineMarkdown content="![](https://tracker.example/x.gif)" />,
+  );
+
+  expect(container.querySelector("img")).toBeNull();
+});
+
+test("InlineMarkdown renders no <img> for an image with alt text", () => {
+  const { container } = render(
+    <InlineMarkdown content="![alt](https://tracker.example/p.png)" />,
+  );
+
+  expect(container.querySelector("img")).toBeNull();
+});
+
+test("MarkdownRenderer still renders images (the control)", () => {
+  // Proves the assertions above are not passing because the harness cannot see
+  // images: the same markdown through the block renderer does produce one.
+  // NOT an endorsement of that behaviour — see the img note in the renderer.
+  const { container } = render(<MarkdownRenderer content="![alt](https://example.com/p.png)" />);
+
+  expect(container.querySelector("img")).not.toBeNull();
+});
