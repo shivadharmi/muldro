@@ -315,16 +315,6 @@ body {
   animation: pulse-live 2s ease-in-out infinite;
 }
 
-/* ── Surface card hover ──────────────────────────────────────── */
-.surface-card {
-  transition: box-shadow 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
-}
-.surface-card:hover {
-  box-shadow: var(--shadow-md);
-  border-color: var(--muldro-border-default);
-  transform: translateY(-1px);
-}
-
 /* ── Subtle noise texture for depth ──────────────────────────── */
 .noise-bg {
   position: relative;
