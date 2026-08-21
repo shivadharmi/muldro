@@ -107,3 +107,31 @@ def test_all_events_missing_timestamp_does_not_raise():
     assert len(groups) == 1
     assert groups[0].event_count == 2
     assert groups[0].latest.title in ("first", "second")
+
+
+def test_naive_and_aware_timestamps_in_one_group_do_not_raise_and_order_correctly():
+    """calendar.py already hit this: naive vs aware datetimes are not
+    comparable and raise TypeError. Notion's connector parses a naive
+    datetime when last_edited_time lacks an offset, so a poll can hand this
+    function a mix. It must not raise, and the naive timestamp must be
+    treated as a real, comparable time - not silently dropped to the epoch."""
+    aware = _event(minute=1, title="aware one")
+    naive = _event(minute=5, title="naive one")
+    naive.occurred_at = naive.occurred_at.replace(tzinfo=None)
+    groups = group_events_by_key([aware, naive])
+    assert len(groups) == 1
+    assert groups[0].event_count == 2
+    # naive was at minute=5, later than aware's minute=1, so it is latest.
+    assert groups[0].latest.title == "naive one"
+
+
+def test_naive_timestamp_is_treated_as_utc_not_as_missing():
+    """A naive 14:00 must outrank an aware 13:00 - if a naive value were
+    coerced to the epoch instead of to UTC, it would wrongly lose that
+    tie-break and never be able to supply the headline."""
+    earlier_aware = _event(minute=0, title="earlier aware")
+    later_naive = _event(minute=0, title="later naive")
+    later_naive.occurred_at = later_naive.occurred_at.replace(hour=15, minute=0, tzinfo=None)
+    groups = group_events_by_key([earlier_aware, later_naive])
+    assert len(groups) == 1
+    assert groups[0].latest.title == "later naive"

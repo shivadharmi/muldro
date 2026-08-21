@@ -14,12 +14,13 @@ from src.view.frame import frame_key
 
 # `NormalizedEvent.occurred_at` is NOT NULL at the DB level, but this module
 # takes any object with the right attributes - including pre-ingest RawEvents
-# that have not been timestamped yet. Treating a missing timestamp as the
-# epoch keeps ordering total (never raises) and keeps it correct: an event
-# with no known time can never outrank one that actually has a time, so
-# `latest` still means "the newest event that has a time" whenever any event
-# in the group has one at all.
-_EPOCH = datetime.min.replace(tzinfo=timezone.utc)
+# that have not been timestamped yet (github_connector.py never sets
+# occurred_at on a RawEvent at all). Treating a missing timestamp as the
+# oldest possible value keeps ordering total (never raises) and keeps it
+# correct: an event with no known time can never outrank one that actually
+# has a time, so `latest` still means "the newest event that has a time"
+# whenever any event in the group has one at all.
+_NO_TIMESTAMP = datetime.min.replace(tzinfo=timezone.utc)
 
 
 @dataclass(frozen=True)
@@ -40,8 +41,23 @@ class EventGroup:
 
 
 def _occurred(event: Any) -> datetime:
-    """Never raises, never returns None. Missing timestamps sort oldest."""
-    return getattr(event, "occurred_at", None) or _EPOCH
+    """Never raises, always returns a tz-aware datetime.
+
+    Missing timestamps sort oldest (see _NO_TIMESTAMP above). A NAIVE
+    timestamp is coerced to UTC rather than left alone: comparing a naive
+    and an aware datetime raises the same TypeError a missing one would,
+    and calendar.py already established the fix for this codebase - "so
+    occurred_at is uniformly aware and downstream comparisons never raise
+    on mixed naive/aware values." notion_connector.py is the live source of
+    a naive value here: it parses last_edited_time with no normalization,
+    so any timestamp lacking an offset reaches this function as-is.
+    """
+    value = getattr(event, "occurred_at", None)
+    if value is None:
+        return _NO_TIMESTAMP
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value
 
 
 def group_events_by_key(events: list[Any]) -> list[EventGroup]:
