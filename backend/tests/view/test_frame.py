@@ -86,14 +86,30 @@ def test_headline_falls_back_when_the_subject_is_entirely_markdown():
     assert frame.headline == "gmail email_thread"
 
 
-def test_importance_defaults_to_zero_when_the_event_has_none():
-    assert frame_for_event(_event(importance_score=None)).importance == 0.0
+def test_a_model_authored_importance_score_on_the_event_never_reaches_the_frame():
+    """Spec §10 invariants 4 and 8. The event's score is LLM-authored.
+
+    `NormalizedEvent.importance_score` is written straight from LLM JSON by a
+    prompt that reads the event's title and summary - the attacker-controlled
+    subject and body. Carrying it onto a Frame would let external text raise
+    its own rank on a class documented as carrying no model-authored field.
+    """
+    assert frame_for_event(_event(importance_score=0.9)).importance == 0.0
 
 
-def test_kind_and_status_are_supplied_by_the_caller_not_the_event():
-    frame = frame_for_event(_event(), kind="finding", status="new")
+def test_importance_defaults_to_zero_when_no_caller_supplies_one():
+    assert frame_for_event(_event()).importance == 0.0
+
+
+def test_importance_is_supplied_by_the_caller():
+    assert frame_for_event(_event(), importance=0.7).importance == 0.7
+
+
+def test_kind_status_and_importance_are_supplied_by_the_caller_not_the_event():
+    frame = frame_for_event(_event(), kind="finding", status="new", importance=0.4)
     assert frame.kind == "finding"
     assert frame.status == "new"
+    assert frame.importance == 0.4
 
 
 # --- actor_entities is a LIST in production -------------------------------
@@ -139,12 +155,12 @@ def test_junk_in_the_actor_list_does_not_raise():
 
 # --- importance is clamped, never raised ----------------------------------
 #
-# Frame.importance is ge=0.0 le=1.0; its source NormalizedEvent.importance_score
-# is a bare nullable Float written straight from LLM JSON, bounded only by the
-# English words "float 0.0-1.0" in a prompt. An out-of-range value must not
-# raise here: a ValidationError inside frame_for_event means the card silently
-# never exists, which is the outcome the design rejected when it chose to
-# neutralize a phishing subject rather than refuse it.
+# Frame.importance is ge=0.0 le=1.0 and the caller supplies it - eventually
+# §6's ranker. An out-of-range value must not raise here: a ValidationError
+# inside frame_for_event means the card silently never exists, which is the
+# outcome the design rejected when it chose to neutralize a phishing subject
+# rather than refuse it. A future ranker bug should degrade a score, not
+# delete a card.
 
 
 @pytest.mark.parametrize(
@@ -163,7 +179,7 @@ def test_junk_in_the_actor_list_does_not_raise():
     ],
 )
 def test_importance_is_clamped_and_never_raises(raw, expected):
-    assert frame_for_event(_event(importance_score=raw)).importance == expected
+    assert frame_for_event(_event(), importance=raw).importance == expected
 
 
 # --- _plain neutralizes everything the validator refuses ------------------

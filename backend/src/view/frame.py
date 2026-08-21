@@ -1,10 +1,15 @@
 """Build a Frame from a NormalizedEvent.
 
-NormalizedEvent already carries everything a frame needs - source,
-entity_type, entity_id, occurred_at, actor_entities, importance_score - and is
-indexed on (user_id, source, entity_id). The perception layer previously
-discarded it and rebuilt a worse frame by concatenating rows into prose, which
-is why the unit was a poll cycle rather than a thing.
+NormalizedEvent already carries almost everything a frame needs - source,
+entity_type, entity_id, occurred_at, actor_entities - and is indexed on
+(user_id, source, entity_id). The perception layer previously discarded it and
+rebuilt a worse frame by concatenating rows into prose, which is why the unit
+was a poll cycle rather than a thing.
+
+`importance_score` is the one field on the event that a frame must NOT read:
+it is LLM-authored from the event's title and summary, i.e. from the
+attacker-controlled subject and body. It comes from a caller instead - see
+`frame_for_event`.
 
 This module is the ONLY place a Frame is constructed from perception.
 """
@@ -127,14 +132,15 @@ def event_actor_name(event: Any) -> str:
 
 
 def _importance(raw: Any) -> float:
-    """Clamp to Frame.importance's [0.0, 1.0]. Never raises.
+    """Clamp a CALLER-supplied score to Frame.importance's [0.0, 1.0].
 
-    importance_score is a bare nullable Float written straight from LLM JSON,
-    bounded only by the words "float 0.0-1.0" in a prompt - nothing clamps it
-    on the way in. A model answering `85` (percent) would otherwise raise a
+    Never raises. This no longer guards LLM JSON - the event's score is not
+    read at all - it guards whatever a caller passes, eventually the spec §6
+    ranker. A caller answering `85` (percent) would otherwise raise a
     ValidationError inside frame_for_event and the card would silently never
     exist, which is the same outcome the design rejected when it chose to
-    neutralize a hostile subject rather than refuse it.
+    neutralize a hostile subject rather than refuse it. A ranker bug should
+    degrade a score, not delete a card.
     """
     try:
         value = float(raw)
@@ -163,6 +169,7 @@ def frame_for_event(
     group_key: str | None = None,
     event_count: int = 1,
     updated_at: datetime | None = None,
+    importance: float = 0.0,
     affordances: list[Affordance] | None = None,
 ) -> Frame:
     """Project a NormalizedEvent - or a pre-ingest RawEvent - onto a Frame.
@@ -173,14 +180,16 @@ def frame_for_event(
     name the counterparty differently, which is why the actor is read through
     `event_actor_name` rather than off one field.
 
-    A RawEvent carries no `importance_score` at all, so `importance` is 0.0
-    for pre-ingest events. That is correct and deliberate: importance is
-    assigned at ingest by the scorer, and inventing a placeholder here would
-    be muldro asserting a judgement it has not made.
+    `kind`, `status` and `importance` are the CALLER's decision - they depend
+    on what the domain row means, which the event alone does not say. They are
+    never the model's.
 
-    `kind` and `status` are the CALLER's decision - they depend on what the
-    domain row means, which the event alone does not say. They are never the
-    model's.
+    `importance` in particular is NOT read off `event.importance_score`, even
+    though NormalizedEvent carries one: that score is LLM-authored from the
+    event's title and summary - the attacker-controlled subject and body - and
+    Frame carries no model-authored field (spec §10 invariants 4 and 8, so
+    external prose cannot raise its own rank). It defaults to 0.0 until §6's
+    ranker supplies one from derived features.
     """
     subject = _plain(getattr(event, "title", None))
     actor = event_actor_name(event)
@@ -211,7 +220,7 @@ def frame_for_event(
         entity_type=event.entity_type,
         occurred_at=occurred,
         updated_at=updated_at or occurred,
-        importance=_importance(getattr(event, "importance_score", None)),
+        importance=_importance(importance),
         event_count=event_count,
         affordances=affordances or [],
     )
