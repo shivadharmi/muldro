@@ -17,9 +17,17 @@ function formatTimeAgo(dateStr: string): string {
 
 export function TimeAgo({
   date,
+  tone = "text-t-tertiary",
   className = "",
 }: {
   date: string | null;
+  /** Colour utility for the rendered `<time>` element. Exactly one colour
+   *  class should ever reach the element — Tailwind resolves conflicting
+   *  utilities by their order in the generated stylesheet, not by their
+   *  order in `className`, so a caller cannot reliably override the
+   *  hardcoded default via `className` alone. Defaults to the original
+   *  tone so existing callers are unaffected. */
+  tone?: string;
   className?: string;
 }) {
   if (!date)
@@ -27,7 +35,7 @@ export function TimeAgo({
   return (
     <time
       dateTime={date}
-      className={`text-t-tertiary ${className}`}
+      className={`${tone} ${className}`}
       title={new Date(date).toLocaleString()}
     >
       {formatTimeAgo(date)}
