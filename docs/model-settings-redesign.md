@@ -183,6 +183,12 @@ data loss or run-time failure, **S2** = user-visible incorrectness, **S3** = qua
 
 ## 4. Target design
 
+This section specifies **behaviour and structure**. Every pixel value — tokens, type
+scale, control metrics, per-component anatomy, icon geometry — is in **§9 Visual
+specification**, which is the authoritative source and is transcribed directly from the
+canvas artboards. Where §4 names a component, §9 has its metric table.
+
+
 ### 4.1 Modal shell
 
 One shell, two behaviours, one breakpoint at `sm` (640px).
@@ -582,3 +588,340 @@ One correction is worth recording, because the first draft of this spec asserted
 map over separate arrays with separate setters, so an agent named after a tier cannot
 clash, and no agent in `AGENT_MODEL_TIERS` is so named. The rename in §2.6 is justified
 by the lossy contract projection, not by a bug.
+
+---
+
+## 9. Visual specification
+
+Transcribed from the canvas artboards (`design-canvas/*.dc.html`). These are the values
+to implement, not approximations of them. Where an artboard and this section disagree,
+this section wins and the artboard is corrected.
+
+### 9.1 Token map — artboards to this codebase
+
+The artboards use raw `hsl()` for legibility. Every one resolves to an existing token in
+`frontend/src/app/globals.css`. **Use the Tailwind class; never re-enter a raw colour.**
+
+| Artboard var | Resolved (dark) | Theme token | Tailwind class |
+|---|---|---|---|
+| `--bg` | `hsl(220 20% 7%)` | `--color-surface-0` | `bg-surface-0` |
+| `--s1` | `hsl(220 18% 10%)` | `--color-surface-1` | `bg-surface-1` |
+| `--s2` | `hsl(220 16% 13%)` | `--color-surface-2` | `bg-surface-2` |
+| `--s3` | `hsl(220 14% 17%)` | `--color-surface-3` | `bg-surface-3` |
+| `--s4` | `hsl(220 12% 22%)` | `--color-surface-4` | `bg-surface-4` |
+| `--tp` | `hsl(220 20% 95%)` | `--color-t-primary` | `text-t-primary` |
+| `--ts` | `hsl(220 12% 72%)` | `--color-t-secondary` | `text-t-secondary` |
+| `--tt` | `hsl(220 8% 52%)` | `--color-t-tertiary` | `text-t-tertiary` |
+| `--tm` | `hsl(220 6% 40%)` | `--color-t-muted` | `text-t-muted` |
+| `--bsub` | `hsl(220 16% 16%)` | `--color-b-secondary` | `border-b-secondary` |
+| `--bdef` | `hsl(220 14% 22%)` | `--color-b-primary` | `border-b-primary` |
+| `--bstr` | `hsl(220 12% 32%)` | `--color-b-strong` | `border-b-strong` |
+| `--pri` | `hsl(193 100% 62%)` | `--color-j-primary` | `text-j-primary` / `bg-j-primary` |
+| `--pris` | `j-primary / 12%` | `--color-j-primary-soft` | `bg-j-primary-soft` |
+| `--prifg` | `hsl(220 20% 7%)` | `--color-j-primary-fg` | `text-j-primary-fg` |
+| `--sec` / `--secs` | violet | `--color-j-secondary(-soft)` | `text-j-secondary` / `bg-j-secondary-soft` |
+| `--ok` / `--oks` | `hsl(155 60% 44%)` | `--color-j-success(-soft)` | `text-j-success` / `bg-j-success-soft` |
+| `--warn` / `--warns` | `hsl(36 90% 60%)` | `--color-j-warning(-soft)` | `text-j-warning` / `bg-j-warning-soft` |
+| `--err` / `--errs` | `hsl(351 90% 68%)` | `--color-j-error(-soft)` | `text-j-error` / `bg-j-error-soft` |
+
+> **Naming trap.** In this codebase `b-secondary` is the **subtle** border and
+> `b-primary` is the **default**, stronger one. Every hairline in the existing settings
+> code uses `border-b-secondary`, and the artboards' `--bsub` maps to it. Reaching for
+> `border-b-primary` because it sounds primary produces visibly heavier rules.
+
+Radii and shadows come from the same file, in the arbitrary-value form the codebase
+already uses: `rounded-[var(--radius-md)]` (8px), `-lg` (12px), `-xl` (16px), `-full`;
+`shadow-[var(--shadow-lg)]`.
+
+Translucent surfaces:
+
+| Artboard | Tailwind |
+|---|---|
+| rail background `hsl(220 16% 13% / .4)` | `bg-surface-2/40` |
+| save bar / palette footer `.5` / `.6` | `bg-surface-2/50`, `bg-surface-2/60` |
+| disabled control fill `hsl(220 16% 13% / .45)` | `bg-surface-2/45` |
+| expanded provider row `hsl(193 100% 62% / .05)` | `bg-j-primary/5` |
+| warning card border `hsl(36 90% 60% / .35)` | `border-j-warning/35` |
+| warning card inner rule `.25` | `border-j-warning/25` |
+| warning ghost button border `.4` | `border-j-warning/40` |
+
+### 9.2 Type scale
+
+Geist throughout (already loaded as `--font-geist-sans`). Tabular numerals on every
+numeric field, cost, context window and count, so columns align and values do not jitter
+while being edited.
+
+| Role | Size | Weight | Colour |
+|---|---|---|---|
+| Modal title | 15px | 600 | `t-primary` |
+| Modal subtitle | 12.5px | 400 | `t-tertiary`, line-height 1.5 |
+| Section header (`sec-h`) | 11px | 500 | `t-muted`, uppercase, tracking `.08em` |
+| Palette group header | 10px | 500 | `t-muted`, uppercase, tracking `.08em` |
+| Tier name | 13px | 600 | `t-primary`, tracking `.02em` |
+| Tier description | 12px | 400 | `t-tertiary` |
+| Rail item | 13px | 400 / 500 active | `t-tertiary` / `j-primary` active |
+| Control value | 14px | 400 | `t-primary` |
+| Control label (`ctl-lbl`) | 10px | 500 | `t-muted`, uppercase, tracking `.07em` |
+| Provider row name | 14px | 500 | `t-primary` |
+| Picker row | 13.5px | 400 / 500 selected | `t-primary` |
+| Meta / hint | 11.5px | 400 | `t-muted` |
+| Chip | 11px | 500 | per variant |
+| Button | 13px | 500 primary / 400 ghost | per variant |
+
+### 9.3 Control primitives
+
+**`ctl` — form control** (select trigger, number input, search field)
+
+| | Desktop (`sm`+) | Mobile |
+|---|---|---|
+| height | 36px | **44px** |
+| font-size | 14px | 15px |
+| padding-x | 10px | 12px |
+| radius | 8px (`--radius-md`) | same |
+| background | `bg-surface-2` | same |
+| border | 1px `border-b-secondary` | same |
+| layout | `flex items-center justify-between gap-2` | same |
+
+- **Focus:** the existing `:focus-visible` rule in `globals.css` (2px `--muldro-primary`,
+  offset 2px). Do not add a second ring.
+- **Changed (dirty):** `border-j-primary` plus
+  `shadow-[0_0_0_1px_var(--muldro-primary-soft)]`.
+- **`ctl-off` — disabled:** `bg-surface-2/45`, **dashed** border, `text-t-muted`, 12px.
+  Used for Temperature when `accepts_temperature` is false and for Effort when
+  `thinking_style === "none"`. Always rendered, never unmounted (**F4**).
+- **`ctl-lbl`:** 10px/500 uppercase `t-muted`, tracking `.07em`, `margin-bottom: 5px`
+  (6px mobile). Every control carries a visible label — the fix for **L2**.
+
+**Buttons.** Two heights, chosen by context rather than by emphasis:
+
+| Variant | Height | Padding-x | Where |
+|---|---|---|---|
+| `md` | 32px | 13px primary / 12px ghost | save bar, card-level actions, warning card |
+| `sm` | 30px | 12px primary / 11px ghost | inside dense list rows, palette footer |
+| mobile | **44px** | 18px / 16px | every button below `sm` |
+
+Primary `bg-j-primary text-j-primary-fg` 13px/500 radius 8px, hover `bg-j-primary-hover`.
+Ghost transparent, `text-t-secondary`, 1px `border-b-primary`, 13px.
+Danger ghost (`Remove`) is ghost plus `text-j-error`.
+
+**Chips.** Three defined sizes; do not invent a fourth.
+
+| Name | Height | Padding-x | Radius | Font | Use |
+|---|---|---|---|---|---|
+| `chip` | 20px | 8px | full | 11px/500 | status, source, counts |
+| `agent-chip` | 19px | 7px | 5px | 11px/400 | agents on a tier |
+| `tchip` | 18px | 7px | 5px | 10.5px/400 | thinking style, picker rows |
+
+Variants: neutral `bg-surface-3 text-t-tertiary`; success `bg-j-success-soft
+text-j-success`; warning `bg-j-warning-soft text-j-warning`; info `bg-j-primary-soft
+text-j-primary`; outline `bg-transparent text-t-muted border border-b-primary`.
+
+**`kbd`** (picker only): min-width 17px, height 17px, padding-x 4px, radius 4px,
+`bg-surface-3`, 1px `border-b-primary`, `text-t-tertiary`, 10.5px.
+
+**Status dot:** 7px circle — connected `bg-j-success`; degraded `bg-j-warning`; not
+connected `border-[1.5px] border-t-muted` on transparent.
+
+### 9.4 Modal shell and rail
+
+**Normalisation.** The artboards render the modal at 780px (Model) and 820px (Providers)
+because each was drawn to its own content. The implementation uses **one fixed height**,
+so switching tabs never resizes the dialog.
+
+```
+sm+   : w-full max-w-4xl (896px) mx-4
+        h-[min(820px,calc(100dvh-4rem))]
+        bg-surface-1  border border-b-secondary
+        rounded-[var(--radius-xl)]  shadow-[var(--shadow-lg)]
+below : fixed inset-0 — full sheet, no radius, no margin
+```
+
+Backdrop `bg-black/50 backdrop-blur-sm`; entry reuses the existing `animate-fade-in` /
+`animate-scale-in`. Every flex child in the height chain carries `min-h-0`.
+
+**Rail** (`sm`+): width **200px**, `border-r border-b-secondary`, `bg-surface-2/40`,
+padding 10px, `gap-[2px]`.
+
+| Element | Metric |
+|---|---|
+| "Settings" heading | padding `8px 10px 12px`, 15px/600 |
+| Rail item | `flex items-center gap-[10px]`, padding `7px 12px`, radius 8px, 13px |
+| Rail item — inactive | `text-t-tertiary`, hover `text-t-primary bg-surface-2` |
+| Rail item — active | `bg-j-primary-soft text-j-primary font-medium` |
+| Providers item suffix | right-aligned `4/15`, 11px `t-muted`, tabular-nums |
+
+**Header:** padding `16px 24px`, `border-b border-b-secondary`. Title 15px/600; subtitle
+12.5px `t-tertiary` at `margin-top: 3px`. Close icon 16px `t-muted`, hover `t-primary`.
+
+**Body:** padding `20px 24px`, `flex flex-col gap-[18px]`, `overflow-y-auto`.
+
+### 9.5 Tier card
+
+`bg-surface-1`, 1px `border-b-secondary`, radius 12px, padding **`13px 20px 11px`**.
+Cards stack with `gap-[10px]`.
+
+**Header row** — `flex items-center justify-between gap-3`, `margin-bottom: 11px`: tier
+name (13px/600, tracking `.02em`) and description (12px `t-tertiary`) on a `gap-[10px]`
+baseline row; agent chips right at `gap-[5px]`.
+
+**Field grid** — `gap-[12px]`:
+
+| Breakpoint | `grid-template-columns` |
+|---|---|
+| `sm`+ | `2.7fr 1fr 1.1fr 1.1fr` — Model, Effort, Max tokens, Temperature |
+| below `sm` | `1fr 1fr`; Model `col-span-2`; Effort + Max tokens share a row; Temperature `col-span-2` |
+
+At 896px that resolves to Model ≈ 261px, Effort ≈ 97px, Max tokens ≈ 106px, Temperature
+≈ 106px. Nothing wraps at any width — the fix for **L1**.
+
+**Model control interior:** display name left, ellipsis on overflow; right cluster
+`gap-[7px]` carrying the derived provider name (11.5px `t-muted`) then an 11px search
+glyph (`t-tertiary`). A search glyph, not a chevron — it opens the palette (§9.9), not a
+dropdown, and the affordance must say so.
+
+**Meta row** — `margin-top: 10px`, `padding-top: 9px`, `border-t border-b-secondary`,
+`flex items-center gap-[9px]`. Context window, `$in / $out per Mtok`, thinking style —
+each 11.5px `t-muted` tabular-nums, separated by `·` in `text-b-strong`. The right slot
+holds either the capability hint ("Adaptive-thinking models do not accept temperature.")
+or the dirty marker: 5px `bg-j-primary` dot plus "Changed — not saved" in 11.5px
+`j-primary`.
+
+### 9.6 Warning variant (§4.4)
+
+The same card with three substitutions and no reflow:
+
+- card border → `border-j-warning/35`
+- meta row `border-t` → `border-j-warning/25`
+- Model control border → `border-j-warning/45`, and the derived provider name renders
+  `text-j-warning` instead of `t-muted`
+
+The meta row is replaced by the warning row: a 14px warning glyph, the consequence at
+12px `text-j-warning`, then a `md` ghost button (`border-j-warning/40 text-j-warning`)
+labelled `Connect {provider}`, which switches to the Providers tab with that provider
+pre-expanded.
+
+### 9.7 Save bar
+
+Pinned footer, outside the scroll region. `border-t border-b-secondary`,
+`bg-surface-2/50`, padding `12px 24px`, `flex items-center gap-3`.
+
+Left: 6px `bg-j-primary` dot plus "N unsaved change(s)" in 12.5px `j-primary`. When
+clean, that is replaced by "No changes" in 12.5px `t-muted` and **both buttons are
+disabled** at `opacity-45`. Right: `Discard` (ghost `md`) then `Save changes` (primary
+`md`), `gap-2`. Exactly one per tab (**F2**, **F3**).
+
+### 9.8 Providers tab
+
+**Toolbar** — padding `14px 24px 12px`, `flex items-center gap-[10px]`. Search is a `ctl`
+at `flex-1` with `justify-start gap-[9px]`, a 13px leading glyph, placeholder "Search N
+providers". Segmented filter: `bg-surface-2`, 1px `border-b-secondary`, radius 8px,
+padding 3px, `gap-[2px]`; each segment 28px tall, padding-x 12px, radius 6px, 12.5px;
+selected `bg-surface-4 text-t-primary font-medium`, unselected `text-t-tertiary`.
+
+**Group header** (`grp`) — `flex items-center gap-2`, padding `0 2px 8px`: a `sec-h`
+label and a neutral count chip. Groups are `Connected` then `Available`; the connected
+card carries `margin-bottom: 18px`.
+
+**Provider row** (`prow`) — `flex items-center gap-[13px]`, padding `11px 20px`,
+separated by a 1px `bg-b-secondary` rule rather than a border, so the card's radius stays
+clean.
+
+| Slot | Spec |
+|---|---|
+| status dot | 7px, per §9.3 |
+| name | **fixed 150px**, 14px/500, ellipsis — fixed so chips align down the column |
+| auth-kind chip | neutral, from `CatalogProvider.auth_kind` |
+| status chip | success `valid` / warning `unreachable` / outline `Not connected` |
+| detail | 11.5px `t-muted`; a base URL renders in `font-mono` |
+| actions | right, `gap-[7px]`, `sm` ghost buttons |
+
+Actions by state: connected → `Test`, `Edit`, plus `Remove` **only** when
+`source === "workspace"` (preserving today's correct behaviour); env or
+deployment-default → `Test`, `Override`; not connected → `Connect`.
+
+**Expanded row:** `bg-j-primary/5` with a **2px left border** in `j-primary`. Its header
+row is unchanged except the action becomes `Cancel`, plus a status chip stating why it
+opened ("Needed by the Fast tier") when reached from a warning card. Form: padding
+`0 20px 15px`, fields in `grid-cols-2 gap-[12px]` (`grid-cols-1` on mobile) generated
+from `CatalogProvider.credential_fields`, `margin-bottom: 11px`. Footer row: a 12px lock
+glyph and "Encrypted at rest. Never shown again after saving." (11.5px `t-muted`), with
+`Save & test` (primary `md`) right. Expansion is exclusive.
+
+A 56px `bg-gradient-to-b from-transparent to-surface-1` overlay sits at the bottom of the
+scroll region so a long list reads as continuing.
+
+### 9.9 Model picker
+
+A centred command palette over the modal, **not** a dropdown anchored to the field.
+
+```
+width 560px, top 78px, horizontally centred
+bg-surface-1, 1px border-b-strong, radius 14px
+shadow 0 24px 60px rgba(0,0,0,.55)
+```
+
+The modal behind dims with `bg-surface-0/55`. On mobile the palette is a full sheet.
+
+| Region | Spec |
+|---|---|
+| Search row | padding `14px 16px`, `gap-[11px]`, `border-b border-b-secondary`; 15px glyph; 15px `t-muted` placeholder "Search models by name, provider, context or price"; right: active tier name (11px `t-muted`) and an `esc` `kbd` |
+| Results | `max-height: 474px`, scrolls |
+| Group header | `grouphdr`: 10px uppercase `t-muted`, padding `11px 16px 6px`, `flex gap-2`, trailing 1px hairline, optional right-aligned "N models" (11px, sentence case) |
+| Row (`mrow`) | `flex items-center gap-3`, padding `9px 16px`, 13.5px |
+| Row — selected | `bg-j-primary-soft`, **2px left border** `j-primary`, `padding-left: 14px`, leading 13px check glyph in `j-primary`, name at weight 500 |
+| Row — unselected | `padding-left: 16px` plus a 13px leading spacer, so names align with the selected row |
+
+Columns after the name (`flex-1`, ellipsis) are all `flex-shrink-0`, right-aligned,
+11.5px `t-muted` tabular-nums: thinking-style `tchip`, context **52px**, cost **96px**,
+provider **66px** — the provider column renders only in the "Suggested" group, the one
+group whose rows cross providers. A context window of 1M or more renders
+`text-j-primary`: the single place colour marks a *value* rather than a state.
+
+Sections in order: **Suggested for {tier}** (from `suggested_tier`), then one group per
+connected provider in catalog order.
+
+**Footer:** `border-t border-b-secondary`, `bg-surface-2/60`, padding `9px 16px`. Left:
+`↑` `↓` kbd "navigate", `↵` kbd "select". Right: "N providers not connected" (11.5px
+`t-secondary`) and a `Browse all providers` primary `sm` button switching to the
+Providers tab.
+
+Keyboard: `↑`/`↓` move, `↵` selects, `Esc` closes without changing the binding, typing
+filters. `role="listbox"` with `aria-activedescendant` on the input (**A3**).
+
+### 9.10 Mobile (below `sm`, 640px)
+
+| Element | Override |
+|---|---|
+| Shell | full sheet, `inset-0`, no radius |
+| Rail | becomes the sheet's **root view** — a pushed list, not a scroller (**L4**) |
+| Pushed header | padding `14px 12px 14px 8px`; back control `‹ Settings` in `j-primary`, 15px, 44px tall; centred title 16px/600; 44×44 close |
+| Body | padding `18px 16px`, `gap-[18px]`, `bg-surface-0` |
+| Tier card | padding `14px 16px 12px` |
+| Field grid | `grid-cols-2 gap-[10px]`; Model and Temperature `col-span-2` |
+| Controls | 44px tall, 15px, padding-x 12px |
+| Buttons | 44px tall |
+| Meta row | `line-height: 1.6` — it wraps to two lines |
+| Save bar | `bg-surface-2`, padding `12px 16px 26px`; the extra bottom padding clears the home indicator |
+
+No fake status bar and no fake keyboard — the real ones render over the layout.
+
+### 9.11 Icons
+
+Inline stroke SVG only, no icon library, matching the existing `TabIcon` in
+`settings-modal.tsx`: `fill="none"`, `stroke="currentColor"`, round caps and joins.
+
+| Icon | viewBox | Stroke | Path |
+|---|---|---|---|
+| Rail tabs (existing six) | `0 0 16 16` | 1.4 | unchanged from `settings-modal.tsx` |
+| **Providers** (new) | `0 0 16 16` | 1.4 | `M5.5 2.5v3M10.5 2.5v3` · `M3.5 5.5h9v2a4.5 4.5 0 01-9 0v-2z` · `M8 12v1.5` |
+| Search / picker trigger | `0 0 12 12` | 1.4 | `circle cx=5.2 cy=5.2 r=3.3` · `M7.7 7.7l2.1 2.1` |
+| Chevron down (select) | `0 0 10 10` | 1.3 | `M2.5 4l2.5 2.5L7.5 4` |
+| Chevron right (row, disclosure) | `0 0 14 14` | 1.5 | `M5.5 3L9.5 7l-4 4` |
+| Chevron left (back) | `0 0 14 14` | 1.6–1.7 | `M8.5 3L4.5 7l4 4` |
+| Check (picker selection) | `0 0 14 14` | 1.8 | `M2.8 7.4l2.7 2.7 5.7-6` |
+| Warning | `0 0 14 14` | 1.5 | `circle cx=7 cy=7 r=5.6` · `M7 4.5v3.2M7 9.9v.2` |
+| Lock (credential hint) | `0 0 14 14` | 1.4 | `rect x=2.5 y=6 w=9 h=6 rx=1.5` · `M4.75 6V4.25a2.25 2.25 0 014.5 0V6` |
+| Close | `0 0 16 16` | 1.5 | `M4 4l8 8M12 4l-8 8` |
+
+The `▾ ▸` text glyphs in today's Advanced disclosure are replaced by the chevron above.
+No emoji or dingbats anywhere in this surface.

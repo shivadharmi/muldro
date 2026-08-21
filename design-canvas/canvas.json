@@ -5,8 +5,8 @@
   ],
   "artboards": [
     { "file": "Current.dc.html", "page": "page-1", "x": 0, "y": 0, "w": 860, "h": 720, "title": "Today — one tab, everything" },
-    { "file": "Main.dc.html", "page": "page-1", "x": 940, "y": 0, "w": 1000, "h": 860, "title": "Model tab — tiers only" },
-    { "file": "Picker.dc.html", "page": "page-1", "x": 2020, "y": 0, "w": 1000, "h": 860, "title": "Model picker" },
+    { "file": "Main.dc.html", "page": "page-1", "x": 940, "y": 0, "w": 1000, "h": 900, "title": "Model tab — tiers only" },
+    { "file": "Picker.dc.html", "page": "page-1", "x": 2020, "y": 0, "w": 1000, "h": 900, "title": "Model picker" },
     { "file": "Providers.dc.html", "page": "page-1", "x": 3100, "y": 0, "w": 1000, "h": 900, "title": "Providers tab — new" },
     { "file": "MobileA.dc.html", "page": "page-1", "x": 4180, "y": 0, "w": 390, "h": 844, "title": "Model tab at 390px" },
 
