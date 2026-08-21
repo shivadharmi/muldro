@@ -210,3 +210,24 @@ def test_adversarial_actor_name_always_yields_a_frame(name):
     frame = frame_for_event(_event(actor_entities=[{"name": name}]))
     assert frame.headline
     assert _MARKDOWN_IN_HEADLINE.search(frame.headline) is None
+
+
+def test_a_pre_ingest_raw_event_still_names_its_counterparty():
+    """A RawEvent's actor field is `actor`, a NormalizedEvent's is
+    `actor_entities`. perception_runner builds Units from RawEvents, before
+    ingest has renamed anything, so reading only `actor_entities` silently
+    dropped the person from every headline in the poll.
+    """
+    from src.services.event_processor import RawEvent
+
+    event = RawEvent(
+        source="gmail",
+        source_account_id="acct_1",
+        event_type="email_received",
+        entity_type="email_thread",
+        entity_id="t_1",
+        title="Series A term sheet",
+        actor={"type": "person", "name": "Sarah Chen"},
+    )
+
+    assert frame_for_event(event).headline == "Sarah Chen - Series A term sheet"

@@ -28,6 +28,7 @@ from src.orchestrator.intent_classifier import extract_plan
 from src.orchestrator.plan_store import PlanStore
 from src.orchestrator.surface_pusher import SurfacePusher, _clean_insight_title
 from src.orchestrator.tracing import TraceManager
+from src.view.perception import units_from_events
 
 logger = logging.getLogger(__name__)
 
@@ -271,6 +272,42 @@ class PerceptionRunner:
                 new_cursor=new_cursor,
                 cursor_type=cursor_type,
             )
+
+            # One Unit per THING, not one signal per poll cycle. Deliberately
+            # additive: the per-cycle PerceptionSignal below is untouched and
+            # still feeds the Planner. Nothing transports these Units yet —
+            # they exist so the grouping is proven against live traffic before
+            # the old path is removed. `events` vs `units` is the whole point:
+            # equal numbers mean nothing grouped, and three polls of one thread
+            # should now read `events=3 units=1`.
+            #
+            # These are pre-ingest RawEvents, so `frame.importance` is 0.0 —
+            # the scorer runs at ingest. Nothing ranks on it here.
+            #
+            # Wrapped because this is a live poll: units_from_events already
+            # skips a single unbuildable thing, but a bug in the view layer
+            # must not be able to take down perception for a whole source,
+            # which would be far worse than a missing diagnostic line.
+            try:
+                units = units_from_events(raw_events)
+                logger.info(
+                    "perception_units_built source=%s events=%d units=%d",
+                    source,
+                    len(raw_events),
+                    len(units),
+                    extra={
+                        "source": source,
+                        "events": len(raw_events),
+                        "units": len(units),
+                    },
+                )
+            except Exception as unit_error:  # noqa: BLE001 - diagnostic only
+                logger.warning(
+                    "perception_units_failed source=%s error=%s",
+                    source,
+                    unit_error,
+                    extra={"source": source, "error": str(unit_error)},
+                )
 
             # Fetch full thread context for reply emails
             thread_contexts = await _fetch_thread_contexts(raw_events, user_id, workspace_id)

@@ -74,6 +74,22 @@ def _actor_name(actor_entities: Any) -> str:
     return ""
 
 
+def event_actor_name(event: Any) -> str:
+    """The counterparty on an event, whichever pipeline stage it came from.
+
+    A Unit is built at TWO points: perception_runner groups a poll's
+    pre-ingest RawEvents, and everything downstream reads the NormalizedEvent
+    rows ingest wrote. The two disagree on one field name - a RawEvent's
+    counterparty is `actor` (a bare dict), a NormalizedEvent's is
+    `actor_entities` (a list of dicts). Reading only one of them does not
+    fail loudly: it silently yields "", which drops the person from a
+    headline and drops a quote entirely.
+
+    Both readers go through here so the pair cannot drift.
+    """
+    return _actor_name(getattr(event, "actor_entities", None) or getattr(event, "actor", None))
+
+
 def _importance(raw: Any) -> float:
     """Clamp to Frame.importance's [0.0, 1.0]. Never raises.
 
@@ -113,14 +129,25 @@ def frame_for_event(
     updated_at: datetime | None = None,
     affordances: list[Affordance] | None = None,
 ) -> Frame:
-    """Project a NormalizedEvent onto a Frame.
+    """Project a NormalizedEvent - or a pre-ingest RawEvent - onto a Frame.
+
+    Both shapes exist because a Unit is built at TWO points in the pipeline:
+    perception_runner groups a poll's RawEvents before ingest has run, and
+    everything downstream reads the NormalizedEvent rows ingest wrote. They
+    name the counterparty differently, which is why the actor is read through
+    `event_actor_name` rather than off one field.
+
+    A RawEvent carries no `importance_score` at all, so `importance` is 0.0
+    for pre-ingest events. That is correct and deliberate: importance is
+    assigned at ingest by the scorer, and inventing a placeholder here would
+    be muldro asserting a judgement it has not made.
 
     `kind` and `status` are the CALLER's decision - they depend on what the
     domain row means, which the event alone does not say. They are never the
     model's.
     """
     subject = _plain(getattr(event, "title", None))
-    actor = _actor_name(getattr(event, "actor_entities", None))
+    actor = event_actor_name(event)
 
     if actor and subject:
         headline = f"{actor} - {subject}"

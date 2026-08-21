@@ -6,12 +6,15 @@ else, so three polls of one inbox produced three cards. The unit is now the
 thing the connector already named.
 """
 
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
-from src.view.contracts import Quote
-from src.view.frame import _actor_name, frame_key
+from src.view.contracts import Quote, Unit
+from src.view.frame import event_actor_name, frame_for_event, frame_key
+
+logger = logging.getLogger(__name__)
 
 # `NormalizedEvent.occurred_at` is NOT NULL at the DB level, but this module
 # takes any object with the right attributes - including pre-ingest RawEvents
@@ -116,10 +119,12 @@ def quotes_from_events(events: list[Any]) -> list[Quote]:
     attribution, not a harmless default - worse than the quote not
     appearing at all.
 
-    `who` is read via frame.py's `_actor_name`, not a second extractor:
+    `who` is read via frame.py's `event_actor_name`, not a second extractor:
     production stores `actor_entities` as a LIST of dicts despite the model
-    annotating `dict | None` (Task 3), and `_actor_name` is where that shape
-    is already handled correctly.
+    annotating `dict | None` (Task 3), and a pre-ingest RawEvent calls the
+    field `actor` instead. That helper is where both shapes are already
+    handled, and sharing it is what keeps a quote's attribution and a
+    headline's from disagreeing about who wrote something.
     """
     quotes: list[Quote] = []
     for event in sorted(events, key=_occurred):
@@ -129,8 +134,45 @@ def quotes_from_events(events: list[Any]) -> list[Quote]:
         text = _quote_text(payload)
         if not text:
             continue
-        who = _actor_name(getattr(event, "actor_entities", None))
+        who = event_actor_name(event)
         if not who:
             continue
         quotes.append(Quote(text=text, who=who, when=_occurred(event)))
     return quotes[-MAX_QUOTES:]
+
+
+def units_from_events(events: list[Any]) -> list[Unit]:
+    """Turn one poll's events into one Unit per thing, newest first.
+
+    `body` is left empty: the frame and the quotes are code's, and the body
+    is the model's, written in a later step against the frame's kind budget.
+
+    One malformed thing costs one Unit, never the poll. `Frame` is a
+    validating model - `headline` caps at 200 characters and refuses blank,
+    and `source` refuses empty - so an ordinary long email subject is enough
+    to raise inside `frame_for_event`. Letting that propagate would lose
+    every OTHER card in the same poll, which is the outcome frame.py already
+    rejected when it chose to clamp a hostile `importance_score` rather than
+    raise on it.
+    """
+    units: list[Unit] = []
+    for group in group_events_by_key(list(events)):
+        try:
+            frame = frame_for_event(
+                group.latest,
+                kind="proposal",
+                status="needs_you",
+                event_count=group.event_count,
+                updated_at=_occurred(group.latest),
+            )
+            quotes = quotes_from_events(list(group.events))
+        except Exception as exc:  # noqa: BLE001 - one bad thing must not cost the poll
+            logger.warning(
+                "view_unit_build_failed key=%s error=%s",
+                group.key,
+                exc,
+                extra={"frame_key": group.key, "error": str(exc)},
+            )
+            continue
+        units.append(Unit(frame=frame, body="", quotes=tuple(quotes)))
+    return units
