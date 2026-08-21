@@ -38,7 +38,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
-from email.utils import parsedate_to_datetime
+from email.utils import parseaddr, parsedate_to_datetime
 
 from src.connectors.base import register_connector
 from src.connectors.gateway_connector import OVERLAP_SECONDS, GatewayConnector
@@ -176,6 +176,41 @@ def _snippet_of(message: dict) -> str:
     return _first_text(message, "messageText")
 
 
+def _actor_of(sender: str) -> dict[str, str]:
+    """Split an RFC 5322 ``From`` into a displayable name and an address.
+
+    This connector is the ONLY place that knows the string is a ``From``
+    header, so it is the only place that can split it - and it must, because
+    downstream cannot use the unsplit value at all. The view layer composes a
+    headline from the actor's ``name`` and reduces it to inert plain text
+    first (``view/frame.py::_plain``), which REMOVES a bare email address:
+    the headline validator refuses one, so ``_plain`` strips it. Writing the
+    whole ``From`` into ``name`` therefore meant that a sender with no display
+    name - ``noreply@acme.com``, and every human whose client omits one - lost
+    its name to the empty string, which dropped the counterparty from the
+    headline AND dropped the message's quote entirely (an unattributed quote
+    is discarded by design).
+
+    So the fallback is the address's LOCAL PART, not the address: "sarah"
+    survives ``_plain`` and gives the founder something to read, where
+    "sarah@acme.com" cannot and must not. ``email`` still carries the full
+    address for anything matching on identity rather than displaying.
+
+    ``parseaddr`` never raises, but it does not report failure either: on
+    input that is not an address it returns ``("", "")`` or - worse, because
+    it is silent - the FIRST WHITESPACE-DELIMITED TOKEN ("not an address"
+    parses to ``("", "not")``). An address with no ``@`` in it is therefore
+    treated as a parse failure and the raw ``From`` stands in, since a header
+    we could not parse is still the only sender we were given and a fragment
+    of it is strictly worse than all of it.
+    """
+    display, address = parseaddr(sender)
+    if "@" not in address:
+        address = sender.strip()
+    name = display.strip() or address.split("@", 1)[0]
+    return {"type": "person", "email": address, "name": name or address}
+
+
 @register_connector("gmail")
 class GmailConnector(GatewayConnector):
     """Polls Gmail through OpenConnector, windowed on a timestamp watermark."""
@@ -297,7 +332,7 @@ class GmailConnector(GatewayConnector):
             occurred_at=_occurred_at(message),
             title=subject,
             summary=_snippet_of(message)[:SUMMARY_MAX_CHARS],
-            actor={"type": "person", "email": sender, "name": sender},
+            actor=_actor_of(sender),
             raw_payload={
                 "message_id": message_id,
                 "labels": labels if isinstance(labels, list) else [],

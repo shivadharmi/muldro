@@ -89,6 +89,50 @@ def ensure_aware_utc(value: Any) -> datetime | None:
     return value
 
 
+def _raw_names(actor_entities: Any) -> list[str]:
+    """Every name string an actor field offers, in preference order."""
+    if isinstance(actor_entities, dict):
+        candidates: list[Any] = [actor_entities]
+    elif isinstance(actor_entities, (list, tuple)):
+        candidates = list(actor_entities)
+    else:
+        return []
+
+    names: list[str] = []
+    for entry in candidates:
+        if not isinstance(entry, dict):
+            continue
+        name = entry.get("name") or entry.get("canonical_name")
+        if isinstance(name, str):
+            names.append(name)
+    return names
+
+
+def _local_part(name: str) -> str:
+    """BACKSTOP: salvage a display name from a value that is a bare address.
+
+    `_plain` removes a bare email address, because the headline validator
+    refuses one - so an actor whose `name` IS an address resolves to '' and
+    the person vanishes from the headline and their quote is dropped.
+
+    The fix belongs where the knowledge is, and it is there: gmail.py splits
+    its RFC 5322 `From` and writes the local part when there is no display
+    name. This is the backstop for everything that ISN'T that - a
+    NormalizedEvent row written before that fix, a source that puts an
+    address in `name` (calendar's organizer `displayName` can be blank), a
+    hand-built event. It parses nothing: there is no header here to parse,
+    only an unusable string to salvage a readable fragment from.
+
+    The result goes back through `_plain`, so this cannot reintroduce a
+    construct the validator refuses - a name like "www.evil.example@x.example"
+    salvages to nothing and stays unattributed, which is the right way for
+    this to fail.
+    """
+    if "@" not in name:
+        return ""
+    return _plain(name.split("@", 1)[0])
+
+
 def _actor_name(actor_entities: Any) -> str:
     """The counterparty's name, or '' when the event names nobody usable.
 
@@ -97,22 +141,20 @@ def _actor_name(actor_entities: Any) -> str:
     NormalizedEvent annotating `actor_entities: Mapped[dict | None]`. The list
     is therefore the shape that matters; the bare dict is accepted too, since
     it is what the model's own annotation claims.
-    """
-    if isinstance(actor_entities, dict):
-        candidates: list[Any] = [actor_entities]
-    elif isinstance(actor_entities, (list, tuple)):
-        candidates = list(actor_entities)
-    else:
-        return ""
 
-    for entry in candidates:
-        if not isinstance(entry, dict):
-            continue
-        name = entry.get("name") or entry.get("canonical_name")
-        if isinstance(name, str):
-            plain = _plain(name)
-            if plain:
-                return plain
+    A real display name always wins, on ANY entry, before the bare-address
+    backstop is tried on any of them - hence two passes. An entry naming a
+    person is better attribution than a fragment of another entry's address.
+    """
+    names = _raw_names(actor_entities)
+    for name in names:
+        plain = _plain(name)
+        if plain:
+            return plain
+    for name in names:
+        salvaged = _local_part(name)
+        if salvaged:
+            return salvaged
     return ""
 
 

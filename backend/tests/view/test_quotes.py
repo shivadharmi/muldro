@@ -209,19 +209,37 @@ def test_a_real_gmail_event_produces_an_attributed_quote():
     assert quotes[0].when == datetime(2026, 8, 21, 14, 0, tzinfo=timezone.utc)
 
 
-def test_a_gmail_sender_with_no_display_name_loses_its_quote():
-    """Characterization, NOT an endorsement - and not this module's to fix.
+def test_a_gmail_sender_with_no_display_name_keeps_its_quote():
+    """A bare `From` must still attribute, because most senders are bare.
 
-    gmail's actor name is the raw From value, and `frame.py::_plain` strips a
-    bare address as an autolink, so `event_actor_name` returns "" and the
-    unattributed-quote rule then drops the quote. The text is present and
-    correct; only the name is gone. Fixing it means teaching the actor
-    extractor to keep the local part (or the connector to split the From),
-    both of which live in files this change does not own.
+    gmail.py splits the RFC 5322 `From` and falls back to the address's LOCAL
+    PART when there is no display name. The full address could not be used:
+    `frame.py::_plain` strips one (the headline validator refuses it), so
+    writing the whole From into `actor["name"]` yielded "" - which dropped the
+    counterparty from the headline AND, because an unattributed quote is
+    discarded by design, dropped this quote entirely.
     """
     raw = _gmail_raw(sender="sarah@acme.com")
-    assert raw.summary == "Can you get back to me by Friday?"
-    assert quotes_from_events([raw]) == []
+    assert raw.actor == {"type": "person", "email": "sarah@acme.com", "name": "sarah"}
+    quotes = quotes_from_events([raw])
+    assert len(quotes) == 1
+    assert quotes[0].text == "Can you get back to me by Friday?"
+    assert quotes[0].who == "sarah"
+
+
+def test_a_gmail_sender_with_a_display_name_is_attributed_to_the_person():
+    """The other half of the pair: a display name is never discarded for the
+    local part it sits next to."""
+    raw = _gmail_raw(sender="Sarah Chen <sarah@acme.com>")
+    assert raw.actor == {"type": "person", "email": "sarah@acme.com", "name": "Sarah Chen"}
+    assert quotes_from_events([raw])[0].who == "Sarah Chen"
+
+
+def test_a_noreply_gmail_sender_is_still_named():
+    """The bare-address case is not an edge: every no-reply notification is
+    one, and they are exactly the senders a founder needs to identify."""
+    raw = _gmail_raw(sender="noreply@acme.com")
+    assert quotes_from_events([raw])[0].who == "noreply"
 
 
 def test_a_real_slack_event_produces_an_attributed_quote():

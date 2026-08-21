@@ -155,6 +155,46 @@ def test_junk_in_the_actor_list_does_not_raise():
     assert frame.headline == "Series A term sheet"
 
 
+# --- a name that is a bare address: the backstop ---------------------------
+#
+# `_plain` removes a bare email address because the headline validator refuses
+# one, so an actor whose `name` IS an address resolved to "" - the person
+# vanished from the headline and their quote was dropped as unattributed. The
+# PRIMARY fix is in gmail.py, which splits its RFC 5322 `From` and stores the
+# local part when there is no display name. These pin the downstream backstop,
+# which covers rows written before that fix and any other source that hands a
+# bare address in `name`.
+
+
+def test_an_actor_name_that_is_a_bare_address_salvages_its_local_part():
+    frame = frame_for_event(_event(actor_entities=[{"name": "sarah@acme.com"}]))
+    assert frame.headline == "sarah - Series A term sheet"
+
+
+def test_a_real_display_name_beats_another_entrys_bare_address():
+    """Two passes, not one: a name is better attribution than a fragment."""
+    frame = frame_for_event(
+        _event(actor_entities=[{"name": "sarah@acme.com"}, {"name": "Sarah Chen"}])
+    )
+    assert frame.headline == "Sarah Chen - Series A term sheet"
+
+
+def test_the_salvaged_local_part_is_still_reduced_to_inert_text():
+    """The salvage re-enters `_plain`, so it cannot mint what the validator
+    refuses. A local part that is itself an autolink salvages to nothing and
+    the event stays unattributed, which is the correct way to fail."""
+    frame = frame_for_event(_event(actor_entities=[{"name": "www.evil.example@x.example"}]))
+    assert frame.headline == "Series A term sheet"
+
+
+def test_an_email_field_is_still_not_a_name():
+    """The backstop reads `name`/`canonical_name` only. `email` is an identity
+    field, not a display field, and promoting it would change what an actor
+    entry carrying ONLY an address means."""
+    frame = frame_for_event(_event(actor_entities=[{"email": "sarah@acme.com"}]))
+    assert frame.headline == "Series A term sheet"
+
+
 # --- importance is clamped, never raised ----------------------------------
 #
 # Frame.importance is ge=0.0 le=1.0 and the caller supplies it - eventually
