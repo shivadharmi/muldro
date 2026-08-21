@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.api.deps import get_current_workspace_id, get_session
 from src.config import secret_crypto
 from src.config.model_catalog import MODEL_CATALOG, get_model_spec
-from src.config.provider_catalog import PROVIDER_CATALOG
+from src.config.provider_catalog import PROVIDER_CATALOG, AuthKind, FieldKind
 from src.contracts.model_config import ModelConfigResponse, ProviderStatus, TierBinding
 from src.llm.model_factory import build_langchain_model
 from src.models.provider_credential import ProviderCredential
@@ -44,7 +44,7 @@ class CredentialFieldModel(BaseModel):
     model_config = ConfigDict(extra="ignore")
     key: str
     label: str
-    kind: str
+    kind: FieldKind
     required: bool
     placeholder: str | None = None
 
@@ -53,7 +53,7 @@ class CatalogProvider(BaseModel):
     model_config = ConfigDict(extra="ignore")
     provider: str
     display_name: str
-    auth_kind: str
+    auth_kind: AuthKind
     credential_fields: list[CredentialFieldModel]
     model_count: int
     docs_url: str | None = None
@@ -76,6 +76,11 @@ class CatalogResponse(BaseModel):
 @router.get("/v1/model-catalog", response_model=CatalogResponse)
 async def get_model_catalog(workspace_id: str = Depends(get_current_workspace_id)):
     return CatalogResponse(
+        # providers and models are built from separate hand-authored catalogs and
+        # never filtered against each other here;
+        # tests/test_provider_catalog.py::test_every_catalogued_provider_has_a_spec
+        # pins set(PROVIDER_CATALOG) == set(MODEL_CATALOG), which is what keeps them
+        # in agreement.
         providers=[
             CatalogProvider(
                 provider=name,

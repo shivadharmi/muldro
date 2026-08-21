@@ -1,4 +1,5 @@
 import asyncio
+from dataclasses import fields
 from unittest.mock import MagicMock
 
 import pytest
@@ -15,6 +16,9 @@ from src.api.deps import (
     get_current_workspace_id,
     get_session,
 )
+from src.api.routes_model_config import CatalogModel, CatalogProvider, CredentialFieldModel
+from src.config.model_catalog import ModelSpec
+from src.config.provider_catalog import CredentialField, ProviderSpec
 from src.config.settings import get_settings
 from src.models.model_binding import ModelBinding
 from src.models.provider_credential import ProviderCredential
@@ -71,6 +75,15 @@ def test_get_model_catalog_still_returns_agents():
         assert {"planner", "perceiver", "persona"} <= names
         planner = next(a for a in body["agents"] if a["name"] == "planner")
         assert planner["tier"] == "reasoning"
+
+
+def test_catalog_dtos_expose_every_source_field():
+    """B5 was the API silently dropping fields ModelSpec already carried. These DTOs
+    are hand-restated copies of their source dataclasses, so nothing but this test
+    stops the same drift recurring the next time a source gains a field."""
+    assert {f.name for f in fields(ModelSpec)} <= set(CatalogModel.model_fields)
+    assert {f.name for f in fields(CredentialField)} <= set(CredentialFieldModel.model_fields)
+    assert {f.name for f in fields(ProviderSpec)} <= set(CatalogProvider.model_fields)
 
 
 def _db_reachable() -> bool:
