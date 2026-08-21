@@ -109,11 +109,20 @@ export function MarkdownRenderer({ content }: { content: string }) {
   );
 }
 
-// InlineMarkdown is used inside heading/span contexts (e.g. surface card <h3>,
-// modal <h2>). Block-level tags (headings, lists, blockquotes) would produce
-// invalid HTML when nested inside inline parents, so override them to <span>.
+// InlineMarkdown is used inside heading/caption contexts (alert titles, A2UI
+// captions, insight summaries). Block-level tags (headings, lists, blockquotes)
+// would produce invalid HTML when nested inside inline parents, so override
+// them to <span>.
+//
+// `a` is overridden to a plain <span> as well: every remaining call site is a
+// short string in a heading or caption position, several of them derived from
+// external text, and a live `target="_blank"` link there puts an attacker's URL
+// in muldro's voice with no sender attributed. `remarkGfm` makes this wider than
+// `[text](url)` — it autolinks bare `www.…` and bare email addresses too. Block
+// prose (`MarkdownRenderer`) keeps its links; inline strings do not get one.
 const inlineComponents: Components = {
   ...components,
+  a: ({ children }) => <span>{children}</span>,
   p: ({ children }) => <span>{children}</span>,
   h1: ({ children }) => <span className="font-semibold">{children}</span>,
   h2: ({ children }) => <span className="font-semibold">{children}</span>,

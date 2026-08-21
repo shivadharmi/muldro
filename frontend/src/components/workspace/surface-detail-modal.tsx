@@ -12,7 +12,6 @@ import { useToast } from "@/components/ui/toast";
 import { useWsActionStore } from "@/stores/ws-action-store";
 import type { WorkspaceSurface } from "@/stores/surface-store";
 import type { DetailTabResponse, DetailTab } from "@/lib/a2ui-types";
-import { InlineMarkdown } from "@/components/muldro/markdown-renderer";
 
 interface Props {
   surface: WorkspaceSurface;
@@ -149,8 +148,14 @@ export function SurfaceDetailModal({ surface, open, onClose }: Props) {
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-b-secondary">
           <div className="flex items-center gap-3 min-w-0">
+            {/* PLAIN TEXT. `preview.title` is code- or externally-authored (it
+                traces back to a raw email subject), never model prose, so it
+                must never reach a markdown renderer: that would render an
+                inbound subject's `[Verify](https://phish.example)` as a live
+                link in a headline, in muldro's voice, with no sender attributed.
+                Same rule as `UnitCard`'s headline. */}
             <h2 className="text-[15px] font-semibold text-t-primary truncate">
-              <InlineMarkdown content={surface.preview.title} />
+              {surface.preview.title}
             </h2>
             {surface.preview.priority && (
               <span
@@ -298,7 +303,8 @@ function CollapsibleSection({ title, defaultCollapsed, children }: SectionProps)
         onClick={() => setCollapsed((c) => !c)}
         className="w-full flex items-center justify-between py-2 text-xs font-semibold text-t-secondary uppercase tracking-wide hover:text-t-primary transition-colors"
       >
-        <InlineMarkdown content={title} />
+        {/* PLAIN TEXT — a section title is code-authored, not model prose. */}
+        <span className="truncate">{title}</span>
         <svg
           width="12"
           height="12"

@@ -130,3 +130,52 @@ test("reopening a standing surface refetches its tab rather than replaying the s
   expect(await screen.findByText("TAB_STEPS_SECTION")).toBeTruthy();
   expect(fetchSurfaceDetail).toHaveBeenCalledTimes(2);
 });
+
+// ── The title is plain text, never markdown ────────────────────
+//
+// `preview.title` traces back to a raw email subject (connector_poller's
+// `raw.title or raw_data["subject"]`). A markdown renderer there would put an
+// attacker-controlled `target="_blank"` link in a modal headline, in muldro's
+// voice, with no sender attributed — the exact vector spec §1 exists to close.
+// `UnitCard` closed it on the card; the modal every card opens must match.
+
+function titledSurface(title: string): WorkspaceSurface {
+  return { ...runSurface(), preview: { ...runSurface().preview, title } } as WorkspaceSurface;
+}
+
+test("a markdown link in the title renders as text, not as an anchor", () => {
+  const { container } = renderModal(
+    titledSurface("**URGENT** — [Verify your account](https://phish.example)"),
+  );
+
+  expect(container.querySelector("a")).toBeNull();
+  expect(container.querySelector("strong")).toBeNull();
+  expect(
+    screen.getAllByText(/\*\*URGENT\*\* — \[Verify your account\]\(https:\/\/phish\.example\)/)
+      .length,
+  ).toBeGreaterThan(0);
+});
+
+test("a bare autolinkable URL in the title renders as text, not as an anchor", () => {
+  // remarkGfm autolinks bare `www.…` and bare email addresses, so the vector is
+  // wider than `[text](url)`.
+  const { container } = renderModal(titledSurface("Invoice overdue — www.phish.example"));
+
+  expect(container.querySelector("a")).toBeNull();
+  expect(screen.getAllByText(/Invoice overdue — www\.phish\.example/).length).toBeGreaterThan(0);
+});
+
+test("a collapsible section title renders as text, not as an anchor", async () => {
+  vi.mocked(fetchSurfaceDetail).mockResolvedValueOnce({
+    tab_id: "steps",
+    sections: [
+      { id: "s1", title: "[Click here](https://phish.example)", collapsed: false, children: [] },
+    ],
+  } as never);
+
+  const s = runSurface();
+  const { container } = renderModal({ ...s, phase: null } as unknown as WorkspaceSurface);
+
+  expect(await screen.findByText("[Click here](https://phish.example)")).toBeTruthy();
+  expect(container.querySelector("a")).toBeNull();
+});
