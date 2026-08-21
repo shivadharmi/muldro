@@ -179,3 +179,14 @@ test("a collapsible section title renders as text, not as an anchor", async () =
   expect(await screen.findByText("[Click here](https://phish.example)")).toBeTruthy();
   expect(container.querySelector("a")).toBeNull();
 });
+
+test("the priority badge prints a Title-case label, not the raw wire value", () => {
+  const s = runSurface();
+  renderModal({
+    ...s,
+    preview: { ...s.preview, priority: "critical" },
+  } as unknown as WorkspaceSurface);
+
+  expect(screen.getByText("Critical")).toBeTruthy();
+  expect(screen.queryByText("critical")).toBeNull();
+});

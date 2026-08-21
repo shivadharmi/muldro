@@ -12,19 +12,13 @@ import { useToast } from "@/components/ui/toast";
 import { useWsActionStore } from "@/stores/ws-action-store";
 import type { WorkspaceSurface } from "@/stores/surface-store";
 import type { DetailTabResponse, DetailTab } from "@/lib/a2ui-types";
+import { PRIORITY_LABELS, priorityStyle } from "@/lib/design-tokens";
 
 interface Props {
   surface: WorkspaceSurface;
   open: boolean;
   onClose: () => void;
 }
-
-const priorityBadge: Record<string, string> = {
-  low: "bg-t-muted/20 text-t-tertiary",
-  medium: "bg-j-info-soft text-j-info",
-  high: "bg-j-warning-soft text-j-warning",
-  critical: "bg-j-error-soft text-j-error",
-};
 
 export function SurfaceDetailModal({ surface, open, onClose }: Props) {
   const sendAction = useWsActionStore((s) => s.sendAction);
@@ -158,11 +152,7 @@ export function SurfaceDetailModal({ surface, open, onClose }: Props) {
               {surface.preview.title}
             </h2>
             {surface.preview.priority && (
-              <span
-                className={`text-[10px] px-2 py-0.5 rounded-[var(--radius-sm)] font-medium shrink-0 ${priorityBadge[surface.preview.priority] ?? ""}`}
-              >
-                {surface.preview.priority}
-              </span>
+              <PriorityBadge priority={surface.preview.priority} />
             )}
           </div>
           <button
@@ -282,6 +272,22 @@ export function SurfaceDetailModal({ surface, open, onClose }: Props) {
         </div>
       </div>
     </div>
+  );
+}
+
+// ── Priority Badge ─────────────────────────────
+
+/** One definition: the shared token style plus the shared Title-case label.
+ *  Printing `preview.priority` verbatim put a lowercase word beside Title-case
+ *  neighbours — the same drift the kind pill's private copy caused. */
+function PriorityBadge({ priority }: { priority: string }) {
+  const tone = priorityStyle(priority);
+  return (
+    <span
+      className={`text-[10px] px-2 py-0.5 rounded-[var(--radius-sm)] font-medium shrink-0 ${tone.bg} ${tone.text}`}
+    >
+      {PRIORITY_LABELS[priority] ?? priority}
+    </span>
   );
 }
 

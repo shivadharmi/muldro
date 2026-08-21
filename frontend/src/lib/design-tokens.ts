@@ -240,6 +240,17 @@ export function frameStatusColor(status: string): string {
   }
 }
 
+/** Title-case display labels for priorities.
+ *
+ *  Priority is the one badge that used to be printed verbatim off the wire,
+ *  which is why it read lowercase beside Title-case neighbours. */
+export const PRIORITY_LABELS: Record<string, string> = {
+  low: "Low",
+  medium: "Medium",
+  high: "High",
+  critical: "Critical",
+};
+
 /** Maps priority to badge styling (bg + text classes) */
 export function priorityStyle(priority: string): { bg: string; text: string } {
   switch (priority) {
