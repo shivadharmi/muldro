@@ -116,6 +116,35 @@ async def _seed_ws(factory) -> str:
     return ws
 
 
+def _ws_app(factory, ws):
+    """A TestClient app bound to workspace *ws* and session factory *factory*.
+
+    Every /v1/model-config test needs a real session: FastAPI solves the get_session
+    dependency before it reports a body-validation error, so even a 422 test would blow
+    up on a missing DB without this.
+    """
+
+    async def _override():
+        async with factory() as s:
+            yield s
+
+    app = create_app()
+    mock_user = MagicMock()
+    mock_user.user_id = TEST_USER_ID
+    app.dependency_overrides[get_current_user] = lambda: mock_user
+    app.dependency_overrides[get_current_user_id] = lambda: TEST_USER_ID
+    app.dependency_overrides[get_current_workspace_id] = lambda: ws
+    app.dependency_overrides[get_session] = _override
+    return app
+
+
+def _ws_factory():
+    """(factory, workspace_id) for a freshly seeded workspace."""
+    engine = create_async_engine(get_settings().database_url, poolclass=NullPool)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    return factory, asyncio.run(_seed_ws(factory))
+
+
 @pytest.mark.skipif(not _db_reachable(), reason="Postgres not reachable")
 def test_put_then_get_model_config():
     engine = create_async_engine(get_settings().database_url, poolclass=NullPool)
@@ -141,7 +170,8 @@ def test_put_then_get_model_config():
                 json={
                     "tiers": [
                         {
-                            "tier": "balanced",
+                            "scope_type": "tier",
+                            "scope_key": "balanced",
                             "provider": "anthropic",
                             "model_id": "claude-sonnet-4-6",
                             "effort": "medium",
@@ -150,7 +180,8 @@ def test_put_then_get_model_config():
                     ],
                     "agent_overrides": [
                         {
-                            "tier": "planner",
+                            "scope_type": "agent",
+                            "scope_key": "planner",
                             "provider": "anthropic",
                             "model_id": "claude-opus-4-8",
                             "effort": "high",
@@ -169,7 +200,8 @@ def test_put_then_get_model_config():
                 json={
                     "tiers": [
                         {
-                            "tier": "balanced",
+                            "scope_type": "tier",
+                            "scope_key": "balanced",
                             "provider": "anthropic",
                             "model_id": "claude-sonnet-4-6",
                             "effort": "low",
@@ -178,7 +210,8 @@ def test_put_then_get_model_config():
                     ],
                     "agent_overrides": [
                         {
-                            "tier": "planner",
+                            "scope_type": "agent",
+                            "scope_key": "planner",
                             "provider": "anthropic",
                             "model_id": "claude-opus-4-8",
                             "effort": "high",
@@ -193,7 +226,7 @@ def test_put_then_get_model_config():
             assert got.status_code == 200, got.text
             body = got.json()
 
-            tiers = {t["tier"]: t for t in body["tiers"]}
+            tiers = {t["scope_key"]: t for t in body["tiers"]}
             # Workspace override wins for balanced (re-PUT effort=low).
             assert tiers["balanced"]["model_id"] == "claude-sonnet-4-6"
             assert tiers["balanced"]["effort"] == "low"
@@ -202,8 +235,8 @@ def test_put_then_get_model_config():
             assert tiers["reasoning"]["model_id"] == "claude-opus-4-8"
             assert tiers["fast"]["model_id"] == "claude-haiku-4-5-20251001"
 
-            # Agent override round-trips with the agent name in the tier field.
-            overrides = {o["tier"]: o for o in body["agent_overrides"]}
+            # Agent override round-trips with the agent name in scope_key.
+            overrides = {o["scope_key"]: o for o in body["agent_overrides"]}
             assert overrides["planner"]["model_id"] == "claude-opus-4-8"
 
             # Provider statuses cover the whole catalog. Anthropic has no
@@ -223,7 +256,8 @@ def test_put_then_get_model_config():
                 json={
                     "tiers": [
                         {
-                            "tier": "balanced",
+                            "scope_type": "tier",
+                            "scope_key": "balanced",
                             "provider": "anthropic",
                             "model_id": "no-such-model",
                         }
@@ -556,14 +590,16 @@ def test_put_config_removes_omitted_agent_overrides():
                     "tiers": [],
                     "agent_overrides": [
                         {
-                            "tier": "planner",
+                            "scope_type": "agent",
+                            "scope_key": "planner",
                             "provider": "anthropic",
                             "model_id": "claude-opus-4-8",
                             "effort": "high",
                             "max_tokens": 8192,
                         },
                         {
-                            "tier": "presenter",
+                            "scope_type": "agent",
+                            "scope_key": "presenter",
                             "provider": "anthropic",
                             "model_id": "claude-sonnet-4-6",
                             "effort": "medium",
@@ -573,7 +609,7 @@ def test_put_config_removes_omitted_agent_overrides():
                 },
             )
             assert put.status_code == 200, put.text
-            overrides = {o["tier"] for o in put.json()["agent_overrides"]}
+            overrides = {o["scope_key"] for o in put.json()["agent_overrides"]}
             assert overrides == {"planner", "presenter"}
 
             # Re-PUT dropping presenter -> it must disappear (replace, not merge).
@@ -583,7 +619,8 @@ def test_put_config_removes_omitted_agent_overrides():
                     "tiers": [],
                     "agent_overrides": [
                         {
-                            "tier": "planner",
+                            "scope_type": "agent",
+                            "scope_key": "planner",
                             "provider": "anthropic",
                             "model_id": "claude-opus-4-8",
                             "effort": "high",
@@ -593,7 +630,7 @@ def test_put_config_removes_omitted_agent_overrides():
                 },
             )
             assert put2.status_code == 200, put2.text
-            assert {o["tier"] for o in put2.json()["agent_overrides"]} == {"planner"}
+            assert {o["scope_key"] for o in put2.json()["agent_overrides"]} == {"planner"}
 
             # Empty list clears all remaining overrides.
             put3 = c.put(
@@ -624,7 +661,8 @@ def test_put_config_rejects_zero_max_tokens():
                 json={
                     "tiers": [
                         {
-                            "tier": "balanced",
+                            "scope_type": "tier",
+                            "scope_key": "balanced",
                             "provider": "anthropic",
                             "model_id": "claude-sonnet-4-6",
                             "effort": "medium",
@@ -653,3 +691,111 @@ def test_model_catalog_includes_agents():
         assert agents["planner"]["tier"] == "reasoning"
         assert agents["persona"]["tier"] == "fast"
         assert all({"name", "display_name", "tier"} <= set(a) for a in body["agents"])
+
+
+@pytest.mark.skipif(not _db_reachable(), reason="Postgres not reachable")
+def test_binding_dto_round_trips_scope_type():
+    """An agent override named after a tier stays distinct from the tier itself —
+    the contract no longer recovers scope from which array it arrived in."""
+    factory, ws = _ws_factory()
+    app = _ws_app(factory, ws)
+
+    try:
+        with TestClient(app) as c:
+            put = c.put(
+                "/v1/model-config",
+                json={
+                    "tiers": [
+                        {
+                            "scope_type": "tier",
+                            "scope_key": "balanced",
+                            "provider": "anthropic",
+                            "model_id": "claude-sonnet-4-6",
+                            "effort": "medium",
+                            "max_tokens": 4096,
+                        }
+                    ],
+                    # Deliberately named after a TIER. The DB stores (scope_type,
+                    # scope_key), so this must round-trip as an agent override and
+                    # never merge with the "balanced" tier above.
+                    "agent_overrides": [
+                        {
+                            "scope_type": "agent",
+                            "scope_key": "balanced",
+                            "provider": "anthropic",
+                            "model_id": "claude-opus-4-8",
+                            "effort": "high",
+                            "max_tokens": 8192,
+                        }
+                    ],
+                },
+            )
+            assert put.status_code == 200, put.text
+            body = put.json()
+
+            tier = next(b for b in body["tiers"] if b["scope_key"] == "balanced")
+            assert tier["scope_type"] == "tier"
+            assert tier["model_id"] == "claude-sonnet-4-6"
+
+            override = next(b for b in body["agent_overrides"] if b["scope_key"] == "balanced")
+            assert override["scope_type"] == "agent"
+            assert override["model_id"] == "claude-opus-4-8"
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.skipif(not _db_reachable(), reason="Postgres not reachable")
+def test_binding_rejects_effort_outside_the_literal():
+    factory, ws = _ws_factory()
+    app = _ws_app(factory, ws)
+    try:
+        with TestClient(app) as c:
+            r = c.put(
+                "/v1/model-config",
+                json={
+                    "tiers": [
+                        {
+                            "scope_type": "tier",
+                            "scope_key": "balanced",
+                            "provider": "anthropic",
+                            "model_id": "claude-sonnet-4-6",
+                            "effort": "extreme",
+                            "max_tokens": 4096,
+                        }
+                    ],
+                    "agent_overrides": [],
+                },
+            )
+            assert r.status_code == 422
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.skipif(not _db_reachable(), reason="Postgres not reachable")
+def test_binding_rejects_scope_type_that_contradicts_its_list():
+    """A tiers[] entry declaring scope_type='agent' would write a tier row from an
+    agent DTO. Reject it rather than silently coercing."""
+    factory, ws = _ws_factory()
+    app = _ws_app(factory, ws)
+    try:
+        with TestClient(app) as c:
+            r = c.put(
+                "/v1/model-config",
+                json={
+                    "tiers": [
+                        {
+                            "scope_type": "agent",
+                            "scope_key": "balanced",
+                            "provider": "anthropic",
+                            "model_id": "claude-sonnet-4-6",
+                            "effort": "medium",
+                            "max_tokens": 4096,
+                        }
+                    ],
+                    "agent_overrides": [],
+                },
+            )
+            assert r.status_code == 422
+            assert "scope_type" in r.text
+    finally:
+        app.dependency_overrides.clear()

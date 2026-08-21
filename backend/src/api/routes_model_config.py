@@ -12,7 +12,7 @@ from src.api.deps import get_current_workspace_id, get_session
 from src.config import secret_crypto
 from src.config.model_catalog import MODEL_CATALOG, get_model_spec
 from src.config.provider_catalog import PROVIDER_CATALOG, AuthKind, FieldKind
-from src.contracts.model_config import ModelConfigResponse, ProviderStatus, TierBinding
+from src.contracts.model_config import ModelBindingDTO, ModelConfigResponse, ProviderStatus
 from src.llm.model_factory import build_langchain_model
 from src.models.provider_credential import ProviderCredential
 from src.orchestrator.agents import AGENT_MODEL_TIERS
@@ -128,8 +128,8 @@ async def get_model_catalog(workspace_id: str = Depends(get_current_workspace_id
 
 class ModelConfigBody(BaseModel):
     model_config = ConfigDict(extra="ignore")
-    tiers: list[TierBinding]
-    agent_overrides: list[TierBinding] = []
+    tiers: list[ModelBindingDTO] = []
+    agent_overrides: list[ModelBindingDTO] = []
 
 
 @router.get("/v1/model-config", response_model=ModelConfigResponse)
@@ -146,6 +146,20 @@ async def put_model_config(
     workspace_id: str = Depends(get_current_workspace_id),
     db: AsyncSession = Depends(get_session),
 ):
+    # A tiers[] entry declaring scope_type="agent" would write a tier row from an agent
+    # DTO. The list a binding arrives in and the scope it declares must agree.
+    for b in body.tiers:
+        if b.scope_type != "tier":
+            raise HTTPException(
+                status_code=422,
+                detail=f"scope_type must be 'tier' in tiers[]; got {b.scope_type!r}",
+            )
+    for b in body.agent_overrides:
+        if b.scope_type != "agent":
+            raise HTTPException(
+                status_code=422,
+                detail=f"scope_type must be 'agent' in agent_overrides[]; got {b.scope_type!r}",
+            )
     for b in [*body.tiers, *body.agent_overrides]:
         if get_model_spec(b.provider, b.model_id) is None:
             raise HTTPException(status_code=400, detail=f"unknown model {b.provider}/{b.model_id}")

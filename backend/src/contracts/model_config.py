@@ -12,15 +12,25 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+BindingScope = Literal["tier", "agent"]
+Effort = Literal["none", "low", "medium", "high"]
 
-class TierBinding(BaseModel):
+
+class ModelBindingDTO(BaseModel):
+    """One model binding, carrying the same (scope_type, scope_key) pair the DB stores.
+
+    Replaces TierBinding, which flattened both into a single ``tier`` field and left
+    ``scope_type`` to be recovered from whichever response array the binding arrived
+    in — a lossy projection of its own storage model.
+    """
+
     model_config = ConfigDict(extra="ignore", protected_namespaces=())
-    # For an agent override this field carries the AGENT NAME (round-tripped as the
-    # scope_key of a scope_type="agent" ModelBinding); for a tier it is the tier name.
-    tier: str
+    scope_type: BindingScope
+    scope_key: str  # a tier name ("balanced") or an agent name ("planner")
     provider: str
     model_id: str
-    effort: str = "none"
+    # "none" is legal and meaningful: models with thinking_style="none" take no effort.
+    effort: Effort = "none"
     # >=1: max_tokens=0 yields a legacy thinking budget of -1 and breaks every call.
     max_tokens: int = Field(4096, ge=1)
     temperature: float | None = None
@@ -49,6 +59,6 @@ class ProviderStatus(BaseModel):
 
 class ModelConfigResponse(BaseModel):
     model_config = ConfigDict(extra="ignore")
-    tiers: list[TierBinding]
-    agent_overrides: list[TierBinding]
+    tiers: list[ModelBindingDTO]
+    agent_overrides: list[ModelBindingDTO]
     providers: list[ProviderStatus]

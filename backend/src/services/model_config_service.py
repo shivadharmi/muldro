@@ -10,15 +10,19 @@ The handler owns the transaction: put_config() stages changes but never commits.
 
 from __future__ import annotations
 
+import logging
+
 from sqlalchemy import delete, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.config.model_catalog import MODEL_CATALOG
 from src.config.settings import get_settings
-from src.contracts.model_config import ModelConfigResponse, ProviderStatus, TierBinding
+from src.contracts.model_config import ModelBindingDTO, ModelConfigResponse, ProviderStatus
 from src.models.model_binding import ModelBinding
 from src.models.provider_credential import ProviderCredential
 from src.services.model_resolver import _ENV_KEY_ATTR
+
+logger = logging.getLogger(__name__)
 
 TIER_ORDER = ("reasoning", "balanced", "fast")
 
@@ -36,12 +40,10 @@ class ModelConfigService:
         default. Does NOT commit (handler owns it).
         """
         for b in tiers:
-            await self._upsert_binding(workspace_id, "tier", b.tier, b)
+            await self._upsert_binding(workspace_id, "tier", b.scope_key, b)
         for b in agent_overrides:
-            # For an agent override the reused TierBinding carries the agent name
-            # in the ``tier`` field; it is written as scope_key of a scope_type="agent" row.
-            await self._upsert_binding(workspace_id, "agent", b.tier, b)
-        await self._prune_agent_overrides(workspace_id, keep={b.tier for b in agent_overrides})
+            await self._upsert_binding(workspace_id, "agent", b.scope_key, b)
+        await self._prune_agent_overrides(workspace_id, keep={b.scope_key for b in agent_overrides})
 
     async def _prune_agent_overrides(self, workspace_id, keep: set[str]) -> None:
         """Delete this workspace's agent-override rows whose agent is not in ``keep``.
@@ -99,16 +101,10 @@ class ModelConfigService:
             if current is None or (current.workspace_id is None and r.workspace_id is not None):
                 bucket[r.scope_key] = r
 
-        tiers = [
-            self._to_tier_binding(TierBinding, tier_by_key[t])
-            for t in TIER_ORDER
-            if t in tier_by_key
-        ]
+        tiers = [self._to_binding_dto(tier_by_key[t]) for t in TIER_ORDER if t in tier_by_key]
         # Only the workspace's own agent rows are surfaced as overrides.
         agent_overrides = [
-            self._to_tier_binding(TierBinding, r)
-            for r in agent_by_key.values()
-            if r.workspace_id is not None
+            self._to_binding_dto(r) for r in agent_by_key.values() if r.workspace_id is not None
         ]
 
         providers = await self._provider_statuses(workspace_id, provider_status_cls=ProviderStatus)
@@ -129,13 +125,27 @@ class ModelConfigService:
         )
         return list((await self._db.execute(stmt)).scalars().all())
 
-    @staticmethod
-    def _to_tier_binding(tier_binding_cls, r: ModelBinding):
-        return tier_binding_cls(
-            tier=r.scope_key,
+    _VALID_EFFORTS = frozenset({"none", "low", "medium", "high"})
+
+    @classmethod
+    def _to_binding_dto(cls, r: ModelBinding) -> ModelBindingDTO:
+        # Coerce an out-of-range stored effort rather than 500ing the whole endpoint:
+        # `effort` was an unvalidated str until this change, so a legacy row may hold
+        # anything. The write path is now Literal-validated, so this cannot recur.
+        effort = r.effort if r.effort in cls._VALID_EFFORTS else "none"
+        if effort != r.effort:
+            logger.warning(
+                "coercing unknown effort %r on binding %s/%s to 'none'",
+                r.effort,
+                r.scope_type,
+                r.scope_key,
+            )
+        return ModelBindingDTO(
+            scope_type=r.scope_type,
+            scope_key=r.scope_key,
             provider=r.provider,
             model_id=r.model_id,
-            effort=r.effort,
+            effort=effort,
             max_tokens=r.max_tokens,
             temperature=r.temperature,
         )
