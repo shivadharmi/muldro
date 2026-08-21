@@ -14,9 +14,19 @@ import re
 
 from src.view.contracts import FrameKind
 
-# A paragraph break is a blank line — one that may itself carry whitespace
-# (spaces, tabs) rather than being strictly empty.
-_PARAGRAPH_BREAK = re.compile(r"\n\s*\n")
+# A paragraph break is a blank line — one that may itself carry spaces or tabs
+# rather than being strictly empty. `[ \t]`, deliberately NOT `\s`: this
+# function has a TypeScript mirror (`ledeOf` in unit-card.tsx) and the two
+# languages disagree about what `\s` and trim() mean. Python does not classify
+# U+FEFF as whitespace and JavaScript does; JavaScript does not classify
+# U+001C-U+001F or U+0085 as whitespace and Python does. Spelling the class out
+# is what makes the pair agree, and it is CommonMark's own rule: a blank line
+# holds nothing but spaces and tabs.
+_PARAGRAPH_BREAK = re.compile(r"\n[ \t]*\n")
+
+# For the same reason, lines are trimmed of spaces and tabs only — never
+# str.strip(), whose character set is Python's alone.
+_SPACE_TAB = " \t"
 
 # Per-kind lede budget in characters. Starting points, not measurements —
 # see docs/view-layer/spec.md §13 open question 1.
@@ -36,8 +46,25 @@ class BodyBudgetError(ValueError):
 def lede_of(body: str) -> str:
     """Return the first prose paragraph of a markdown body, soft-wraps joined.
 
-    Paragraphs are separated by a blank line, which may itself carry
-    whitespace. Line endings (\\r\\n and lone \\r) are normalized to \\n first,
+    THIS FUNCTION HAS A MIRROR: `ledeOf` in
+    `frontend/src/components/workspace/unit-card.tsx`. Two projections of one
+    string that disagree is exactly what this design exists to remove, so both
+    are pinned against ONE shared corpus,
+    `backend/tests/view/fixtures/lede_corpus.json`, which both test suites
+    read. Change either implementation and the corpus must be updated with it.
+
+    Paragraphs are separated by a blank line, which may itself carry spaces or
+    tabs — and ONLY spaces or tabs, because Python's `\\s`/`str.strip()` and
+    JavaScript's `\\s`/`trim()` classify different characters (U+FEFF is
+    whitespace to JavaScript but not to Python; U+001C-U+001F and U+0085 are
+    whitespace to Python but not to JavaScript). Trimming with either
+    language's own notion made the two disagree about whether a line was blank
+    and about whether a line began with `#`, so the card rendered as prose a
+    heading the backend had budgeted as a heading. Spaces and tabs is also
+    CommonMark's definition of a blank line, so this is alignment on the
+    markdown spec rather than on either language.
+
+    Line endings (\\r\\n and lone \\r) are normalized to \\n first,
     so a CRLF-delimited body splits the same way a LF-delimited one does. After
     that normalization, only \\n separates lines within a paragraph -- that is
     what CommonMark itself recognizes as a line ending (\\n, \\r\\n, \\r; the
@@ -54,7 +81,7 @@ def lede_of(body: str) -> str:
     """
     normalized = body.replace("\r\n", "\n").replace("\r", "\n")
     for block in _PARAGRAPH_BREAK.split(normalized):
-        lines = [line.strip() for line in block.strip().split("\n")]
+        lines = [line.strip(_SPACE_TAB) for line in block.strip(_SPACE_TAB).split("\n")]
         lines = [line for line in lines if line and not line.startswith("#")]
         if lines:
             return " ".join(lines)
