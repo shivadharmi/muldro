@@ -2,16 +2,17 @@
 
 import Link from "next/link";
 import { ErrorBoundary } from "@/components/error-boundary";
-import { SurfaceCard } from "@/components/workspace/surface-card";
-import type { WorkspaceSurface } from "@/stores/surface-store";
+import { UnitCard } from "@/components/workspace/unit-card";
+import type { Unit } from "@/lib/types/unit";
 
 interface Props {
-  surfaces: WorkspaceSurface[];
-  onSurfaceClick?: (id: string) => void;
+  units: Unit[];
+  onOpen: (key: string) => void;
+  onAct?: (key: string, capability: string) => void;
 }
 
-export function WorkspaceCanvas({ surfaces, onSurfaceClick }: Props) {
-  if (surfaces.length === 0) {
+export function WorkspaceCanvas({ units, onOpen, onAct }: Props) {
+  if (units.length === 0) {
     return (
       <div className="rounded-[var(--radius-xl)] border border-b-secondary bg-surface-1 p-8 sm:p-12">
         <div className="flex flex-col items-center text-center max-w-md mx-auto">
@@ -60,24 +61,23 @@ export function WorkspaceCanvas({ surfaces, onSurfaceClick }: Props) {
 
   return (
     <div
+      data-testid="unit-grid"
       className="grid gap-3 items-start"
-      style={{
-        gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))",
-        gridAutoFlow: "dense",
-      }}
+      style={{ gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))" }}
     >
-      {surfaces.map((ws) => (
+      {units.map((u) => (
         <ErrorBoundary
-          key={ws.id}
+          key={u.frame.key}
           fallback={
             <div className="rounded-[var(--radius-lg)] border border-j-error/20 bg-j-error-soft p-4">
-              <p className="text-sm text-t-secondary">Surface failed to load</p>
+              <p className="text-sm text-t-secondary">Card failed to load</p>
             </div>
           }
         >
-          <SurfaceCard
-            surface={ws}
-            onClick={() => onSurfaceClick?.(ws.id)}
+          <UnitCard
+            unit={u}
+            onOpen={() => onOpen(u.frame.key)}
+            onAct={(cap) => onAct?.(u.frame.key, cap)}
           />
         </ErrorBoundary>
       ))}

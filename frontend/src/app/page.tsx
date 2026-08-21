@@ -13,6 +13,7 @@ import { useMuldroWs } from "@/hooks/use-muldro-ws";
 import { useSurfaceStore } from "@/stores/surface-store";
 import type { WorkspaceSurface } from "@/stores/surface-store";
 import { normalizeSurfaceKind } from "@/lib/types/surfaces";
+import { unitFromSurface } from "@/lib/types/unit";
 import { sortSurfacesActiveFirst } from "@/lib/surface-merge";
 import { useWsActionStore } from "@/stores/ws-action-store";
 import { formatApiError, type ParsedApiError } from "@/lib/api-error";
@@ -91,6 +92,10 @@ export default function WorkspacePage() {
     return sortSurfacesActiveFirst(Array.from(map.values()));
   }, [restSurfaces, wsSurfaces]);
 
+  // TEMPORARY bridge — see unitFromSurface. Removed with the surface store
+  // once the backend publishes Units directly.
+  const units = useMemo(() => allSurfaces.map(unitFromSurface), [allSurfaces]);
+
   const sourceCount = system?.observations
     ? Object.keys(system.observations).length
     : 0;
@@ -156,10 +161,7 @@ export default function WorkspacePage() {
       {firstRunState === "gathering" && <BriefingGatheringCard />}
 
       {allSurfaces.length > 0 && (
-        <WorkspaceCanvas
-          surfaces={allSurfaces}
-          onSurfaceClick={openDetailModal}
-        />
+        <WorkspaceCanvas units={units} onOpen={openDetailModal} />
       )}
 
       {activeSurface && (

@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { ChatPanel } from "@/components/muldro/chat-panel";
 import { SessionSidebar } from "@/components/muldro/session-sidebar";
 import { CommandWorkspace } from "@/components/feature/command/command-workspace";
-import { SurfaceCard } from "@/components/workspace/surface-card";
+import { UnitCard } from "@/components/workspace/unit-card";
 import { SurfaceDetailModal } from "@/components/workspace/surface-detail-modal";
 import { useAuth } from "@/lib/auth";
 import { useMuldroWs } from "@/hooks/use-muldro-ws";
@@ -16,6 +16,8 @@ import { formatApiError, type ParsedApiError } from "@/lib/api-error";
 import { useToast } from "@/components/ui/toast";
 import type { WorkspaceSurfacePush, SurfacePreview, SurfaceUpdate } from "@/lib/a2ui-types";
 import { normalizeSurfaceKind } from "@/lib/types/surfaces";
+// TEMPORARY bridge — see unitFromSurface. Removed with the surface store.
+import { unitFromSurface } from "@/lib/types/unit";
 import { sortSurfacesActiveFirst } from "@/lib/surface-merge";
 
 export default function ChatPage() {
@@ -236,14 +238,13 @@ export default function ChatPage() {
                 </span>
               </div>
 
-              {sortSurfacesActiveFirst(surfaces)
-                .map((surface) => (
-                  <SurfaceCard
-                    key={surface.id}
-                    surface={surface}
-                    onClick={() => openDetailModal(surface.id)}
-                  />
-                ))}
+              {sortSurfacesActiveFirst(surfaces).map((surface) => (
+                <UnitCard
+                  key={surface.id}
+                  unit={unitFromSurface(surface)}
+                  onOpen={() => openDetailModal(surface.id)}
+                />
+              ))}
             </div>
           ) : undefined
         }
