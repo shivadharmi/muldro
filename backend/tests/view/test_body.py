@@ -35,6 +35,26 @@ def test_lede_joins_soft_wrapped_lines_in_one_paragraph():
     assert lede_of(body) == "Sarah is asking for a decision by Friday."
 
 
+def test_lede_splits_on_a_plain_blank_line():
+    body = "First para.\n\nSecond para."
+    assert lede_of(body) == "First para."
+
+
+def test_lede_splits_on_a_crlf_paragraph_break():
+    body = "First para.\r\n\r\nSecond para."
+    assert lede_of(body) == "First para."
+
+
+def test_lede_splits_on_a_blank_line_that_carries_a_space():
+    body = "First para.\n \nSecond para."
+    assert lede_of(body) == "First para."
+
+
+def test_lede_splits_on_a_blank_line_that_carries_a_tab():
+    body = "First para.\n\t\nSecond para."
+    assert lede_of(body) == "First para."
+
+
 def test_lede_skips_a_leading_heading():
     body = "# Repository activity\n\nThree repos moved this week."
     assert lede_of(body) == "Three repos moved this week."

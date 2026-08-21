@@ -10,7 +10,13 @@ Code owns the budget; the model fills it. An overrun is a validation failure
 returned through the existing typed-generation repair loop, never a truncation.
 """
 
+import re
+
 from src.view.contracts import FrameKind
+
+# A paragraph break is a blank line — one that may itself carry whitespace
+# (spaces, tabs) rather than being strictly empty.
+_PARAGRAPH_BREAK = re.compile(r"\n\s*\n")
 
 # Per-kind lede budget in characters. Starting points, not measurements —
 # see docs/view-layer/spec.md §13 open question 1.
@@ -30,10 +36,15 @@ class BodyBudgetError(ValueError):
 def lede_of(body: str) -> str:
     """Return the first prose paragraph of a markdown body, soft-wraps joined.
 
+    Paragraphs are separated by a blank line, which may itself carry
+    whitespace. Line endings (\\r\\n and lone \\r) are normalized to \\n first,
+    so a CRLF-delimited body splits the same way a LF-delimited one does.
+
     Leading ATX headings are skipped: a heading is a label for what follows,
     not the claim itself. Returns "" for an empty or heading-only body.
     """
-    for block in body.split("\n\n"):
+    normalized = body.replace("\r\n", "\n").replace("\r", "\n")
+    for block in _PARAGRAPH_BREAK.split(normalized):
         lines = [line.strip() for line in block.strip().splitlines()]
         lines = [line for line in lines if line and not line.startswith("#")]
         if lines:
