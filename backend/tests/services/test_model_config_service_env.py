@@ -17,6 +17,7 @@ from sqlalchemy.pool import NullPool
 from ulid import ULID
 
 from src.config.settings import get_settings
+from src.models.model_binding import ModelBinding
 from src.models.provider_credential import ProviderCredential
 from src.models.users import User, Workspace
 from src.services.model_config_service import ModelConfigService
@@ -91,3 +92,33 @@ async def test_env_backed_provider_is_configured(monkeypatch):
         # ollama has no env attr at all -> unconfigured (base_url only).
         assert providers["ollama"].configured is False
         assert providers["ollama"].status == "unconfigured"
+
+
+async def test_legacy_invalid_effort_is_coerced_to_none():
+    """Guards the legacy-row coercion path in ``_to_binding_dto``.
+
+    ``effort`` was an unvalidated str before ModelBindingDTO's Literal, and the DB
+    column still has no CHECK constraint, so a row can hold anything -- e.g.
+    ``seed_defaults()`` writes ModelBinding rows straight from tuples, bypassing
+    ModelBindingDTO/Pydantic entirely. The row here is inserted directly (bypassing
+    the API) precisely because the API can no longer produce one with an invalid
+    effort. ``get_config_response`` must coerce it to "none" rather than raising.
+    """
+    async with _session() as db:
+        ws = await _seed_workspace(db)
+        db.add(
+            ModelBinding(
+                workspace_id=ws,
+                scope_type="tier",
+                scope_key="balanced",
+                provider="anthropic",
+                model_id="claude-sonnet-4-6",
+                effort="bogus",
+                max_tokens=4096,
+            )
+        )
+        await db.flush()
+
+        resp = await ModelConfigService(db).get_config_response(ws)
+        tiers = {t.scope_key: t for t in resp.tiers}
+        assert tiers["balanced"].effort == "none"

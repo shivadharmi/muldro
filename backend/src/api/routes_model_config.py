@@ -129,7 +129,10 @@ async def get_model_catalog(workspace_id: str = Depends(get_current_workspace_id
 class ModelConfigBody(BaseModel):
     model_config = ConfigDict(extra="ignore")
     tiers: list[ModelBindingDTO] = []
-    agent_overrides: list[ModelBindingDTO] = []
+    # None means "leave agent overrides alone"; [] means "clear them all". Overrides use
+    # REPLACE semantics, so collapsing absent into empty would let a tiers-only PUT
+    # silently delete every override in the workspace.
+    agent_overrides: list[ModelBindingDTO] | None = None
 
 
 @router.get("/v1/model-config", response_model=ModelConfigResponse)
@@ -154,13 +157,13 @@ async def put_model_config(
                 status_code=422,
                 detail=f"scope_type must be 'tier' in tiers[]; got {b.scope_type!r}",
             )
-    for b in body.agent_overrides:
+    for b in body.agent_overrides or []:
         if b.scope_type != "agent":
             raise HTTPException(
                 status_code=422,
                 detail=f"scope_type must be 'agent' in agent_overrides[]; got {b.scope_type!r}",
             )
-    for b in [*body.tiers, *body.agent_overrides]:
+    for b in [*body.tiers, *(body.agent_overrides or [])]:
         if get_model_spec(b.provider, b.model_id) is None:
             raise HTTPException(status_code=400, detail=f"unknown model {b.provider}/{b.model_id}")
     await ModelConfigService(db).put_config(workspace_id, body.tiers, body.agent_overrides)

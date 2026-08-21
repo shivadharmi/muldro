@@ -799,3 +799,116 @@ def test_binding_rejects_scope_type_that_contradicts_its_list():
             assert "scope_type" in r.text
     finally:
         app.dependency_overrides.clear()
+
+
+@pytest.mark.skipif(not _db_reachable(), reason="Postgres not reachable")
+def test_omitting_agent_overrides_preserves_them():
+    """A tiers-only PUT that omits agent_overrides entirely must NOT delete existing
+    overrides. agent_overrides defaults to [] on the wire, and overrides use REPLACE
+    semantics, so collapsing 'the key was absent' into 'the key was an empty list'
+    would let a client wipe every override in the workspace just by PUTing tiers."""
+    factory, ws = _ws_factory()
+    app = _ws_app(factory, ws)
+    try:
+        with TestClient(app) as c:
+            put = c.put(
+                "/v1/model-config",
+                json={
+                    "tiers": [
+                        {
+                            "scope_type": "tier",
+                            "scope_key": "balanced",
+                            "provider": "anthropic",
+                            "model_id": "claude-sonnet-4-6",
+                            "effort": "medium",
+                            "max_tokens": 4096,
+                        }
+                    ],
+                    "agent_overrides": [
+                        {
+                            "scope_type": "agent",
+                            "scope_key": "planner",
+                            "provider": "anthropic",
+                            "model_id": "claude-opus-4-8",
+                            "effort": "high",
+                            "max_tokens": 8192,
+                        }
+                    ],
+                },
+            )
+            assert put.status_code == 200, put.text
+            assert {o["scope_key"] for o in put.json()["agent_overrides"]} == {"planner"}
+
+            # Re-PUT with only "tiers" in the JSON body -- agent_overrides key absent.
+            put2 = c.put(
+                "/v1/model-config",
+                json={
+                    "tiers": [
+                        {
+                            "scope_type": "tier",
+                            "scope_key": "balanced",
+                            "provider": "anthropic",
+                            "model_id": "claude-sonnet-4-6",
+                            "effort": "low",
+                            "max_tokens": 2048,
+                        }
+                    ]
+                },
+            )
+            assert put2.status_code == 200, put2.text
+
+            got = c.get("/v1/model-config")
+            assert got.status_code == 200, got.text
+            assert {o["scope_key"] for o in got.json()["agent_overrides"]} == {"planner"}
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.skipif(not _db_reachable(), reason="Postgres not reachable")
+def test_explicit_empty_agent_overrides_clears_them():
+    """An explicit agent_overrides=[] still means 'clear them all' -- keeps REPLACE
+    semantics honest against the None-means-absent change above."""
+    factory, ws = _ws_factory()
+    app = _ws_app(factory, ws)
+    try:
+        with TestClient(app) as c:
+            put = c.put(
+                "/v1/model-config",
+                json={
+                    "tiers": [
+                        {
+                            "scope_type": "tier",
+                            "scope_key": "balanced",
+                            "provider": "anthropic",
+                            "model_id": "claude-sonnet-4-6",
+                            "effort": "medium",
+                            "max_tokens": 4096,
+                        }
+                    ],
+                    "agent_overrides": [
+                        {
+                            "scope_type": "agent",
+                            "scope_key": "planner",
+                            "provider": "anthropic",
+                            "model_id": "claude-opus-4-8",
+                            "effort": "high",
+                            "max_tokens": 8192,
+                        }
+                    ],
+                },
+            )
+            assert put.status_code == 200, put.text
+            assert {o["scope_key"] for o in put.json()["agent_overrides"]} == {"planner"}
+
+            put2 = c.put(
+                "/v1/model-config",
+                json={"tiers": [], "agent_overrides": []},
+            )
+            assert put2.status_code == 200, put2.text
+            assert put2.json()["agent_overrides"] == []
+
+            got = c.get("/v1/model-config")
+            assert got.status_code == 200, got.text
+            assert got.json()["agent_overrides"] == []
+    finally:
+        app.dependency_overrides.clear()

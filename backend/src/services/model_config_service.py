@@ -11,13 +11,14 @@ The handler owns the transaction: put_config() stages changes but never commits.
 from __future__ import annotations
 
 import logging
+from typing import get_args
 
 from sqlalchemy import delete, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.config.model_catalog import MODEL_CATALOG
 from src.config.settings import get_settings
-from src.contracts.model_config import ModelBindingDTO, ModelConfigResponse, ProviderStatus
+from src.contracts.model_config import Effort, ModelBindingDTO, ModelConfigResponse, ProviderStatus
 from src.models.model_binding import ModelBinding
 from src.models.provider_credential import ProviderCredential
 from src.services.model_resolver import _ENV_KEY_ATTR
@@ -31,21 +32,31 @@ class ModelConfigService:
     def __init__(self, db: AsyncSession) -> None:
         self._db = db
 
-    async def put_config(self, workspace_id, tiers, agent_overrides) -> None:
+    async def put_config(
+        self,
+        workspace_id: str,
+        tiers: list[ModelBindingDTO],
+        agent_overrides: list[ModelBindingDTO] | None,
+    ) -> None:
         """UPSERT workspace tier bindings; REPLACE workspace agent overrides.
 
         Tiers merge (an omitted tier falls through to the deployment default). Agent
-        overrides use replace semantics: the submitted list is the complete set, so a
-        workspace override omitted from it is deleted and the agent reverts to its tier
-        default. Does NOT commit (handler owns it).
+        overrides are three-valued: ``None`` means absent — leave existing workspace
+        overrides untouched; any list (including ``[]``) is the complete replacement
+        set, so a workspace override omitted from it is deleted and the agent reverts
+        to its tier default. Does NOT commit (handler owns it).
         """
         for b in tiers:
             await self._upsert_binding(workspace_id, "tier", b.scope_key, b)
+        if agent_overrides is None:
+            # Absent, not empty: leave existing overrides untouched. An explicit []
+            # still means "clear them all", which is what REPLACE semantics require.
+            return
         for b in agent_overrides:
             await self._upsert_binding(workspace_id, "agent", b.scope_key, b)
         await self._prune_agent_overrides(workspace_id, keep={b.scope_key for b in agent_overrides})
 
-    async def _prune_agent_overrides(self, workspace_id, keep: set[str]) -> None:
+    async def _prune_agent_overrides(self, workspace_id: str, keep: set[str]) -> None:
         """Delete this workspace's agent-override rows whose agent is not in ``keep``.
 
         Scoped to the workspace's own rows (never the NULL-default rows), so an
@@ -125,13 +136,17 @@ class ModelConfigService:
         )
         return list((await self._db.execute(stmt)).scalars().all())
 
-    _VALID_EFFORTS = frozenset({"none", "low", "medium", "high"})
+    _VALID_EFFORTS = frozenset(get_args(Effort))
 
     @classmethod
     def _to_binding_dto(cls, r: ModelBinding) -> ModelBindingDTO:
         # Coerce an out-of-range stored effort rather than 500ing the whole endpoint:
         # `effort` was an unvalidated str until this change, so a legacy row may hold
-        # anything. The write path is now Literal-validated, so this cannot recur.
+        # anything. The PUT /v1/model-config write path is now Literal-validated, but
+        # seed_defaults() writes ModelBinding rows straight from tuples (bypassing
+        # ModelBindingDTO/Pydantic entirely) and the DB column has no CHECK constraint,
+        # so other write paths (seeding, migrations, direct SQL) can still put anything
+        # here. This stays as a safety net.
         effort = r.effort if r.effort in cls._VALID_EFFORTS else "none"
         if effort != r.effort:
             logger.warning(
