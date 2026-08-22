@@ -60,11 +60,11 @@ export default function WorkspacePage() {
     refetchInterval: 15_000,
   });
 
-  // The server is the ordering authority (spec §6): it ranks, and the client
-  // renders that order. A REST refresh therefore REPLACES the list rather than
-  // merging into it — a client-side merge would reintroduce arrival order,
-  // which is one of the three non-decisions §6 exists to remove. Live pushes
-  // land on top via upsertUnit until the next refresh re-ranks.
+  // The server is the ordering authority: it ranks, and the client renders
+  // that order. A REST refresh therefore REPLACES the list rather than merging
+  // into it — a client-side merge would reintroduce arrival order, which is
+  // exactly what ranking exists to remove. Live pushes land on top via
+  // upsertUnit until the next refresh re-ranks.
   useEffect(() => {
     if (unitData?.units) setUnits(unitData.units);
   }, [unitData, setUnits]);
@@ -119,8 +119,8 @@ export default function WorkspacePage() {
       {firstRunState === "onboarding" && <OnboardingCard />}
       {firstRunState === "gathering" && <BriefingGatheringCard />}
 
-      {/* The canvas owns its own empty state — the caller's length guard made
-          that state unreachable outside its own test (FOLLOWUPS §5). */}
+      {/* The canvas owns its own empty state. Do not guard on units.length
+          here — that made the empty state unreachable outside its own test. */}
       <WorkspaceCanvas units={units} onOpen={openDetail} onDismiss={handleDismiss} />
 
       <UnitDetail
