@@ -2,7 +2,12 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { test, expect, vi } from "vitest";
 
-import { ProviderRow, ProviderRowSeparator } from "./provider-row";
+import {
+  CHIP_VARIANTS,
+  ProviderRow,
+  ProviderRowSeparator,
+  STATUS_PRESENTATION,
+} from "./provider-row";
 import type { CatalogProvider, ProviderStatus } from "@/lib/types";
 
 function providerStatus(over: Partial<ProviderStatus> = {}): ProviderStatus {
@@ -231,29 +236,56 @@ test("an untested credential stays a warning", () => {
   expect(screen.getByText("Untested").className).toContain("bg-j-warning-soft");
 });
 
-test("an unrecognised status falls back to its raw text", () => {
-  renderRow({ status: "quarantined" });
-  expect(screen.getByText("quarantined")).toBeTruthy();
-});
-
-/** The dot is the only `aria-hidden` element in a row. */
+/** The dot, located by the fact that it is the row's only decorative element.
+ *  That is asserted rather than assumed, so a second `aria-hidden` element
+ *  fails this helper loudly instead of silently retargeting every dot
+ *  assertion below at something else. */
 function dotTokens(container: HTMLElement): string[] {
-  const dot = container.querySelector('[aria-hidden="true"]');
-  return (dot?.className ?? "").split(/\s+/);
+  const decorative = container.querySelectorAll('[aria-hidden="true"]');
+  expect(decorative).toHaveLength(1);
+  return decorative[0].className.split(/\s+/);
 }
 
-// The dot is the smallest and most glanceable element in the row. If it and the
-// chip come from separate tables they drift, and the drift shows up exactly
-// where it matters least visible: an amber dot beside a red chip.
-test.each([
-  ["invalid", "Invalid credential", "bg-j-error", "bg-j-error-soft"],
-  ["valid", "Connected", "bg-j-success", "bg-j-success-soft"],
-  ["untested", "Untested", "bg-j-warning", "bg-j-warning-soft"],
-  ["quarantined", "quarantined", "bg-j-warning", "bg-j-warning-soft"],
-])("the dot and the chip agree for %s", (status, label, dotToken, chipToken) => {
-  const { container } = renderRow({ status });
-  expect(dotTokens(container)).toContain(dotToken);
-  expect(screen.getByText(label).className).toContain(chipToken);
+/** The dot colour that belongs with each chip variant a status may use. This is
+ *  the half of the invariant that is NOT derived from the entry under test —
+ *  without it, enumerating the table only proves the row renders whatever the
+ *  entry says, so an entry pairing `chip: "error"` with an amber dot passes by
+ *  agreeing with itself. That is the exact bug this suite exists to prevent. */
+const DOT_FOR_CHIP: Record<string, string> = {
+  success: "bg-j-success",
+  warning: "bg-j-warning",
+  error: "bg-j-error",
+};
+
+// Derived from the table, NOT hand-written: a hand-written case list lets a
+// fourth STATUS_PRESENTATION entry land with no assertion at all, which is the
+// other way the amber-dot-beside-a-red-chip bug comes back. Enumerating the
+// source makes the invariant structural.
+test.each(Object.entries(STATUS_PRESENTATION))(
+  "the dot and the chip agree for %s",
+  (status, presentation) => {
+    // The entry itself is severity-consistent...
+    expect(DOT_FOR_CHIP[presentation.chip]).toBe(presentation.dot);
+
+    // ...and the row renders what the entry says.
+    const { container } = renderRow({ status });
+    const tokens = dotTokens(container);
+    for (const token of presentation.dot.split(/\s+/)) {
+      expect(tokens).toContain(token);
+    }
+    expect(screen.getByText(presentation.label).className).toContain(
+      CHIP_VARIANTS[presentation.chip],
+    );
+  },
+);
+
+// The fallback is not in the table, so it is asserted on its own. Amber, not
+// red: the frontend cannot know a new status's severity, and rendering a benign
+// one in red is the worse failure.
+test("an unrecognised status gets the warning pair", () => {
+  const { container } = renderRow({ status: "quarantined" });
+  expect(dotTokens(container)).toContain("bg-j-warning");
+  expect(screen.getByText("quarantined").className).toContain(CHIP_VARIANTS.warning);
 });
 
 test("a not-connected row's dot is an outline, not a colour", () => {

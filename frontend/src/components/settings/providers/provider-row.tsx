@@ -11,7 +11,9 @@ const CHIP_BASE =
   "inline-flex items-center h-[20px] px-[8px] rounded-full text-[11px] " +
   "font-medium whitespace-nowrap shrink-0";
 
-const CHIP_VARIANTS = {
+/** Exported for the tests only, so a chip assertion names the variant rather
+ *  than re-typing its classes and drifting from them. */
+export const CHIP_VARIANTS = {
   neutral: "bg-surface-3 text-t-tertiary",
   success: "bg-j-success-soft text-j-success",
   warning: "bg-j-warning-soft text-j-warning",
@@ -78,20 +80,29 @@ const SOURCE_DETAIL: Record<ProviderStatus["source"], string> = {
  *  Split across two tables they drift: a chip variant added for `invalid`
  *  without a matching dot colour renders an amber dot beside a red chip, and
  *  the dot is the smaller, more glanceable of the two. */
+const OUTLINE_DOT = "border-[1.5px] border-t-muted bg-transparent";
+
+/** The dot's colours, enumerated rather than left as `string`. A bare string
+ *  lets a typo (`bg-j-eror`) compile, lint and render an INVISIBLE dot — the
+ *  one element in the row with no text to fall back on. The constraint lives
+ *  on the table, not on `StatusDot`, so it is checked where the value is
+ *  written rather than where it is passed. */
+type DotTone = "bg-j-success" | "bg-j-warning" | "bg-j-error" | typeof OUTLINE_DOT;
+
 interface StatusPresentation {
   label: string;
   chip: ChipVariant;
-  dot: string;
+  dot: DotTone;
 }
 
 const NOT_CONNECTED: StatusPresentation = {
   label: "Not connected",
   chip: "outline",
-  dot: "border-[1.5px] border-t-muted bg-transparent",
+  dot: OUTLINE_DOT,
 };
 
 /** An unrecognised status is neither trusted nor called a hard failure. */
-function unknownStatus(status: string): StatusPresentation {
+function unknownPresentation(status: string): StatusPresentation {
   return { label: status, chip: "warning", dot: "bg-j-warning" };
 }
 
@@ -102,12 +113,16 @@ function unknownStatus(status: string): StatusPresentation {
  *  The map is deliberately OPEN (`Record<string, …>`), not a closed union: the
  *  wire contract really is a bare `str` (`ProviderStatus.status`, a
  *  `String(16)` column), so a status added on the backend must degrade through
- *  `unknownStatus` rather than crash a settings screen. Do not narrow it.
+ *  `unknownPresentation` rather than crash a settings screen. Do not narrow it.
  *
  *  `invalid` is NOT amber. It means the provider REJECTED the credential, so
  *  every tier bound to it fails at runtime — rendering it in the same colour as
- *  the benign `untested` teaches the founder to read the second as the first. */
-const STATUS_PRESENTATION: Record<string, StatusPresentation> = {
+ *  the benign `untested` teaches the founder to read the second as the first.
+ *
+ *  Exported for the tests ONLY, which enumerate it so that adding a fourth
+ *  entry cannot land without a dot/chip assertion. Nothing else should read it:
+ *  callers want `presentationFor`, which also handles the unconfigured row. */
+export const STATUS_PRESENTATION: Record<string, StatusPresentation> = {
   valid: { label: "Connected", chip: "success", dot: "bg-j-success" },
   invalid: { label: "Invalid credential", chip: "error", dot: "bg-j-error" },
   untested: { label: "Untested", chip: "warning", dot: "bg-j-warning" },
@@ -118,10 +133,10 @@ const STATUS_PRESENTATION: Record<string, StatusPresentation> = {
  *  which is a statement about the ROW existing, not about a credential. */
 function presentationFor(status: ProviderStatus): StatusPresentation {
   if (!status.configured) return NOT_CONNECTED;
-  return STATUS_PRESENTATION[status.status] ?? unknownStatus(status.status);
+  return STATUS_PRESENTATION[status.status] ?? unknownPresentation(status.status);
 }
 
-function StatusDot({ tone }: { tone: string }) {
+function StatusDot({ tone }: { tone: DotTone }) {
   return (
     <span
       aria-hidden="true"
