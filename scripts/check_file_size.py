@@ -45,6 +45,11 @@ GRANDFATHERED: dict[str, int] = {
     # a little further; recorded here rather than split -- the tab's actual
     # redesign is a later phase.
     "frontend/src/components/settings/model-tab.tsx": 610,
+    # Already 529 lines at HEAD (over the 400 cap already, same oversight).
+    # The handler adaptation to ModelBinding + saveProviderCredential +
+    # CredentialDeleteResult grows it a little further; recorded here rather
+    # than split -- the modal's actual redesign is a later phase.
+    "frontend/src/components/settings/settings-modal.tsx": 538,
     "frontend/src/components/chat/chat-panel.tsx": 678,
     "frontend/src/components/history/run-detail-modal.tsx": 543,
     "frontend/src/app/settings/page.tsx": 522,
