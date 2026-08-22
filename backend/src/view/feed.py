@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
+from src.services.unit_dismissals import OWN_SOURCE, is_hidden, load_dismissals
 from src.view.body_fill import attach_stored_bodies
 from src.view.contracts import Unit
 from src.view.domain_units import (
@@ -36,10 +37,40 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "Feed",
     "assemble_feed",
+    "drop_dismissed",
     "order_by_rank",
     "partition_for_fold",
     "quiet_units",
 ]
+
+
+async def drop_dismissed(
+    db: Any, units: Sequence[Unit], *, workspace_id: str, user_id: str
+) -> list[Unit]:
+    """Remove the things this person has cleared and that have not moved since.
+
+    Total; never raises. A dismissal read that fails shows EVERYTHING: a card
+    the founder dismissed is a far smaller failure than a blank workspace, and
+    it is the same posture the ranker's own outage takes below.
+
+    muldro's own units are never dropped here, whatever rows exist. The route
+    refuses to dismiss one, so no such row should be written — but the review
+    queue, the briefing and the runs are the founder's only route to work
+    muldro is holding, and a stray key must not be able to take that away.
+    """
+    try:
+        dismissals = await load_dismissals(db, workspace_id=workspace_id, user_id=user_id)
+    except Exception as exc:  # noqa: BLE001 - a dismissal outage beats an empty feed
+        logger.warning("feed_dismissals_failed workspace=%s error=%s", workspace_id, exc)
+        return list(units)
+    if not dismissals:
+        return list(units)
+    return [
+        unit
+        for unit in units
+        if getattr(getattr(unit, "frame", None), "source", None) == OWN_SOURCE
+        or not is_hidden(unit, dismissals)
+    ]
 
 
 def order_by_rank(units: Sequence[Unit], ranked_keys: Sequence[Any]) -> list[Unit]:
@@ -217,6 +248,10 @@ async def assemble_feed(
     if health is not None:
         units.append(health)
     units.extend(perception)
+
+    # Before the body lookup and before ranking: a thing the founder has
+    # cleared should cost neither a stored body nor a rank slot.
+    units = await drop_dismissed(db, units, workspace_id=workspace_id, user_id=user_id)
 
     # The prose is written by the poll and stored; the feed reads it back. A
     # feed read never generates - see `attach_stored_bodies`.

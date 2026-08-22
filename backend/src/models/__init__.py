@@ -37,6 +37,7 @@ from src.models.traces import ModelCall, Trace
 from src.models.triggers import Trigger
 from src.models.trust_state import TrustCeiling, TrustState
 from src.models.unit_body import UnitBody
+from src.models.unit_dismissal import UnitDismissal
 from src.models.users import (
     MagicLink,
     Session,
@@ -116,4 +117,5 @@ __all__ = [
     # View layer
     "FilterRule",
     "UnitBody",
+    "UnitDismissal",
 ]

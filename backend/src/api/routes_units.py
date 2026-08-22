@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.api.deps import get_current_user_id, get_current_workspace_id, get_session
 from src.models.events import NormalizedEvent
 from src.services.engagement_service import EngagementService
+from src.services.unit_dismissals import OWN_SOURCE, dismiss
 from src.view.contracts import Unit
 from src.view.feed import assemble_feed
 
@@ -65,12 +66,6 @@ async def get_workspace_units(
     return UnitFeedResponse(units=feed.units, count=len(feed.units), fold_after=feed.fold_after)
 
 
-# Sources whose Units are muldro's OWN rows, not perception signals. Dismissing
-# one would write an `engagement_history` row keyed on a source the ranker
-# never asks about, and would teach demotion from a card that is not a signal.
-_OWN_SOURCE = "muldro"
-
-
 class DismissRequest(BaseModel):
     frame_key: str
 
@@ -86,7 +81,14 @@ async def dismiss_unit(
     workspace_id: str = Depends(get_current_workspace_id),
     db: AsyncSession = Depends(get_session),
 ) -> DismissResponse:
-    """Record a dismissal against the key `rank()` actually reads.
+    """Hide this card, and teach the ranker less of its kind.
+
+    TWO writes, because a dismissal is two facts and neither implies the other.
+    "Not this one" is `unit_dismissals`, read back by the feed — without it the
+    card returned on the next poll, since the feed is a pure projection of live
+    rows and nothing recorded that the founder had cleared one. "Less of this
+    kind" is `engagement_history`, read by the ranker. Dropping either would
+    leave a write with no reader or a card that will not go away.
 
     `engagement_history` is keyed on `(signal_source, signal_category)`, and
     `ranking/build.py` reads it as `(frame.source, event.event_type)` — e.g.
@@ -104,7 +106,7 @@ async def dismiss_unit(
     if parsed is None:
         raise HTTPException(status_code=400, detail="Malformed unit key.")
     source, entity_type, entity_id = parsed
-    if source == _OWN_SOURCE:
+    if source == OWN_SOURCE:
         raise HTTPException(
             status_code=400, detail="This card is muldro's own work and cannot be dismissed."
         )
@@ -128,6 +130,13 @@ async def dismiss_unit(
         # another workspace's events one key at a time.
         raise HTTPException(status_code=404, detail="Unit not found.")
 
+    await dismiss(
+        db,
+        workspace_id=workspace_id,
+        user_id=user_id,
+        frame_key=body.frame_key,
+        now=datetime.now(timezone.utc),
+    )
     await EngagementService(db, workspace_id).record_engagement(
         source, event.event_type, "dismissed"
     )
