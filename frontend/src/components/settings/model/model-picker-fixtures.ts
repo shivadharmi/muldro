@@ -3,9 +3,12 @@ import type { CatalogModel, CatalogProvider, ProviderStatus } from "@/lib/types"
 /**
  * One catalog, shared by every model-picker test file.
  *
- * Five catalogued providers, three connected and two not: the unconnected pair
+ * Six catalogued providers, three connected and THREE not: the unconnected set
  * is what the footer has to NAME, and a picker that filtered them out of
  * existence is the state that keeps a missing prerequisite invisible (§4.7).
+ *
+ * Three, not two, so the footer's "+N more" overflow is exercised — at exactly
+ * two it was dead code that no test could reach.
  */
 
 function provider(slug: string, displayName: string): CatalogProvider {
@@ -53,6 +56,7 @@ export const PROVIDERS: CatalogProvider[] = [
   provider("google_genai", "Google"),
   provider("mistral", "Mistral"),
   provider("cohere", "Cohere"),
+  provider("groq", "Groq"),
 ];
 
 export const STATUSES: ProviderStatus[] = [
@@ -61,6 +65,7 @@ export const STATUSES: ProviderStatus[] = [
   status("google_genai", true),
   status("mistral", false),
   status("cohere", false),
+  status("groq", false),
 ];
 
 export const ANTHROPIC_OPUS = model({ model_id: "claude-opus-4-5" });

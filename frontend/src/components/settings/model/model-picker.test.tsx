@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { test, expect, vi } from "vitest";
 
@@ -109,7 +109,11 @@ test("the footer NAMES the providers that are not connected and can route to the
   const { onBrowseProviders, user } = renderPicker();
 
   // A count alone still leaves the founder guessing which models are missing.
-  expect(screen.getByText("2 providers not connected: Mistral, Cohere")).toBeInTheDocument();
+  // Capped at two names so the line cannot outgrow the footer — the overflow
+  // is `+N more`, which at exactly two unconnected providers never ran.
+  const line = screen.getByText("3 providers not connected: Mistral, Cohere +1 more");
+  expect(line).toBeInTheDocument();
+  expect(line).toHaveClass("tabular-nums");
 
   await user.click(screen.getByRole("button", { name: "Browse all providers" }));
   expect(onBrowseProviders).toHaveBeenCalledTimes(1);
@@ -272,11 +276,49 @@ test("the bound model carries the check glyph and the 2px rule", () => {
     .getAllByRole("option")
     .filter((el) => el.getAttribute("aria-selected") === "true");
 
+  // A `for` over an empty list asserts nothing at all.
+  expect(bound).toHaveLength(2);
   for (const row of bound) {
     expect(row).toHaveClass("border-l-2");
     expect(row).toHaveClass("bg-j-primary-soft");
     expect(row.textContent).toContain(ANTHROPIC_OPUS.display_name);
   }
+});
+
+// ── §9 metrics ─────────────────────────────────────────────────────────────
+
+test("the row is a 44px target below `sm` and §9.9's 9px above it", () => {
+  renderPicker();
+
+  // A DELIBERATE deviation, and the reason it is pinned: §9.9's table says
+  // `padding: 9px 16px`, so the next reader with the spec open would "correct"
+  // this back to a 36px target with nothing failing. §9.10's mobile overrides
+  // are uniformly 44px, and a picker row IS the control this surface exists
+  // for — the one act it is here to perform.
+  const row = screen.getAllByRole("option")[0];
+  expect(row).toHaveClass("py-[12px]");
+  expect(row).toHaveClass("sm:py-[9px]");
+});
+
+test("the group header is weight 500 and its count is tabular", () => {
+  renderPicker();
+
+  const group = screen.getByRole("group", { name: "Anthropic" });
+  expect(within(group).getByText("Anthropic")).toHaveClass("font-medium");
+  expect(within(group).getByText("2 models")).toHaveClass("tabular-nums");
+});
+
+test("the footer button is §9.3's `sm` primary, including its mobile padding", () => {
+  renderPicker();
+
+  // Hand-rolled, this carried `px-[12px]` at every width and quietly missed
+  // §9.3's 18px mobile padding-x. It comes from `btn()` now.
+  const browse = screen.getByRole("button", { name: "Browse all providers" });
+  expect(browse).toHaveClass("px-[18px]");
+  expect(browse).toHaveClass("sm:px-[12px]");
+  expect(browse).toHaveClass("h-[44px]");
+  expect(browse).toHaveClass("sm:h-[30px]");
+  expect(browse).toHaveClass("bg-j-primary");
 });
 
 // ── Closed is closed ───────────────────────────────────────────────────────

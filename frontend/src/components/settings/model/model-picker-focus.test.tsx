@@ -192,6 +192,32 @@ test("Escape still closes when focus has been lost to the body", () => {
   }
 });
 
+test("the arrow keys survive a caret lost to the body", () => {
+  renderOpen();
+  const input = screen.getByRole("combobox");
+  const rows = screen.getAllByRole("option");
+  expect(input).toHaveAttribute("aria-activedescendant", rows[0].id);
+
+  // The caret guard below is one mousedown away from missing something. Scoped
+  // to `event.target === input`, the list went dead the moment it did.
+  input.blur();
+  expect(document.activeElement).toBe(document.body);
+
+  fireEvent.keyDown(document.body, { key: "ArrowDown" });
+  expect(input).toHaveAttribute("aria-activedescendant", rows[1].id);
+});
+
+test("a mousedown on the SVG search glyph is prevented too", () => {
+  renderOpen();
+  const glyph = screen.getByRole("combobox").parentElement?.querySelector("svg");
+  expect(glyph).toBeTruthy();
+
+  // An `SVGElement` is not an `HTMLElement`, so an `instanceof HTMLElement`
+  // guard skipped exactly the 15px target sitting beside the search field —
+  // and the check glyph on every bound row.
+  expect(fireEvent.mouseDown(glyph as SVGSVGElement)).toBe(false);
+});
+
 test("a mousedown on non-interactive chrome keeps the caret in the search field", () => {
   renderOpen();
   const input = screen.getByRole("combobox");

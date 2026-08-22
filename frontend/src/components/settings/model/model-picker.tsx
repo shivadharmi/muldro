@@ -84,6 +84,10 @@ function PickerPanel(props: ModelPickerProps) {
   // `use-focus-trap.ts` documents as load-bearing. `isolate` is the WRAPPER so
   // the backdrop stays clickable while everything outside goes `inert` — which
   // is what earns the `aria-modal` below rather than merely asserting it.
+  // Both traps are armed for one render: a child's effects run before its
+  // parent's, so this registers before `useOverlayClaim` pauses the shell's.
+  // Self-correcting, and harmless in the direction that matters — that window
+  // has two traps competing over Tab, never zero.
   const panelRef = useFocusTrap<HTMLDivElement>({ isolate: wrapperRef });
   const [query, setQuery] = useState("");
 
@@ -152,11 +156,22 @@ function PickerPanel(props: ModelPickerProps) {
    */
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      // Arrow keys and Enter belong to the LIST, and only the input is in the
-      // list. Unscoped, Enter on the footer button suppressed its activation
-      // and rebound the tier to whatever row the cursor sat on instead.
-      const inList = event.target === inputRef.current;
+      // The list owns ↑/↓/↵ everywhere EXCEPT on a focusable control. Scoped
+      // to the input alone it closed C2 but re-opened C1: one blur to `<body>`
+      // — a mousedown the caret guard below happened not to catch — and the
+      // keyboard went dead. Scoping by "is this a control?" instead keeps the
+      // footer button's own Enter (C2) while surviving a lost caret, which is
+      // what stops that guard from being a single point of failure.
+      const target = event.target;
+      const onControl =
+        target instanceof Element &&
+        target !== inputRef.current &&
+        target.closest("button,a,select,textarea,[contenteditable]") !== null;
+      const inList = !onControl;
       if (event.key === "Escape") {
+        // Not checked against the INNERMOST claimant: a future confirm dialog
+        // stacked over the palette would have its Escape eaten here. The lease
+        // in `overlay-context.ts` already counts claims if that day comes.
         event.preventDefault();
         onClose();
       } else if (inList && (event.key === "ArrowDown" || event.key === "ArrowUp")) {
@@ -195,12 +210,24 @@ function PickerPanel(props: ModelPickerProps) {
         role="dialog"
         aria-modal="true"
         aria-label={`Choose a model for the ${tierName} tier`}
-        // Keep the caret in the search field. A mousedown on a header, on
-        // whitespace or on the scrollbar otherwise blurs to `<body>` and the
-        // list stops answering ↑/↓ and ↵ until something is refocused.
+        // Keep the caret in the search field, so typing keeps reaching it. No
+        // longer load-bearing for ↑/↓/↵ — `inList` above owns that — but still
+        // the difference between typing and typing into nothing.
+        //
+        // `Element`, not `HTMLElement`: an `SVGElement` is neither an
+        // `HTMLElement` nor a subclass of one, so that guard skipped the 15px
+        // search glyph the founder was aiming past, and the check glyph on
+        // every bound row. `closest` exists on both.
+        //
+        // Two known costs. Text in the palette cannot be drag-selected, so a
+        // context window or a price cannot be copied — accepted narrowly,
+        // because a dead caret is worse. And a mousedown on the results list's
+        // native SCROLLBAR targets that `<div>` and is prevented here; browsers
+        // are believed to run a scrollbar drag ahead of the default action, but
+        // jsdom renders no scrollbar, so that one needs a live click-through.
         onMouseDown={(event) => {
           const target = event.target;
-          if (target instanceof HTMLElement && !target.closest("input,button")) {
+          if (target instanceof Element && !target.closest("input,button,a,select,textarea")) {
             event.preventDefault();
           }
         }}
