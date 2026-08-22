@@ -307,3 +307,51 @@ def frame_for_event(
         event_count=event_count,
         affordances=affordances or [],
     )
+
+
+def frame_for_row(
+    *,
+    source: str,
+    entity_type: str,
+    entity_id: str,
+    kind: FrameKind,
+    status: FrameStatus,
+    headline: str,
+    occurred_at: datetime | None,
+    updated_at: datetime | None = None,
+    group_key: str | None = None,
+    event_count: int = 1,
+    affordances: list[Affordance] | None = None,
+) -> Frame:
+    """Project one of MULDRO'S OWN rows - a run, a briefing, a queue - onto a Frame.
+
+    The sibling of `frame_for_event`, and deliberately the same neutralizer.
+    A row's headline is not external text, but it is frequently MODEL-authored
+    prose (a briefing headline, a plan step name), and `Frame.headline`'s
+    validator refuses every markdown construct without caring where it came
+    from. Constructing a Frame directly here would raise on an ordinary
+    `**Board pack**` and cost the founder the card, so the text goes through
+    `_plain` and `_clamp_headline` exactly as an email subject does.
+
+    `kind` and `status` are the CALLER's decision, as in `frame_for_event`:
+    they depend on what the row means, which the row alone does not say. They
+    are never the model's.
+    """
+    text = _plain(headline)
+    if not text:
+        # Name what muldro knows rather than inventing a constant.
+        text = f"{source} {entity_type}".strip()
+    occurred = ensure_aware_utc(occurred_at) or datetime.now(timezone.utc)
+    return Frame(
+        key=frame_key(source, entity_type, entity_id),
+        group_key=group_key,
+        kind=kind,
+        status=status,
+        headline=_clamp_headline(text),
+        source=source,
+        entity_type=entity_type,
+        occurred_at=occurred,
+        updated_at=ensure_aware_utc(updated_at) or occurred,
+        event_count=event_count,
+        affordances=affordances or [],
+    )
