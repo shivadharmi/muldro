@@ -325,7 +325,14 @@ async def delete_provider_credential(
     )
     return CredentialDeleteResponse(
         status=status,
-        orphaned_bindings=[w for w in config.warnings if w.code == "provider_not_configured"],
+        orphaned_bindings=[
+            w
+            for w in config.warnings
+            # Only what THIS revoke broke. config.warnings spans every binding in the
+            # workspace, so an unrelated provider that was already unconfigured would
+            # otherwise be misreported as a consequence of deleting this one.
+            if w.code == "provider_not_configured" and w.provider == provider
+        ],
     )
 
 

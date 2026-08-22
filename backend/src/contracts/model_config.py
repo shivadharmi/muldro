@@ -80,6 +80,10 @@ class ConfigWarning(BaseModel):
     model_config = ConfigDict(extra="ignore")
     scope_type: BindingScope
     scope_key: str
+    # The provider that could not be resolved. Lets a client group warnings by
+    # provider, and lets a credential revoke report only the warnings ITS delete
+    # caused rather than every unrelated provider already broken in the workspace.
+    provider: str
     code: Literal["provider_not_configured"]
     message: str
 

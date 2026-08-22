@@ -1735,3 +1735,77 @@ def test_delete_credential_reports_what_it_breaks_and_still_deletes(monkeypatch)
         if app is not None:
             app.dependency_overrides.clear()
         _delete_ws_credentials(factory, ws)
+
+
+@pytest.mark.skipif(not _db_reachable(), reason="Postgres not reachable")
+def test_delete_reports_only_what_this_revoke_broke(monkeypatch):
+    """orphaned_bindings must be scoped to the provider actually deleted.
+
+    config.warnings spans every binding in the workspace, across all providers. If a
+    workspace already has an unrelated provider unconfigured (here: a `balanced` tier
+    bound to google_genai, which has no credential), deleting the OpenAI credential
+    must not report that pre-existing, unrelated breakage as something THIS delete
+    caused.
+    """
+    _use_test_key(monkeypatch)
+    # Blank both env fallbacks so neither provider's warning is masked by a dev .env.
+    # Do NOT blank anthropic_api_key -- validate_startup() hard-fails without it.
+    monkeypatch.setattr(get_settings(), "openai_api_key", "", raising=False)
+    monkeypatch.setattr(get_settings(), "google_api_key", "", raising=False)
+    factory, ws = _ws_factory()
+    app = None
+
+    async def _seed_broken_google_binding():
+        async with factory() as db:
+            db.add(
+                ModelBinding(
+                    workspace_id=ws,
+                    scope_type="tier",
+                    scope_key="balanced",
+                    provider="google_genai",
+                    model_id="gemini-2.5-pro",
+                    effort="medium",
+                    max_tokens=4096,
+                    enabled=True,
+                )
+            )
+            await db.commit()
+
+    try:
+        app = _ws_app(factory, ws)
+        with TestClient(app) as c:
+            c.put("/v1/providers/openai/credentials", json={"api_key": "sk-x"})
+            c.put(
+                "/v1/model-config",
+                json={
+                    "tiers": [
+                        {
+                            "scope_type": "tier",
+                            "scope_key": "fast",
+                            "provider": "openai",
+                            "model_id": "gpt-5-mini",
+                            "effort": "low",
+                            "max_tokens": 4096,
+                        }
+                    ],
+                    "agent_overrides": [],
+                },
+            )
+            asyncio.run(_seed_broken_google_binding())
+
+            # Sanity: the pre-existing google_genai breakage is already visible before
+            # the delete, and is not itself under test here.
+            pre = c.get("/v1/model-config").json()
+            assert any(w["scope_key"] == "balanced" for w in pre["warnings"])
+
+            r = c.delete("/v1/providers/openai/credentials")
+            assert r.status_code == 200, r.text
+            body = r.json()
+
+            orphaned = body["orphaned_bindings"]
+            assert [w["scope_key"] for w in orphaned] == ["fast"]
+            assert all(w["provider"] == "openai" for w in orphaned)
+    finally:
+        if app is not None:
+            app.dependency_overrides.clear()
+        _delete_ws_credentials(factory, ws)

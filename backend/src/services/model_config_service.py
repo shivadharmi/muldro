@@ -210,6 +210,7 @@ class ModelConfigService:
                 ConfigWarning(
                     scope_type=b.scope_type,
                     scope_key=b.scope_key,
+                    provider=b.provider,
                     code="provider_not_configured",
                     message=message,
                 )
