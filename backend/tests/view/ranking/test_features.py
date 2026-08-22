@@ -1,11 +1,11 @@
 """The feature record carries no prose — asserted structurally, not by listing.
 
-`ranker-interface.md` §4 invariant 1: *`RankFeatures` holds no prose.* A test
-that names the fields it expects passes the day someone adds `headline: str`,
-so the test below walks the model's own annotations instead and refuses any
-bare `str` leaf anywhere in the tree. A code-authored handle or closed
-vocabulary must say so in its type (`Opaque`), which is the whole point: the
-declaration is where the claim is made and where the test can check it.
+*`RankFeatures` holds no prose.* A test that names the fields it expects passes
+the day someone adds `headline: str`, so the test below walks the model's own
+annotations instead and refuses any bare `str` leaf anywhere in the tree. A
+code-authored handle or closed vocabulary must say so in its type (`Opaque`),
+which is the whole point: the declaration is where the claim is made and where
+the test can check it.
 """
 
 from typing import Annotated, Literal, Union, get_args, get_origin, get_type_hints

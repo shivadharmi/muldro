@@ -111,7 +111,7 @@ test("a transient close (not auth) still reconnects", () => {
  * The guard is not defensive noise. `render_surface` emitted `surface_id`
  * where this hook read `id`, so `msg.surface?.id` dropped every surface it
  * ever sent — silently, because the tool returned {status: "published"}
- * regardless (spec §1). The guard stays; the publisher states the field.
+ * regardless. The guard stays; the publisher states the field.
  */
 
 const UNIT = {

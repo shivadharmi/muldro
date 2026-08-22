@@ -1,6 +1,6 @@
 """The view layer — code owns the frame, the model writes one markdown body.
 
-See docs/view-layer/spec.md. Appearance is normative in docs/view-layer/mockup.html.
+External text is quoted by code and enters neither the frame nor the body.
 """
 
 from src.view.contracts import Affordance, Frame, FrameKind, FrameStatus, Quote, Unit

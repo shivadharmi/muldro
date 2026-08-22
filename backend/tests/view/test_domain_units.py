@@ -2,8 +2,7 @@
 
 The old builder made `run` and `alert` two surface kinds from one table.
 FrameKind has one `run`; FrameStatus carries the difference. Two cards of one
-kind are the same shape by construction (spec §4.1) — which is what ranking
-needs.
+kind are the same shape by construction — which is what ranking needs.
 """
 
 from datetime import datetime, timezone
@@ -82,8 +81,8 @@ def test_the_goal_wins_over_the_step_name():
 
 def test_with_neither_it_returns_empty_rather_than_the_word_Run():  # noqa: N802
     """The old builder fell back to the literal 'Run', so every unnamed run read
-    alike — defect 1 in miniature. Empty lets frame_for_row name what muldro
-    actually knows: `muldro run`."""
+    alike — the many-identical-cards failure in miniature. Empty lets
+    frame_for_row name what muldro actually knows: `muldro run`."""
     assert run_headline(plan_goal=None, step_name=None) == ""
     assert run_headline(plan_goal="  ", step_name="") == ""
 
@@ -249,14 +248,14 @@ async def test_an_empty_queue_is_absent_rather_than_a_card_announcing_idleness()
 
 
 async def test_prepared_work_offers_a_code_authored_affordance():
-    """spec §10 invariant 5: an affordance names a real capability, labelled in code."""
+    """An affordance names a real capability, and is labelled in code."""
     unit = await prepared_work_unit(_DB([_approval()]), workspace_id="ws_1", user_id="usr_1")
     assert [a.capability for a in unit.frame.affordances] == ["internal.approve_action"]
     assert unit.frame.affordances[0].label == "Review"
 
 
 async def test_failing_sources_become_one_record_unit_with_a_real_key():
-    """`rec_{i}` was defect 6's own example of an id that resolves to nothing."""
+    """`rec_{i}` was the canonical example of an id that resolves to nothing."""
     state = SimpleNamespace(source="gmail", circuit_state="open")
     unit = await connector_health_unit(_DB([state]), workspace_id="ws_1")
     assert unit is not None

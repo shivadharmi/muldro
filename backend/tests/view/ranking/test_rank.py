@@ -1,9 +1,9 @@
-"""`rank()` is ordering cases, not eyeballing (spec §10 test surface).
+"""`rank()` is ordering cases, not eyeballing.
 
 Two properties carry the design and are asserted rather than described:
 `rank()` is a pure, total permutation of its input handles, and engagement can
-only ever push an item DOWN. `validate_permutation` is the checkable half of
-§3 — the reason a later list-ranking model may reorder but never author.
+only ever push an item DOWN. `validate_permutation` is the checkable half —
+the reason a later list-ranking model may reorder but never author.
 """
 
 import ast

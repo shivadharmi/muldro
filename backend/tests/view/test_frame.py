@@ -1,9 +1,8 @@
 """frame.key is deterministic and names a durable thing, not an occurrence.
 
-Spec §3 / §10 invariant 6. Identity must be deterministic or dedup is not
-dedup: an inferred key lets two runs of one pipeline mint two keys for one
-thing, which is why three polls of one inbox produced three "New activity"
-cards.
+Identity must be deterministic or dedup is not dedup: an inferred key lets two
+runs of one pipeline mint two keys for one thing, which is why three polls of
+one inbox produced three "New activity" cards.
 """
 
 import json
@@ -89,7 +88,7 @@ def test_headline_falls_back_when_the_subject_is_entirely_markdown():
 
 
 def test_a_model_authored_importance_score_on_the_event_never_reaches_the_frame():
-    """Spec §10 invariants 4 and 8. The event's score is LLM-authored.
+    """The event's score is LLM-authored.
 
     `NormalizedEvent.importance_score` is written straight from LLM JSON by a
     prompt that reads the event's title and summary - the attacker-controlled
@@ -198,7 +197,7 @@ def test_an_email_field_is_still_not_a_name():
 # --- importance is clamped, never raised ----------------------------------
 #
 # Frame.importance is ge=0.0 le=1.0 and the caller supplies it - eventually
-# §6's ranker. An out-of-range value must not raise here: a ValidationError
+# that caller is the ranker. An out-of-range value must not raise here: a ValidationError
 # inside frame_for_event means the card silently never exists, which is the
 # outcome the design rejected when it chose to neutralize a phishing subject
 # rather than refuse it. A future ranker bug should degrade a score, not
@@ -422,7 +421,7 @@ def test_a_clamped_headline_ends_on_a_word_boundary():
 
 
 def test_a_clamped_headline_carries_no_ellipsis():
-    """Spec §2.3: no ellipsis, no 'read more'. CSS line-clamp already says cut."""
+    """No ellipsis, no 'read more': CSS line-clamp already says cut."""
     headline = frame_for_event(_event(title=_LONG_WORDS * 8, actor_entities=None)).headline
 
     assert "…" not in headline

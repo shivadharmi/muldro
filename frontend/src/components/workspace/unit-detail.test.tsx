@@ -1,10 +1,10 @@
 /**
- * The Full's shell. Layers 2 and 4 are built; layers 1-by-archetype and 3 are
- * spec step 5.
+ * The Full's shell. Layers 2 and 4 are built; layer 1-by-archetype and layer 3
+ * are still to come.
  *
- * The one thing it must never do is render empty. "Card shows info, modal
- * shows nothing" is spec §1 defect 6, and it is what a chevron opening onto a
- * deleted surface detail modal would recreate.
+ * The one thing it must never do is render empty. "Card shows info, modal shows
+ * nothing" is the failure this replaced, and it is what a chevron opening onto
+ * a deleted surface detail modal would recreate.
  */
 
 import { describe, expect, it, vi } from "vitest";
@@ -75,7 +75,7 @@ describe("UnitDetail", () => {
   it("renders a quote as plain text, never as markdown", () => {
     // External text is carried verbatim; safety is the renderer never treating
     // it as markup. A subject that renders as a live link in muldro's voice is
-    // the phishing surface spec §1 opens with.
+    // the phishing surface this design exists to close.
     const { container } = render(
       <UnitDetail
         unit={unit({ quotes: [{ text: "[click](https://phish.example)", who: "X", when: NOW }] })}
@@ -127,7 +127,7 @@ describe("UnitDetail", () => {
   });
 
   it("states plainly that the reasoning has not been written yet", () => {
-    // Honest absence beats a blank pane. Removed when spec step 2b lands.
+    // Honest absence beats a blank pane. Removed once the body generator lands.
     render(<UnitDetail unit={unit()} open onClose={() => {}} />);
     expect(screen.getByTestId("unit-detail-no-body")).toBeInTheDocument();
   });

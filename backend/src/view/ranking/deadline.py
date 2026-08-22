@@ -2,7 +2,7 @@
 
 Why this is a parser and not a prompt
 -------------------------------------
-`spec.md` §6 admits a deadline into the ranker's feature set on one argument:
+A deadline is admitted into the ranker's feature set on one argument:
 *an attacker can lie about **when**; they cannot inject an **instruction**.*
 Extraction is still a boundary — a deadline lifted from a body is
 attacker-influenced — but it enters as a **typed date, which is bounded and
@@ -11,8 +11,7 @@ checkable**.
 That argument holds only for a genuinely parsed date. What the codebase holds
 today is `NormalizedEvent.importance_signals["contains_deadline"]`: a boolean
 an LLM asserted while reading the attacker's subject and body. That is the
-instruction channel wearing a typed name (`ranker-interface.md` §1), and this
-module replaces it.
+instruction channel wearing a typed name, and this module replaces it.
 
 So there is no model here and no prompt to inject — only a parser to feed. And
 there is no clock: `now` is a required keyword argument, because a relative
@@ -44,7 +43,7 @@ nothing due at all.
 **That influence is expected and accepted, not an oversight.** A deadline is
 one bounded feature among several on `RankFeatures`, and `rank_with_model`'s
 `max_displacement` clamps how far any single item may move from its
-deterministic position (`ranker-interface.md` §3, invariant 4). A maximally
+deterministic position. A maximally
 successful lie about *when* moves an item a few places; it cannot move it to
 the top, cannot add an item, and cannot say anything to the ranker at all.
 The blast radius is bounded by construction rather than by detection.

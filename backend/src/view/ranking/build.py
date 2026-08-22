@@ -2,7 +2,7 @@
 
 `rank()` is a pure function over a record; everything that has to ask Postgres
 a question happens here, which is what keeps the ordering testable against
-cases rather than eyeballed (`ranker-interface.md` §3).
+cases rather than eyeballed.
 
 What this module is allowed to read
 -----------------------------------
@@ -71,7 +71,7 @@ DeadlineSource = Literal["structured", "verbatim_text"]
 # Same shape and same fail-closed rule as `perception.py::VERBATIM_TEXT_FIELD`,
 # and for the same reason: "does this connector expose a deadline, and as what?"
 # is a per-source question with three possible answers, only two of which are
-# admissible (`ranker-interface.md` §1a):
+# admissible:
 #
 #   "structured"     a typed value the PROVIDER returned. No extraction, so no
 #                    parser to feed and nothing to inject. Strictly the best.

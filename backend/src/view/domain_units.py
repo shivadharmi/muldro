@@ -192,7 +192,7 @@ async def briefing_units(db: Any, *, workspace_id: str, user_id: str) -> list[Un
         logger.warning("feed_briefing_unit_failed id=%s error=%s", briefing.briefing_id, exc)
         return []
     # `full_text` is the briefing's own model-authored prose: it IS a body, in
-    # the one place a body already exists before spec step 2b writes them.
+    # the one place a body already existed before bodies were written anywhere.
     return [Unit(frame=frame, body=getattr(briefing, "full_text", "") or "", quotes=())]
 
 
@@ -209,8 +209,8 @@ async def prepared_work_unit(db: Any, *, workspace_id: str, user_id: str) -> Uni
 
     The affordance names `internal.approve_action` because that is the only
     approval capability CAPABILITY_CATALOG carries — there is no read-side
-    `internal.list_approvals`, and spec §10 invariant 5 forbids inventing one:
-    an affordance whose capability does not resolve is not rendered at all.
+    `internal.list_approvals`, and inventing one is forbidden: an affordance
+    whose capability does not resolve is not rendered at all.
     """
     from src.deep_runtime.middleware.approval_persistence import PREPARED_APPROVAL_TYPE
     from src.models.approvals import Approval
@@ -262,8 +262,8 @@ async def connector_health_unit(db: Any, *, workspace_id: str) -> Unit | None:
     """One `record` Unit when sources are failing, else None.
 
     Replaces `_build_recommendation_surfaces`, whose only real output was this
-    and whose `rec_{i}` ids are spec §1 defect 6's own example of an id that
-    resolves to nothing. The information keeps a real, deterministic key.
+    and whose `rec_{i}` ids were the canonical example of an id that resolves
+    to nothing. The information keeps a real, deterministic key.
     """
     from src.models.perception_state import PerceptionState
 

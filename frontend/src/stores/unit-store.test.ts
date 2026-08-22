@@ -2,7 +2,7 @@
  * The store is keyed on frame.key, which is the whole point.
  *
  * The surface store keyed on a minted `surf_ULID`, so three polls of one email
- * thread produced three ids and three cards (spec §1 defect 1). frame.key is
+ * thread produced three ids and three identical cards. frame.key is
  * `source:entity_type:entity_id` — supplied by the source system, stable by
  * construction — so the second message on a thread UPDATES the card.
  */

@@ -1,8 +1,8 @@
 """The Frame is code-authored and plain-text.
 
-Invariant 2 (docs/view-layer/spec.md §10): frame.headline is plain text and is
-never passed to a markdown renderer. The type refuses markdown syntax so an
-email subject cannot arrive here and become a live link in muldro's voice.
+frame.headline is plain text and is never passed to a markdown renderer. The
+type refuses markdown syntax so an email subject cannot arrive here and become
+a live link in muldro's voice.
 """
 
 from datetime import datetime, timezone

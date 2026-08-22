@@ -1,7 +1,7 @@
 """A Frame built from a domain row runs the same neutralizer as one built from an event.
 
-spec §10 invariant 3: every field other than `headline` rests on there being
-exactly one construction site per origin. `frame_for_event` is that site for
+Every field other than `headline` rests on there being exactly one
+construction site per origin. `frame_for_event` is that site for
 perception; `frame_for_row` is it for muldro's own rows. Both must neutralize
 through `_plain` + `_clamp_headline`, or a briefing headline carrying `**`
 raises inside Frame's validator and the founder loses the card.
@@ -70,5 +70,5 @@ def test_affordances_are_carried():
 
 
 def test_importance_defaults_to_zero():
-    """rank() returns an order, not a score. Nothing fills this (spec §6.1)."""
+    """rank() returns an order, not a score, so nothing fills this."""
     assert _row().importance == 0.0

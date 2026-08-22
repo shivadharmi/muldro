@@ -189,8 +189,8 @@ def _clamp_headline(text: str) -> str:
     boundary = cut.rfind(" ", MAX_HEADLINE_CHARS - _WORD_BOUNDARY_WINDOW)
     if boundary > 0:
         cut = cut[:boundary]
-    # No ellipsis and no "read more" (spec §2.3): CSS line-clamp-2 already
-    # signals visual truncation, and a "..." says "this was cut" a second time.
+    # No ellipsis and no "read more": CSS line-clamp-2 already signals visual
+    # truncation, and a "..." says "this was cut" a second time.
     return cut.rstrip()
 
 
@@ -214,8 +214,8 @@ def _importance(raw: Any) -> float:
     """Clamp a CALLER-supplied score to Frame.importance's [0.0, 1.0].
 
     Never raises. This no longer guards LLM JSON - the event's score is not
-    read at all - it guards whatever a caller passes, eventually the spec §6
-    ranker. A caller answering `85` (percent) would otherwise raise a
+    read at all - it guards whatever a caller passes, and eventually that
+    caller is the ranker. A caller answering `85` (percent) would otherwise raise a
     ValidationError inside frame_for_event and the card would silently never
     exist, which is the same outcome the design rejected when it chose to
     neutralize a hostile subject rather than refuse it. A ranker bug should
@@ -266,9 +266,9 @@ def frame_for_event(
     `importance` in particular is NOT read off `event.importance_score`, even
     though NormalizedEvent carries one: that score is LLM-authored from the
     event's title and summary - the attacker-controlled subject and body - and
-    Frame carries no model-authored field (spec §10 invariants 4 and 8, so
-    external prose cannot raise its own rank). It defaults to 0.0 until §6's
-    ranker supplies one from derived features.
+    Frame carries no model-authored field, so external prose cannot raise its
+    own rank. It defaults to 0.0 until the ranker supplies one from features
+    muldro derived itself.
     """
     subject = _plain(getattr(event, "title", None))
     actor = event_actor_name(event)

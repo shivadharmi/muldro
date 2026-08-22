@@ -2,14 +2,14 @@
  * The workspace's Units, keyed on `frame.key`.
  *
  * The surface store keyed on a minted `surf_ULID`, so three polls of one email
- * thread minted three ids and rendered three cards — spec §1 defect 1.
+ * thread minted three ids and rendered three identical cards.
  * `frame.key` is `source:entity_type:entity_id`, supplied by the source system
  * and stable by construction, so the second message on a thread updates the
  * card that is already there.
  *
- * There is no cap and no expiry here. The feed is a projection of live rows
- * (spec §10 invariants 1 and 9); what bounds it is the server's window and the
- * ranker's order, not a client-side slice.
+ * There is no cap and no expiry here. The feed is a projection of live rows,
+ * so what bounds it is the server's window and the ranker's order, not a
+ * client-side slice.
  */
 
 import { create } from "zustand";

@@ -29,7 +29,7 @@ _PARAGRAPH_BREAK = re.compile(r"\n[ \t]*\n")
 _SPACE_TAB = " \t"
 
 # Per-kind lede budget in characters. Starting points, not measurements —
-# see docs/view-layer/spec.md §13 open question 1.
+# nobody has yet checked them against real bodies at the rendered width.
 LEDE_BUDGETS: dict[str, int] = {
     "proposal": 140,  # one thread, one reason it needs you
     "finding": 180,  # research and synthesis are legitimately long

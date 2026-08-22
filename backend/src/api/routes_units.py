@@ -53,8 +53,7 @@ async def get_workspace_units(
     """Every Unit the workspace shows, in rank order.
 
     A pure projection of live domain rows — no cache, no stored feed, and no
-    expiry (spec §10 invariants 1 and 9). The Unit exists exactly as long as
-    the row it projects.
+    expiry. The Unit exists exactly as long as the row it projects.
     """
     units = await assemble_feed(
         db, workspace_id=workspace_id, user_id=user_id, now=datetime.now(timezone.utc)
@@ -93,7 +92,9 @@ async def dismiss_unit(
     no dismissal the founder has ever made reached the ranker. This writes the
     key the ranker reads.
 
-    Demotion only (spec §6.2). Nothing here can promote.
+    Demotion only; nothing here can promote. Promotion by engagement would be
+    self-sealing — rank drives visibility and visibility drives engagement —
+    while a thing had to be seen before it could be dismissed.
     """
     parsed = parse_frame_key(body.frame_key)
     if parsed is None:

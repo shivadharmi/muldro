@@ -1,8 +1,8 @@
 """The feed is a projection of normalized_events, not of a poll cycle.
 
 Three polls of one thread wrote three rows keyed on one entity_id; this
-returns ONE Unit whose event_count is 3. That is defect 1 from spec §1,
-closed on the read side as well as the write side.
+returns ONE Unit whose event_count is 3 — the three identical "New activity"
+cards, closed on the read side as well as the write side.
 """
 
 from datetime import datetime, timedelta, timezone
@@ -94,7 +94,8 @@ async def test_a_calendar_unit_carries_no_quote():
 
 
 async def test_the_body_is_empty_until_the_generator_lands():
-    """spec §12 step 2b writes bodies; this step transports frames and quotes."""
+    """Body generation is a separate concern; this path transports frames and
+    quotes only."""
     db = _DB([_row()])
     units, _ = await stored_perception_units(
         db, workspace_id="ws_1", user_id="usr_1", now=datetime.now(timezone.utc)

@@ -3,7 +3,7 @@
 `perception.units_from_events` groups ONE POLL's raw events. The feed needs
 the same grouping over the rows ingest already wrote, for a window rather
 than a poll — which is what makes the feed a pure function of domain rows
-(spec §10 invariant 1) rather than something that exists only while a poll
+rather than something that exists only while a poll
 is running. `frame_for_event` reads both shapes, so this is a query plus a
 call, not a second projection.
 
@@ -29,9 +29,9 @@ logger = logging.getLogger(__name__)
 
 __all__ = ["FEED_WINDOW_DAYS", "MAX_FEED_EVENTS", "stored_perception_units"]
 
-# How far back the feed looks. NOT a TTL and not an expiry (spec §10 invariant
-# 9): the row is still there, and widening this number brings it straight back.
-# A window is an attention bound; an expiry is a deletion.
+# How far back the feed looks. NOT a TTL and not an expiry: the row is still
+# there, and widening this number brings it straight back. A window is an
+# attention bound; an expiry is a deletion.
 FEED_WINDOW_DAYS = 14
 
 # Rows read per feed build. Grouping collapses these, so the unit count is far

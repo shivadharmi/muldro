@@ -17,11 +17,11 @@ FrameStatus = Literal["needs_you", "scheduled", "running", "done", "failed", "ne
 
 # `Frame.headline`'s upper bound, named once and imported by frame.py so the
 # clamp and the field cannot drift apart. This is a TYPE SANITY bound, not a
-# display rule: spec §4.2 gives the headline CSS `line-clamp-2`, which at 13px
+# display rule: the headline renders under CSS `line-clamp-2`, which at 13px
 # in a 320px cell shows on the order of 80 characters, so 200 is invisible in
-# practice and exists only to keep the field finite. It is deliberately NOT one
-# of the seven truncation rules §2.3 replaces - those are about what the reader
-# sees, and CSS decides that.
+# practice and exists only to keep the field finite. It is deliberately NOT a
+# truncation rule - truncation is about what the reader sees, and CSS decides
+# that, in one place, rather than seven disagreeing character counts in Python.
 MAX_HEADLINE_CHARS = 200
 
 # A headline is plain text, line-clamped, and never passed to a markdown
@@ -31,8 +31,8 @@ MAX_HEADLINE_CHARS = 200
 # <scheme:...> protocol autolink — plus raw newlines (which close setext
 # headings and lists on their own) and control/bidi-override characters that
 # can spoof plain text with no markdown involved at all. An email subject
-# reaching this field is the phishing vector described in spec §1, so the
-# type refuses these constructs rather than trusting a caller to sanitize.
+# reaching this field is the phishing vector this design exists to close, so
+# the type refuses these constructs rather than trusting a caller to sanitize.
 _MARKDOWN_IN_HEADLINE = re.compile(
     r"""
       \*\*                       # bold
@@ -108,10 +108,7 @@ class Frame(BaseModel):
         if not stripped:
             raise ValueError("frame.headline must not be blank")
         if _MARKDOWN_IN_HEADLINE.search(stripped):
-            raise ValueError(
-                "frame.headline is plain text; markdown and bare URLs are refused "
-                "(spec §10 invariant 2)"
-            )
+            raise ValueError("frame.headline is plain text; markdown and bare URLs are refused")
         return stripped
 
 

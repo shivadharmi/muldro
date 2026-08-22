@@ -106,6 +106,6 @@ async def test_a_missing_bus_publishes_nothing_and_never_raises():
     """`EventPublisher.event_bus` is lazily initialised and is None until
     something has called `ensure_event_bus()`. A publisher handed None must
     fail silent rather than AttributeError into the poll — the exact class of
-    "returned success and rendered nothing" bug spec §1 opens with, so it is
-    pinned here rather than left to the caller."""
+    "returned success and rendered nothing" bug this design exists to close, so
+    it is pinned here rather than left to the caller."""
     await publish_units(None, [_unit()], user_id="usr_1")

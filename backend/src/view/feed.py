@@ -1,10 +1,9 @@
 """Compose the five Unit families and put them in rank order.
 
-spec §6: there was no ranking function at all. Server order was the order
+Before this there was no ranking function at all. Server order was the order
 builders ran in, client order was arrival order, and `gridAutoFlow: dense`
 repacked both — three independent non-decisions, stacked. `src/view/ranking`
-has been built and tested since spec step 4 and NOTHING IMPORTED IT. This is
-where it is wired.
+was built and tested and then NOTHING IMPORTED IT. This is where it is wired.
 
 The composition order below is the fallback, not the product: it is what the
 feed looks like when the ranker cannot run. It must therefore be a defensible
@@ -40,8 +39,8 @@ def order_by_rank(units: Sequence[Unit], ranked_keys: Sequence[Any]) -> list[Uni
     A key `rank()` did not return is DROPPED, not appended. `rank()` omits a
     key for exactly two reasons and both are decisions: a duplicate handle
     names one thing, and a `suppressed` item is one the founder dismissed five
-    times running. Re-appending the omitted keys would undo the demotion §6.2
-    exists to apply.
+    times running. Re-appending the omitted keys would undo the very demotion
+    those omissions exist to apply.
 
     A key in `ranked_keys` with no matching Unit is ignored — the ranker sees
     the same list, but a malformed response must cost nothing.

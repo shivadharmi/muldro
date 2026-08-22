@@ -3,7 +3,7 @@
 `rank()` takes a sequence of `RankFeatures` and returns handles. It performs
 no I/O and makes no model call — every DB read lives in `build.py`. That
 separation is not tidiness: it is what makes the ordering testable against
-cases (`spec.md` §10 test surface) instead of eyeballed, and it is what keeps
+cases instead of eyeballed, and it is what keeps
 a clock out of the ordering so the same feed twice produces the same feed.
 
 Why an ORDER rather than a score
@@ -15,8 +15,8 @@ model may **reorder** the baseline but can never author it.
 
 The weights
 -----------
-`spec.md` §13 leaves the weighting open on purpose: soul says *"surface what
-matters, not compete for presence"*, which is a constraint, not a formula.
+The weighting is left open on purpose: soul says *"surface what matters, not
+compete for presence"*, which is a constraint, not a formula.
 The shape below is chosen so that every term answers **"does this need the
 founder?"** rather than "how loud is it?":
 
@@ -44,7 +44,7 @@ Two terms only ever SUBTRACT, and the sign is the guarantee:
 
 A reserved field contributes nothing when absent. `deadline_in_days=None` and
 `you_replied=None` mean *no signal*, and score exactly as a far-off date and an
-unanswered question do — never as a low value (invariant 6).
+unanswered question do — never as a low value.
 
 Ties
 ----

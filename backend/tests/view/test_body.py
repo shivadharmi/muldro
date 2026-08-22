@@ -1,7 +1,7 @@
 """The body is one markdown field; the card shows its first paragraph.
 
-Spec §2.3: the Glance renders paragraph 1, the Full renders the whole document,
-so the Glance is a SEMANTIC prefix of the Full and the two cannot disagree.
+The Glance renders paragraph 1 and the Full renders the whole document, so the
+Glance is a SEMANTIC prefix of the Full and the two cannot disagree.
 This replaces seven disagreeing truncation rules with one budget per kind.
 
 The lede cases live in `fixtures/lede_corpus.json` rather than in this file:
@@ -31,7 +31,7 @@ def test_the_shared_corpus_is_actually_loaded():
 
 @pytest.mark.parametrize("case", _CASES, ids=[c["name"] for c in _CASES])
 def test_lede_of_matches_the_shared_corpus(case):
-    """The differential pin (spec §10 invariants 1 and 7).
+    """The differential pin across the two implementations.
 
     `frontend/src/components/workspace/unit-card.test.tsx` asserts `ledeOf`
     against these same cases. Nothing else fails when one implementation

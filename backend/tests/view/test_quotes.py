@@ -1,7 +1,7 @@
 """External text reaches the screen only as an attributed quote.
 
-Spec §2.1: the body slot never carries external provenance because external
-values arrive on a different field that only code renders. This is the field.
+The body slot never carries external provenance, because external values
+arrive on a different field that only code renders. This is the field.
 
 Two shapes are exercised below and they are NOT equally real. The
 ``_event`` fixture hand-writes ``raw_payload={"snippet": ...}``; no connector
@@ -247,7 +247,7 @@ def test_a_real_slack_event_produces_an_attributed_quote():
     assert len(quotes) == 1
     assert quotes[0].text == "Can you review the deck before standup?"
     # slack_connector puts the slack user id in actor["name"] - an account,
-    # which spec §2.2 allows for `who`, rather than an unattributed quote.
+    # which is an allowed `who`: naming the account beats an unattributed quote.
     assert quotes[0].who == "U08SARAH"
 
 

@@ -1,15 +1,15 @@
 """The only object the ranker may see.
 
-`ranker-interface.md` §0: **the ranker reads only values muldro computed about
-its own history — never a value an outside party wrote, and never a value a
-model inferred *from* what an outside party wrote.**
+**The ranker reads only values muldro computed about its own history — never a
+value an outside party wrote, and never a value a model inferred *from* what an
+outside party wrote.**
 
 The consequence is visible in the type: there is no headline here, no summary,
 no snippet and no body. `key` is an opaque handle. The ranker orders handles;
 it never learns what they say, so there is nothing on this record to prompt it
-with. That is invariant 1 (§4), and `tests/view/ranking/test_features.py`
-enforces it by walking these annotations rather than by listing the fields it
-expects — a listing test passes the day someone adds `headline: str`.
+with. `tests/view/ranking/test_features.py` enforces that by walking these
+annotations rather than by listing the fields it expects — a listing test
+passes the day someone adds `headline: str`.
 
 `Opaque` is how a string field states its own provenance. A `str` on this
 record is either a handle muldro minted (`frame.key`), a connector name code
@@ -21,7 +21,7 @@ Fields explicitly NOT here, and why they look safe
 --------------------------------------------------
 `NormalizedEvent.importance_score`, `urgency_score` and every key under
 `importance_signals` except the rules-origin triage flag are an LLM's
-assertions over the raw subject and body (`ranker-interface.md` §1).
+assertions over the raw subject and body.
 `Entity.importance_score` is also a stored score whose writer has not been
 audited. None of them may enter, however typed they look.
 
@@ -29,7 +29,7 @@ A reserved field is None, never a guess
 ---------------------------------------
 Three fields are typed to accept a prerequisite that has not landed, and all
 three carry *no signal* rather than a defaulted value that would read as a
-fact (invariant 6):
+fact:
 
 * `ThreadState.you_replied` — there is no sent-mail ingestion and no
   `email_sent` event type. `False` would read as *"you ignored them"*.
@@ -37,7 +37,7 @@ fact (invariant 6):
   counterparty" needs an actor-indexed query over `normalized_events`, and
   `actor_entities` is unindexed JSONB. `0` on a `known=True` counterparty
   would assert *"you have never corresponded"*, which is the same failure.
-  This widens §2's draft type (`int = 0`) for exactly that reason.
+  The field is therefore optional rather than an `int` defaulting to 0.
 * `RankFeatures.matched_goal_ids` — empty when no goal memory references the
   counterparty. This one IS populated (a graph join, `build.py`); empty means
   no match, not no capability.

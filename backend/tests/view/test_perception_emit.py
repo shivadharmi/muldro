@@ -81,7 +81,7 @@ def test_pre_ingest_raw_events_group_and_stay_attributed():
 
 
 def test_a_units_frame_never_takes_importance_from_the_event():
-    """Spec §10 invariants 4 and 8: importance is CALLER-supplied, always.
+    """`importance` is CALLER-supplied, always.
 
     An earlier version of this test read as though a pre-ingest frame were the
     special case ("the scorer runs at ingest"). It is not: `importance` is no
@@ -90,7 +90,7 @@ def test_a_units_frame_never_takes_importance_from_the_event():
     that has none. That score is derived from the event's title and summary -
     the attacker-controlled subject and body - so carrying it would let
     external prose raise its own rank. `units_from_events` supplies no
-    importance, and will until §6's ranker does.
+    importance, and will not until the ranker does.
     """
     scored = _event()
     assert scored.importance_score == 0.6  # the event really does carry one

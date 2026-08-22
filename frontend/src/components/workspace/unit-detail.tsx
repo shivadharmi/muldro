@@ -18,19 +18,20 @@ interface Props {
 }
 
 /**
- * The Full, as far as spec step 3b builds it.
+ * The Full, as far as it is built today.
  *
- * Four layers are specified (spec §5.1). Two are here — layer 2 (the whole
- * body, block markdown) and layer 4 (the affordances) — plus the quotes band
- * standing in for layer 1. Layer 1 by archetype and layer 3, the derivation,
- * are spec step 5; this component is the shell they land in, not a stopgap
- * that gets thrown away.
+ * The design has four layers. Two are here — layer 2 (the whole body, block
+ * markdown) and layer 4 (the affordances) — plus the quotes band standing in
+ * for layer 1. Layer 1 by archetype and layer 3, the derivation, are still to
+ * come; this component is the shell they land in, not a stopgap that gets
+ * thrown away.
  *
- * It exists because deleting the old surface detail modal with nothing behind the
- * chevron re-creates defect 6 from spec §1 — chevrons that open to nothing.
+ * It exists because deleting the old surface detail modal with nothing behind
+ * the chevron would recreate the failure this replaced: a chevron that opens
+ * to nothing.
  *
- * It CANNOT render empty (§2.3). The frame header is unconditional, and the
- * body's absence is stated rather than left blank. Tabs are gone: _TABS_BY_KIND
+ * It CANNOT render empty. The frame header is unconditional, and the body's
+ * absence is stated rather than left blank. Tabs are gone: _TABS_BY_KIND
  * mapped `summary` to Steps/Plan/Events/Trace because nobody could say what a
  * summary was, and four layers replace nine tab lists.
  */
@@ -126,8 +127,8 @@ export function UnitDetail({ unit, open, onClose, onAct, children }: Props) {
               <MarkdownRenderer content={body} />
             </div>
           ) : (
-            // Honest absence, not a blank pane. Deleted when spec step 2b — the
-            // body generator — lands and every Unit arrives with prose.
+            // Honest absence, not a blank pane. Deleted once the body generator
+            // lands and every Unit arrives with prose.
             <p data-testid="unit-detail-no-body" className="text-xs text-t-muted italic">
               Muldro has not written this up yet.
             </p>

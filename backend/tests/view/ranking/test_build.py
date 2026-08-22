@@ -1,8 +1,8 @@
 """`build_features` is the only place the ranker touches the database.
 
 The tests that matter here are not "does it read the column" but "does it
-refuse to read the wrong one". Three properties carry `ranker-interface.md`
-§1 and §1a: the LLM-authored scores are never read at all; a deadline is
+refuse to read the wrong one". Three properties carry the ranker's input
+rule: the LLM-authored scores are never read at all; a deadline is
 sourced PER CONNECTOR and fails closed on an unlisted one (calendar in
 particular never sees the text extractor); and one malformed unit costs its
 own features, never the feed.
@@ -219,7 +219,7 @@ _FORBIDDEN_READS = (
 
 
 def test_build_never_names_an_llm_authored_score():
-    """§1's forbidden list, asserted at the syntax tree rather than by review.
+    """The forbidden list, asserted at the syntax tree rather than by review.
 
     Each of these is an LLM's assertion over the attacker's subject and body
     wearing a typed name. `Entity.importance_score` is on the list too: it is

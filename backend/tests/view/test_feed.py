@@ -1,6 +1,6 @@
 """The feed is ordered by rank(), not by which builder ran first.
 
-spec §6: server order was the order builders ran in, client order was arrival
+Server order used to be the order builders ran in, client order was arrival
 order, and a dense CSS grid repacked both. Three independent non-decisions,
 stacked. This is the decision.
 """

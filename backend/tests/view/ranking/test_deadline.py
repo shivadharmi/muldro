@@ -1,11 +1,11 @@
 """The deadline extractor is a parser, not a judgement.
 
-ranker-interface.md §1 rejects `importance_signals["contains_deadline"]` because
-it is a boolean an LLM asserted while reading the attacker's subject and body.
-spec.md §6's argument for admitting a deadline at all - *an attacker can lie
-about when, but cannot inject an instruction* - only holds for a genuinely
-parsed date. These tests pin that there is no model and no clock in the loop:
-`extract_deadline` is a pure function of `(text, now)`.
+`importance_signals["contains_deadline"]` is rejected because it is a boolean
+an LLM asserted while reading the attacker's subject and body. The argument for
+admitting a deadline at all - *an attacker can lie about when, but cannot
+inject an instruction* - only holds for a genuinely parsed date. These tests
+pin that there is no model and no clock in the loop: `extract_deadline` is a
+pure function of `(text, now)`.
 
 Every control and otherwise-invisible character below is written as an explicit
 `\\uXXXX` escape. A literal one is invisible in a diff and this repo has been
