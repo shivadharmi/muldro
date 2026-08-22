@@ -16,6 +16,7 @@ from typing import get_args
 from sqlalchemy import delete, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.config import secret_crypto
 from src.config.model_catalog import MODEL_CATALOG
 from src.config.provider_catalog import public_field_keys
 from src.config.settings import get_settings
@@ -286,9 +287,17 @@ class ModelConfigService:
             cred = cred_by_provider.get(provider)
             # "configured" must mean what the RUNTIME means: usable credential material,
             # not merely a row. A keyed provider whose key was cleared has a row and no
-            # credential, and ModelResolver raises for exactly that state.
+            # credential, and ModelResolver raises for exactly that state. A column
+            # check alone is not enough either: a row whose ciphertext no longer
+            # decrypts (e.g. after a master-key rotation) has key material the resolver
+            # cannot use, so it must not read as configured with a stale "valid" status
+            # -- the exact drift this fix exists to close, reopened for this input.
             has_material = cred is not None and (
-                bool(cred.api_key_encrypted) or provider in KEYLESS_PROVIDERS
+                provider in KEYLESS_PROVIDERS
+                or (
+                    bool(cred.api_key_encrypted)
+                    and secret_crypto.try_decrypt_secret(cred.api_key_encrypted) is not None
+                )
             )
             if has_material:
                 # A real credential row always wins (its own status). Only a row

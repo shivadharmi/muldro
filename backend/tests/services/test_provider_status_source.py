@@ -16,7 +16,23 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+from cryptography.fernet import Fernet
+
+from src.config import secret_crypto
 from src.services.model_config_service import ModelConfigService
+
+
+@pytest.fixture(autouse=True)
+def _test_master_key(monkeypatch):
+    """_provider_statuses (FIX C) now attempts a real decrypt to compute `configured`,
+    so every _cred() ciphertext below must actually decrypt. A generated Fernet key
+    stands in for MULDRO_CONFIG_ENCRYPTION_KEY -- this keeps the file a pure, in-memory
+    unit test (no DB, no network) while staying honest about what _provider_statuses
+    actually does, rather than hollowing the test out by patching try_decrypt_secret
+    itself."""
+    key = Fernet.generate_key().decode()
+    monkeypatch.setattr(secret_crypto, "_config_key", lambda: key)
 
 
 def _db_returning(rows: list) -> MagicMock:
@@ -33,19 +49,20 @@ def _cred(provider: str, workspace_id: str | None, status: str = "valid") -> Sim
     # None on a real row) so this stub keeps matching _provider_statuses's attribute
     # access as it grows -- these tests assert on source/configured only.
     #
-    # api_key_encrypted defaults to a stand-in ciphertext: every _cred() in this file
+    # api_key_encrypted defaults to a genuine ciphertext (encrypted under the module's
+    # test master key -- see `_test_master_key` above): every _cred() in this file
     # represents a real, previously-PUT credential (per the module docstring -- "this
-    # workspace's own ProviderCredential row"), which always has key material. A
-    # cleared-key row (api_key_encrypted=None) is a different fixture, exercised by
-    # ModelConfigService's own has_material tests, not this file's source/configured
-    # matrix.
+    # workspace's own ProviderCredential row"), which always has key material that
+    # actually decrypts. A row whose ciphertext does NOT decrypt is a different
+    # fixture -- see test_credential_row_with_unusable_key_material_reports_unconfigured
+    # below -- not this file's source/configured matrix.
     return SimpleNamespace(
         provider=provider,
         workspace_id=workspace_id,
         status=status,
         base_url=None,
         extra_config=None,
-        api_key_encrypted="stub-ciphertext",
+        api_key_encrypted=secret_crypto.encrypt_secret("stub"),
     )
 
 
@@ -89,3 +106,14 @@ async def test_workspace_row_wins_over_the_deployment_default():
     """Both rows present: the workspace row is preferred, and it IS deletable."""
     got = await _statuses([_cred("anthropic", None), _cred("anthropic", "ws_1")])
     assert got["anthropic"].source == "workspace"
+
+
+async def test_credential_row_with_unusable_key_material_reports_unconfigured():
+    """A row can have a non-null ``api_key_encrypted`` and still be unusable -- e.g.
+    after a master-key rotation leaves its ciphertext undecryptable under the current
+    key. ``configured`` must reflect what the runtime can actually use, not merely
+    that the column is populated (a plain column-presence check would say True here)."""
+    row = _cred("anthropic", "ws_1")
+    row.api_key_encrypted = "not-real-ciphertext"
+    got = await _statuses([row])
+    assert got["anthropic"].configured is False

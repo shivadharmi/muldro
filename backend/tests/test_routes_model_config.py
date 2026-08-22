@@ -1060,8 +1060,18 @@ def test_credential_for_uncatalogued_provider_is_still_visible(monkeypatch):
     this test seeds exactly such a row before the app boots. The row is deleted in
     `finally` so it can't trip the same guard for any test that creates an app
     afterwards.
+
+    The key must be a REAL Fernet key, not just a truthy string: GET /v1/model-config
+    now decrypts every row's ciphertext to compute `configured` (FIX C), and a
+    malformed key raises ValueError out of Fernet's own constructor instead of the
+    per-row InvalidToken that path is designed to absorb. `_use_test_key` covers the
+    decrypt path; `config_encryption_key` is set separately (same real key) because
+    that is the literal attribute the boot guard's truthiness check reads.
     """
-    monkeypatch.setattr(get_settings(), "config_encryption_key", "test-master-key")
+    from cryptography.fernet import Fernet
+
+    _use_test_key(monkeypatch)
+    monkeypatch.setattr(get_settings(), "config_encryption_key", Fernet.generate_key().decode())
     factory, ws = _ws_factory()
     app = None
 

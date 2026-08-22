@@ -242,7 +242,16 @@ class ModelResolver:
         """Resolve a provider's (api_key, base_url) exactly as ``resolve`` does: the
         workspace credential row, else the deployment-default (NULL) row, else the
         per-provider env fallback key. Public so the /test endpoint can probe the
-        same credential source GET /model-config reports as configured."""
+        same credential source GET /model-config reports as configured.
+
+        A row whose ciphertext no longer decrypts under the current master key is
+        discarded entirely -- base_url included -- and treated as though the row were
+        absent, falling through to the env fallback with no base_url. Pairing the
+        deployment's shared env key with a *different* row's workspace-chosen base_url
+        would otherwise send that shared credential to an endpoint it was never
+        configured against, which during a key rotation is exfiltration, not
+        degradation.
+        """
         stmt = (
             select(ProviderCredential)
             .where(
@@ -256,20 +265,25 @@ class ModelResolver:
             .order_by(ProviderCredential.workspace_id.is_(None))
         )
         row = (await self._db.execute(stmt)).scalars().first()
-        if row and row.api_key_encrypted:
-            try:
-                return secret_crypto.decrypt_secret(row.api_key_encrypted), row.base_url
-            except Exception:
-                # An undecryptable ciphertext is an UNUSABLE credential, not a crash --
-                # the master key may have been rotated out from under it. Falling through
-                # means GET /v1/model-config WARNS about the provider instead of 500ing on
-                # the one page that could delete the bad row, and the runtime raises an
-                # articulate ModelConfigError instead of a raw Fernet error.
-                logger.warning(
-                    "credential for provider %s could not be decrypted; treating it as "
-                    "unconfigured (has the config encryption key been rotated?)",
-                    provider,
-                )
+        if row is not None and row.api_key_encrypted:
+            plaintext = secret_crypto.try_decrypt_secret(row.api_key_encrypted)
+            if plaintext is not None:
+                return plaintext, row.base_url
+            # An undecryptable ciphertext is an UNUSABLE credential, not a crash --
+            # the master key may have been rotated out from under it. Falling through
+            # means GET /v1/model-config WARNS about the provider instead of 500ing on
+            # the one page that could delete the bad row, and the runtime raises an
+            # articulate ModelConfigError instead of a raw Fernet error.
+            logger.warning(
+                "credential for provider %s could not be decrypted; treating it as "
+                "unconfigured (has the config encryption key been rotated?)",
+                provider,
+            )
+            # Discard the row entirely, base_url included. Falling through to the env
+            # fallback would otherwise send the DEPLOYMENT's shared key to a base_url
+            # this WORKSPACE chose -- a pairing that was never configured together, and
+            # during a key rotation that is exfiltration, not degradation.
+            row = None
         # env fallback
         attr = _ENV_KEY_ATTR.get(provider)
         env_key = getattr(get_settings(), attr, "") if attr else ""
