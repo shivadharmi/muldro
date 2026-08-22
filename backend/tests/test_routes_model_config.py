@@ -1585,3 +1585,105 @@ def test_keyless_provider_with_a_base_url_is_still_configured(monkeypatch):
         if app is not None:
             app.dependency_overrides.clear()
         _delete_ws_credentials(factory, ws)
+
+
+@pytest.mark.skipif(not _db_reachable(), reason="Postgres not reachable")
+def test_binding_a_tier_to_an_unconfigured_provider_is_rejected(monkeypatch):
+    """B3, bind path. Saving this used to succeed and then fail every run."""
+    # resolve_credential consults the env fallback last, and this worktree's .env has
+    # MULDRO_OPENAI_API_KEY set -- blank it so the env key cannot mask the result.
+    monkeypatch.setattr(get_settings(), "openai_api_key", "", raising=False)
+    factory, ws = _ws_factory()
+    app = None
+
+    try:
+        app = _ws_app(factory, ws)
+        with TestClient(app) as c:
+            r = c.put(
+                "/v1/model-config",
+                json={
+                    "tiers": [
+                        {
+                            "scope_type": "tier",
+                            "scope_key": "reasoning",
+                            "provider": "openai",
+                            "model_id": "gpt-5",
+                            "effort": "high",
+                            "max_tokens": 8192,
+                        }
+                    ],
+                    "agent_overrides": [],
+                },
+            )
+            assert r.status_code == 422, r.text
+            detail = r.json()["detail"]
+            assert detail[0]["scope_key"] == "reasoning"
+            assert detail[0]["code"] == "provider_not_configured"
+    finally:
+        if app is not None:
+            app.dependency_overrides.clear()
+
+
+@pytest.mark.skipif(not _db_reachable(), reason="Postgres not reachable")
+def test_binding_an_agent_override_to_an_unconfigured_provider_is_allowed(monkeypatch):
+    """An override degrades to its tier binding, so rejecting it would be stricter
+    than the runtime. It warns instead."""
+    monkeypatch.setattr(get_settings(), "openai_api_key", "", raising=False)
+    factory, ws = _ws_factory()
+    app = None
+
+    try:
+        app = _ws_app(factory, ws)
+        with TestClient(app) as c:
+            r = c.put(
+                "/v1/model-config",
+                json={
+                    "tiers": [],
+                    "agent_overrides": [
+                        {
+                            "scope_type": "agent",
+                            "scope_key": "planner",
+                            "provider": "openai",
+                            "model_id": "gpt-5",
+                            "effort": "high",
+                            "max_tokens": 8192,
+                        }
+                    ],
+                },
+            )
+            assert r.status_code == 200, r.text
+            assert any(w["scope_key"] == "planner" for w in r.json()["warnings"])
+    finally:
+        if app is not None:
+            app.dependency_overrides.clear()
+
+
+@pytest.mark.skipif(not _db_reachable(), reason="Postgres not reachable")
+def test_keyless_provider_survives_bind_validation():
+    """KEYLESS_PROVIDERS must be honoured, or the new reject breaks local models."""
+    factory, ws = _ws_factory()
+    app = None
+
+    try:
+        app = _ws_app(factory, ws)
+        with TestClient(app) as c:
+            r = c.put(
+                "/v1/model-config",
+                json={
+                    "tiers": [
+                        {
+                            "scope_type": "tier",
+                            "scope_key": "balanced",
+                            "provider": "ollama",
+                            "model_id": "llama3.1",
+                            "effort": "none",
+                            "max_tokens": 4096,
+                        }
+                    ],
+                    "agent_overrides": [],
+                },
+            )
+            assert r.status_code == 200, r.text
+    finally:
+        if app is not None:
+            app.dependency_overrides.clear()

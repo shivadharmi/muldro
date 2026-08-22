@@ -4,6 +4,7 @@ avoid the /v1/settings/{category}/{key} catch-all in routes_settings.py."""
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -166,7 +167,22 @@ async def put_model_config(
     for b in [*body.tiers, *(body.agent_overrides or [])]:
         if get_model_spec(b.provider, b.model_id) is None:
             raise HTTPException(status_code=400, detail=f"unknown model {b.provider}/{b.model_id}")
-    await ModelConfigService(db).put_config(workspace_id, body.tiers, body.agent_overrides)
+
+    service = ModelConfigService(db)
+    # A tier has no fallback: ModelResolver raises for it, and the run dies. Reject the
+    # bind rather than accept a config that cannot run. Agent overrides degrade to their
+    # tier binding (model_resolver.py:70), so they are warned about, not refused.
+    blocking = await service.unconfigured_bindings(workspace_id, body.tiers, [])
+    if blocking:
+        # A plain `raise HTTPException(detail=[...])` would lose this structure: the
+        # central handler (error_handlers.py) collapses any non-string `.detail` into
+        # the generic {"error": {"message": "Request failed."}} envelope, by design --
+        # every other error in this file uses a string detail for exactly that reason.
+        # This is the one response that must carry which bindings are blocking (so a
+        # client can point at them), so it returns directly and bypasses that handler.
+        return JSONResponse(status_code=422, content={"detail": [w.model_dump() for w in blocking]})
+
+    await service.put_config(workspace_id, body.tiers, body.agent_overrides)
     await db.commit()
     return await ModelConfigService(db).get_config_response(workspace_id)
 
