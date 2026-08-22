@@ -1156,6 +1156,60 @@ def test_rotating_a_key_preserves_base_url_and_extra_config(monkeypatch):
 
 
 @pytest.mark.skipif(not _db_reachable(), reason="Postgres not reachable")
+def test_empty_credential_body_does_not_reset_status(monkeypatch):
+    """A no-op write must not invalidate a verification.
+
+    The handler only ever writes status="untested" itself, so a prior "valid" state
+    has to be seeded directly in the DB. PUT {} carries no fields at all -- it changes
+    nothing -- and must leave that verification alone rather than downgrading it.
+    """
+    _use_test_key(monkeypatch)
+    factory, ws = _ws_factory()
+    app = None
+
+    try:
+        app = _ws_app(factory, ws)
+        with TestClient(app) as c:
+            created = c.put(
+                "/v1/providers/anthropic/credentials",
+                json={"api_key": "sk-original"},
+            )
+            assert created.status_code == 200, created.text
+
+            async def _mark_valid():
+                from sqlalchemy import select
+
+                async with factory() as s:
+                    row = (
+                        (
+                            await s.execute(
+                                select(ProviderCredential).where(
+                                    ProviderCredential.workspace_id == ws,
+                                    ProviderCredential.provider == "anthropic",
+                                )
+                            )
+                        )
+                        .scalars()
+                        .first()
+                    )
+                    row.status = "valid"
+                    await s.commit()
+
+            asyncio.run(_mark_valid())
+
+            empty = c.put("/v1/providers/anthropic/credentials", json={})
+            assert empty.status_code == 200, empty.text
+
+            body = c.get("/v1/model-config").json()
+            anthropic = next(p for p in body["providers"] if p["provider"] == "anthropic")
+            assert anthropic["status"] == "valid"
+    finally:
+        if app is not None:
+            app.dependency_overrides.clear()
+        _delete_ws_credentials(factory, ws)
+
+
+@pytest.mark.skipif(not _db_reachable(), reason="Postgres not reachable")
 def test_explicit_null_clears_base_url(monkeypatch):
     """Omitted means 'leave alone'; explicit null means 'clear'."""
     _use_test_key(monkeypatch)

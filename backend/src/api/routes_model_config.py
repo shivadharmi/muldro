@@ -236,8 +236,12 @@ async def put_provider_credential(
             existing.base_url = fields["base_url"]
         if "extra_config" in fields:
             existing.extra_config = fields["extra_config"]
-        existing.status = "untested"
-        existing.enabled = True
+        if fields:
+            # Only a real write invalidates a prior verification. An empty body changes
+            # nothing, so it must not downgrade a `valid` provider to `untested` --
+            # `status` renders in the Providers tab.
+            existing.status = "untested"
+            existing.enabled = True
     else:
         api_key = fields.get("api_key")
         db.add(
