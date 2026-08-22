@@ -16,26 +16,58 @@ PY_CAP = 800
 TSX_CAP = 400
 STORE_CAP = 200
 
-# path -> line count at adoption (2026-06-12). Files may not exceed this.
+# path -> line count when the guard was first actually RUN (2026-08-22).
+# Files may not exceed this; each carries a standing debt to be split.
+#
+# This list was regenerated because it had never been enforced: core.hooksPath
+# pointed at a directory removed by the muldro rename, so no hook ran for months,
+# and the pre-commit framework that invokes THIS script was never installed. The
+# previous list was written against a tree that no longer exists — it named
+# surface_detail_builders.py as a file (it is a package now) and muldro.py at
+# 3427 lines (it is 896). A guard that never runs cannot keep its own exemptions
+# honest.
 GRANDFATHERED: dict[str, int] = {
-    "backend/src/orchestrator/muldro.py": 3427,
-    "backend/src/services/graph_executor.py": 2026,
-    "backend/src/services/surface_detail_builders.py": 1610,
-    "backend/src/services/scheduler.py": 1215,
-    "backend/src/tools/intelligence_server.py": 1214,
-    "backend/src/services/memory_service.py": 1142,
-    "backend/src/api/routes_auth.py": 1036,
-    "backend/src/integrations/session_pool.py": 871,
-    "backend/src/integrations/mcp_pool.py": 900,
-    "frontend/src/lib/api.ts": 897,
-    "frontend/src/components/chat/chat-panel.tsx": 678,
-    "frontend/src/components/history/run-detail-modal.tsx": 543,
-    "frontend/src/app/settings/page.tsx": 522,
+    "backend/src/orchestrator/agent_invoker.py": 1620,
+    "backend/tests/deep_runtime/test_permission_gate.py": 1159,
+    "backend/src/integrations/session_pool.py": 1143,
+    "frontend/src/lib/api.ts": 1111,
+    "backend/tests/test_scheduler.py": 1104,
+    "backend/src/services/graph_executor.py": 1023,
+    "backend/src/services/dag_runner.py": 961,
+    "backend/tests/test_push_receiver.py": 924,
+    "backend/tests/test_autonomous_deep_e2e.py": 909,
+    "backend/tests/test_knowledge_service.py": 909,
+    "backend/src/orchestrator/muldro.py": 896,
+    "backend/tests/deep_runtime/test_trust_gate.py": 892,
+    "backend/tests/test_perception_policy.py": 889,
+    "backend/tests/test_foundation_hardening.py": 885,
+    "backend/tests/test_chat_single_lead.py": 880,
+    "backend/src/orchestrator/perception_runner.py": 825,
+    "backend/src/api/routes_approvals.py": 820,
+    "backend/tests/test_perception.py": 815,
+    "frontend/src/components/muldro/chat-panel.tsx": 736,
+    "frontend/src/components/settings/model-tab.tsx": 588,
+    "frontend/src/lib/types.ts": 542,
+    "frontend/src/components/history/run-detail-modal.tsx": 536,
+    "frontend/src/components/settings/settings-modal.tsx": 529,
+    "frontend/tests/e2e/diagnostic.spec.ts": 501,
+    "frontend/src/app/integrations/page.tsx": 460,
+    "frontend/tests/e2e/screenshot-all-pages.spec.ts": 421,
+    "frontend/tests/e2e/pages.spec.ts": 413,
+    "frontend/src/components/knowledge/stats-view.tsx": 406,
+    "frontend/src/hooks/useConnectAccount.test.ts": 401,
 }
 GRANDFATHER_SLACK = 40  # small headroom so unrelated edits don't hard-block
 
 
 def cap_for(path: str) -> int:
+    # Alembic revisions are GENERATED, not designed. The standard's reasoning —
+    # "hitting a cap is a design signal, split by responsibility" — has nothing
+    # to act on in a file `alembic revision --autogenerate` wrote, and the
+    # initial-schema revision is 1200+ lines by construction. Capping them would
+    # mean grandfathering every future migration one at a time.
+    if "alembic/versions/" in path:
+        return 0
     if "stores/" in path and path.endswith(".ts"):
         return STORE_CAP
     if path.endswith((".tsx", ".ts")):
