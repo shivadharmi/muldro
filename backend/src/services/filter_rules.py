@@ -7,17 +7,22 @@ founder already tell us to keep this quiet?" — has a name.
 
 import logging
 from collections.abc import Mapping
+from datetime import datetime
 from email.utils import parseaddr
 from typing import Any
 
 from sqlalchemy import select
 
+from src.models.events import NormalizedEvent
 from src.models.filter_rule import FilterRule
 
 logger = logging.getLogger(__name__)
 
 __all__ = [
     "SenderRules",
+    "apply_approved_proposal",
+    "load_all_sender_rules",
+    "revoke_rule",
     "load_sender_rules",
     "matching_rule_id",
     "normalize_sender",
@@ -111,3 +116,134 @@ async def load_sender_rules(db: Any, *, workspace_id: str) -> dict[tuple[str, st
         logger.warning("filter_rules_read_failed workspace=%s error=%s", workspace_id, exc)
         return {}
     return {(r.source, r.match_value): r.rule_id for r in rows}
+
+
+async def apply_approved_proposal(db: Any, approval: Any) -> list[str]:
+    """Write the rules a founder just confirmed. Returns the new rule ids.
+
+    Reads the addresses off the approval's `artifact_refs`, never off fresh
+    evidence. The founder answered a specific card naming specific senders, and
+    re-deriving the list at confirmation time would create rules for whatever
+    the inbox looks like NOW — the same reason a prepared action replays its
+    recorded payload instead of re-running the agent that produced it.
+
+    One rule per address, not one rule for the batch. A single yes is
+    convenient to give and must still be revocable piece by piece.
+
+    Idempotent: a second confirmation of the same approval adds nothing,
+    because the unique constraint already holds one rule per
+    (workspace, source, kind, value) and an existing rule is left alone rather
+    than duplicated or re-dated.
+    """
+    refs = getattr(approval, "artifact_refs", None) or {}
+    senders = refs.get("senders") or []
+    if not senders:
+        return []
+
+    existing = await load_all_sender_rules(db, workspace_id=approval.workspace_id)
+    created: list[str] = []
+    for entry in senders:
+        if not isinstance(entry, dict):
+            continue
+        source = str(entry.get("source") or "")
+        address = normalize_sender(entry.get("address"))
+        if not source or not address or (source, address) in existing:
+            continue
+        rule = FilterRule(
+            workspace_id=approval.workspace_id,
+            user_id=approval.user_id,
+            source=source,
+            match_kind="sender",
+            match_value=address,
+            created_from_approval_id=approval.approval_id,
+        )
+        db.add(rule)
+        await db.flush()
+        created.append(rule.rule_id)
+    logger.info(
+        "filter_rules_created workspace=%s approval=%s rules=%d",
+        approval.workspace_id,
+        getattr(approval, "approval_id", "?"),
+        len(created),
+    )
+    return created
+
+
+async def load_all_sender_rules(db: Any, *, workspace_id: str) -> set[tuple[str, str]]:
+    """Every sender rule, live or revoked. Used to avoid re-creating one the
+    founder has already answered — in either direction."""
+    try:
+        rows = (
+            (
+                await db.execute(
+                    select(FilterRule).where(
+                        FilterRule.workspace_id == workspace_id,
+                        FilterRule.match_kind == "sender",
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("filter_rules_read_failed workspace=%s error=%s", workspace_id, exc)
+        return set()
+    return {(r.source, r.match_value) for r in rows}
+
+
+async def revoke_rule(db: Any, *, workspace_id: str, rule_id: str, now: datetime) -> int:
+    """Turn a rule off and RELEASE the mail it hid. Returns rows released.
+
+    Revoking is not enough on its own. The triage verdict was frozen into
+    `importance_signals` at ingest, so without this the mail would stay
+    unactionable — and therefore folded — for ever, with the rule that caused
+    it already gone. That is the failure `filtered_by` exists to make fixable.
+
+    The row is kept rather than deleted: a deleted rule loses the evidence of
+    what it once hid, and the founder may want it back.
+    """
+    rule = (
+        (
+            await db.execute(
+                select(FilterRule).where(
+                    FilterRule.workspace_id == workspace_id,
+                    FilterRule.rule_id == rule_id,
+                )
+            )
+        )
+        .scalars()
+        .first()
+    )
+    if rule is None:
+        return 0
+    rule.enabled = False
+    rule.revoked_at = now
+
+    released = 0
+    events = (
+        (
+            await db.execute(
+                select(NormalizedEvent).where(
+                    NormalizedEvent.workspace_id == workspace_id,
+                    NormalizedEvent.importance_signals["filtered_by"].astext == rule_id,
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for event in events:
+        signals = dict(event.importance_signals or {})
+        signals.pop("filtered_by", None)
+        # Back to unclassified, NOT to some guessed verdict. The next poll
+        # re-triages it honestly; asserting `actionable=True` here would be
+        # muldro deciding on the founder's behalf in the other direction.
+        signals["actionable"] = None
+        signals["triage_origin"] = "default"
+        event.importance_signals = signals
+        released += 1
+    await db.flush()
+    logger.info(
+        "filter_rule_revoked workspace=%s rule=%s released=%d", workspace_id, rule_id, released
+    )
+    return released
