@@ -270,3 +270,85 @@ class TestFoldOnTheAssembledFeed:
         feed = await assemble_feed(_StubDB(), workspace_id="ws_1", user_id="usr_1", now=NOW)
         assert len(feed.units) == 2
         assert feed.fold_after == len(feed.units)
+
+
+class TestQuietUnits:
+    """What counts as below the founder's attention.
+
+    Two sources OR-ed: rules-origin headers, and triage's own `actionable`
+    verdict. The second is a JUDGEMENT and is consulted for DEMOTION ONLY —
+    an attacker wants to be SEEN, so the manipulation available to them is to
+    read as actionable, which leaves them exactly where they already are.
+    Marking yourself unactionable only hides you.
+    """
+
+    @staticmethod
+    def _f(key, bulk=False):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(key=key, bulk_mail=bulk)
+
+    @staticmethod
+    def _ev(actionable):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(importance_signals={"actionable": actionable})
+
+    def test_rules_bulk_is_quiet(self):
+        from src.view.feed import quiet_units
+
+        assert quiet_units([], [self._f("a", bulk=True)], {})["a"] is True
+
+    def test_an_unactionable_thing_is_quiet_even_with_no_bulk_header(self):
+        """Bank alerts, OTPs and delivery receipts carry no List-Unsubscribe,
+        and `classify_by_rules` can only return "marketing"."""
+        from src.view.feed import quiet_units
+
+        q = quiet_units([], [self._f("a")], {"a": [self._ev(False)]})
+        assert q["a"] is True
+
+    def test_one_actionable_event_keeps_the_whole_thing_visible(self):
+        """A reply on a receipt thread is still a reply."""
+        from src.view.feed import quiet_units
+
+        q = quiet_units([], [self._f("a")], {"a": [self._ev(False), self._ev(True)]})
+        assert q["a"] is False
+
+    def test_no_evidence_either_way_stays_visible(self):
+        """muldro's own cards have no triage row and must never be folded by a
+        lookup that missed."""
+        from src.view.feed import quiet_units
+
+        q = quiet_units([], [self._f("muldro:run:r1")], {})
+        assert q["muldro:run:r1"] is False
+
+    def test_a_thing_with_no_verdicts_at_all_stays_visible(self):
+        from src.view.feed import quiet_units
+
+        q = quiet_units([], [self._f("a")], {"a": []})
+        assert q.get("a") is False
+
+    def test_a_missing_verdict_is_not_a_false_one(self):
+        """`None` means triage never scored it, which is not "unactionable"."""
+        from types import SimpleNamespace
+
+        from src.view.feed import quiet_units
+
+        q = quiet_units([], [self._f("a")], {"a": [SimpleNamespace(importance_signals={})]})
+        assert q.get("a") is False
+
+    def test_a_malformed_event_does_not_raise(self):
+        from types import SimpleNamespace
+
+        from src.view.feed import quiet_units
+
+        q = quiet_units([], [self._f("a")], {"a": [SimpleNamespace(importance_signals=None)]})
+        assert q.get("a") is False
+
+    def test_the_llm_verdict_can_only_hide_never_promote(self):
+        """A thing already quiet by RULES cannot be rescued by an actionable
+        verdict — that would be promotion, and promotion is self-sealing."""
+        from src.view.feed import quiet_units
+
+        q = quiet_units([], [self._f("a", bulk=True)], {"a": [self._ev(True)]})
+        assert q["a"] is True

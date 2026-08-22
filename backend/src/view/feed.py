@@ -33,7 +33,13 @@ from src.view.stored_units import stored_perception_units
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["Feed", "assemble_feed", "order_by_rank", "partition_for_fold"]
+__all__ = [
+    "Feed",
+    "assemble_feed",
+    "order_by_rank",
+    "partition_for_fold",
+    "quiet_units",
+]
 
 
 def order_by_rank(units: Sequence[Unit], ranked_keys: Sequence[Any]) -> list[Unit]:
@@ -82,40 +88,36 @@ class Feed:
 
 
 def partition_for_fold(
-    units: Sequence[Unit], bulk_by_key: Mapping[str, bool]
+    units: Sequence[Unit], quiet_by_key: Mapping[str, bool]
 ) -> tuple[list[Unit], int]:
     """Split the ranked feed into what is shown and what is collapsed.
 
-    Returns `(units, fold_after)`: a STABLE partition — signal first, bulk
-    after, each group in the rank order it arrived in — and the index where the
-    second group starts.
+        Returns `(units, fold_after)`: a STABLE partition — signal first, bulk
+        after, each group in the rank order it arrived in — and the index where the
+        second group starts.
 
-    A POSITIONAL boundary was tried first and does not work, for a reason only
-    real data shows: the ranker deliberately interleaves the two classes.
-    `W_BULK_MAIL` demotes bulk by 2.5 but `W_RECENCY` lifts a recent item by up
-    to 2.0, so a marketing mail from an hour ago outranks a real thread from
-    yesterday. Bulk is therefore SCATTERED through the order, not gathered at
-    the end. Cutting before the first bulk item folds real signal below it;
-    cutting after the last signal item shows everything above it — measured on
-    a live inbox, that left 42 of 85 visible, most of them delivery receipts
-    and card alerts. No threshold fixes it, because the instrument is wrong.
+        A POSITIONAL boundary was tried first and does not work, for a reason only
+        real data shows: the ranker deliberately interleaves the two classes.
+        `W_BULK_MAIL` demotes bulk by 2.5 but `W_RECENCY` lifts a recent item by up
+        to 2.0, so a marketing mail from an hour ago outranks a real thread from
+        yesterday. Bulk is therefore SCATTERED through the order, not gathered at
+        the end. Cutting before the first bulk item folds real signal below it;
+        cutting after the last signal item shows everything above it — measured on
+        a live inbox, that left 42 of 85 visible, most of them delivery receipts
+        and card alerts. No threshold fixes it, because the instrument is wrong.
 
-    Partitioning makes the boundary the PREDICATE, which is what it always
-    meant. Ordering and membership are orthogonal questions: `rank()` answers
-    "in what sequence", this answers "is it worth the founder's attention", and
-    neither needs to be bent to serve the other. `rank()` stays a pure
-    permutation — nothing is re-scored here, only grouped for presentation.
+        Partitioning makes the boundary the PREDICATE, which is what it always
+        meant. Ordering and membership are orthogonal questions: `rank()` answers
+        "in what sequence", this answers "is it worth the founder's attention", and
+        neither needs to be bent to serve the other. `rank()` stays a pure
+        permutation — nothing is re-scored here, only grouped for presentation.
 
-    `bulk_mail` is rules-origin evidence — `List-Unsubscribe`, `List-Id`,
-    `Precedence` — headers an attacker can only use against themselves, since
-    adding one makes a message MORE bulk. An LLM's category is deliberately not
-    consulted: letting model-authored judgement decide what the founder sees
-    would hand external text a lever on its own visibility, in the direction
-    that hides rather than shows.
+    What counts as quiet is `quiet_by_key`'s question, not this function's — see
+        `quiet_units`.
 
-    Nothing is dropped. The tail is still on the wire, still ordered, still
-    reachable — a hidden thing that cannot be reached is a lie about coverage,
-    and it would leave the ranker unfalsifiable besides.
+        Nothing is dropped. The tail is still on the wire, still ordered, still
+        reachable — a hidden thing that cannot be reached is a lie about coverage,
+        and it would leave the ranker unfalsifiable besides.
     """
     signal: list[Unit] = []
     quiet: list[Unit] = []
@@ -123,8 +125,64 @@ def partition_for_fold(
         key = getattr(getattr(unit, "frame", None), "key", None)
         # Absent evidence is not evidence of bulk: a key the ranker never
         # scored stays visible rather than being hidden by a failed lookup.
-        (quiet if bulk_by_key.get(key, False) else signal).append(unit)
+        (quiet if quiet_by_key.get(key, False) else signal).append(unit)
     return signal + quiet, len(signal)
+
+
+# Triage's own verdict on the one question the fold asks: does this need the
+# founder? Consulted for DEMOTION ONLY, and that asymmetry is the whole safety
+# argument. An attacker wants to be SEEN, so the manipulation available to them
+# is to read as actionable — which leaves them exactly where they are today,
+# visible. Marking yourself unactionable only hides you, which is self-harm.
+# The same shape the ranker already accepts for engagement: demotion has no
+# self-sealing loop, promotion does.
+#
+# It is a JUDGEMENT, unlike the rules-origin headers, so it is kept out of
+# `RankFeatures.bulk_mail` — that value feeds the ranking SCORE and carries a
+# documented rules-only guarantee. This decides visibility at the fold and
+# nothing else, which is a place a founder can see and disagree with.
+_TRIAGE_ACTIONABLE = "actionable"
+
+
+def quiet_units(
+    units: Sequence[Unit],
+    features: Sequence[Any],
+    events_by_key: Mapping[str, Sequence[Any]],
+) -> dict[str, bool]:
+    """Which units are below the founder's attention. Total; never raises.
+
+    Two sources, OR-ed:
+
+      * `bulk_mail` from `RankFeatures` — rules-origin headers
+        (`List-Unsubscribe`, `List-Id`, `Precedence`) an attacker can only use
+        against themselves, since adding one makes a message MORE bulk;
+      * triage's `actionable=false`, for the transactional mail no header
+        marks: bank alerts, OTPs, delivery receipts. `classify_by_rules` can
+        only return "marketing", so rules alone leave those visible.
+
+    A unit with NO evidence either way stays visible. Absent evidence is not
+    evidence of quiet, and muldro's own cards — runs, findings, the briefing —
+    have no triage row at all and must never be folded by a lookup that missed.
+    """
+    quiet: dict[str, bool] = {}
+    for feature in features:
+        key = getattr(feature, "key", None)
+        if isinstance(key, str):
+            quiet[key] = bool(getattr(feature, "bulk_mail", False))
+
+    for key, events in (events_by_key or {}).items():
+        if quiet.get(key):
+            continue
+        # Every event on the thing must be unactionable. One that needs the
+        # founder makes the whole thing need them: a reply on a receipt thread
+        # is still a reply.
+        verdicts = [
+            (getattr(e, "importance_signals", None) or {}).get(_TRIAGE_ACTIONABLE)
+            for e in (events or ())
+        ]
+        if verdicts and all(v is False for v in verdicts):
+            quiet[key] = True
+    return quiet
 
 
 async def assemble_feed(
@@ -193,6 +251,6 @@ async def assemble_feed(
 
     # Built from the SAME features the order came from, so the boundary cannot
     # disagree with the sequence it cuts.
-    bulk_by_key = {f.key: bool(getattr(f, "bulk_mail", False)) for f in features}
-    shown_then_quiet, fold_after = partition_for_fold(ordered, bulk_by_key)
+    quiet = quiet_units(ordered, features, events_by_key)
+    shown_then_quiet, fold_after = partition_for_fold(ordered, quiet)
     return Feed(units=shown_then_quiet, fold_after=fold_after)
