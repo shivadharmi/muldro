@@ -27,23 +27,37 @@ vi.mock("@/lib/api", () => ({
   setTrustCeiling: vi.fn().mockResolvedValue({}),
   resetTrust: vi.fn().mockResolvedValue({}),
   fetchModelCatalog: vi.fn().mockResolvedValue({
-    providers: {
-      anthropic: [
-        {
-          model_id: "claude-sonnet-4-6",
-          display_name: "Claude Sonnet 4.6",
-          thinking_style: "anthropic_legacy",
-          accepts_temperature: true,
-          suggested_tier: "balanced",
-        },
-      ],
-    },
+    providers: [
+      {
+        provider: "anthropic",
+        display_name: "Anthropic",
+        auth_kind: "api_key",
+        credential_fields: [],
+        model_count: 1,
+        docs_url: null,
+      },
+    ],
+    models: [
+      {
+        provider: "anthropic",
+        model_id: "claude-sonnet-4-6",
+        display_name: "Claude Sonnet 4.6",
+        thinking_style: "anthropic_legacy",
+        accepts_temperature: true,
+        suggested_tier: "balanced",
+        context_window: 200000,
+        input_cost_per_1k: 0.003,
+        output_cost_per_1k: 0.015,
+        supports_prompt_cache: true,
+      },
+    ],
     agents: [{ name: "planner", display_name: "Planner", tier: "reasoning" }],
   }),
   fetchModelConfig: vi.fn().mockResolvedValue({
     tiers: [
       {
-        tier: "balanced",
+        scope_type: "tier",
+        scope_key: "balanced",
         provider: "anthropic",
         model_id: "claude-sonnet-4-6",
         effort: "medium",
@@ -52,11 +66,36 @@ vi.mock("@/lib/api", () => ({
       },
     ],
     agent_overrides: [],
-    providers: [{ provider: "anthropic", configured: true, status: "valid" }],
+    providers: [
+      {
+        provider: "anthropic",
+        configured: true,
+        status: "valid",
+        source: "workspace",
+        base_url: null,
+        extra_config_public: {},
+        extra_config_secret_keys: [],
+        catalogued: true,
+      },
+    ],
+    warnings: [],
   }),
   saveModelConfig: vi.fn().mockResolvedValue({}),
-  saveProviderKey: vi.fn().mockResolvedValue({ status: "valid" }),
+  saveProviderCredential: vi.fn().mockResolvedValue({ status: "valid" }),
   testProviderKey: vi.fn().mockResolvedValue({ status: "valid" }),
+  deleteProviderKey: vi.fn().mockResolvedValue({
+    status: {
+      provider: "anthropic",
+      configured: false,
+      status: "unconfigured",
+      source: "none",
+      base_url: null,
+      extra_config_public: {},
+      extra_config_secret_keys: [],
+      catalogued: true,
+    },
+    orphaned_bindings: [],
+  }),
 }));
 
 import { SettingsModal } from "./settings-modal";

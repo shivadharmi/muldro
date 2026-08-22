@@ -6,8 +6,8 @@ import type {
   CatalogModel,
   ModelCatalog,
   ModelConfig,
+  ModelBinding,
   ProviderStatus,
-  TierBinding,
 } from "@/lib/types";
 
 interface ModelTabProps {
@@ -17,13 +17,12 @@ interface ModelTabProps {
   config: ModelConfig | null;
   onLoad: () => void;
   onSaveConfig?: (body: {
-    tiers: TierBinding[];
-    agent_overrides: TierBinding[];
+    tiers: ModelBinding[];
+    agent_overrides: ModelBinding[];
   }) => void;
   onSaveProviderKey?: (
     provider: string,
-    apiKey: string,
-    baseUrl?: string,
+    fields: { api_key?: string; base_url?: string | null },
   ) => void;
   onTestProvider?: (provider: string) => void;
   onDeleteProvider?: (provider: string) => void;
@@ -32,7 +31,7 @@ interface ModelTabProps {
 }
 
 const TIER_ORDER = ["reasoning", "balanced", "fast"];
-const EFFORT_OPTIONS = ["low", "medium", "high"];
+const EFFORT_OPTIONS = ["none", "low", "medium", "high"];
 
 const INPUT_CLASS =
   "rounded-[var(--radius-md)] bg-surface-2 border border-b-secondary px-3 py-2 text-sm text-t-primary focus:outline-none focus:ring-1 focus:ring-j-ring transition-colors";
@@ -43,8 +42,10 @@ const PRIMARY_BTN_CLASS =
 const GHOST_BTN_CLASS =
   "px-3.5 py-2 rounded-[var(--radius-md)] text-t-secondary text-[13px] hover:bg-surface-2 disabled:opacity-50 transition-colors cursor-pointer";
 
-function keyOf(binding: TierBinding): string {
-  return binding.tier;
+/** Bindings are identified by their full scope, so a tier and an agent of the same
+ *  name can never be confused for one another. */
+function keyOf(binding: ModelBinding): string {
+  return `${binding.scope_type}:${binding.scope_key}`;
 }
 
 function findModel(
@@ -52,7 +53,9 @@ function findModel(
   provider: string,
   modelId: string,
 ): CatalogModel | undefined {
-  return catalog?.providers[provider]?.find((m) => m.model_id === modelId);
+  return catalog?.models.find(
+    (m) => m.provider === provider && m.model_id === modelId,
+  );
 }
 
 function statusTone(status: string): string {
@@ -62,10 +65,10 @@ function statusTone(status: string): string {
 }
 
 interface BindingRowProps {
-  binding: TierBinding;
+  binding: ModelBinding;
   catalog: ModelCatalog | null;
   configuredProviders: string[];
-  onChange: (next: TierBinding) => void;
+  onChange: (next: ModelBinding) => void;
   onRemove?: () => void;
 }
 
@@ -82,7 +85,9 @@ function BindingRow({
   onChange,
   onRemove,
 }: BindingRowProps) {
-  const providerModels = catalog?.providers[binding.provider] ?? [];
+  const providerModels = (catalog?.models ?? []).filter(
+    (m) => m.provider === binding.provider,
+  );
   const selectedModel = findModel(catalog, binding.provider, binding.model_id);
   const showEffort = !!selectedModel && selectedModel.thinking_style !== "none";
   const showTemperature = !!selectedModel && selectedModel.accepts_temperature;
@@ -96,11 +101,11 @@ function BindingRow({
   return (
     <div className="flex flex-wrap items-center gap-2">
       <span className="text-sm text-t-secondary font-medium w-24 shrink-0 capitalize">
-        {binding.tier}
+        {binding.scope_key}
       </span>
 
       <select
-        aria-label={`${binding.tier} provider`}
+        aria-label={`${binding.scope_key} provider`}
         value={binding.provider}
         onChange={(e) =>
           onChange({ ...binding, provider: e.target.value, model_id: "" })
@@ -115,7 +120,7 @@ function BindingRow({
       </select>
 
       <select
-        aria-label={`${binding.tier} model`}
+        aria-label={`${binding.scope_key} model`}
         value={binding.model_id}
         onChange={(e) => onChange({ ...binding, model_id: e.target.value })}
         className={INPUT_CLASS}
@@ -130,9 +135,14 @@ function BindingRow({
 
       {showEffort && (
         <select
-          aria-label={`${binding.tier} effort`}
+          aria-label={`${binding.scope_key} effort`}
           value={binding.effort}
-          onChange={(e) => onChange({ ...binding, effort: e.target.value })}
+          onChange={(e) =>
+            onChange({
+              ...binding,
+              effort: e.target.value as ModelBinding["effort"],
+            })
+          }
           className={INPUT_CLASS}
         >
           {EFFORT_OPTIONS.map((eff) => (
@@ -145,7 +155,7 @@ function BindingRow({
 
       <input
         type="number"
-        aria-label={`${binding.tier} max tokens`}
+        aria-label={`${binding.scope_key} max tokens`}
         min="1"
         value={binding.max_tokens}
         onChange={(e) =>
@@ -161,7 +171,7 @@ function BindingRow({
       {showTemperature && (
         <input
           type="number"
-          aria-label={`${binding.tier} temperature`}
+          aria-label={`${binding.scope_key} temperature`}
           min="0"
           max="2"
           step="0.1"
@@ -180,7 +190,7 @@ function BindingRow({
       {onRemove && (
         <button
           type="button"
-          aria-label={`remove ${binding.tier} override`}
+          aria-label={`remove ${binding.scope_key} override`}
           onClick={onRemove}
           className="ml-auto px-2 py-1 rounded-[var(--radius-md)] text-t-muted hover:text-j-danger hover:bg-surface-2 transition-colors cursor-pointer"
         >
@@ -195,7 +205,10 @@ interface ProviderRowProps {
   provider: string;
   status: ProviderStatus | undefined;
   busy: boolean;
-  onSaveKey?: (provider: string, apiKey: string, baseUrl?: string) => void;
+  onSaveKey?: (
+    provider: string,
+    fields: { api_key?: string; base_url?: string | null },
+  ) => void;
   onTest?: (provider: string) => void;
   onDelete?: (provider: string) => void;
 }
@@ -210,7 +223,8 @@ function ProviderRow({
   onDelete,
 }: ProviderRowProps) {
   const [apiKey, setApiKey] = useState("");
-  const [baseUrl, setBaseUrl] = useState("");
+  // Prefill from the stored value so saving does not clear what the user did not retype.
+  const [baseUrl, setBaseUrl] = useState(status?.base_url ?? "");
 
   return (
     <Card>
@@ -270,9 +284,16 @@ function ProviderRow({
             <button
               type="button"
               // ollama authenticates with a base URL alone — no key required.
-              disabled={busy || (provider !== "ollama" && !apiKey)}
+              disabled={
+                busy || (provider !== "ollama" && !status?.configured && !apiKey)
+              }
               onClick={() =>
-                onSaveKey?.(provider, apiKey, baseUrl || undefined)
+                onSaveKey?.(provider, {
+                  ...(apiKey ? { api_key: apiKey } : {}),
+                  ...(baseUrl !== (status?.base_url ?? "")
+                    ? { base_url: baseUrl || null }
+                    : {}),
+                })
               }
               className={PRIMARY_BTN_CLASS}
             >
@@ -319,8 +340,8 @@ export function ModelTab({
   savingConfig,
   providerBusy,
 }: ModelTabProps) {
-  const [tiers, setTiers] = useState<TierBinding[]>(config?.tiers ?? []);
-  const [agentOverrides, setAgentOverrides] = useState<TierBinding[]>(
+  const [tiers, setTiers] = useState<ModelBinding[]>(config?.tiers ?? []);
+  const [agentOverrides, setAgentOverrides] = useState<ModelBinding[]>(
     config?.agent_overrides ?? [],
   );
   const [advancedOpen, setAdvancedOpen] = useState(false);
@@ -356,7 +377,7 @@ export function ModelTab({
 
   const providerNames = useMemo(() => {
     const names = new Set<string>();
-    for (const name of Object.keys(catalog?.providers ?? {})) names.add(name);
+    for (const p of catalog?.providers ?? []) names.add(p.provider);
     for (const p of config?.providers ?? []) names.add(p.provider);
     return Array.from(names);
   }, [catalog, config]);
@@ -364,16 +385,16 @@ export function ModelTab({
   const sortedTiers = useMemo(
     () =>
       [...tiers].sort(
-        (a, b) => TIER_ORDER.indexOf(a.tier) - TIER_ORDER.indexOf(b.tier),
+        (a, b) => TIER_ORDER.indexOf(a.scope_key) - TIER_ORDER.indexOf(b.scope_key),
       ),
     [tiers],
   );
 
-  const updateTier = (next: TierBinding) => {
+  const updateTier = (next: ModelBinding) => {
     setTiers((prev) => prev.map((t) => (keyOf(t) === keyOf(next) ? next : t)));
   };
 
-  const updateOverride = (next: TierBinding) => {
+  const updateOverride = (next: ModelBinding) => {
     setAgentOverrides((prev) =>
       prev.map((t) => (keyOf(t) === keyOf(next) ? next : t)),
     );
@@ -381,7 +402,7 @@ export function ModelTab({
 
   // Agents that don't yet have an override — the candidates for the add selector.
   const overriddenAgents = useMemo(
-    () => new Set(agentOverrides.map((o) => o.tier)),
+    () => new Set(agentOverrides.map((o) => o.scope_key)),
     [agentOverrides],
   );
   const availableAgents = useMemo(
@@ -392,12 +413,13 @@ export function ModelTab({
   const addOverride = (agentName: string) => {
     const agent = catalog?.agents.find((a) => a.name === agentName);
     if (!agent) return;
-    // Seed the override from the agent's default tier binding so it starts valid.
-    const tierBinding = tiers.find((t) => t.tier === agent.tier);
-    const seed: TierBinding = tierBinding
-      ? { ...tierBinding, tier: agentName }
+    // Seed from the agent's default tier binding so the override starts valid.
+    const tierBinding = tiers.find((t) => t.scope_key === agent.tier);
+    const seed: ModelBinding = tierBinding
+      ? { ...tierBinding, scope_type: "agent", scope_key: agentName }
       : {
-          tier: agentName,
+          scope_type: "agent",
+          scope_key: agentName,
           provider: configuredProviders[0] ?? "",
           model_id: "",
           effort: "none",
@@ -409,7 +431,7 @@ export function ModelTab({
   };
 
   const removeOverride = (agentName: string) => {
-    setAgentOverrides((prev) => prev.filter((o) => o.tier !== agentName));
+    setAgentOverrides((prev) => prev.filter((o) => o.scope_key !== agentName));
   };
 
   const handleSave = () => {
@@ -478,7 +500,7 @@ export function ModelTab({
               <div className="space-y-3">
                 {sortedTiers.map((tier) => (
                   <BindingRow
-                    key={tier.tier}
+                    key={keyOf(tier)}
                     binding={tier}
                     catalog={catalog}
                     configuredProviders={configuredProviders}
@@ -555,12 +577,12 @@ export function ModelTab({
                   <div className="space-y-3">
                     {agentOverrides.map((ov) => (
                       <BindingRow
-                        key={ov.tier}
+                        key={keyOf(ov)}
                         binding={ov}
                         catalog={catalog}
                         configuredProviders={configuredProviders}
                         onChange={updateOverride}
-                        onRemove={() => removeOverride(ov.tier)}
+                        onRemove={() => removeOverride(ov.scope_key)}
                       />
                     ))}
                   </div>

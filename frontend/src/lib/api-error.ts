@@ -18,6 +18,19 @@ export interface ParsedApiError {
   correlationId: string | null;
 }
 
+/**
+ * One rejected binding, as `PUT /v1/model-config` reports it. Mirrors
+ * `ConfigWarning` in `./types` — kept structural here to avoid a circular
+ * import between the error-parsing module and the domain types module.
+ */
+export interface BindRejection {
+  scope_type: "tier" | "agent";
+  scope_key: string;
+  provider: string;
+  code: "provider_not_configured";
+  message: string;
+}
+
 /** Shape of the standardized error envelope (REST/SSE/WS share these fields). */
 interface ErrorEnvelopeFields {
   code?: unknown;
@@ -88,6 +101,57 @@ export function parseApiError(
     message: SAFE_FALLBACK_MESSAGE,
     correlationId: headerCid,
   };
+}
+
+/**
+ * Recognize the ONE deliberate exception to the standard error envelope:
+ * `PUT /v1/model-config` returns `422 { "detail": [ConfigWarning, ...] }` when
+ * a binding cannot resolve to a runnable model (see
+ * `backend/src/api/routes_model_config.py::put_model_config`). That body does
+ * NOT match `{ error: {...} }`, so `parseApiError` would silently collapse it
+ * to the generic fallback and discard which binding failed and why.
+ *
+ * Returns the rejected bindings when `body` looks like `{ detail: [...] }`
+ * with entries carrying at least `scope_key` and `code`, and `null` for every
+ * other shape (including a malformed or partially-shaped body) so a caller can
+ * fall back to {@link parseApiError} without this ever throwing.
+ *
+ * @param body  parsed JSON object, or a raw response-body string
+ */
+export function parseBindRejection(body: unknown): BindRejection[] | null {
+  let parsed: unknown = body;
+
+  if (typeof body === "string") {
+    try {
+      parsed = JSON.parse(body);
+    } catch {
+      return null;
+    }
+  }
+
+  if (!isRecord(parsed) || !Array.isArray(parsed.detail) || parsed.detail.length === 0) {
+    return null;
+  }
+
+  const rejections: BindRejection[] = [];
+  for (const entry of parsed.detail) {
+    if (
+      !isRecord(entry) ||
+      (entry.scope_type !== "tier" && entry.scope_type !== "agent") ||
+      typeof entry.scope_key !== "string" ||
+      entry.code !== "provider_not_configured"
+    ) {
+      return null;
+    }
+    rejections.push({
+      scope_type: entry.scope_type,
+      scope_key: entry.scope_key,
+      provider: asString(entry.provider) ?? "",
+      code: "provider_not_configured",
+      message: asString(entry.message) ?? SAFE_FALLBACK_MESSAGE,
+    });
+  }
+  return rejections;
 }
 
 /**

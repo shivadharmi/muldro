@@ -7,7 +7,7 @@ of the OAuth-token key.
 
 from __future__ import annotations
 
-from cryptography.fernet import Fernet
+from cryptography.fernet import Fernet, InvalidToken
 
 from src.config.settings import get_settings
 
@@ -35,3 +35,18 @@ def encrypt_secret(plaintext: str) -> str:
 def decrypt_secret(ciphertext: str) -> str:
     """Return the plaintext for a Fernet *ciphertext* string."""
     return _fernet().decrypt(ciphertext.encode()).decode()
+
+
+def try_decrypt_secret(ciphertext: str) -> str | None:
+    """Decrypt, or None if *ciphertext* is not valid under the current master key.
+
+    Distinguishes ONE unusable row (``InvalidToken`` -> None) from a missing or
+    malformed MASTER key (``RuntimeError`` / ``ValueError``, which propagate). The
+    second is a deployment-wide misconfiguration that app.py's boot guard is meant to
+    catch loudly, and swallowing it here would remove the turn-time backstop that
+    guard's own comment relies on when the DB is unreachable at startup.
+    """
+    try:
+        return decrypt_secret(ciphertext)
+    except InvalidToken:
+        return None

@@ -12,15 +12,25 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+BindingScope = Literal["tier", "agent"]
+Effort = Literal["none", "low", "medium", "high"]
 
-class TierBinding(BaseModel):
+
+class ModelBindingDTO(BaseModel):
+    """One model binding, carrying the same (scope_type, scope_key) pair the DB stores.
+
+    Replaces TierBinding, which flattened both into a single ``tier`` field and left
+    ``scope_type`` to be recovered from whichever response array the binding arrived
+    in — a lossy projection of its own storage model.
+    """
+
     model_config = ConfigDict(extra="ignore", protected_namespaces=())
-    # For an agent override this field carries the AGENT NAME (round-tripped as the
-    # scope_key of a scope_type="agent" ModelBinding); for a tier it is the tier name.
-    tier: str
+    scope_type: BindingScope
+    scope_key: str  # a tier name ("balanced") or an agent name ("planner")
     provider: str
     model_id: str
-    effort: str = "none"
+    # "none" is legal and meaningful: models with thinking_style="none" take no effort.
+    effort: Effort = "none"
     # >=1: max_tokens=0 yields a legacy thinking budget of -1 and breaks every call.
     max_tokens: int = Field(4096, ge=1)
     temperature: float | None = None
@@ -34,6 +44,10 @@ class ProviderStatus(BaseModel):
     for a workspace-owned row and not for one inherited from the deployment
     default row or a process env var — DELETE only ever removes the workspace
     row, so offering it elsewhere is a control that silently does nothing.
+
+    The response envelope stays write-only for secrets: ``extra_config_public``
+    carries values only for DECLARED non-secret fields, while every other stored
+    key appears in ``extra_config_secret_keys`` by name alone.
     """
 
     model_config = ConfigDict(extra="ignore")
@@ -45,10 +59,38 @@ class ProviderStatus(BaseModel):
     # "env"       — the per-provider env fallback key (not deletable at all)
     # "none"      — no credential resolves; `configured` is False
     source: Literal["workspace", "default", "env", "none"] = "none"
+    base_url: str | None = None
+    extra_config_public: dict[str, str] = Field(default_factory=dict)
+    extra_config_secret_keys: list[str] = Field(default_factory=list)
+    # False means a credential row survives for a provider the catalog no longer
+    # lists (B6): the client has no display name or credential schema to render
+    # for it, but should still offer Remove.
+    catalogued: bool = True
+
+
+class ConfigWarning(BaseModel):
+    """A binding that will not resolve to a runnable model.
+
+    Computed from the same ModelResolver.resolve_credential call the runtime makes,
+    so this and reality cannot drift. The message differs by scope because the
+    consequence does: a tier has no fallback and fails outright, while an agent
+    override degrades to its tier binding.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+    scope_type: BindingScope
+    scope_key: str
+    # The provider that could not be resolved. Lets a client group warnings by
+    # provider, and lets a credential revoke report only the warnings ITS delete
+    # caused rather than every unrelated provider already broken in the workspace.
+    provider: str
+    code: Literal["provider_not_configured"]
+    message: str
 
 
 class ModelConfigResponse(BaseModel):
     model_config = ConfigDict(extra="ignore")
-    tiers: list[TierBinding]
-    agent_overrides: list[TierBinding]
+    tiers: list[ModelBindingDTO]
+    agent_overrides: list[ModelBindingDTO]
     providers: list[ProviderStatus]
+    warnings: list[ConfigWarning] = Field(default_factory=list)

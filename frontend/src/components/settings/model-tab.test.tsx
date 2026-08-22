@@ -2,20 +2,42 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { test, expect, vi } from "vitest";
 import { ModelTab } from "./model-tab";
-import type { ModelCatalog, ModelConfig } from "@/lib/types";
+import type { ModelCatalog, ModelConfig, ProviderStatus } from "@/lib/types";
+
+// Shared defaults for the non-secret credential fields every ProviderStatus
+// fixture now carries. Spread and override per test.
+const providerStatusDefaults = {
+  base_url: null,
+  extra_config_public: {},
+  extra_config_secret_keys: [],
+  catalogued: true,
+} satisfies Partial<ProviderStatus>;
 
 const catalog: ModelCatalog = {
-  providers: {
-    anthropic: [
-      {
-        model_id: "claude-sonnet-4-6",
-        display_name: "Claude Sonnet 4.6",
-        thinking_style: "anthropic_legacy",
-        accepts_temperature: true,
-        suggested_tier: "balanced",
-      },
-    ],
-  },
+  providers: [
+    {
+      provider: "anthropic",
+      display_name: "Anthropic",
+      auth_kind: "api_key",
+      credential_fields: [],
+      model_count: 1,
+      docs_url: null,
+    },
+  ],
+  models: [
+    {
+      provider: "anthropic",
+      model_id: "claude-sonnet-4-6",
+      display_name: "Claude Sonnet 4.6",
+      thinking_style: "anthropic_legacy",
+      accepts_temperature: true,
+      suggested_tier: "balanced",
+      context_window: 200000,
+      input_cost_per_1k: 0.003,
+      output_cost_per_1k: 0.015,
+      supports_prompt_cache: true,
+    },
+  ],
   agents: [
     { name: "planner", display_name: "Planner", tier: "reasoning" },
     { name: "presenter", display_name: "Presenter", tier: "balanced" },
@@ -25,7 +47,8 @@ const catalog: ModelCatalog = {
 const config: ModelConfig = {
   tiers: [
     {
-      tier: "balanced",
+      scope_type: "tier",
+      scope_key: "balanced",
       provider: "anthropic",
       model_id: "claude-sonnet-4-6",
       effort: "medium",
@@ -36,12 +59,14 @@ const config: ModelConfig = {
   agent_overrides: [],
   providers: [
     {
+      ...providerStatusDefaults,
       provider: "anthropic",
       configured: true,
       status: "valid",
       source: "workspace",
     },
   ],
+  warnings: [],
 };
 
 test("renders tier rows from config", async () => {
@@ -129,6 +154,7 @@ test("keeps the binding's current provider in options when de-configured", () =>
     ...config,
     providers: [
       {
+        ...providerStatusDefaults,
         provider: "anthropic",
         configured: false,
         status: "unconfigured",
@@ -175,6 +201,7 @@ test("hides Remove for an unconfigured provider (R2)", () => {
     ...config,
     providers: [
       {
+        ...providerStatusDefaults,
         provider: "anthropic",
         configured: false,
         status: "unconfigured",
@@ -251,7 +278,7 @@ test("can add and remove a per-agent override from the UI (F1)", async () => {
   expect(onSaveConfig).toHaveBeenCalledWith(
     expect.objectContaining({
       agent_overrides: expect.arrayContaining([
-        expect.objectContaining({ tier: "planner" }),
+        expect.objectContaining({ scope_type: "agent", scope_key: "planner" }),
       ]),
     }),
   );
@@ -269,17 +296,30 @@ test("can add and remove a per-agent override from the UI (F1)", async () => {
 
 test("enables Save for keyless ollama and disables it for keyed providers (F3)", () => {
   const ollamaCatalog: ModelCatalog = {
-    providers: {
-      ollama: [
-        {
-          model_id: "llama3",
-          display_name: "Llama 3",
-          thinking_style: "none",
-          accepts_temperature: true,
-          suggested_tier: "fast",
-        },
-      ],
-    },
+    providers: [
+      {
+        provider: "ollama",
+        display_name: "Ollama",
+        auth_kind: "keyless_base_url",
+        credential_fields: [],
+        model_count: 1,
+        docs_url: null,
+      },
+    ],
+    models: [
+      {
+        provider: "ollama",
+        model_id: "llama3",
+        display_name: "Llama 3",
+        thinking_style: "none",
+        accepts_temperature: true,
+        suggested_tier: "fast",
+        context_window: 8192,
+        input_cost_per_1k: 0,
+        output_cost_per_1k: 0,
+        supports_prompt_cache: false,
+      },
+    ],
     agents: [],
   };
   const ollamaConfig: ModelConfig = {
@@ -287,12 +327,14 @@ test("enables Save for keyless ollama and disables it for keyed providers (F3)",
     agent_overrides: [],
     providers: [
       {
+        ...providerStatusDefaults,
         provider: "ollama",
         configured: false,
         status: "unconfigured",
         source: "none",
       },
     ],
+    warnings: [],
   };
   render(
     <ModelTab
@@ -319,7 +361,13 @@ test("hides Remove for a credential this workspace does not own", () => {
     const inherited: ModelConfig = {
       ...config,
       providers: [
-        { provider: "anthropic", configured: true, status: "valid", source },
+        {
+          ...providerStatusDefaults,
+          provider: "anthropic",
+          configured: true,
+          status: "valid",
+          source,
+        },
       ],
     };
     const { unmount } = render(

@@ -1,0 +1,67 @@
+{
+  "pages": [
+    { "id": "page-1", "name": "Split design" },
+    { "id": "page-2", "name": "Explored earlier" }
+  ],
+  "artboards": [
+    { "file": "Current.dc.html", "page": "page-1", "x": 0, "y": 0, "w": 860, "h": 720, "title": "Today — one tab, everything" },
+    { "file": "Main.dc.html", "page": "page-1", "x": 940, "y": 0, "w": 1000, "h": 900, "title": "Model tab — tiers only" },
+    { "file": "Picker.dc.html", "page": "page-1", "x": 2020, "y": 0, "w": 1000, "h": 900, "title": "Model picker" },
+    { "file": "Providers.dc.html", "page": "page-1", "x": 3100, "y": 0, "w": 1000, "h": 900, "title": "Providers tab — new" },
+    { "file": "MobileA.dc.html", "page": "page-1", "x": 4180, "y": 0, "w": 390, "h": 844, "title": "Model tab at 390px" },
+
+    { "file": "OptionB.dc.html", "page": "page-2", "x": 0, "y": 0, "w": 1440, "h": 900, "title": "Option B — full page route" },
+    { "file": "OptionC.dc.html", "page": "page-2", "x": 1540, "y": 0, "w": 880, "h": 780, "title": "Option C — drill-in" }
+  ],
+  "annotations": [
+    {
+      "id": "note-today",
+      "page": "page-1",
+      "x": 0,
+      "y": -200,
+      "w": 340,
+      "text": "TODAY\nOne Model tab carries credentials and tier bindings\ntogether.\nThe binding row needs ~730px and has 552px, so max\ntokens and temperature wrap into two number boxes\nwith no visible label — on every screen size, not just\nsmall ones."
+    },
+    {
+      "id": "note-model",
+      "page": "page-1",
+      "x": 940,
+      "y": -200,
+      "w": 460,
+      "text": "MODEL TAB — TIERS ONLY\nCredentials moved out, so the tab holds three cards and\nnothing else, and the modal only needs 896px.\nNo provider select: the binding is model-first, so you can\nno longer pick a provider without a model — which is the\nbug at model-tab.tsx:96 that PUTs model_id: \"\".\n\nThe Fast tier shows the state the split makes likelier: a\ntier bound to a provider you have not connected.\nput_config validates only that the model exists in the\ncatalog, never that its provider is configured, and\nModelResolver's degradation path covers agent overrides\nonly — a tier binding raises ModelConfigError instead.\nSo this warning is load-bearing, not decorative."
+    },
+    {
+      "id": "note-picker",
+      "page": "page-1",
+      "x": 2020,
+      "y": -200,
+      "w": 470,
+      "text": "MODEL PICKER\nAt 15 providers nobody thinks \"I want an OpenRouter\nmodel\" — they think \"I want Kimi K2\" or \"the cheapest\nthing with 1M context\".\nSo one search across every connected provider, with the\ndeciding facts on the row: context window, price per Mtok,\nthinking style.\nSuggested-for-this-tier comes from suggested_tier, which\nthe catalog already carries.\nUnconnected providers stay reachable from the footer\nrather than being filtered out of existence."
+    },
+    {
+      "id": "note-providers",
+      "page": "page-1",
+      "x": 3100,
+      "y": -200,
+      "w": 470,
+      "text": "PROVIDERS TAB — NEW\nSearch, an All / Connected / Available filter, and grouping\nby status — the things a 15-row list needs and a 4-row\nsection never did.\nThe subtitle draws the line that matters: these grant no\naccess to your accounts, unlike /integrations.\n\nNote the auth-type chips. Bedrock wants region + SigV4,\nAzure wants endpoint + deployment + api-version. At this\nscale the credential form is per-provider, not a fixed\n(api_key, base_url) pair — extra_config on CredentialBody\nis the hook that already exists."
+    },
+    {
+      "id": "note-mobile",
+      "page": "page-1",
+      "x": 4180,
+      "y": -200,
+      "w": 390,
+      "text": "AT PHONE WIDTH\nThe modal becomes a full sheet and the tab rail becomes a\nlist you push from — no horizontal tab scroller, no fixed\n600px box.\nThe 4-column grid folds to 2 with Model spanning both.\nControls go to 44px. The Save bar stays pinned."
+    },
+    {
+      "id": "note-explored",
+      "page": "page-2",
+      "x": 0,
+      "y": -160,
+      "w": 700,
+      "text": "EXPLORED EARLIER — kept for the record, not proposed\nBoth of these assumed Providers and Tiers share one surface. Splitting them made the question moot:\nthe Model tab no longer needs a full page (B), and the drill-in navigation (C) moved into the Providers\nlist where a long list actually wants it."
+    }
+  ],
+  "launch": { "view": "canvas", "page": "page-1" }
+}

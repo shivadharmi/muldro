@@ -1,0 +1,137 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&display=swap">
+  <style>
+    :root{
+      --bg:hsl(220 20% 7%);--s1:hsl(220 18% 10%);--s2:hsl(220 16% 13%);
+      --s3:hsl(220 14% 17%);--s4:hsl(220 12% 22%);
+      --tp:hsl(220 20% 95%);--ts:hsl(220 12% 72%);--tt:hsl(220 8% 52%);--tm:hsl(220 6% 40%);
+      --bsub:hsl(220 16% 16%);--bdef:hsl(220 14% 22%);--bstr:hsl(220 12% 32%);
+      --pri:hsl(193 100% 62%);--prih:hsl(193 90% 55%);--pris:hsl(193 100% 62% / 0.12);
+      --prifg:hsl(220 20% 7%);--sec:hsl(247 80% 72%);
+      --ok:hsl(155 60% 44%);--oks:hsl(155 60% 44% / 0.12);
+      --warn:hsl(36 90% 60%);--warns:hsl(36 90% 60% / 0.12);
+      --err:hsl(351 90% 68%);--errs:hsl(351 90% 68% / 0.12);
+      --shl:0 12px 40px rgba(0,0,0,.40), 0 2px 8px rgba(0,0,0,.24);
+    }
+    *{box-sizing:border-box}
+    body{margin:0;font-family:Geist,system-ui,-apple-system,sans-serif;background:var(--bg);
+      color:var(--tp);-webkit-font-smoothing:antialiased;font-feature-settings:"ss01","ss02","cv01"}
+    a{color:var(--pri);text-decoration:none}a:hover{color:var(--prih)}
+    .sec-h{font-size:11px;text-transform:uppercase;letter-spacing:.08em;font-weight:500;color:var(--tm)}
+    .ctl{border-radius:8px;background:var(--s2);border:1px solid var(--bsub);
+      padding:0 10px;height:36px;font-size:14px;color:var(--tp);display:flex;align-items:center;
+      justify-content:space-between;gap:6px;overflow:hidden;white-space:nowrap}
+    .card{border-radius:12px;background:var(--s1);border:1px solid var(--bsub)}
+    .mark{position:absolute;width:18px;height:18px;border-radius:9999px;background:var(--err);
+      color:hsl(220 20% 7%);font-size:11px;font-weight:600;display:flex;align-items:center;
+      justify-content:center;z-index:5;box-shadow:0 0 0 3px hsl(220 20% 7% / .9)}
+    .bad{outline:1.5px dashed var(--err);outline-offset:3px;border-radius:4px}
+  </style>
+</helmet>
+
+<div style="width:860px;height:720px;background:var(--bg);display:flex;align-items:center;justify-content:center;padding:24px;position:relative">
+
+  <!-- viewport ruler -->
+  <div style="position:absolute;top:14px;left:0;right:0;display:flex;justify-content:center;gap:8px;align-items:center">
+    <span style="font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--tm);font-weight:500">Today &mdash; max-w-3xl (768px), h-[600px] fixed</span>
+  </div>
+
+  <div style="position:relative;width:768px;height:600px;background:var(--s1);border:1px solid var(--bsub);border-radius:16px;box-shadow:var(--shl);display:flex;overflow:hidden">
+
+    <!-- rail -->
+    <nav style="width:176px;flex-shrink:0;border-right:1px solid var(--bsub);background:hsl(220 16% 13% / .4);padding:8px;display:flex;flex-direction:column;gap:4px">
+      <div style="padding:8px;margin-bottom:4px"><span style="font-size:15px;font-weight:600;color:var(--tp)">Settings</span></div>
+      <div style="display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:8px;font-size:13px;color:var(--tt)"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="5" r="2.5"/><path d="M3 13c0-2.5 2.2-4 5-4s5 1.5 5 4"/></svg>Account</div>
+      <div style="display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:8px;font-size:13px;color:var(--tt)"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5h6M11 5h2M3 11h2M7 11h6"/><circle cx="10" cy="5" r="1.4"/><circle cx="6" cy="11" r="1.4"/></svg>Preferences</div>
+      <div style="display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:8px;font-size:13px;color:var(--tt)"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2l5 2v4c0 3-2.2 5-5 6-2.8-1-5-3-5-6V4l5-2z"/></svg>Policy</div>
+      <div style="display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:8px;font-size:13px;color:var(--tt)"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="6"/><path d="M8 4.5v7M9.8 6c-.4-.7-1.1-1-1.8-1-1 0-1.7.6-1.7 1.4 0 1.9 3.5 1 3.5 2.9 0 .8-.8 1.4-1.8 1.4-.8 0-1.5-.3-1.9-1"/></svg>Budget</div>
+      <div style="display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:8px;font-size:13px;color:var(--tt)"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="6"/><path d="M5.5 8.2l1.7 1.7 3.3-3.6"/></svg>Trust</div>
+      <div style="display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:8px;font-size:13px;background:var(--pris);color:var(--pri);font-weight:500"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="5" width="6" height="6" rx="1"/><path d="M6.5 2.5v2M9.5 2.5v2M6.5 11.5v2M9.5 11.5v2M2.5 6.5h2M2.5 9.5h2M11.5 6.5h2M11.5 9.5h2"/></svg>Model</div>
+    </nav>
+
+    <!-- content -->
+    <div style="flex:1;min-width:0;display:flex;flex-direction:column">
+      <div style="display:flex;align-items:center;justify-content:flex-end;padding:12px 16px;border-bottom:1px solid var(--bsub);flex-shrink:0">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" style="color:var(--tm)"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+      </div>
+
+      <div style="flex:1;overflow:hidden;padding:20px;position:relative">
+        <div class="mark" style="top:112px;left:-9px">1</div>
+        <div class="mark" style="top:280px;left:-9px">2</div>
+        <div class="mark" style="top:404px;left:-9px">3</div>
+
+        <p style="font-size:14px;line-height:1.6;color:var(--tt);margin:0 0 24px">Configure which model powers each reasoning tier, connect provider API keys, and override models per agent.</p>
+
+        <!-- Providers -->
+        <div style="margin-bottom:24px">
+          <h3 class="sec-h" style="margin:0 0 10px">Providers</h3>
+          <div class="card" style="padding:16px 20px">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+              <span style="font-size:14px;font-weight:500;text-transform:capitalize">anthropic</span>
+              <div style="display:flex;align-items:center;gap:8px">
+                <span style="font-size:12px;color:var(--ok);font-weight:500">Configured &#10003;</span>
+                <span style="font-size:12px;color:var(--ts)">from environment</span>
+                <span style="font-size:12px;color:var(--ok);font-weight:500">valid</span>
+              </div>
+            </div>
+            <!-- real flex-wrap failure -->
+            <div class="bad" style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;width:472px">
+              <div class="ctl" style="flex:1 1 160px;min-width:160px;color:var(--tm)">&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;</div>
+              <div class="ctl" style="flex:1 1 160px;min-width:160px;color:var(--tm)">Base URL (optional)</div>
+              <div style="height:36px;padding:0 14px;border-radius:8px;background:var(--pri);color:var(--prifg);font-size:13px;font-weight:500;display:flex;align-items:center">Save</div>
+              <div style="height:36px;padding:0 14px;border-radius:8px;color:var(--ts);font-size:13px;display:flex;align-items:center">Test</div>
+              <div style="height:36px;padding:0 14px;border-radius:8px;color:var(--err);font-size:13px;display:flex;align-items:center">Remove</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tiers -->
+        <div>
+          <h3 class="sec-h" style="margin:0 0 10px">Tiers</h3>
+          <div class="card" style="padding:16px 20px">
+            <div style="display:flex;flex-direction:column;gap:12px">
+              <!-- real flex-wrap failure -->
+              <div class="bad" style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;width:472px">
+                <span style="font-size:14px;font-weight:500;color:var(--ts);width:96px;flex-shrink:0;text-transform:capitalize">reasoning</span>
+                <div class="ctl" style="width:128px;flex-shrink:0">anthropic<svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M2.5 4l2.5 2.5L7.5 4"/></svg></div>
+                <div class="ctl" style="width:186px;flex-shrink:0">Claude Opus 4.8<svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M2.5 4l2.5 2.5L7.5 4"/></svg></div>
+                <div class="ctl" style="width:104px;flex-shrink:0">high<svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M2.5 4l2.5 2.5L7.5 4"/></svg></div>
+                <div class="ctl" style="width:96px;flex-shrink:0">8192</div>
+                <div class="ctl" style="width:80px;flex-shrink:0;color:var(--tm)">&nbsp;</div>
+              </div>
+              <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;width:472px;opacity:.55">
+                <span style="font-size:14px;font-weight:500;color:var(--ts);width:96px;flex-shrink:0;text-transform:capitalize">balanced</span>
+                <div class="ctl" style="width:128px;flex-shrink:0">anthropic<svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M2.5 4l2.5 2.5L7.5 4"/></svg></div>
+                <div class="ctl" style="width:186px;flex-shrink:0">Claude Sonnet 4.6<svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M2.5 4l2.5 2.5L7.5 4"/></svg></div>
+                <div class="ctl" style="width:104px;flex-shrink:0">medium<svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M2.5 4l2.5 2.5L7.5 4"/></svg></div>
+                <div class="ctl" style="width:96px;flex-shrink:0">8192</div>
+                <div class="ctl" style="width:80px;flex-shrink:0">1</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- clipped edge -->
+        <div style="position:absolute;left:0;right:0;bottom:0;height:44px;background:linear-gradient(to bottom, transparent, var(--s1))"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- legend -->
+  <div style="position:absolute;bottom:16px;left:24px;right:24px;display:flex;flex-direction:column;gap:5px">
+    <div style="display:flex;gap:8px;align-items:flex-start"><span style="color:var(--err);font-size:12px;font-weight:600;flex-shrink:0">1</span><span style="font-size:12px;color:var(--ts);line-height:1.5">Credential row needs ~576px, has 512px &mdash; <strong style="color:var(--tp)">Remove</strong> drops to its own line on every screen.</span></div>
+    <div style="display:flex;gap:8px;align-items:flex-start"><span style="color:var(--err);font-size:12px;font-weight:600;flex-shrink:0">2</span><span style="font-size:12px;color:var(--ts);line-height:1.5">Binding row needs ~730px, has 552px &mdash; <strong style="color:var(--tp)">max&nbsp;tokens</strong> and <strong style="color:var(--tp)">temperature</strong> wrap into unlabelled number boxes.</span></div>
+    <div style="display:flex;gap:8px;align-items:flex-start"><span style="color:var(--err);font-size:12px;font-weight:600;flex-shrink:0">3</span><span style="font-size:12px;color:var(--ts);line-height:1.5">Fixed 600px height clips the third tier, the Save button and the Advanced section below the fold.</span></div>
+  </div>
+</div>
+</x-dc>
+</body>
+</html>

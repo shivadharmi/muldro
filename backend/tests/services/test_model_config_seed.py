@@ -9,6 +9,7 @@ from sqlalchemy.pool import NullPool
 from src.config.settings import get_settings
 from src.models.model_binding import ModelBinding
 from src.services.model_config_registry import ModelConfigRegistry
+from tests.helpers.model_config import pinned_deployment_defaults_async
 
 
 def _db_reachable() -> bool:
@@ -33,6 +34,22 @@ def _db_reachable() -> bool:
 pytestmark = pytest.mark.skipif(not _db_reachable(), reason="Postgres not reachable")
 
 
+def _factory():
+    engine = create_async_engine(get_settings().database_url, poolclass=NullPool)
+    return async_sessionmaker(engine, expire_on_commit=False)
+
+
+@asynccontextmanager
+async def _empty_deployment_defaults():
+    """Both tests below assert on what `seed_defaults()` DOES, so they must start from
+    no NULL-workspace rows. Without this they merely observe whatever the developer's
+    own deployment happens to be bound to -- and pass or fail accordingly.
+    """
+    factory = _factory()
+    async with pinned_deployment_defaults_async(factory, bindings=[]):
+        yield factory
+
+
 @asynccontextmanager
 async def _session():
     engine = create_async_engine(get_settings().database_url, poolclass=NullPool)
@@ -43,7 +60,7 @@ async def _session():
 
 
 async def test_seed_creates_default_tier_bindings():
-    async with _session() as db:
+    async with _empty_deployment_defaults(), _session() as db:
         await ModelConfigRegistry(db).seed_defaults()
         await db.flush()
         rows = (
@@ -70,7 +87,7 @@ async def test_seed_creates_default_tier_bindings():
 
 
 async def test_seed_is_idempotent():
-    async with _session() as db:
+    async with _empty_deployment_defaults(), _session() as db:
         await ModelConfigRegistry(db).seed_defaults()
         await db.flush()
         n2 = await ModelConfigRegistry(db).seed_defaults()  # second run: no new rows

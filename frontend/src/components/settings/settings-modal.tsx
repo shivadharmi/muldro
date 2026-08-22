@@ -14,7 +14,7 @@ import {
   fetchModelCatalog,
   fetchModelConfig,
   saveModelConfig,
-  saveProviderKey,
+  saveProviderCredential,
   testProviderKey,
   deleteProviderKey,
 } from "@/lib/api";
@@ -25,7 +25,7 @@ import type {
   TrustDashboardEntry,
   ModelCatalog,
   ModelConfig,
-  TierBinding,
+  ModelBinding,
 } from "@/lib/types";
 import { TRUST_LEVEL_LABELS } from "@/components/settings/trust-constants";
 import {
@@ -319,7 +319,7 @@ export function SettingsModal() {
   }, [addToast]);
 
   const handleSaveModelConfig = useCallback(
-    async (body: { tiers: TierBinding[]; agent_overrides: TierBinding[] }) => {
+    async (body: { tiers: ModelBinding[]; agent_overrides: ModelBinding[] }) => {
       setSavingModelConfig(true);
       try {
         const updated = await saveModelConfig(body);
@@ -335,10 +335,13 @@ export function SettingsModal() {
   );
 
   const handleSaveProviderKey = useCallback(
-    async (provider: string, apiKey: string, baseUrl?: string) => {
+    async (
+      provider: string,
+      fields: { api_key?: string; base_url?: string | null },
+    ) => {
       setProviderBusy(provider);
       try {
-        await saveProviderKey(provider, apiKey, baseUrl);
+        await saveProviderCredential(provider, fields);
         const config = await fetchModelConfig();
         setModelConfig(config);
         addToast(`${provider} credentials saved`, "success");
@@ -372,10 +375,16 @@ export function SettingsModal() {
     async (provider: string) => {
       setProviderBusy(provider);
       try {
-        await deleteProviderKey(provider);
+        const result = await deleteProviderKey(provider);
         const config = await fetchModelConfig();
         setModelConfig(config);
-        addToast(`${provider} credentials removed`, "success");
+        // A revoke can orphan bindings that depended on this credential -- surface
+        // that consequence instead of reporting a plain success.
+        if (result.orphaned_bindings.length > 0) {
+          addToast(result.orphaned_bindings[0].message, "error");
+        } else {
+          addToast(`${provider} credentials removed`, "success");
+        }
       } catch (err) {
         addToast(errorToMessage(err), "error");
       } finally {

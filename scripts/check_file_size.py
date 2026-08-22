@@ -29,8 +29,12 @@ STORE_CAP = 200
 GRANDFATHERED: dict[str, int] = {
     "backend/src/orchestrator/agent_invoker.py": 1620,
     "backend/tests/deep_runtime/test_permission_gate.py": 1159,
+    # The model-config client rewrite (partial-credential bodies, bind-rejection
+    # error mapping) grew this; the view-layer cutover shrank it by deleting the
+    # A2UI surface calls. 1146 is the MERGED size — neither branch's own figure
+    # (1111 here, 1169 there) describes the file that now exists.
+    "frontend/src/lib/api.ts": 1146,
     "backend/src/integrations/session_pool.py": 1143,
-    "frontend/src/lib/api.ts": 1111,
     "backend/tests/test_scheduler.py": 1104,
     "backend/src/services/graph_executor.py": 1023,
     "backend/src/services/dag_runner.py": 961,
@@ -46,10 +50,16 @@ GRANDFATHERED: dict[str, int] = {
     "backend/src/api/routes_approvals.py": 820,
     "backend/tests/test_perception.py": 815,
     "frontend/src/components/muldro/chat-panel.tsx": 736,
-    "frontend/src/components/settings/model-tab.tsx": 588,
-    "frontend/src/lib/types.ts": 542,
+    # Over the 400 cap before the standard was adopted and omitted from this
+    # list by oversight. The Model tab's adaptation to scope_type/scope_key
+    # bindings and the flat catalog.models list grew it further; recorded
+    # rather than split — the tab's actual redesign is a later phase.
+    "frontend/src/components/settings/model-tab.tsx": 610,
+    # Same oversight. The model-config contract rewrite (scope_type/scope_key
+    # bindings, flat catalog.models, credential fields) grew it further.
+    "frontend/src/lib/types.ts": 591,
+    "frontend/src/components/settings/settings-modal.tsx": 538,
     "frontend/src/components/history/run-detail-modal.tsx": 536,
-    "frontend/src/components/settings/settings-modal.tsx": 529,
     "frontend/tests/e2e/diagnostic.spec.ts": 501,
     "frontend/src/app/integrations/page.tsx": 460,
     "frontend/tests/e2e/screenshot-all-pages.spec.ts": 421,
