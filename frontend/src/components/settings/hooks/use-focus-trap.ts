@@ -77,7 +77,7 @@ function focusableWithin(container: HTMLElement): HTMLElement[] {
 export interface FocusTrapOptions {
   /**
    * Suspend the Tab trap without releasing focus. Set while a NESTED overlay
-   * (portalled out of this container, e.g. the model picker) owns the keyboard:
+   * rendered over this container (e.g. the model picker) owns the keyboard:
    * the trap is document-scoped and pulls focus back in from anywhere, so an
    * unpaused trap would rip focus out of that overlay on its first Tab.
    *

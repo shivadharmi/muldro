@@ -4,8 +4,16 @@ import { createContext, useContext, useEffect, useMemo, useState } from "react";
 
 interface SettingsOverlayValue {
   /**
-   * Take the keyboard for a NESTED overlay — one portalled out of the dialog
-   * panel, such as the model picker. The shell suspends its focus trap while
+   * Take the keyboard for a NESTED overlay rendered over the dialog panel, such
+   * as the model picker. NOTE: the picker is NOT portalled — it renders in place
+   * inside the shell's `overflow-hidden` panel, escaping it only because
+   * `position: fixed` resolves against the viewport. That holds today solely
+   * because the panel's one transform (`animate-scale-in`) has no `forwards`
+   * fill and so leaves nothing behind; a `will-change`, `filter`,
+   * `backdrop-filter` or persistent `transform` on any ancestor would make the
+   * fixed wrapper resolve against THAT ancestor and clip the palette to the
+   * panel, with no test failing. Portal it if that day comes.
+   * The shell suspends its focus trap while
    * any claim is outstanding, so the overlay's own Tab handling wins instead of
    * being fought by a document-scoped trap that would pull focus back into the
    * rail on the first keypress. Returns the release, which is idempotent.
