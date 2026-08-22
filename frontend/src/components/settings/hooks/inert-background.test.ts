@@ -97,6 +97,23 @@ test("an element already hidden by someone else is not un-hidden on release", ()
   expect(theirs).toHaveAttribute("aria-hidden", "true");
 });
 
+test('aria-hidden="false" background content is hidden, and gets its false back', () => {
+  // `hasAttribute` is true for `="false"`, so skipping on presence alone left
+  // content someone deliberately exposed fully readable behind the modal.
+  const exposed = div();
+  exposed.setAttribute("aria-hidden", "false");
+  const dialog = div();
+
+  const release = inertBackground(dialog);
+  expect(exposed).toHaveAttribute("aria-hidden", "true");
+  expect(exposed).toHaveAttribute("inert");
+
+  release();
+  // Restored, not stripped: removing it would clear a state we did not set.
+  expect(exposed).toHaveAttribute("aria-hidden", "false");
+  expect(exposed).not.toHaveAttribute("inert");
+});
+
 test("a null root isolates nothing", () => {
   const background = div();
   inertBackground(null)();

@@ -140,19 +140,63 @@ test("Tab is trapped inside the dialog and wraps in both directions (A1)", () =>
   expect(document.activeElement).toBe(last);
 });
 
+/**
+ * jsdom implements `inert` as an inert attribute — it neither blurs nor blocks
+ * focus — so both halves of the trap's ordering invariant are invisible by
+ * default, and every ordering test here has to reinstate the browser behaviour
+ * it depends on. This is the half that makes `focus()` a no-op inside an inert
+ * subtree, which is what the RELEASE-before-RESTORE order exists for.
+ */
+function enforceInertBlocksFocus() {
+  const realFocus = HTMLElement.prototype.focus;
+  return vi
+    .spyOn(HTMLElement.prototype, "focus")
+    .mockImplementation(function (this: HTMLElement, options?: FocusOptions) {
+      if (this.closest("[inert]")) return;
+      realFocus.call(this, options);
+    });
+}
+
 test("focus returns to the invoking element on close (A1)", () => {
+  const inert = enforceInertBlocksFocus();
   const invoker = document.createElement("button");
   document.body.appendChild(invoker);
   invoker.focus();
 
-  const { rerender } = render(<SettingsModal />);
-  expect(document.activeElement).not.toBe(invoker);
+  try {
+    const { rerender } = render(<SettingsModal />);
+    expect(document.activeElement).not.toBe(invoker);
 
-  useSettingsModalStore.setState({ open: false });
-  rerender(<SettingsModal />);
-  expect(document.activeElement).toBe(invoker);
+    useSettingsModalStore.setState({ open: false });
+    rerender(<SettingsModal />);
+    // Restoring BEFORE the release would focus into a still-inert ancestor,
+    // which a real browser ignores silently.
+    expect(document.activeElement).toBe(invoker);
+  } finally {
+    inert.mockRestore();
+    invoker.remove();
+  }
+});
 
-  invoker.remove();
+test("the backdrop is never inerted, and closes the dialog on click", async () => {
+  // The trap isolates around the whole dialog, not around the panel. Isolating
+  // around the panel makes this backdrop a marked sibling, `inert` kills its
+  // onClick, and click-outside-to-close dies with nothing looking wrong.
+  render(<SettingsModal />);
+  const backdrop = screen.getByTestId("settings-backdrop");
+  expect(backdrop).not.toHaveAttribute("inert");
+  expect(backdrop).not.toHaveAttribute("aria-hidden");
+
+  await userEvent.click(backdrop);
+  expect(useSettingsModalStore.getState().open).toBe(false);
+});
+
+test("the panel's own siblings inside the dialog stay reachable", () => {
+  // The same invariant stated structurally: nothing inside the dialog is
+  // isolated, however deep the panel sits.
+  render(<SettingsModal />);
+  const dialog = screen.getByRole("dialog");
+  expect(dialog.querySelector("[inert]")).toBeNull();
 });
 
 test("Esc closes the dialog", () => {

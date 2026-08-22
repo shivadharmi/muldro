@@ -1,6 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { expect, test } from "vitest";
 
 import {
@@ -98,14 +98,21 @@ test("two overlays: the trap re-arms only when the last one lets go", async () =
 test("releasing twice does not decrement another overlay's claim", async () => {
   function DoubleReleaseScene() {
     const overlay = useOverlayClaims();
-    const [release] = useState(() => overlay.value.claim());
+    // Claimed in an effect, not a lazy initialiser: `claim()` calls setState,
+    // and doing that during render double-claims under StrictMode.
+    const release = useRef<() => void>(() => {});
+    useEffect(() => {
+      release.current = overlay.value.claim();
+      // Mount-only; `overlay.value` is stable.
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
     return (
       <>
         <output>{overlay.claimed ? "paused" : "trapping"}</output>
         <button
           onClick={() => {
-            release();
-            release();
+            release.current();
+            release.current();
           }}
         >
           release twice

@@ -114,34 +114,50 @@ export function ModelConfigProvider({ children }: { children: ReactNode }) {
 }
 
 /**
- * The full model surface — catalog included — and the credential mutations.
+ * The model surface: catalog, saved config, draft, save lifecycle and the
+ * credential mutations. Reading it FETCHES NOTHING — call `useModelCatalog()`
+ * when you need the catalog populated.
  *
- * Reaching for this IS the request for the catalog, so it starts the full load.
- * That is the seam: `useProviderCounts` reads the eagerly-fetched config and
- * pulls nothing extra, while every consumer that renders a binding or a
- * credential schema needs the catalog by definition and gets it by asking for
- * this. The alternative — each tab remembering to call `load()` in its own
- * mount effect — is a rule that holds only while everyone remembers it, and
- * `providers-tab.tsx` already consumes the catalog without one.
- *
- * The load is fired in an effect, never during render, and failures are
- * swallowed here: the consumer's own `load()` shares the same promise and owns
- * the toast.
+ * It briefly did fire the full load itself, on the theory that reaching for
+ * this context was the request for the catalog. That only holds while the
+ * context contains nothing but catalog-shaped things, and it already does not:
+ * a consumer wanting `credentials` or `config.providers` alone had no way to
+ * say so and silently pulled a catalog it would never render — exactly the cost
+ * the eager/lazy split exists to avoid. Intent belongs at the call site.
  */
 export function useModelConfigContext(): ModelConfigContextValue {
   const value = useContext(ModelConfigContext);
-
-  // Hooks before the throw, or this one would be conditional.
-  const load = value?.models.load;
-  useEffect(() => {
-    load?.().catch(() => {});
-  }, [load]);
-
   if (!value) {
     throw new Error(
       "useModelConfigContext must be used inside <ModelConfigProvider>",
     );
   }
+  return value;
+}
+
+/**
+ * The model surface WITH its catalog: same context, plus the full load.
+ *
+ * For a consumer that renders models, tiers or credential schemas. Both tabs
+ * that do also call `load()` in their own mount effect and own the toast, so
+ * this is belt-and-braces — but it is the loader a new catalog consumer gets
+ * for free, and asking for the catalog is now something you say rather than
+ * something a docblock says for you.
+ *
+ * Fired in an effect, never during render; the failure is swallowed because the
+ * caller's own `load()` shares the same promise and reports it.
+ *
+ * Note the asymmetry this accepts: `load()` sets `loading` synchronously, so a
+ * catalog consumer DOES pay the extra mount commit the eager `loadConfig()`
+ * avoids. That is the right trade here — a surface rendering the catalog is the
+ * one that needs the spinner.
+ */
+export function useModelCatalog(): ModelConfigContextValue {
+  const value = useModelConfigContext();
+  const { load } = value.models;
+  useEffect(() => {
+    load().catch(() => {});
+  }, [load]);
   return value;
 }
 

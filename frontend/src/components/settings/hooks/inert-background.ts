@@ -28,8 +28,11 @@ function isLiveRegion(el: Element): boolean {
  * sprite sheet, say) gets `aria-hidden` and nothing else. That still takes it
  * out of the virtual cursor, which is the part that matters here.
  *
- * An element that already carries `inert` or `aria-hidden` is left alone in
- * both directions, so the release can never clear a state it did not set.
+ * An element already hidden by someone else is left alone in both directions,
+ * so the release can never clear a state it did not set. "Already hidden" is a
+ * question about the VALUE, not the attribute: `aria-hidden="false"` is content
+ * someone deliberately kept exposed, and skipping it on the strength of
+ * `hasAttribute` alone left it fully readable behind the modal.
  *
  * KNOWN BOUNDARY: this is a snapshot, not a subscription. Nodes appended to the
  * body AFTER the call — a portal opened later — are not covered. Today that
@@ -39,6 +42,13 @@ function isLiveRegion(el: Element): boolean {
  * screen), but any other late portal stays AT-visible. A `MutationObserver`
  * would close it if that ever matters.
  *
+ * SECOND BOUNDARY, same shape: two body-level dialogs closed out of order.
+ * A isolates and marks sibling X; B isolates, sees X already marked and skips
+ * it; A closes first and strips X while B is still open. Nesting in the usual
+ * order is safe precisely because of the already-marked check — B never claims
+ * what A holds — and the settings dialog is the only body-level modal here.
+ * A ref-count keyed on the element is the fix if a second one ever lands.
+ *
  * Not a hook on purpose: the caller must be able to order it against focus
  * capture and restore inside ONE effect. Sequencing it as a second hook made
  * both invariants depend on React's effect ordering — and the capture half
@@ -47,7 +57,10 @@ function isLiveRegion(el: Element): boolean {
 export function inertBackground(root: Element | null): () => void {
   if (!root) return () => {};
 
-  const touched: Element[] = [];
+  // The PRIOR value travels with each element: an `aria-hidden="false"` node is
+  // hidden while the modal is up and must get its explicit `false` back, not be
+  // stripped bare, on release.
+  const touched: Array<{ el: Element; ariaHidden: string | null }> = [];
   let node: Element | null = root;
   while (node && node !== document.body) {
     const parent: HTMLElement | null = node.parentElement;
@@ -57,19 +70,25 @@ export function inertBackground(root: Element | null): () => void {
       if (sibling === node) continue;
       if (NON_RENDERED.has(sibling.tagName)) continue;
       if (sibling.hasAttribute("inert")) continue;
-      if (sibling.hasAttribute("aria-hidden")) continue;
+      // `="false"` is not hidden — it is content someone kept deliberately
+      // visible, and it still has to be hidden behind a modal.
+      if (sibling.getAttribute("aria-hidden") === "true") continue;
       if (isLiveRegion(sibling)) continue;
+      touched.push({
+        el: sibling,
+        ariaHidden: sibling.getAttribute("aria-hidden"),
+      });
       sibling.setAttribute("aria-hidden", "true");
       if (sibling instanceof HTMLElement) sibling.setAttribute("inert", "");
-      touched.push(sibling);
     }
     node = parent;
   }
 
   return () => {
-    for (const el of touched) {
+    for (const { el, ariaHidden } of touched) {
       el.removeAttribute("inert");
-      el.removeAttribute("aria-hidden");
+      if (ariaHidden === null) el.removeAttribute("aria-hidden");
+      else el.setAttribute("aria-hidden", ariaHidden);
     }
   };
 }

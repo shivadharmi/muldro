@@ -5,6 +5,11 @@ import { inertBackground } from "./inert-background";
 /**
  * Everything the browser will land on with Tab. Deliberately a query rather
  * than a dependency: a modal needs a trap, not a library.
+ *
+ * `[tabindex="-1"]` is excluded from EVERY clause, not just the catch-all.
+ * `a[href]` and `button` are focusable by default, so an element that opted out
+ * of the tab order — a roving-tabindex row, a restore anchor — still matched
+ * and sat in the cycle as a phantom stop the browser itself would skip.
  */
 const FOCUSABLE_SELECTOR = [
   "a[href]",
@@ -12,8 +17,10 @@ const FOCUSABLE_SELECTOR = [
   "input:not([disabled])",
   "select:not([disabled])",
   "textarea:not([disabled])",
-  '[tabindex]:not([tabindex="-1"])',
-].join(",");
+  "[tabindex]",
+]
+  .map((clause) => `${clause}:not([tabindex="-1"])`)
+  .join(",");
 
 /**
  * Tabbable means the element AND every ancestor is rendered — the settings
@@ -146,7 +153,13 @@ export function useFocusTrap<T extends HTMLElement>({
       release();
       restore?.focus();
     };
-  }, [isolate]);
+    // Mount-only, deliberately. `isolate` is documented as a stable ref and
+    // nothing can enforce that, so it is NOT a dependency: an inline
+    // `isolate={{current: el}}` would re-run this every render, and re-running
+    // it is not idempotent — the cleanup fires `restore.focus()`, yanking focus
+    // out of the dialog and back to whatever opened it, on every keystroke.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const onKeyDown = useCallback((event: KeyboardEvent) => {
     if (event.key !== "Tab") return;
@@ -166,6 +179,38 @@ export function useFocusTrap<T extends HTMLElement>({
     const current = document.activeElement;
     const index = current instanceof HTMLElement ? items.indexOf(current) : -1;
 
+    // Focused, inside the container, but not IN the cycle — a `tabIndex={-1}`
+    // anchor the app focused programmatically. `FOCUSABLE_SELECTOR` excludes
+    // those by design (they are not tab stops), so `indexOf` says -1 and the
+    // wrap branches below would read that as "at the end" and throw the user to
+    // the first control in the whole panel — or, on Shift+Tab, the last.
+    //
+    // That is precisely the failure the restore was written to prevent: close a
+    // dialog, land back on the row you opened it from, press Tab, and get flung
+    // to the top of the dialog instead of that row's next control (WCAG 2.4.3).
+    // Resolve by DOCUMENT ORDER instead, which is what the browser would have
+    // done had the element been a tab stop. Descendants count as following and
+    // ancestors as preceding, matching real tab sequence.
+    if (index === -1 && current instanceof HTMLElement && container.contains(current)) {
+      event.preventDefault();
+      const following = items.find(
+        (el) =>
+          current.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING,
+      );
+      const preceding = [...items]
+        .reverse()
+        .find(
+          (el) =>
+            current.compareDocumentPosition(el) &
+            Node.DOCUMENT_POSITION_PRECEDING,
+        );
+      // Falling back to the far end is the correct wrap at either extreme.
+      (event.shiftKey ? (preceding ?? last) : (following ?? first)).focus();
+      return;
+    }
+
+    // `index === -1` still reaches here when focus is OUTSIDE the container.
+    // That one is a genuine escape, and pulling it back to an end is right.
     if (event.shiftKey && index <= 0) {
       event.preventDefault();
       last.focus();

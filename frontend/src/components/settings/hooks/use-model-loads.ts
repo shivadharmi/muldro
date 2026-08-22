@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 
 import { fetchModelCatalog, fetchModelConfig } from "@/lib/api";
 import type { ModelCatalog, ModelConfig } from "@/lib/types";
@@ -99,8 +99,7 @@ export function useModelLoads(
     return promise;
   }, [loadConfig]);
 
-  return useMemo(
-    () => ({ catalog, loading, load, loadConfig }),
-    [catalog, loading, load, loadConfig],
-  );
+  // Not memoised: every caller destructures this immediately, so the object's
+  // identity is never observed and a `useMemo` here would buy nothing.
+  return { catalog, loading, load, loadConfig };
 }

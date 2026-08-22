@@ -145,7 +145,12 @@ function SettingsDialog() {
       aria-modal="true"
       aria-labelledby={SETTINGS_TITLE_ID}
     >
+      {/* Click-outside-to-close. It lives INSIDE `dialogRef`, which is why the
+          trap isolates around the dialog and not around the panel: isolating
+          around the panel would mark this sibling `inert` and kill the click
+          with nothing on screen looking wrong. */}
       <div
+        data-testid="settings-backdrop"
         className="absolute inset-0 bg-black/50 backdrop-blur-sm"
         onClick={closeSettings}
       />

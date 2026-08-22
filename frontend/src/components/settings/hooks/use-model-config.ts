@@ -150,7 +150,6 @@ export function useModelConfig(): UseModelConfigResult {
 
   const { catalog, loading, load, loadConfig } = useModelLoads(adoptConfig);
 
-
   // Destructured, not used through `bindRejections`: that object is memoised on
   // `rejections`, so reaching through it inside a callback would re-create the
   // callback on every 422 and cost `save` its identity stability. These three
