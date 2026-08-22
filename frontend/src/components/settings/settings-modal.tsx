@@ -36,6 +36,7 @@ import { AccountTab } from "./account-tab";
 import { PreferencesTab } from "./preferences-tab";
 import { PolicyTab } from "./policy-tab";
 import { TrustTab } from "./trust-tab";
+import { FiltersTab } from "./filters-tab";
 import { SpendingTab } from "./spending-tab";
 import { ModelTab } from "./model-tab";
 
@@ -45,6 +46,7 @@ const TABS: Array<{ key: SettingsTab; label: string }> = [
   { key: "policy", label: "Policy" },
   { key: "budget", label: "Budget" },
   { key: "trust", label: "Trust" },
+  { key: "filters", label: "Filters" },
   { key: "model", label: "Model" },
 ];
 
@@ -98,6 +100,12 @@ function TabIcon({ tab }: { tab: SettingsTab }) {
         <svg {...common}>
           <circle cx="8" cy="8" r="6" />
           <path d="M5.5 8.2l1.7 1.7 3.3-3.6" />
+        </svg>
+      );
+    case "filters": // funnel
+      return (
+        <svg {...common}>
+          <path d="M2.5 3.5h11l-4.3 5v4.3l-2.4 1.2V8.5l-4.3-5z" />
         </svg>
       );
     case "model": // chip / CPU
@@ -514,6 +522,8 @@ export function SettingsModal() {
                 resetLoading={resetLoading}
               />
             )}
+
+            {activeTab === "filters" && <FiltersTab />}
 
             {activeTab === "model" && (
               <ModelTab

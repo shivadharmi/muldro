@@ -596,3 +596,17 @@ export interface CredentialDeleteResult {
   status: ProviderStatus;
   orphaned_bindings: ConfigWarning[];
 }
+
+/** A sender-level mail filter Muldro proposed and the founder confirmed.
+ *  A revoked rule is kept rather than deleted (`enabled: false` plus a
+ *  `revoked_at` stamp) — it is the record of what was once being filtered. */
+export interface FilterRule {
+  rule_id: string;
+  source: string;
+  match_kind: string;
+  match_value: string;
+  enabled: boolean;
+  created_at: string | null;
+  revoked_at: string | null;
+  created_from_approval_id: string;
+}

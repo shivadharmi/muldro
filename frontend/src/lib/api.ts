@@ -11,6 +11,7 @@ import type {
   BriefingFeedbackInput,
   BriefingFeedbackSummary,
   CredentialDeleteResult,
+  FilterRule,
   MeetingPrep,
   MemoryItem,
   ModelBinding,
@@ -1052,6 +1053,23 @@ export async function setTimePolicies(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ policies }),
   });
+}
+
+// ── Filter rules ───────────────────────────────────────────────
+
+export async function fetchFilterRules(): Promise<{
+  rules: FilterRule[];
+  count: number;
+}> {
+  return api("/workspace/filter-rules");
+}
+
+/** Revoking releases the events the rule had frozen; `released` is how many
+ *  came back into view. */
+export async function revokeFilterRule(
+  ruleId: string
+): Promise<{ rule_id: string; released: number }> {
+  return api(`/workspace/filter-rules/${ruleId}`, { method: "DELETE" });
 }
 
 // ── History ─────────────────────────────────────────────────────
