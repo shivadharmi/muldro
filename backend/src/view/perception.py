@@ -240,3 +240,67 @@ def units_from_events(events: list[Any]) -> list[Unit]:
             continue
         units.append(Unit(frame=frame, body="", quotes=tuple(quotes)))
     return units
+
+
+def _event_identity(event: Any) -> str:
+    """One event's durable identity, whichever pipeline stage it came from.
+
+    Three shapes, one answer - the same RawEvent/NormalizedEvent split that
+    `event_actor_name` already exists for:
+
+      * a stored NormalizedEvent row has `event_id`;
+      * an ingested event also carries `idempotency_key`;
+      * a pre-ingest RawEvent has NEITHER - ingest is what mints the key - so
+        it falls back to a composite over the fields it does have.
+
+    `event_processor.make_idempotency_key` is deliberately NOT called here: it
+    takes a RawEvent and reads `.raw_payload`, which a NormalizedEvent row does
+    not have, so it cannot serve both shapes this module must handle. The
+    composite also carries the timestamp, which that function's own fallback
+    branch omits, because two messages arriving on one thread inside a single
+    poll must not collapse to one identity - that is exactly the change this
+    value exists to detect.
+
+    Deterministic: the same event yields the same string on every poll, which
+    is what makes a stored body's staleness check a real comparison rather
+    than a coin toss. Two events on one thread bearing the same timestamp do
+    collide, and the only cost is that a body is not regenerated for the
+    second - never a wrong body, only a late one.
+
+    Every read is defensive for the same reason the rest of this module is:
+    these values come from external payloads, where a dict, a list or None can
+    sit where a string belongs. A non-string identifier is treated as absent
+    and falls through to the next candidate rather than raising and taking the
+    whole poll down.
+    """
+    for attribute in ("event_id", "idempotency_key"):
+        value = getattr(event, attribute, None)
+        if isinstance(value, str) and value:
+            return value
+    occurred = ensure_aware_utc(getattr(event, "occurred_at", None))
+    stamp = occurred.isoformat() if occurred else ""
+    source = getattr(event, "source", "")
+    entity_id = getattr(event, "entity_id", "")
+    event_type = getattr(event, "event_type", "")
+    return f"{source}:{entity_id}:{event_type}:{stamp}"
+
+
+def event_ids_by_key(events: list[Any]) -> dict[str, tuple[str, ...]]:
+    """What each Unit's body would be written over, keyed by frame key.
+
+    The companion to `units_from_events`, grouping the same events through the
+    same `group_events_by_key` rather than re-deriving the key. Kept separate
+    rather than folded into that function's return type because its shape is
+    pinned by existing callers, and because a stored body's staleness is a
+    question about EVENTS, not about the Unit they projected to.
+
+    Order comes from the grouping, which sorts a group oldest-first, so the
+    tuple does not follow the connector's arrival order. That matters: a body
+    is compared against this value poll after poll, and an order that shifted
+    with paging would make every stored body look stale and force a
+    regeneration that changed nothing.
+    """
+    return {
+        group.key: tuple(_event_identity(event) for event in group.events)
+        for group in group_events_by_key(list(events))
+    }
