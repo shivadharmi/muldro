@@ -11,8 +11,8 @@ const PREPARED_TYPE = "prepared_action";
  *
  * A prepared action is a write a gate wanted a human for on a turn with no
  * human present. CLAUDE.md: this queue is the ONLY place such an item can be
- * acted on, which is why it lands before SurfaceDetailModal's `queue` tab is
- * deleted rather than after.
+ * acted on, which is why it landed before the old detail modal's `queue` tab
+ * was deleted rather than after.
  *
  * A decided row is removed from the list immediately. Confirmation replays the
  * exact recorded tool call and is exactly-once via the idempotency ledger, so

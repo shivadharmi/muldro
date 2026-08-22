@@ -4,7 +4,7 @@
  *
  * The one thing it must never do is render empty. "Card shows info, modal
  * shows nothing" is spec §1 defect 6, and it is what a chevron opening onto a
- * deleted SurfaceDetailModal would recreate.
+ * deleted surface detail modal would recreate.
  */
 
 import { describe, expect, it, vi } from "vitest";

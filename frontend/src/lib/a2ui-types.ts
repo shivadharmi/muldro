@@ -99,11 +99,26 @@ export interface SurfaceDataPayload {
   sections: A2UIComponent[];
 }
 
+/** Surface kind taxonomy — mirrors the backend SurfaceKind Literal.
+ *  Lives here because the surface push is the only thing that still carries a
+ *  kind; the units transport uses its own closed FrameKind instead. */
+export type SurfaceKind =
+  | "run"
+  | "summary"
+  | "briefing"
+  | "alert"
+  | "recommendation"
+  | "proactive_insight"
+  | "prepared_work"
+  | "message"
+  | "plan"
+  | "approval";
+
 /** New two-layer surface push from backend (preview + detail_config + optional surface_data). */
 export interface WorkspaceSurfacePush {
   type: "surface";
   id: string;
-  kind: import("@/lib/types/surfaces").SurfaceKind;
+  kind: SurfaceKind;
   preview: SurfacePreview;
   detail_config: DetailConfig | null;
   source_run_id: string | null;

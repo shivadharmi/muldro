@@ -2,9 +2,8 @@
 
 import { create } from "zustand";
 
-import type { DetailConfig, InsightData, SurfaceDataPayload, SurfacePreview } from "@/lib/a2ui-types";
+import type { DetailConfig, InsightData, SurfaceDataPayload, SurfaceKind, SurfacePreview } from "@/lib/a2ui-types";
 import type { ExecutionPhase, StepState, ApprovalContext, ResultSummary, SurfaceUpdate } from "@/lib/types/execution";
-import type { SurfaceKind } from "@/lib/types/surfaces";
 
 export interface WorkspaceSurface {
   id: string;
@@ -73,7 +72,7 @@ export const useSurfaceStore = create<SurfaceState>((set) => ({
   openDetailModal: (id) =>
     set({ activeSurfaceId: id, detailModalOpen: true }),
 
-  // Closing DROPS the active surface, so `SurfaceDetailModal` unmounts and its per-open
+  // Closing DROPS the active surface, so the detail modal unmounts and its per-open
   // `tabCache` goes with it. Leaving `activeSurfaceId` set kept the modal mounted and its
   // fetched detail tabs cached indefinitely — the cache only reset on a surface *id* change,
   // which never happens for a standing singleton like `prepared_work_{workspace_id}`. The

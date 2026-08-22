@@ -525,7 +525,7 @@ export function fetchSurface(surfaceId: string) {
 
 interface WorkspaceSurfaceResponse {
   id: string;
-  kind: import("@/lib/types/surfaces").SurfaceKind;
+  kind: import("@/lib/a2ui-types").SurfaceKind;
   preview: import("@/lib/a2ui-types").SurfacePreview;
   detail_config: import("@/lib/a2ui-types").DetailConfig | null;
   source_run_id?: string | null;

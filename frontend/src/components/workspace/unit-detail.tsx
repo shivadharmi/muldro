@@ -26,7 +26,7 @@ interface Props {
  * are spec step 5; this component is the shell they land in, not a stopgap
  * that gets thrown away.
  *
- * It exists because deleting SurfaceDetailModal with nothing behind the
+ * It exists because deleting the old surface detail modal with nothing behind the
  * chevron re-creates defect 6 from spec §1 — chevrons that open to nothing.
  *
  * It CANNOT render empty (§2.3). The frame header is unconditional, and the
