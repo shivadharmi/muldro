@@ -47,11 +47,20 @@ import {
  * `globals.css` defines `accent-50/100/400/500/600` and no `accent-primary`.
  * That is `text-j-danger` verbatim, five more times, none of it in this tree.
  *
- * The cost of the wider net is false positives, and it was measured rather than
- * assumed: across 175 files the only thing it flagged was the five real defects
- * and this module's own prefix table. `stroke-width` and friends are SVG
- * presentation attributes sharing a prefix with a colour utility, and they are
- * enumerated in `NON_COLOUR` for exactly that reason.
+ * The cost of the wider net is false positives, and it was measured across the
+ * whole of `src/` rather than assumed: what it flagged was the five real
+ * defects, this module's own prefix table, and — once the net covered feature
+ * areas with their own conventions — a tail of legitimate Tailwind utilities
+ * that share a prefix with a colour one. `stroke-width` (an SVG presentation
+ * attribute), `border-collapse`, `outline-offset-2`, `text-shadow-sm`,
+ * `from-10%`: all enumerated in `NON_COLOUR` / `NON_COLOUR_HEADS` / `NUMERIC`
+ * for exactly that reason, and pinned below so the next widening cannot
+ * silently re-flag them.
+ *
+ * The stock palette (`bg-red-500`, `text-gray-400`) is NOT in that tail. It is
+ * reported on purpose — see `token-audit.ts` — which is why the sweep's failure
+ * message names that reading explicitly instead of leaving it to look like a
+ * typo report.
  *
  * Fixtures are excluded with the tests: they are data for a spec, not a surface
  * anyone sees, and their class strings are assertions rather than markup. This
@@ -60,6 +69,14 @@ import {
  * naming a token called `offset`. It is the auditor, not a surface.
  */
 const SRC_DIR = join(fileURLToPath(import.meta.url), "../../..");
+
+/** The auditor's own path, relative to `SRC_DIR`. Compared as a PATH, not as a
+ *  basename: a basename test excuses any file called `token-audit.ts` anywhere
+ *  under `src/`, so a second one in another feature area would be silently
+ *  unswept — the same hole the hand-maintained list had. `.test.` and
+ *  `-fixtures.` stay on the basename because those two ARE basename
+ *  conventions; this one is an identity. */
+const AUDITOR = "components/settings/token-audit.ts";
 
 function walk(dir: string, prefix = ""): string[] {
   const found: string[] = [];
@@ -72,7 +89,7 @@ function walk(dir: string, prefix = ""): string[] {
       /\.tsx?$/.test(entry.name) &&
       !entry.name.includes(".test.") &&
       !entry.name.includes("-fixtures.") &&
-      entry.name !== "token-audit.ts"
+      name !== AUDITOR
     ) {
       found.push(name);
     }
@@ -135,25 +152,55 @@ describe("the resolver", () => {
   });
 
   test("a misspelled token is reported, through every variant and tint", () => {
-    for (const dead of [
-      "text-j-danger",
-      "bg-j-eror",
-      "bg-surface-9/50",
-      "hover:bg-j-primary-hoverr",
-      "sm:focus-visible:ring-j-rng",
-      "border-l-j-primry",
+    // The NAME, not just the count. `toHaveLength(1)` passed for
+    // `ring-offset-j-danger` even when the alternation read it as `ring-` plus
+    // a token called `offset-j-danger` — one finding, wrong finding, green
+    // test. Wherever the expected name is knowable, assert it.
+    for (const [dead, expected] of [
+      ["text-j-danger", "j-danger"],
+      ["bg-j-eror", "j-eror"],
+      ["bg-surface-9/50", "surface-9"],
+      ["hover:bg-j-primary-hoverr", "j-primary-hoverr"],
+      ["sm:focus-visible:ring-j-rng", "j-rng"],
+      // Reported WITH the side still attached: `candidates()` tries both
+      // `l-j-primry` and `j-primry`, and the whole remainder is what is
+      // recorded when neither resolves.
+      ["border-l-j-primry", "l-j-primry"],
       // The arbitrary-opacity spelling. Tailwind takes both `/50` and `/[0.5]`,
       // and testing for `[` before stripping the modifier skipped the second
       // entirely — a one-keystroke bypass on a surface full of tints.
-      "bg-j-danger/[0.5]",
-      "hover:bg-surface-9/[.35]",
+      ["bg-j-danger/[0.5]", "j-danger"],
+      ["hover:bg-surface-9/[.35]", "surface-9"],
       // `ring-offset-` takes a colour. Classifying `offset` as geometry to keep
       // `ring-offset-2` quiet silenced this with it.
-      "ring-offset-j-danger",
-      "focus-visible:ring-offset-surface-9",
-      "inset-ring-j-danger",
-    ]) {
-      expect(undefinedTokensInSource(dead), dead).toHaveLength(1);
+      ["ring-offset-j-danger", "j-danger"],
+      ["focus-visible:ring-offset-surface-9", "surface-9"],
+      ["inset-ring-j-danger", "j-danger"],
+      // Compounding `outline-offset` to un-flag `outline-offset-2` must not
+      // re-mask a colour spelled after it, the way `ring-offset` was masked.
+      ["outline-offset-j-danger", "j-danger"],
+    ] as const) {
+      expect(undefinedTokensInSource(dead), dead).toEqual([expected]);
+    }
+  });
+
+  /**
+   * The stock Tailwind palette is banned, and the ban is the assertion.
+   *
+   * `globals.css` is a bare `@import "tailwindcss"` with no `--color-*: initial`
+   * reset, so these classes generate real rules and really paint — they are not
+   * broken. They are reported because bypassing the theme is what this design
+   * system exists to prevent. Pinned so nobody "fixes" the false positive by
+   * enumerating the palette into `NON_COLOUR`.
+   */
+  test("a stock palette class is reported even though it works", () => {
+    for (const [stock, expected] of [
+      ["bg-red-500", "red-500"],
+      ["text-gray-400", "gray-400"],
+      ["border-slate-200", "slate-200"],
+      ["bg-blue-600/20", "blue-600"],
+    ] as const) {
+      expect(undefinedTokensInSource(stock), stock).toEqual([expected]);
     }
   });
 
@@ -196,6 +243,38 @@ describe("the resolver", () => {
       "stroke-linecap",
       "stroke-dasharray",
       "shadow-[0_0_0_1px_var(--muldro-primary-soft)]",
+      // The tail the app-wide sweep exposed: real Tailwind utilities that share
+      // a prefix with a colour one, in feature areas `settings/` never used.
+      // Every one of these flagged before this list grew, and a guard that
+      // cries wolf on working code is a guard somebody deletes.
+      //
+      // `outline-offset-2` is the regression this sweep's own widening caused:
+      // dropping `offset` from the geometry heads unmasked `ring-offset-<colour>`
+      // and `outline-offset-<width>` together, and only the first was
+      // compensated for.
+      "outline-offset-2",
+      "outline-offset-4",
+      "border-collapse",
+      "border-separate",
+      "border-spacing-2",
+      "divide-x-reverse",
+      "divide-y-reverse",
+      "bg-top-left",
+      "bg-bottom-right",
+      "decoration-wavy",
+      "decoration-from-font",
+      "text-shadow-sm",
+      "text-shadow-lg",
+      // Gradient stops and widths — numbers, matched by shape. `NUMERIC` is the
+      // one shape rule here, and it is safe only because no `--color-*` name in
+      // `globals.css` is a bare number.
+      "from-10%",
+      "via-50%",
+      "to-90%",
+      "stroke-3",
+      "border-l-3",
+      "text-opacity-50",
+      "bg-opacity-50",
     ]) {
       expect(tokenOf(notAToken)).toBeNull();
     }
@@ -255,8 +334,36 @@ describe("every settings component", () => {
     for (const name of COLOUR_BEARING) expect(COMPONENTS).toContain(name);
   });
 
+  /**
+   * The message is load-bearing, because this sweep now fails in feature areas
+   * whose owners have never read `token-audit.ts`.
+   *
+   * "names only defined tokens: red-500" reads as a typo report for a class
+   * that demonstrably works, and the honest reaction to a typo report about
+   * working code is to delete the guard. So the message names the file, both
+   * readings, and the fix for each — including the one that is a policy rather
+   * than a defect.
+   */
+  const explain = (name: string) =>
+    [
+      `${name} names a colour token globals.css does not define.`,
+      "",
+      "Either:",
+      "  (a) the token is MISSPELLED — check the --color-* names in",
+      "      app/globals.css (j-error, not j-danger; surface-2, not surface-9);",
+      "  (b) it is a STOCK TAILWIND palette class (bg-red-500, text-gray-400).",
+      "      Those generate real rules and really paint — they are reported",
+      "      because this design system does not permit bypassing the theme.",
+      "      Replace it with a --color-* token; do NOT add it to NON_COLOUR;",
+      "  (c) it is a legitimate NON-COLOUR utility sharing a prefix with a",
+      "      colour one (border-collapse, outline-offset-2, text-shadow-sm).",
+      "      That is the case NON_COLOUR / NON_COLOUR_HEADS in",
+      "      components/settings/token-audit.ts exist for — add it there, with",
+      "      a case in token-audit.test.ts pinning it.",
+    ].join("\n");
+
   test.each(COMPONENTS)("%s names only defined tokens", (name) => {
-    expect(undefinedTokensInSource(read(name))).toEqual([]);
+    expect(undefinedTokensInSource(read(name)), explain(name)).toEqual([]);
   });
 
   test.each(COLOUR_BEARING)("%s still names colour at all", (name) => {

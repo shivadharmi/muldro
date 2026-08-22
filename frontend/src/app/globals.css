@@ -236,6 +236,17 @@ body {
    and two spelled `focus:` (the trust ceiling select and the budget input) —
    and every one of them drew two rings.
 
+   THE CLEANUP WAS NOT APP-WIDE, and this note should not be read as though it
+   were. The pair was removed from those six settings controls and from the chat
+   composer. It remains elsewhere — most importantly in `lib/focus-ring.ts`, the
+   SHARED helper every importer inherits it from, which still spells
+   `focus-visible:outline-none` beside `focus-visible:ring-2`. More call sites
+   spell the same pair inline, across the button primitive, the sidebar, the
+   search and history filters, the login form and the inline approval card. So
+   the rule above is the law; the codebase does not yet obey it everywhere.
+   Fixing the shared helper is the single highest-leverage step and is filed
+   separately — it touches many owners, which is why it was not done here.
+
    None of that is visible in the source; it only appears in the compiled
    stylesheet, which is why it is written down here. */
 :focus-visible {

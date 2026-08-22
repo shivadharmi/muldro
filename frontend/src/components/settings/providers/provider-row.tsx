@@ -244,8 +244,14 @@ export function ProviderRow({
    * name rather than instead of it.
    *
    * `data-raw-slug` marks it for `slug-audit.test.tsx`, which otherwise fails
-   * the whole surface on exactly this string. Marking the ONE node is the point:
+   * the whole surface on exactly this string. Marking one node is the point:
    * loosening the regex would exempt every future leak with it.
+   *
+   * The mark exempts a SUBTREE, not a node — the sweep tests `closest()`, so
+   * everything under the marked element is skipped too. That is harmless only
+   * because the mark sits on the leaf `<span>` below. Moving it up to a
+   * container would silently stop auditing every slug rendered inside it, which
+   * is a hole rather than an exemption.
    */
   const rawSlug = uncatalogued ? status.provider : null;
 

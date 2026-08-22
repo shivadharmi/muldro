@@ -3,7 +3,7 @@
  * `globals.css` actually DEFINES.
  *
  * Named `token-audit`, not `design-tokens`: `lib/design-tokens.ts` already
- * exists, is production code with ten importers, and hands out Tailwind colour
+ * exists, is production code with several importers, and hands out Tailwind colour
  * classes from a status map — which is exactly the kind of place a dead token
  * hides. Two modules under one name with opposite bundling constraints (this
  * one imports `node:fs` and must never reach a bundle) is a trap. The
@@ -29,6 +29,16 @@
  *     which is where a dead token hides longest, because nobody renders the
  *     branch that was never right.
  *
+ * **The stock Tailwind palette is reported too, and that is deliberate.**
+ * `globals.css` starts with a bare `@import "tailwindcss"` and its `@theme`
+ * block never resets `--color-*: initial`, so `bg-red-500` DOES generate a real
+ * rule and DOES paint. It is reported anyway: bypassing the theme is the exact
+ * thing this design system exists to prevent, and a palette class is
+ * indistinguishable from a misspelled token to anything but a human. The
+ * failure message therefore has to name both readings, because the second one
+ * is not a bug report — it is a policy, and a policy nobody can read is a
+ * policy nobody follows.
+ *
  * **What neither can see:** a class assembled at run time from a fragment
  * (`"bg-j-" + tone`). No settings component does that today, and
  * `providers/provider-row.tsx` documents why its dot tone is a union of whole
@@ -49,6 +59,24 @@ import { fileURLToPath } from "node:url";
 /** Utility prefixes whose value is a colour token. `shadow-` is deliberately
  *  absent: every shadow on this surface is an arbitrary value or a size. */
 const COLOUR_PREFIXES = [
+  // COMPOUND PREFIXES FIRST. `PREFIX` alternates in this order and the regex
+  // takes the first branch that matches, so every compound has to precede its
+  // own stem. `ring-offset-j-danger` read as `ring-` plus `offset-j-danger`
+  // reports a token nobody wrote; `outline-offset-2` read as `outline-` plus
+  // `offset-2` reports a width as a colour. This is why the list is not
+  // alphabetical, and why anything added here goes above, not below.
+  //
+  // `outline-offset` is here for the OPPOSITE reason to the other two: it takes
+  // a LENGTH, not a colour. `offset` used to sit in `NON_COLOUR_HEADS`, which
+  // kept `outline-offset-2` AND `ring-offset-2` quiet — and silenced the real
+  // `ring-offset-j-danger` with them. Dropping it unmasked the colour and the
+  // width together. Compounding both prefixes restores the split: the widths
+  // resolve to `2` and stay quiet, a colour after either prefix is still a
+  // token. `globals.css` uses `outline-offset: 2px` in the one focus rule, so
+  // this is live vocabulary rather than a hypothetical.
+  "outline-offset",
+  "ring-offset",
+  "inset-ring",
   "bg",
   "text",
   "border",
@@ -60,11 +88,6 @@ const COLOUR_PREFIXES = [
   "accent",
   "decoration",
   "placeholder",
-  // Longest-first: `ring-offset-j-danger` must not be read as `ring-` plus
-  // `offset-j-danger`. `PREFIX` alternates in this order, so these two have to
-  // precede `ring`, which is why the list is not alphabetical.
-  "ring-offset",
-  "inset-ring",
   "from",
   "via",
   "to",
@@ -90,32 +113,63 @@ const NON_COLOUR = new Set([
   // Alignment, wrapping, truncation.
   "left", "center", "right", "justify", "start", "end",
   "balance", "pretty", "wrap", "nowrap", "ellipsis", "clip",
-  // Widths shared by border-/ring-/outline-/divide-.
-  "0", "1", "2", "4", "8",
+  // Widths shared by border-/ring-/outline-/divide- are numbers, and numbers
+  // are handled by shape rather than by enumeration — see NUMERIC below.
   // Line styles, and the "no line at all" keyword.
   "solid", "dashed", "dotted", "double", "hidden", "none",
+  // Underline styles, which share `decoration-` with the colour utility.
+  "wavy", "from-font",
   // Sides and axes: `border-b`, `border-x`, `divide-y`.
   "t", "r", "b", "l", "s", "e", "x", "y",
+  // `divide-x-reverse` / `divide-y-reverse`, reached through the SIDE rule.
+  "reverse",
+  // Table layout, which shares `border-` with the colour utility.
+  "collapse", "separate",
   // Ring geometry.
   "inset",
-  // Background geometry.
+  // Background geometry, including the two-word positions Tailwind v4 spells
+  // `bg-top-left` (and, for anyone porting v3 markup, `bg-left-top`).
   "fixed", "local", "scroll", "auto", "cover", "contain",
   "top", "bottom", "repeat", "round", "space",
+  "top-left", "top-right", "bottom-left", "bottom-right",
+  "left-top", "left-bottom", "right-top", "right-bottom",
   // SVG presentation ATTRIBUTES, which share the `stroke-` prefix with the
   // colour utility. `settings/icons.tsx` escapes this only because JSX spells
   // them camelCase; a plain `style`/`transition` string or a data-URI SVG
   // elsewhere in the app spells them kebab-case and would otherwise be read as
   // four undefined colour tokens.
   "width", "linecap", "linejoin", "dasharray", "dashoffset", "miterlimit",
-  "opacity",
 ]);
 
 /** Multi-segment suffixes whose FIRST segment settles that it is not a colour:
- *  `bg-gradient-to-b`, `ring-offset-2`, `bg-repeat-x`, `bg-clip-text`. */
+ *  `bg-gradient-to-b`, `bg-repeat-x`, `bg-clip-text`, `border-spacing-2`.
+ *
+ *  `shadow` is here rather than in `COLOUR_PREFIXES` for the reason that list
+ *  gives: no shadow on this surface names a token, so `text-shadow-sm` and
+ *  `text-shadow-lg` are sizes. The trade is explicit — a `text-shadow-<colour>`
+ *  would not be checked. Move `text-shadow` into `COLOUR_PREFIXES` the day one
+ *  is written, rather than pre-emptively flagging every size today. */
 const NON_COLOUR_HEADS = new Set([
   "gradient", "linear", "radial", "conic",
   "origin", "clip", "size", "position", "blend", "repeat", "no",
+  "spacing", "shadow", "opacity",
 ]);
+
+/** Numbers are not tokens, and there are too many of them to enumerate.
+ *
+ *  This is the ONE shape rule in a module that is otherwise deliberately a
+ *  closed vocabulary, and it is safe precisely because no `--color-*` name in
+ *  `globals.css` is a bare number: every token carries a word (`surface-2`,
+ *  `accent-500`), so the SEGMENT this ever sees is `2`, never `surface-2`.
+ *  Covers the border/ring/outline widths (`ring-2`, `outline-offset-2`), the
+ *  stroke widths JSX can spell kebab-case (`stroke-3`), and the gradient stops
+ *  (`from-10%`, `via-50%`, `to-90%`). */
+const NUMERIC = /^\d+(?:\.\d+)?%?$/;
+
+/** Whether a whole suffix segment is settled as "not a colour". */
+function isNonColour(value: string): boolean {
+  return NON_COLOUR.has(value) || NUMERIC.test(value);
+}
 
 /** `t-`, `b-`, `l-` … as a SIDE rather than as the first half of a token name.
  *  `border-l-j-primary` is side `l` plus `j-primary`; `border-t-muted` is the
@@ -180,10 +234,11 @@ export function tokenOf(raw: string): string | null {
   const match = PREFIX.exec(base);
   if (!match) return null;
   const value = match[1];
-  if (NON_COLOUR.has(value)) return null;
+  if (isNonColour(value)) return null;
   if (NON_COLOUR_HEADS.has(value.split("-")[0])) return null;
-  // A side plus a width, not a side plus a colour: `border-l-2`.
-  if (SIDE.test(value) && NON_COLOUR.has(value.slice(2))) return null;
+  // A side plus a width, not a side plus a colour: `border-l-2`. Also the axis
+  // plus a keyword: `divide-x-reverse`.
+  if (SIDE.test(value) && isNonColour(value.slice(2))) return null;
   return value;
 }
 
