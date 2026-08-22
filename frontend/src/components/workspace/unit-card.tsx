@@ -18,6 +18,31 @@ interface Props {
 const MAX_AFFORDANCES = 3;
 
 /**
+ * What the events of a unit are called. A meeting is not a message, and the
+ * fallback has to survive an entity type nobody has mapped yet, so it is a
+ * noun that is true of anything a connector can group.
+ */
+const EVENT_NOUN: Record<string, string> = {
+  email_thread: "messages",
+  meeting: "events",
+  issue: "updates",
+  pull_request: "updates",
+  channel: "messages",
+  page: "revisions",
+};
+
+const DEFAULT_EVENT_NOUN = "updates";
+
+/**
+ * A count of one says nothing the card does not already show, and it is
+ * where the wrong noun was on display.
+ */
+function eventCountLabel(entityType: string, count: number): string | null {
+  if (count <= 1) return null;
+  return `${count} ${EVENT_NOUN[entityType] ?? DEFAULT_EVENT_NOUN}`;
+}
+
+/**
  * The Glance. Six slots, always in this order, none of them optional except
  * the quote. Two cards of one kind are the same shape by construction — which
  * is what ranking needs, since you cannot rank things that do not look alike.
@@ -36,6 +61,7 @@ export function UnitCard({ unit, onOpen, onAct, onDismiss }: Props) {
   const quote = quotes[0];
   const kindTone = kindStyle(frame.kind);
   const affordances = frame.affordances.slice(0, MAX_AFFORDANCES);
+  const countLabel = eventCountLabel(frame.entity_type, frame.event_count);
 
   const handleKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     if (e.target !== e.currentTarget) return;
@@ -94,10 +120,12 @@ export function UnitCard({ unit, onOpen, onAct, onDismiss }: Props) {
             <span>{frame.entity_type}</span>
           </>
         )}
-        <span aria-hidden="true">·</span>
-        <span>
-          {frame.event_count} {frame.event_count === 1 ? "message" : "messages"}
-        </span>
+        {countLabel && (
+          <>
+            <span aria-hidden="true">·</span>
+            <span>{countLabel}</span>
+          </>
+        )}
       </p>
 
       {/* 4 — lede */}

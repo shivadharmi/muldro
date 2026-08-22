@@ -109,16 +109,40 @@ test("omits the entity-type segment and its separator when entity_type is empty"
   render(<UnitCard unit={u} onOpen={vi.fn()} />);
   const text = contextText();
   expect(text).toContain("gmail");
-  expect(text).toContain("3 messages");
+  // No entity type means no noun to pick, so the count falls back to neutral.
+  expect(text).toContain("3 updates");
   expect((text.match(/·/g) ?? []).length).toBe(1);
 });
 
-test("renders one message for a single-event unit", () => {
+test("omits the count entirely for a single-event unit", () => {
   const u = unit();
   u.frame.event_count = 1;
   render(<UnitCard unit={u} onOpen={vi.fn()} />);
-  expect(contextText()).toContain("1 message");
-  expect(contextText()).not.toContain("1 messages");
+  const text = contextText();
+  expect(text).not.toContain("1 message");
+  expect(text).not.toContain("message");
+  expect(text).not.toMatch(/\b1\b/);
+  expect((text.match(/·/g) ?? []).length).toBe(1);
+});
+
+test("counts a multi-event email thread in messages", () => {
+  const u = unit();
+  u.frame.entity_type = "email_thread";
+  u.frame.event_count = 3;
+  render(<UnitCard unit={u} onOpen={vi.fn()} />);
+  expect(contextText()).toContain("3 messages");
+});
+
+test("never calls a meeting a message", () => {
+  const u = unit();
+  u.frame.source = "calendar";
+  u.frame.entity_type = "meeting";
+  u.frame.event_count = 2;
+  render(<UnitCard unit={u} onOpen={vi.fn()} />);
+  const text = contextText();
+  expect(text).toContain("meeting");
+  expect(text).not.toContain("message");
+  expect(text).not.toContain("messages");
 });
 
 test("renders the status pill with a Title-case frame-status label", () => {

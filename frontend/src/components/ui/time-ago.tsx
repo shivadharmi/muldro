@@ -1,9 +1,34 @@
 "use client";
 
-function formatTimeAgo(dateStr: string): string {
-  const now = Date.now();
-  const then = new Date(dateStr).getTime();
-  const seconds = Math.floor((now - then) / 1000);
+/**
+ * A stamp slightly ahead of the client clock is skew between two machines,
+ * not a scheduled event, and must still read as "just now". Only a stamp
+ * further ahead than any plausible skew describes something that has not
+ * happened yet.
+ */
+const CLOCK_SKEW_TOLERANCE_SECONDS = 60;
+
+/** Weekday, day, short month, hour and minute — localised, never hand-formatted. */
+const SCHEDULED_FORMAT: Intl.DateTimeFormatOptions = {
+  weekday: "short",
+  day: "numeric",
+  month: "short",
+  hour: "2-digit",
+  minute: "2-digit",
+};
+
+/**
+ * A relative stamp is only honest about the past. A meeting three weeks out
+ * is a date you need to read, not a distance you need to decode — and the
+ * elapsed-seconds arithmetic below goes negative for it, which without the
+ * future branch made every scheduled thing render as "just now".
+ */
+export function formatTimeAgo(dateStr: string): string {
+  const then = new Date(dateStr);
+  const seconds = Math.floor((Date.now() - then.getTime()) / 1000);
+
+  if (seconds < -CLOCK_SKEW_TOLERANCE_SECONDS)
+    return then.toLocaleString(undefined, SCHEDULED_FORMAT);
 
   if (seconds < 60) return "just now";
   const minutes = Math.floor(seconds / 60);
@@ -12,7 +37,7 @@ function formatTimeAgo(dateStr: string): string {
   if (hours < 24) return `${hours}h ago`;
   const days = Math.floor(hours / 24);
   if (days < 30) return `${days}d ago`;
-  return new Date(dateStr).toLocaleDateString();
+  return then.toLocaleDateString();
 }
 
 export function TimeAgo({
