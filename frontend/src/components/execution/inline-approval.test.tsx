@@ -1,7 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { test, expect, beforeEach, vi, type Mock } from "vitest";
-import { InlineApprovalCard } from "./inline-approval";
+import { InlineApprovalCard } from "@/components/execution/inline-approval";
 import { useWsActionStore } from "@/stores/ws-action-store";
 import type { ApprovalContext } from "@/lib/a2ui-types";
 

@@ -1,6 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import { test, expect } from "vitest";
-import { InlineApprovalCard } from "../inline-approval";
+import { InlineApprovalCard } from "@/components/execution/inline-approval";
 import type { ApprovalContext } from "@/lib/a2ui-types";
 
 // B12 / P3.2: ONE InlineApprovalCard, fed by the SAME rich `ApprovalContext` from

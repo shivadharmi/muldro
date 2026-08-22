@@ -4,8 +4,8 @@ import type { A2UIComponent } from "@/lib/a2ui-types";
 import type { ExecutionPhase, StepState, ApprovalContext, ResultSummary } from "@/lib/a2ui-types";
 import { isStepDone } from "@/lib/a2ui-types";
 import { phaseTextColor } from "@/lib/design-tokens";
-import { StepList } from "./step-list";
-import { InlineApprovalCard } from "./inline-approval";
+import { StepList } from "@/components/execution/step-list";
+import { InlineApprovalCard } from "@/components/execution/inline-approval";
 
 interface Props {
   component: A2UIComponent;

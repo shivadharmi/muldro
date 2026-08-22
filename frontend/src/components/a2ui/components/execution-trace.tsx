@@ -1,6 +1,6 @@
 import type { A2UIComponent } from "@/lib/a2ui-types";
 import { statusColor } from "@/lib/design-tokens";
-import { stepStatusIcon, formatDuration } from "./step-presentation";
+import { stepStatusIcon, formatDuration } from "@/components/execution/step-presentation";
 
 interface Props {
   component: A2UIComponent;

@@ -10,8 +10,8 @@ import { MarkdownRenderer } from "./markdown-renderer";
 import { AgentTrace, type AgentStep } from "./agent-trace";
 import { ChatTodos } from "./chat-todos";
 import { todosFromToolCall, type Todo } from "@/lib/todos";
-import { StepList } from "@/components/a2ui/components/step-list";
-import { InlineApprovalCard } from "@/components/a2ui/components/inline-approval";
+import { StepList } from "@/components/execution/step-list";
+import { InlineApprovalCard } from "@/components/execution/inline-approval";
 import type { ApprovalContext, StepState } from "@/lib/a2ui-types";
 
 interface ChatMessage {

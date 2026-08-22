@@ -3,7 +3,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { type StepState, isStepDone } from "@/lib/a2ui-types";
 import { statusTextColor } from "@/lib/design-tokens";
-import { stepStatusIcon, formatDuration } from "./step-presentation";
+import { stepStatusIcon, formatDuration } from "@/components/execution/step-presentation";
 
 interface StepListProps {
   steps: StepState[];
