@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useAuth } from "@/lib/auth";
 import {
@@ -8,8 +8,15 @@ import {
   type SettingsTab,
 } from "@/stores/settings-modal-store";
 import { useFocusTrap } from "./hooks/use-focus-trap";
+import { useInertBackground } from "./hooks/use-inert-background";
 import { ModelConfigProvider, useProviderCounts } from "./model-config-context";
-import { SETTINGS_TITLE_ID, SettingsRail, tabMetaFor } from "./settings-rail";
+import { SettingsOverlayProvider } from "./overlay-context";
+import {
+  SETTINGS_TABS,
+  SETTINGS_TITLE_ID,
+  SettingsRail,
+  tabMetaFor,
+} from "./settings-rail";
 import { AccountTab } from "./tabs/account-tab";
 import { ModelTab } from "./tabs/model-tab";
 import { PolicyTab } from "./tabs/policy-tab";
@@ -95,13 +102,40 @@ function SettingsDialog() {
 
   // Below `sm` the rail is the sheet's ROOT view and a tab is pushed over it
   // (defect L4). At `sm`+ both panes show side by side and this is ignored.
-  const [pushed, setPushed] = useState(false);
-  const panelRef = useFocusTrap<HTMLDivElement>(true);
+  // Opening straight onto a named tab — `openSettings("model")` — lands PUSHED,
+  // or a mobile deep link would drop the user on the list it asked past.
+  const [pushed, setPushed] = useState(() => activeTab !== SETTINGS_TABS[0].key);
+
+  // A nested overlay portalled out of the panel (the model picker) claims the
+  // keyboard while it is open; see `overlay-context.tsx`.
+  const [overlayOpen, setOverlayOpen] = useState(false);
+  const overlay = useMemo(() => ({ setOverlayOpen }), []);
+
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  // ORDER IS LOAD-BEARING. Effect cleanups run in declaration order, and the
+  // focus trap's cleanup restores focus to the control that opened the dialog —
+  // which lives in the background this hook marks `inert`. Declared the other
+  // way round, the restore would run while that ancestor was still inert and a
+  // real browser would silently refuse the focus (jsdom, which does not
+  // implement `inert`, would never show it).
+  useInertBackground(dialogRef);
+  const panelRef = useFocusTrap<HTMLDivElement>({ paused: overlayOpen });
   const meta = tabMetaFor(activeTab);
+
+  const selectTab = useCallback(
+    (tab: SettingsTab) => {
+      setActiveTab(tab);
+      setPushed(true);
+    },
+    [setActiveTab],
+  );
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") closeSettings();
+      // A nested overlay closes itself by handling Escape and calling
+      // `preventDefault()`; without this check the whole dialog would close
+      // underneath it.
+      if (e.key === "Escape" && !e.defaultPrevented) closeSettings();
     };
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
@@ -109,6 +143,7 @@ function SettingsDialog() {
 
   return (
     <div
+      ref={dialogRef}
       className="fixed inset-0 z-50 flex sm:items-center sm:justify-center animate-fade-in"
       role="dialog"
       aria-modal="true"
@@ -126,11 +161,8 @@ function SettingsDialog() {
         <SettingsRail
           activeTab={activeTab}
           providerCounts={providerCounts}
-          onSelect={(tab) => {
-            setActiveTab(tab);
-            setPushed(true);
-          }}
-          className={`${pushed ? "hidden sm:flex" : "flex"} w-full sm:w-[200px]`}
+          onSelect={selectTab}
+          className={pushed ? "hidden sm:flex" : "flex"}
         />
 
         <div
@@ -169,7 +201,9 @@ function SettingsDialog() {
           </div>
 
           <div className="flex-1 min-h-0 overflow-y-auto flex flex-col gap-[18px] bg-surface-0 px-4 py-[18px] sm:bg-transparent sm:px-6 sm:py-5">
-            <TabBody tab={activeTab} />
+            <SettingsOverlayProvider value={overlay}>
+              <TabBody tab={activeTab} />
+            </SettingsOverlayProvider>
           </div>
         </div>
       </div>

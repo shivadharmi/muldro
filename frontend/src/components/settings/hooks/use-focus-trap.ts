@@ -14,15 +14,26 @@ const FOCUSABLE_SELECTOR = [
 ].join(",");
 
 /**
- * `display:none` / `visibility:hidden` subtrees are not tabbable, and the
- * settings sheet hides a whole pane per breakpoint — so the rail's buttons must
- * not be in the mobile cycle. Computed style is used rather than
- * `getClientRects()` because jsdom reports no rects for anything at all, which
- * would empty the cycle under test.
+ * Tabbable means the element AND every ancestor is rendered — the settings
+ * sheet hides a whole pane per breakpoint (`hidden sm:flex`), so the rail's
+ * seven buttons must leave the cycle on a phone.
+ *
+ * The ancestor walk is the whole point: `display` does NOT inherit, so
+ * `getComputedStyle(child).display` on a child of a `display:none` element
+ * still reports the child's own `flex`. Only `visibility` inherits, which is
+ * exactly why checking the element alone LOOKS correct and is not.
+ *
+ * `el.checkVisibility()` is the one-line browser answer; jsdom does not
+ * implement it. Computed style is used rather than `getClientRects()` for the
+ * same reason — jsdom reports no rects for anything, which would empty the
+ * cycle under test.
  */
 function isVisible(el: HTMLElement): boolean {
-  const style = window.getComputedStyle(el);
-  return style.display !== "none" && style.visibility !== "hidden";
+  for (let node: HTMLElement | null = el; node; node = node.parentElement) {
+    const style = window.getComputedStyle(node);
+    if (style.display === "none" || style.visibility === "hidden") return false;
+  }
+  return true;
 }
 
 function focusableWithin(container: HTMLElement): HTMLElement[] {
@@ -31,22 +42,38 @@ function focusableWithin(container: HTMLElement): HTMLElement[] {
   ).filter(isVisible);
 }
 
+export interface FocusTrapOptions {
+  /**
+   * Suspend the Tab trap without releasing focus. Set while a NESTED overlay
+   * (portalled out of this container, e.g. the model picker) owns the keyboard:
+   * the trap is document-scoped and pulls focus back in from anywhere, so an
+   * unpaused trap would rip focus out of that overlay on its first Tab.
+   *
+   * Pausing deliberately does NOT restore focus — that rides on unmount, so a
+   * nested overlay opening cannot fling focus back to whatever opened the
+   * dialog in the first place.
+   */
+  paused?: boolean;
+}
+
 /**
- * Traps Tab inside the returned container while `active`, moves focus into it
- * on activation, and restores focus to whatever was focused beforehand when it
- * deactivates or unmounts (defect A1).
+ * Traps Tab inside the returned container, moves focus into it on mount, and
+ * restores focus to whatever was focused beforehand on unmount (defect A1).
+ *
+ * Capture/restore ride on MOUNT, not on a flag: the settings dialog is mounted
+ * only while it is open, so its lifetime already is the trap's lifetime, and
+ * tying restore to a flag would make every transient pause a focus jump.
  *
  * The container itself is focused first rather than its first control, so
  * opening the dialog never looks like the user is about to press something.
  */
-export function useFocusTrap<T extends HTMLElement>(active: boolean) {
+export function useFocusTrap<T extends HTMLElement>({
+  paused = false,
+}: FocusTrapOptions = {}) {
   const containerRef = useRef<T | null>(null);
   const restoreRef = useRef<HTMLElement | null>(null);
 
-  // Capture + restore. The cleanup is the restore, so an unmount (the modal
-  // returns null when closed) is handled by the same path as a deactivation.
   useEffect(() => {
-    if (!active) return;
     const previous = document.activeElement;
     restoreRef.current =
       previous instanceof HTMLElement && previous !== document.body
@@ -57,7 +84,7 @@ export function useFocusTrap<T extends HTMLElement>(active: boolean) {
       restoreRef.current?.focus();
       restoreRef.current = null;
     };
-  }, [active]);
+  }, []);
 
   const onKeyDown = useCallback((event: KeyboardEvent) => {
     if (event.key !== "Tab") return;
@@ -87,10 +114,10 @@ export function useFocusTrap<T extends HTMLElement>(active: boolean) {
   }, []);
 
   useEffect(() => {
-    if (!active) return;
+    if (paused) return;
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [active, onKeyDown]);
+  }, [paused, onKeyDown]);
 
   return containerRef;
 }

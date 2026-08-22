@@ -1,6 +1,12 @@
 "use client";
 
-import { createContext, useContext, useMemo, type ReactNode } from "react";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useMemo,
+  type ReactNode,
+} from "react";
 
 import { useToast } from "@/components/ui/toast";
 import { errorToMessage } from "@/lib/api-error";
@@ -12,7 +18,12 @@ import {
   useProviderCredentials,
   type UseProviderCredentialsResult,
 } from "./hooks/use-provider-credentials";
-import type { ProviderCounts } from "./settings-rail";
+
+/** How many providers are connected, out of how many exist. */
+export interface ProviderCounts {
+  connected: number;
+  total: number;
+}
 
 interface ModelConfigContextValue {
   models: UseModelConfigResult;
@@ -20,6 +31,15 @@ interface ModelConfigContextValue {
 }
 
 const ModelConfigContext = createContext<ModelConfigContextValue | null>(null);
+
+/**
+ * Split from the value above on purpose. The rail's `connected/total` suffix
+ * changes only when the SAVED config does, while the model context's value
+ * changes on every draft keystroke — subscribing the shell to the latter
+ * re-rendered the header and all seven rail icons on every character typed
+ * into a `max_tokens` field.
+ */
+const ProviderCountsContext = createContext<ProviderCounts | null>(null);
 
 /**
  * Holds the model/provider configuration for the whole settings surface.
@@ -43,14 +63,38 @@ export function ModelConfigProvider({ children }: { children: ReactNode }) {
     addToast(`Credentials saved, but the view is stale: ${errorToMessage(err)}`, "error"),
   );
 
+  // The rail's badge exists to say "Providers needs attention" BEFORE the user
+  // goes there, so the config is loaded when the surface opens rather than when
+  // the Model tab happens to mount. `load()` is once-only and re-entrant, so
+  // the Model tab's own call collapses into this one.
+  //
+  // A failure here is deliberately silent: the badge is simply absent, and
+  // nobody asked for model data yet. `load()` clears its own guard on failure,
+  // so the Model tab retries and toasts when the user actually opens it.
+  const { load } = models;
+  useEffect(() => {
+    load().catch(() => {});
+  }, [load]);
+
   const value = useMemo(
     () => ({ models, credentials }),
     [models, credentials],
   );
 
+  const providers = models.config?.providers;
+  const counts = useMemo<ProviderCounts | null>(() => {
+    if (!providers) return null;
+    return {
+      connected: providers.filter((p) => p.configured).length,
+      total: providers.length,
+    };
+  }, [providers]);
+
   return (
     <ModelConfigContext.Provider value={value}>
-      {children}
+      <ProviderCountsContext.Provider value={counts}>
+        {children}
+      </ProviderCountsContext.Provider>
     </ModelConfigContext.Provider>
   );
 }
@@ -70,13 +114,5 @@ export function useModelConfigContext(): ModelConfigContextValue {
  * has not loaded — an unloaded config renders no suffix rather than `0/0`.
  */
 export function useProviderCounts(): ProviderCounts | null {
-  const { models } = useModelConfigContext();
-  const providers = models.config?.providers;
-  return useMemo(() => {
-    if (!providers) return null;
-    return {
-      connected: providers.filter((p) => p.configured).length,
-      total: providers.length,
-    };
-  }, [providers]);
+  return useContext(ProviderCountsContext);
 }

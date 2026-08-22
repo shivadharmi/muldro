@@ -1,6 +1,9 @@
 "use client";
 
+import { memo } from "react";
+
 import type { SettingsTab } from "@/stores/settings-modal-store";
+import type { ProviderCounts } from "./model-config-context";
 
 /** The dialog is labelled by the visible heading this id sits on (defect A2). */
 export const SETTINGS_TITLE_ID = "settings-modal-title";
@@ -120,11 +123,6 @@ export function TabIcon({ tab }: { tab: SettingsTab }) {
   }
 }
 
-export interface ProviderCounts {
-  connected: number;
-  total: number;
-}
-
 interface SettingsRailProps {
   activeTab: SettingsTab;
   onSelect: (tab: SettingsTab) => void;
@@ -138,8 +136,11 @@ interface SettingsRailProps {
  * The settings tab list. At `sm`+ it is the 200px left rail; below `sm` it is
  * the sheet's root view — a full-width push list, never a horizontal scroller
  * (defect L4). Which of the two it is, is the caller's layout decision.
+ *
+ * Memoised: it renders seven inline SVGs, and the shell above it re-renders for
+ * reasons that have nothing to do with the tab list.
  */
-export function SettingsRail({
+export const SettingsRail = memo(function SettingsRail({
   activeTab,
   onSelect,
   providerCounts,
@@ -148,7 +149,7 @@ export function SettingsRail({
   return (
     <nav
       aria-label="Settings sections"
-      className={`flex flex-col shrink-0 gap-[2px] p-[10px] min-h-0 overflow-y-auto border-b-secondary sm:w-[200px] sm:border-r bg-surface-2/40 ${className}`}
+      className={`flex flex-col shrink-0 gap-[2px] p-[10px] min-h-0 overflow-y-auto border-b-secondary w-full sm:w-[200px] sm:border-r bg-surface-2/40 ${className}`}
     >
       <h2
         id={SETTINGS_TITLE_ID}
@@ -186,4 +187,4 @@ export function SettingsRail({
       })}
     </nav>
   );
-}
+});

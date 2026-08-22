@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { test, expect, vi, beforeEach } from "vitest";
 
@@ -36,7 +36,10 @@ vi.mock("@/lib/api", () => ({
   fetchModelConfig: vi.fn().mockResolvedValue({
     tiers: [],
     agent_overrides: [],
-    providers: [],
+    providers: [
+      { provider: "anthropic", configured: true },
+      { provider: "openai", configured: false },
+    ],
     warnings: [],
   }),
   saveModelConfig: vi.fn().mockResolvedValue({}),
@@ -47,7 +50,13 @@ vi.mock("@/lib/api", () => ({
 
 import { SettingsModal } from "./settings-modal";
 import { SETTINGS_TABS } from "./settings-rail";
-import { fetchModelCatalog, fetchModelConfig } from "@/lib/api";
+import {
+  fetchBudget,
+  fetchModelCatalog,
+  fetchModelConfig,
+  fetchPolicyMode,
+  fetchTrustDashboard,
+} from "@/lib/api";
 import { useSettingsModalStore } from "@/stores/settings-modal-store";
 
 beforeEach(() => {
@@ -158,20 +167,41 @@ test("the close control closes the dialog", async () => {
   expect(useSettingsModalStore.getState().open).toBe(false);
 });
 
-test("the shell fetches no model config for a non-model tab (L5)", async () => {
+test("the shell fetches no tab's data for a tab that is not on screen (L5)", async () => {
   render(<SettingsModal />);
-  // Account is active; the rail's provider suffix must not have provoked a load.
+  // Account is active. No other tab's endpoints may fire — the shell holds no
+  // tab's state, so nothing off-screen has anything to load.
+  expect(fetchTrustDashboard).not.toHaveBeenCalled();
+  expect(fetchBudget).not.toHaveBeenCalled();
+  expect(fetchPolicyMode).not.toHaveBeenCalled();
+
   await userEvent.click(
     within(rail()).getByRole("button", { name: /^policy$/i }),
   );
-  expect(fetchModelCatalog).not.toHaveBeenCalled();
-  expect(fetchModelConfig).not.toHaveBeenCalled();
+  await waitFor(() => expect(fetchPolicyMode).toHaveBeenCalled());
+  expect(fetchTrustDashboard).not.toHaveBeenCalled();
+  expect(fetchBudget).not.toHaveBeenCalled();
 });
 
-test("the rail omits the provider count while the config is unloaded", () => {
+test("the model config loads once for the surface, not per tab visit", async () => {
   render(<SettingsModal />);
-  const providers = within(rail()).getByRole("button", { name: /providers/i });
-  expect(providers.textContent).toBe("Providers");
+  await waitFor(() => expect(fetchModelConfig).toHaveBeenCalledTimes(1));
+  // Visiting Model and leaving again must not re-fetch: the state is owned
+  // above both the rail and the tab, not by the tab that happens to be open.
+  await userEvent.click(within(rail()).getByRole("button", { name: /^model$/i }));
+  await userEvent.click(within(rail()).getByRole("button", { name: /^trust$/i }));
+  expect(fetchModelConfig).toHaveBeenCalledTimes(1);
+  expect(fetchModelCatalog).toHaveBeenCalledTimes(1);
+});
+
+test("the rail omits the provider count until the config lands, then shows it", async () => {
+  render(<SettingsModal />);
+  const providers = () =>
+    within(rail()).getByRole("button", { name: /providers/i });
+  // Nothing has loaded on this first paint: no suffix, and never a bare `0/0`.
+  expect(providers().textContent).toBe("Providers");
+  // The badge's whole job is to flag Providers BEFORE the user goes there.
+  await waitFor(() => expect(providers().textContent).toBe("Providers1/2"));
 });
 
 test("the header names the active tab", async () => {
@@ -185,4 +215,83 @@ test("the header names the active tab", async () => {
 test("the account tab renders the signed-in user", () => {
   render(<SettingsModal />);
   expect(screen.getByText("founder@example.com")).toBeInTheDocument();
+});
+
+test("a hidden pane's controls leave the Tab cycle (A1)", () => {
+  render(<SettingsModal />);
+  const dialog = screen.getByRole("dialog");
+  const nav = rail();
+  // Below `sm` the rail is `hidden sm:flex`. jsdom loads no Tailwind, so the
+  // real `display:none` is applied here directly — a class would be ignored and
+  // the assertion would pass against a broken visibility check.
+  nav.style.display = "none";
+
+  const visible = Array.from(
+    dialog.querySelectorAll<HTMLElement>("button, input, select, a[href]"),
+  ).filter((el) => !nav.contains(el));
+  const first = visible[0];
+  const last = visible[visible.length - 1];
+
+  last.focus();
+  fireEvent.keyDown(last, { key: "Tab" });
+  // `display` does not inherit, so checking the button alone would report it
+  // visible and wrap onto a rail item nobody can see.
+  expect(nav.contains(document.activeElement)).toBe(false);
+  expect(document.activeElement).toBe(first);
+
+  fireEvent.keyDown(first, { key: "Tab", shiftKey: true });
+  expect(document.activeElement).toBe(last);
+});
+
+test("Esc that a nested overlay already handled does not close the dialog", () => {
+  render(<SettingsModal />);
+  const inner = screen.getByRole("button", { name: /close settings/i });
+  const claim = (e: KeyboardEvent) => {
+    if (e.key === "Escape") e.preventDefault();
+  };
+  inner.addEventListener("keydown", claim);
+
+  fireEvent.keyDown(inner, { key: "Escape" });
+  expect(useSettingsModalStore.getState().open).toBe(true);
+
+  inner.removeEventListener("keydown", claim);
+  fireEvent.keyDown(inner, { key: "Escape" });
+  expect(useSettingsModalStore.getState().open).toBe(false);
+});
+
+test("the page behind the dialog is inert, but live regions are not", () => {
+  const background = document.createElement("div");
+  const toasts = document.createElement("div");
+  toasts.setAttribute("role", "status");
+  document.body.append(background, toasts);
+
+  const { unmount } = render(<SettingsModal />);
+  expect(background).toHaveAttribute("inert");
+  expect(background).toHaveAttribute("aria-hidden", "true");
+  // Settings raises its own toasts; inerting them would silence the dialog.
+  expect(toasts).not.toHaveAttribute("inert");
+
+  unmount();
+  expect(background).not.toHaveAttribute("inert");
+  expect(background).not.toHaveAttribute("aria-hidden");
+
+  background.remove();
+  toasts.remove();
+});
+
+test("opening straight onto a named tab lands pushed, not on the rail list", () => {
+  useSettingsModalStore.setState({ open: true, activeTab: "model" });
+  render(<SettingsModal />);
+  // Below `sm` the rail is the root view; a deep link must push past it.
+  expect(rail().className).toContain("hidden");
+});
+
+test("opening with no tab lands on the rail list", () => {
+  render(<SettingsModal />);
+  expect(rail().className).not.toContain("hidden");
+});
+
+test("the rail's §9.4 width is encoded in one place", () => {
+  render(<SettingsModal />);
+  expect(rail().className.match(/sm:w-\[200px\]/g)).toHaveLength(1);
 });
