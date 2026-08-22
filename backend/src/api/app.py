@@ -39,6 +39,7 @@ from src.api.routes_system import router as system_router
 from src.api.routes_traces import router as traces_router
 from src.api.routes_trust import router as trust_router
 from src.api.routes_ui import router as ui_router
+from src.api.routes_units import router as units_router
 from src.api.routes_webhooks import router as webhooks_router
 from src.api.routes_workspace_settings import router as workspace_settings_router
 from src.api.routes_ws import router as ws_router
@@ -487,6 +488,10 @@ def create_app() -> FastAPI:
 
     # A2UI surface state REST endpoints
     app.include_router(ui_router, tags=["ui"])
+
+    # The view layer's typed Unit feed (spec step 3b). Replaces the surfaces
+    # endpoint above, which is deleted once the frontend stops reading it.
+    app.include_router(units_router, tags=["units"])
 
     # Surface detail modal tabs
     app.include_router(surface_detail_router, tags=["surface-detail"])
