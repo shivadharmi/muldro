@@ -11,7 +11,26 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from src.ui.contracts import A2UIComponent, SurfaceKind
+# The surface-kind taxonomy, inlined now that the component-tree module it used to
+# live beside is gone. It is wire vocabulary for rows already on disk, nothing more.
+SurfaceKind = Literal[
+    # System-managed (detail API exposed)
+    "run",  # unified execution run surface (replaces execution/plan/approval trio)
+    "summary",  # lightweight completion card emitted when a run finishes
+    "briefing",
+    "alert",
+    "recommendation",
+    "proactive_insight",
+    # The standing review queue for actions prepared on turns with no human present —
+    # the ONLY place a prepared action can be acted on.
+    "prepared_work",
+    # Agent-managed (inline children, no detail API)
+    "message",  # Presenter-authored rich response promoted to workspace feed
+    # Legacy kinds retained for rows already on disk. Nothing produces `plan` any
+    # more; `approval` is demoted-to-inline but its detail tabs are still used.
+    "plan",
+    "approval",
+]
 
 
 class AgentEnvelope(BaseModel):
@@ -242,7 +261,7 @@ class WorkspaceSurfacePush(BaseModel):
     detail modal and where to fetch each tab's content.
 
     The old ``children`` + ``WorkspaceSurfaceMetadata`` shape is removed —
-    grid cards render from SurfacePreview data, not A2UI component trees.
+    grid cards render from preview data, not component trees.
     """
 
     model_config = ConfigDict(extra="ignore", frozen=True)
@@ -250,8 +269,8 @@ class WorkspaceSurfacePush(BaseModel):
     type: Literal["surface"] = "surface"
     id: str
     kind: SurfaceKind
-    preview: Any  # SurfacePreview — imported at runtime to avoid circular deps
-    detail_config: Any | None = None  # DetailConfig — same reason
+    preview: Any  # untyped on the wire; this model is a legacy response shell
+    detail_config: Any | None = None  # same
     decision: str | None = None
     source_run_id: str | None = None
     response_preview: str | None = None
@@ -267,19 +286,6 @@ class WorkspaceSurfacePush(BaseModel):
     approval: dict | None = None
     results: dict | None = None
     surface_data: dict | None = None
-
-
-class SurfaceDataPayload(BaseModel):
-    """Presenter-authored rich content for a surface's detail view.
-
-    Each section is a full A2UIComponent tree — the frontend dispatches through
-    the existing A2UIRenderer. The A2UIComponent.type field is the discriminator
-    that routes to per-type property validation (see src/ui/component_properties.py).
-    """
-
-    model_config = ConfigDict(extra="ignore", frozen=True)
-
-    sections: list[A2UIComponent] = Field(default_factory=list)
 
 
 class SuggestedActionRef(BaseModel):
@@ -393,9 +399,8 @@ class StepState(BaseModel):
 #
 # ``completed_unverified``/``partially_completed`` are passed through unchanged —
 # the verification nuance now reaches the UI (frontend step-presentation.tsx renders
-# ✓? for completed_unverified and ⚠ for partially_completed; backend ui/units.py
-# step_list mirrors the same glyphs for the persisted run-detail Steps tab), so the
-# backend no longer collapses them into completed/failed.
+# ✓? for completed_unverified and ⚠ for partially_completed), so the backend no
+# longer collapses them into completed/failed.
 _STEP_STATUS_TO_UI: dict[str, str] = {
     "pending": "pending",
     "ready": "pending",

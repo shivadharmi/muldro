@@ -3,8 +3,8 @@
 Extracted from ``GraphExecutor`` (SVC-P1-3): the executor is a frozen god
 object, so its cohesive Redis/event-bus emission cluster lives here as an
 injected collaborator. This module owns the best-effort publishing of domain
-events, WebSocket run-progress, live A2UI ``SurfaceUpdate`` streaming (with a
-durable DB fallback), and the completion ``summary`` surface.
+events, WebSocket run-progress, and live ``SurfaceUpdate`` streaming (with a
+durable DB fallback).
 
 It is a leaf under ``src.services`` — it must never import ``graph_executor``.
 All datastore/transport dependencies are injected; nothing is reached back out
@@ -16,11 +16,7 @@ from __future__ import annotations
 import json
 import logging
 
-from sqlalchemy import select
-
 from src.config.settings import Settings
-from src.models.task_graph import TaskRun, TaskStep
-from src.services.execution_state import TERMINAL_SUCCESS
 
 logger = logging.getLogger(__name__)
 
@@ -242,126 +238,3 @@ class SurfaceEmitter:
                     await persist_db.commit()
         except Exception:
             logger.debug("Failed to persist surface update to DB", exc_info=True)
-
-    async def emit_summary_surface(
-        self,
-        run: TaskRun,
-        run_surface_id: str,
-    ) -> None:
-        """Emit a lightweight ``summary`` card on run completion.
-
-        The full ``run`` surface is archived (expires sooner) and this compact
-        card takes its place in the active workspace feed. The summary links
-        back to the archived run via ``source_run_id`` so detail tabs can
-        still fetch the full trace/steps/plan from the same row.
-        """
-        if not self._db_factory:
-            return
-
-        try:
-            from datetime import datetime, timedelta, timezone
-
-            from src.contracts import WorkspaceSurfacePush
-            from src.models.ui_state import UISurface
-            from src.ui.contracts import SurfaceMetric, SurfacePreview
-            from src.ui.renderer import build_detail_config
-
-            summary_id = f"summary_{run.run_id}"
-
-            step_count = 0
-            completed_count = 0
-            try:
-                async with self._db_factory() as db:
-                    step_rows = await db.execute(
-                        select(TaskStep).where(TaskStep.run_id == run.run_id)
-                    )
-                    steps = list(step_rows.scalars().all())
-                    step_count = len(steps)
-                    completed_count = sum(1 for s in steps if s.status in TERMINAL_SUCCESS)
-            except Exception:
-                logger.debug("Failed to count steps for summary surface", exc_info=True)
-
-            input_tokens = int(getattr(run, "input_tokens", 0) or 0)
-            output_tokens = int(getattr(run, "output_tokens", 0) or 0)
-            cost_usd = float(getattr(run, "cost_usd", 0.0) or 0.0)
-
-            metrics: list[SurfaceMetric] = [
-                SurfaceMetric(
-                    label="Steps",
-                    value=f"{completed_count}/{step_count}" if step_count else "0",
-                    variant="success" if run.status == "completed" else "warning",
-                ),
-            ]
-            if input_tokens or output_tokens:
-                metrics.append(
-                    SurfaceMetric(label="Tokens", value=f"{input_tokens + output_tokens:,}")
-                )
-            if cost_usd:
-                metrics.append(SurfaceMetric(label="Cost", value=f"${cost_usd:.4f}"))
-
-            title = "Run completed" if run.status == "completed" else f"Run {run.status}"
-            preview = SurfacePreview(
-                title=title,
-                subtitle=(run.error or {}).get("message") if run.status != "completed" else None,
-                status=run.status if run.status in ("completed", "failed") else "completed",
-                metrics=metrics,
-                tokens=(input_tokens + output_tokens) or None,
-                cost_usd=cost_usd if cost_usd else None,
-                updated_at=getattr(run, "completed_at", None) or getattr(run, "updated_at", None),
-            )
-
-            # Summary surfaces reuse the 'run' detail tabs so the user can
-            # drill into the archived run from the summary card.
-            detail_config = build_detail_config("run", run_surface_id)
-
-            surface = WorkspaceSurfacePush(
-                id=summary_id,
-                kind="summary",
-                preview=preview.model_dump(mode="json"),
-                detail_config=(detail_config.model_dump(mode="json") if detail_config else None),
-                source_run_id=run.run_id,
-                created_at=datetime.now(timezone.utc).isoformat(),
-            )
-
-            # Publish to WebSocket so the workspace feed updates live
-            if self._redis:
-                channel = f"muldro:a2ui:{run.user_id}"
-                await self._redis.publish(
-                    channel,
-                    json.dumps({"type": "surface", "surface": surface.model_dump(mode="json")}),
-                )
-            elif self._event_bus:
-                channel = f"muldro:a2ui:{run.user_id}"
-                await self._event_bus.publish_to_channel(
-                    channel,
-                    json.dumps({"type": "surface", "surface": surface.model_dump(mode="json")}),
-                )
-
-            # Persist the summary surface AND archive the run surface by
-            # shortening its TTL so it drops out of active-feed queries.
-            async with self._db_factory() as db:
-                db.add(
-                    UISurface(
-                        surface_id=summary_id,
-                        user_id=run.user_id,
-                        workspace_id=run.workspace_id,
-                        surface_type="summary",
-                        payload=surface.model_dump(mode="json"),
-                        preview=preview.model_dump(mode="json"),
-                        detail_config=(
-                            detail_config.model_dump(mode="json") if detail_config else None
-                        ),
-                        expires_at=datetime.now(timezone.utc) + timedelta(days=30),
-                    )
-                )
-                # Archive the live run surface: hide from active feed but
-                # keep the record for detail drill-downs.
-                run_row = await db.execute(
-                    select(UISurface).where(UISurface.surface_id == run_surface_id)
-                )
-                existing_run = run_row.scalar_one_or_none()
-                if existing_run:
-                    existing_run.expires_at = datetime.now(timezone.utc) + timedelta(hours=2)
-                await db.commit()
-        except Exception:
-            logger.debug("Failed to emit summary surface", exc_info=True)

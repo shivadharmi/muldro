@@ -98,7 +98,6 @@ def _build_runner(run, step, reauth, *, auth_output):
     emitter = MagicMock()
     emitter.emit_event = AsyncMock()
     emitter.emit_surface_update = AsyncMock()
-    emitter.emit_summary_surface = AsyncMock()
 
     trust_engine = MagicMock()
     trust_engine.evaluate = AsyncMock(return_value=_auto_decision())

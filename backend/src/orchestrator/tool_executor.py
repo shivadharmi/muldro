@@ -26,17 +26,18 @@ logger = logging.getLogger(__name__)
 # LLM-facing schemas in schemas.py deliberately omit them.
 _CONTEXT_ARGS = ("user_id", "workspace_id")
 
-# Pydantic v2 errors are verbose, and a malformed component tree yields one entry per bad
-# node plus a long `msg` naming every valid AnyComponent tag. Render only the first few and
-# say how many were dropped — the agent needs the first offending field, not the census.
-# (AnyComponent's `type` discriminator keeps an unknown tag to ONE error rather than one
-# per union member; the cap is for breadth of errors, not for union fan-out.)
+# Pydantic v2 errors are verbose: a malformed nested payload yields one entry per bad
+# node, and a tagged-union field adds a long `msg` naming every tag it would accept.
+# Render only the first few and say how many were dropped — the agent needs the first
+# offending field, not the census. (A `type` discriminator keeps an unknown tag to ONE
+# error rather than one per union member; the cap is for breadth of errors, not for
+# union fan-out.)
 #
 # The per-error cap is sized off a MEASUREMENT, because the longest message is also the
-# most actionable one: an unknown component tag produces exactly one error whose `msg` is
-# 260 chars and lists all 17 valid AnyComponent tags. At the old 100-char cap the agent
-# was told three tags and then cut mid-word, destroying the one thing that lets it repair
-# the call. 280 = 260 measured + room for a few more component types.
+# most actionable one: the worst case measured was a single error whose `msg` ran 260
+# chars enumerating the seventeen tags its union accepted. At the old 100-char cap the
+# agent was told three of them and then cut mid-word, destroying the one thing that lets
+# it repair the call. 280 = 260 measured + headroom.
 # The overall cap survives that intact: envelope (42) + loc (~12) + 260 + trailer (61) =
 # 375 for a single tag-list error, so 900 fits it whole with room for two neighbours,
 # while still bounding a broadly-malformed payload to ~225 tokens.

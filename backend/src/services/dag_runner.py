@@ -174,9 +174,6 @@ class DagRunner:
                             tokens=((run.input_tokens or 0) + (run.output_tokens or 0)) or None,
                             cost_usd=run.cost_usd if run.cost_usd else None,
                         )
-                        # Emit a lightweight summary card for the workspace
-                        # feed and archive the run surface.
-                        await self._emitter.emit_summary_surface(run, surface_id)
                     break
                 # If there are pending steps but none ready, we're blocked
                 failed = [s for s in all_steps if s.status == "failed"]
@@ -198,7 +195,6 @@ class DagRunner:
                             progress=f"{len(failed)} step(s) failed",
                             workspace_id=run.workspace_id,
                         )
-                        await self._emitter.emit_summary_surface(run, surface_id)
                     break
                 # Must be waiting for approval or external event
                 break

@@ -1009,14 +1009,6 @@ class GraphExecutor:
             workspace_id,
         )
 
-    async def _emit_summary_surface(
-        self,
-        run: TaskRun,
-        run_surface_id: str,
-    ) -> None:
-        """Forward to the SurfaceEmitter collaborator (SVC-P1-3)."""
-        await self._surface_emitter.emit_summary_surface(run, run_surface_id)
-
     @staticmethod
     def _build_graph_definition(tasks: list[PlanTask]) -> dict:
         """Facade → StepGraphStore.build_graph_definition."""
