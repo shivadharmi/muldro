@@ -1,14 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import {
-  Fragment,
-  useCallback,
-  useEffect,
-  useMemo,
-  useState,
-  type ReactNode,
-} from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useToast } from "@/components/ui/toast";
 import { errorToMessage } from "@/lib/api-error";
@@ -17,6 +10,7 @@ import { SearchIcon } from "../icons";
 import type { CredentialFields } from "../hooks/use-provider-credentials";
 import { useModelConfigContext } from "../model-config-context";
 import { ProviderCredentialForm } from "../providers/provider-credential-form";
+import { ProviderGroup } from "../providers/provider-group";
 import {
   buildEntries,
   dependentBindings,
@@ -29,23 +23,11 @@ import {
 } from "../providers/provider-filter";
 import { ProviderRow, ProviderRowSeparator } from "../providers/provider-row";
 import {
-  consequenceOf,
   RemoveConfirmation,
+  removalPrompt,
   useRowFocusRestore,
   type PendingRemoval,
 } from "../providers/remove-confirmation";
-
-/** §9.2 section header. */
-const SEC_H = "text-[11px] font-medium uppercase text-t-muted tracking-[.08em]";
-
-/** §9.3 neutral chip. Re-stated rather than imported: `Chip` is private to
- *  `provider-row.tsx`, and a count beside a group header is not a row slot —
- *  two tab-level siblings cross-importing a presentational primitive is a worse
- *  dependency than this duplication. `controls.ts` is its eventual home. */
-const COUNT_CHIP =
-  "inline-flex items-center h-[20px] px-[8px] rounded-full text-[11px] " +
-  "font-medium whitespace-nowrap shrink-0 bg-surface-3 text-t-tertiary " +
-  "tabular-nums";
 
 /** The row wrapper is focusable BY SCRIPT only: it is where focus returns after
  *  the removal confirmation unmounts, so that focus never falls to `<body>`
@@ -53,34 +35,6 @@ const COUNT_CHIP =
 const ROW_ANCHOR =
   "outline-none focus-visible:ring-1 focus-visible:ring-inset " +
   "focus-visible:ring-j-ring";
-
-function ProviderGroup({
-  id,
-  title,
-  count,
-  className = "",
-  children,
-}: {
-  id: string;
-  title: string;
-  count: number;
-  className?: string;
-  children: ReactNode;
-}) {
-  return (
-    <section aria-label={title} className={className}>
-      <div className="flex items-center gap-2 px-[2px] pb-[8px]">
-        <h3 className={SEC_H}>{title}</h3>
-        <span className={COUNT_CHIP} data-testid={`provider-count-${id}`}>
-          {count}
-        </span>
-      </div>
-      <div className="bg-surface-1 border border-b-secondary rounded-[var(--radius-lg)] overflow-hidden">
-        {children}
-      </div>
-    </section>
-  );
-}
 
 /**
  * The Providers tab: every model provider this workspace can call, its
@@ -97,12 +51,17 @@ function ProviderGroup({
  * sake of a form the founder navigated away from — the credential form already
  * clears its own secrets the moment the server holds them, and this is the same
  * rule applied to abandonment.
+ *
+ * Every removal is confirmed, breaking or not — see `removalPrompt`. This is the
+ * one surface where a stored API key is destroyed, and the panel asks rather
+ * than vetoes.
  */
 export function ProvidersTab() {
   const { addToast } = useToast();
   const { models, credentials } = useModelConfigContext();
   const { catalog, config, loading, load } = models;
 
+  const containerRef = useRef<HTMLDivElement>(null);
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<ProviderFilterValue>("all");
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -112,10 +71,14 @@ export function ProvidersTab() {
   // because a shared context cannot know which of its consumers is on screen to
   // be told. This tab IS on screen, and both calls share one promise — so this
   // is not a second request, it is the one place that observes the outcome. A
-  // failure resets the hook's guard, which is what makes the retry below work.
+  // failure resets the hook's guard, which is what makes the retry work.
+  const retryLoad = useCallback(
+    () => load().catch((err) => addToast(errorToMessage(err), "error")),
+    [load, addToast],
+  );
   useEffect(() => {
-    load().catch((err) => addToast(errorToMessage(err), "error"));
-  }, [load, addToast]);
+    void retryLoad();
+  }, [retryLoad]);
 
   const entries = useMemo(() => buildEntries(config, catalog), [config, catalog]);
   const visible = useMemo(() => filterEntries(entries, query), [entries, query]);
@@ -131,7 +94,7 @@ export function ProvidersTab() {
   const showConnected = filter !== "available" && connected.length > 0;
   const showAvailable = filter !== "connected" && available.length > 0;
 
-  const restoreFocusTo = useRowFocusRestore();
+  const restoreFocusTo = useRowFocusRestore(containerRef);
 
   const closeConfirmation = useCallback(
     (provider: string) => {
@@ -164,18 +127,35 @@ export function ProvidersTab() {
 
   const handleRemove = useCallback(
     (provider: string, name: string) => {
-      const bindings = dependentBindings(config, provider);
-      if (bindings.length === 0) {
-        // An open confirmation for a DIFFERENT provider is stale the moment this
-        // one deletes: clear it rather than leave it answering for a row whose
-        // neighbour just changed underneath it.
-        setPending(null);
-        void remove(provider, name);
-        return;
-      }
-      setPending({ provider, name, consequence: consequenceOf(name, bindings) });
+      const prompt = removalPrompt(name, dependentBindings(config, provider));
+      setPending({ provider, name, prompt });
     },
-    [config, remove],
+    [config],
+  );
+
+  /**
+   * A confirmation belongs to a ROW, so it must not outlive that row being
+   * filtered away. Left standing, `pending` survives the row's unmount and the
+   * panel REMOUNTS when the row returns — taking focus out of the search box
+   * mid-word, on the founder's own keystroke. Answered by the handlers that own
+   * the filters, against the NEXT values, rather than by storing a second truth
+   * about what is visible.
+   */
+  const dropPendingIfHidden = useCallback(
+    (nextQuery: string, nextFilter: ProviderFilterValue) => {
+      setPending((prev) => {
+        if (!prev) return prev;
+        const item = entries.find((e) => e.status.provider === prev.provider);
+        if (!item) return null;
+        const inGroup =
+          nextFilter === "all" ||
+          (nextFilter === "connected") === item.status.configured;
+        return inGroup && filterEntries([item], nextQuery).length > 0
+          ? prev
+          : null;
+      });
+    },
+    [entries],
   );
 
   const confirmRemoval = useCallback(() => {
@@ -269,7 +249,7 @@ export function ProvidersTab() {
     });
 
   return (
-    <div className="flex flex-col">
+    <div ref={containerRef} className="flex flex-col">
       {/* §2.2. An inference key is not an install: it grants Muldro no access
           to the founder's world and mints no capability. */}
       <p className="text-[12.5px] leading-[1.5] text-t-tertiary">
@@ -300,15 +280,50 @@ export function ProvidersTab() {
           <input
             type="search"
             value={query}
-            onChange={(event) => setQuery(event.target.value)}
+            onChange={(event) => {
+              setQuery(event.target.value);
+              dropPendingIfHidden(event.target.value, filter);
+            }}
             placeholder={`Search ${entries.length} providers`}
             autoComplete="off"
             spellCheck={false}
             className="flex-1 min-w-0 bg-transparent text-[15px] sm:text-[14px] text-t-primary placeholder:text-t-muted outline-none"
           />
         </label>
-        <ProviderFilter value={filter} onChange={setFilter} />
+        <ProviderFilter
+          value={filter}
+          onChange={(next) => {
+            setFilter(next);
+            dropPendingIfHidden(query, next);
+          }}
+        />
       </div>
+
+      {/* The catalog carries every display name and credential schema, so
+          without it `buildEntries` gives every provider a null entry and each
+          row renders as UNCATALOGUED — no Connect, no Edit, no Test, no form,
+          only Remove. Rows still render, so the empty state never appears and
+          its retry is unreachable: a tab where no key can be pasted, and one
+          transient toast as the only signal. The band is persistent and sits
+          above the groups for exactly that case. */}
+      {!loading && catalog === null && (
+        <div
+          role="status"
+          className="mb-[14px] flex flex-wrap items-center gap-3 rounded-[var(--radius-lg)] border border-j-warning/35 bg-j-warning-soft px-4 py-3"
+        >
+          <p className="flex-1 min-w-[200px] text-[12.5px] leading-[1.5] text-t-secondary">
+            Provider catalog unavailable — credentials cannot be edited until it
+            loads.
+          </p>
+          <button
+            type="button"
+            onClick={() => void retryLoad()}
+            className="shrink-0 text-[12.5px] font-medium text-j-primary hover:underline cursor-pointer"
+          >
+            Try again
+          </button>
+        </div>
+      )}
 
       {showConnected && (
         <ProviderGroup
@@ -327,32 +342,19 @@ export function ProvidersTab() {
         </ProviderGroup>
       )}
 
+      {/* `role="status"`: this container SWAPS its text as a load settles, and a
+          screen-reader user parked on "Loading providers…" would otherwise hear
+          nothing when it becomes a failure. The retry lives in the band above,
+          which renders whenever the catalog is missing — including here. */}
       {!showConnected && !showAvailable && (
-        <div className="py-6 text-center text-[12.5px] text-t-muted">
-          {loading ? (
-            "Loading providers…"
-          ) : config === null ? (
-            // A failed load is NOT an empty list. Say so, and offer the retry —
-            // the hook resets its guard on failure, so `load()` really refetches.
-            <>
-              <p>Providers could not be loaded.</p>
-              <button
-                type="button"
-                onClick={() =>
-                  void load().catch((err) =>
-                    addToast(errorToMessage(err), "error"),
-                  )
-                }
-                className="mt-2 text-[12.5px] font-medium text-j-primary hover:underline cursor-pointer"
-              >
-                Try again
-              </button>
-            </>
-          ) : entries.length === 0 ? (
-            "No providers available."
-          ) : (
-            "No providers match."
-          )}
+        <div role="status" className="py-6 text-center text-[12.5px] text-t-muted">
+          {loading
+            ? "Loading providers…"
+            : config === null
+              ? "Providers could not be loaded."
+              : entries.length === 0
+                ? "No providers available."
+                : "No providers match."}
         </div>
       )}
 

@@ -7,8 +7,11 @@ import type {
   ProviderStatus,
 } from "@/lib/types";
 
-/** Shared fixtures for the Providers tab's two test files. Every export is a
- *  factory or is cloned at use, so one test cannot reach another through them. */
+/** Shared fixtures for the Providers tab's two test files.
+ *
+ *  Every export is a FACTORY returning a fresh graph. A shared const would be
+ *  true-by-convention only: the first test that pushes onto `config.tiers` would
+ *  leak into every other file importing it, and nothing would say so. */
 
 const statusDefaults = {
   base_url: null,
@@ -81,51 +84,51 @@ function catalogModel(
   };
 }
 
-export const catalog: ModelCatalog = {
-  providers: [
-    catalogProvider("anthropic", "Anthropic", "api_key", [
-      field("api_key", "Anthropic API key", "secret"),
-    ]),
-    catalogProvider("openai", "OpenAI", "api_key", [
-      field("api_key", "OpenAI API key", "secret"),
-    ]),
-    catalogProvider("ollama", "Ollama", "keyless_base_url", [
-      field("base_url", "Ollama base URL", "url"),
-    ]),
-  ],
-  models: [
-    catalogModel("anthropic", "claude-sonnet-4-6", "Claude Sonnet 4.6"),
-    catalogModel("openai", "gpt-5", "GPT-5"),
-  ],
-  agents: [{ name: "planner", display_name: "Planner", tier: "reasoning" }],
-};
+export function makeCatalog(): ModelCatalog {
+  return {
+    providers: [
+      catalogProvider("anthropic", "Anthropic", "api_key", [
+        field("api_key", "Anthropic API key", "secret"),
+      ]),
+      catalogProvider("openai", "OpenAI", "api_key", [
+        field("api_key", "OpenAI API key", "secret"),
+      ]),
+      catalogProvider("ollama", "Ollama", "keyless_base_url", [
+        field("base_url", "Ollama base URL", "url"),
+      ]),
+    ],
+    models: [
+      catalogModel("anthropic", "claude-sonnet-4-6", "Claude Sonnet 4.6"),
+      catalogModel("openai", "gpt-5", "GPT-5"),
+    ],
+    agents: [{ name: "planner", display_name: "Planner", tier: "reasoning" }],
+  };
+}
 
 /** Only the `fast` tier is bound, and it is bound to OpenAI — so OpenAI has a
  *  dependent binding and Anthropic deliberately has none. */
-export const config: ModelConfig = {
-  tiers: [
-    {
-      scope_type: "tier",
-      scope_key: "fast",
-      provider: "openai",
-      model_id: "gpt-5",
-      effort: "low",
-      max_tokens: 2000,
-      temperature: null,
-    },
-  ],
-  agent_overrides: [],
-  providers: [
-    connected("anthropic"),
-    connected("openai"),
-    notConnected("ollama"),
-    notConnected("legacy_vendor", false),
-  ],
-  warnings: [],
-};
-
-export function deepClone<T>(value: T): T {
-  return JSON.parse(JSON.stringify(value)) as T;
+export function makeConfig(): ModelConfig {
+  return {
+    tiers: [
+      {
+        scope_type: "tier",
+        scope_key: "fast",
+        provider: "openai",
+        model_id: "gpt-5",
+        effort: "low",
+        max_tokens: 2000,
+        temperature: null,
+      },
+    ],
+    agent_overrides: [],
+    providers: [
+      connected("anthropic"),
+      connected("openai"),
+      notConnected("ollama"),
+      notConnected("legacy_vendor", false),
+    ],
+    warnings: [],
+  };
 }
 
 /** The row wrapper focus returns to, by provider slug. */

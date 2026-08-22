@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { test, expect, vi, beforeEach } from "vitest";
 
@@ -16,10 +16,9 @@ vi.mock("@/lib/api", () => ({
 
 import { ProvidersTab } from "./providers-tab";
 import {
-  catalog,
-  config,
   connected,
-  deepClone,
+  makeCatalog,
+  makeConfig,
   notConnected,
   rowAnchor,
 } from "./providers-tab-fixtures";
@@ -32,8 +31,8 @@ import {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.mocked(fetchModelCatalog).mockResolvedValue(deepClone(catalog));
-  vi.mocked(fetchModelConfig).mockResolvedValue(deepClone(config));
+  vi.mocked(fetchModelCatalog).mockResolvedValue(makeCatalog());
+  vi.mocked(fetchModelConfig).mockResolvedValue(makeConfig());
 });
 
 async function renderTab() {
@@ -101,7 +100,7 @@ test("focus is not lost when the confirmation is confirmed", async () => {
   await renderTab();
   // Only the post-delete refetch sees OpenAI disconnected.
   vi.mocked(fetchModelConfig).mockResolvedValue({
-    ...deepClone(config),
+    ...makeConfig(),
     providers: [
       connected("anthropic"),
       notConnected("openai"),
@@ -142,25 +141,37 @@ test("the confirmation can be declined without deleting", async () => {
   expect(deleteProviderKey).not.toHaveBeenCalled();
 });
 
-test("Remove does not block a provider nothing depends on", async () => {
+// Every removal is confirmed. A key with no dependent binding is still
+// destroyed by that click and cannot be read back — only the sentence differs.
+test("a provider nothing depends on is confirmed in plainer words", async () => {
   deleteResolves("anthropic");
   await renderTab();
 
   await userEvent.click(screen.getByRole("button", { name: "Remove Anthropic" }));
+  expect(deleteProviderKey).not.toHaveBeenCalled();
+  const text = screen.getByRole("alertdialog").textContent ?? "";
+  expect(text).toContain("Remove the Anthropic key?");
+  expect(text).not.toContain("breaks");
+
+  await userEvent.click(screen.getByRole("button", { name: "Remove anyway" }));
   await waitFor(() => expect(deleteProviderKey).toHaveBeenCalledWith("anthropic"));
   expect(screen.queryByRole("alertdialog")).toBeNull();
 });
 
-// A banner still standing for a row whose neighbour just deleted is answering
-// for a screen that no longer exists.
-test("an open confirmation is cleared by a dependency-free removal elsewhere", async () => {
-  deleteResolves("anthropic");
+// One confirmation at a time, and it belongs to the row it is beneath — asking
+// about a second provider MOVES it rather than leaving two questions open.
+test("a second Remove moves the confirmation to that row", async () => {
   await renderTab();
 
   await userEvent.click(screen.getByRole("button", { name: "Remove OpenAI" }));
   await userEvent.click(screen.getByRole("button", { name: "Remove Anthropic" }));
-  await waitFor(() => expect(deleteProviderKey).toHaveBeenCalledWith("anthropic"));
-  expect(screen.queryByRole("alertdialog")).toBeNull();
+
+  const dialogs = screen.getAllByRole("alertdialog");
+  expect(dialogs).toHaveLength(1);
+  expect(dialogs[0].textContent).toContain("Remove the Anthropic key?");
+  const position = rowAnchor("anthropic").compareDocumentPosition(dialogs[0]);
+  expect(position & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(deleteProviderKey).not.toHaveBeenCalled();
 });
 
 // The post-delete truth still gets reported, even though the confirmation was
@@ -181,10 +192,38 @@ test("orphaned bindings reported by the delete are surfaced", async () => {
   await renderTab();
 
   await userEvent.click(screen.getByRole("button", { name: "Remove Anthropic" }));
+  await userEvent.click(screen.getByRole("button", { name: "Remove anyway" }));
   await waitFor(() =>
     expect(addToast).toHaveBeenCalledWith(
       expect.stringContaining("The balanced tier has no configured provider."),
       "warning",
     ),
   );
+});
+
+// The half of the restore that protects the founder who moved on. Without this,
+// a "simplification" back to an unconditional `.focus()` passes everything else.
+test("a slow delete does not steal focus back from where the founder moved", async () => {
+  let settle: (() => void) | undefined;
+  vi.mocked(deleteProviderKey).mockReturnValue(
+    new Promise((resolve) => {
+      settle = () =>
+        resolve({ status: notConnected("openai"), orphaned_bindings: [] });
+    }),
+  );
+  await renderTab();
+
+  await userEvent.click(screen.getByRole("button", { name: "Remove OpenAI" }));
+  await userEvent.click(screen.getByRole("button", { name: "Remove anyway" }));
+
+  // The founder walks off to another row while the delete is still in flight.
+  const elsewhere = screen.getByRole("button", { name: "Test Anthropic" });
+  elsewhere.focus();
+  expect(document.activeElement).toBe(elsewhere);
+
+  await act(async () => {
+    settle?.();
+  });
+  await waitFor(() => expect(deleteProviderKey).toHaveBeenCalledWith("openai"));
+  expect(document.activeElement).toBe(elsewhere);
 });

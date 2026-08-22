@@ -15,14 +15,14 @@ vi.mock("@/lib/api", () => ({
 }));
 
 import { ProvidersTab } from "./providers-tab";
-import { catalog, config, deepClone } from "./providers-tab-fixtures";
+import { makeCatalog, makeConfig } from "./providers-tab-fixtures";
 import { ModelConfigProvider } from "../model-config-context";
 import { fetchModelCatalog, fetchModelConfig } from "@/lib/api";
 
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.mocked(fetchModelCatalog).mockResolvedValue(deepClone(catalog));
-  vi.mocked(fetchModelConfig).mockResolvedValue(deepClone(config));
+  vi.mocked(fetchModelCatalog).mockResolvedValue(makeCatalog());
+  vi.mocked(fetchModelConfig).mockResolvedValue(makeConfig());
 });
 
 function renderBare() {
@@ -130,8 +130,79 @@ test("a failed load is reported, not left spinning, and can be retried", async (
   expect(await screen.findByText("Providers could not be loaded.")).toBeTruthy();
   expect(screen.queryByText("Loading providers…")).toBeNull();
 
-  vi.mocked(fetchModelCatalog).mockResolvedValue(deepClone(catalog));
-  vi.mocked(fetchModelConfig).mockResolvedValue(deepClone(config));
+  vi.mocked(fetchModelCatalog).mockResolvedValue(makeCatalog());
+  vi.mocked(fetchModelConfig).mockResolvedValue(makeConfig());
   await userEvent.click(screen.getByRole("button", { name: "Try again" }));
   expect(await screen.findByRole("button", { name: "Edit Anthropic" })).toBeTruthy();
+});
+
+// The catalog carries every credential schema, so without it each row renders
+// as uncatalogued — no Connect, no Edit, no form. Rows still render, so the
+// empty state (and the retry inside it) never appears.
+test("a catalog-only failure still shows a persistent retry", async () => {
+  vi.mocked(fetchModelCatalog).mockRejectedValue(new Error("catalog 500"));
+  renderBare();
+
+  expect(
+    await screen.findByText(/Provider catalog unavailable/),
+  ).toBeTruthy();
+  // Rows DID render from the eagerly-fetched config, so the empty state is not
+  // on screen and cannot be what carries the recovery.
+  expect(screen.getByRole("button", { name: "Remove anthropic" })).toBeTruthy();
+  expect(screen.queryByText("Providers could not be loaded.")).toBeNull();
+
+  vi.mocked(fetchModelCatalog).mockResolvedValue(makeCatalog());
+  await userEvent.click(screen.getByRole("button", { name: "Try again" }));
+  expect(await screen.findByRole("button", { name: "Edit Anthropic" })).toBeTruthy();
+  expect(screen.queryByText(/Provider catalog unavailable/)).toBeNull();
+});
+
+test("the band is absent once the catalog is loaded", async () => {
+  await renderTab();
+  expect(screen.queryByText(/Provider catalog unavailable/)).toBeNull();
+});
+
+// `pending` outliving its row meant the panel REMOUNTED when the row came back,
+// taking focus out of the search box on the founder's own keystroke.
+test("filtering a pending row away drops the confirmation and keeps focus", async () => {
+  await renderTab();
+  await userEvent.click(screen.getByRole("button", { name: "Remove OpenAI" }));
+  expect(screen.getByRole("alertdialog")).toBeTruthy();
+
+  const search = screen.getByRole("searchbox");
+  await userEvent.click(search);
+  await userEvent.type(search, "anth");
+
+  expect(screen.queryByRole("alertdialog")).toBeNull();
+  expect(document.activeElement).toBe(search);
+
+  // The row returns; the confirmation must NOT come back with it.
+  await userEvent.clear(search);
+  expect(screen.getByRole("button", { name: "Remove OpenAI" })).toBeTruthy();
+  expect(screen.queryByRole("alertdialog")).toBeNull();
+  expect(document.activeElement).toBe(search);
+});
+
+test("switching the segmented filter drops a hidden confirmation", async () => {
+  await renderTab();
+  await userEvent.click(screen.getByRole("button", { name: "Remove OpenAI" }));
+
+  await userEvent.click(screen.getByRole("button", { name: "Available" }));
+  expect(screen.queryByRole("alertdialog")).toBeNull();
+
+  await userEvent.click(screen.getByRole("button", { name: "Connected" }));
+  expect(screen.queryByRole("alertdialog")).toBeNull();
+});
+
+// A filter that leaves the row on screen has no reason to discard the answer
+// the founder is part-way through giving.
+test("a confirmation survives a filter change that keeps its row", async () => {
+  await renderTab();
+  await userEvent.click(screen.getByRole("button", { name: "Remove OpenAI" }));
+
+  await userEvent.click(screen.getByRole("button", { name: "Connected" }));
+  expect(screen.getByRole("alertdialog")).toBeTruthy();
+
+  await userEvent.type(screen.getByRole("searchbox"), "openai");
+  expect(screen.getByRole("alertdialog")).toBeTruthy();
 });

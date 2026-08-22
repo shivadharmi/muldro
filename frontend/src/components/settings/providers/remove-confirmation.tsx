@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 
 import type { ModelBinding } from "@/lib/types";
 
@@ -15,8 +15,15 @@ import type { ModelBinding } from "@/lib/types";
  *
  * The target is held in a ref and read by an effect keyed on a tick, so a
  * restore never schedules a render whose only purpose is to clear a flag.
+ *
+ * `scopeRef` is the owning tab's container: the lookup is scoped to it rather
+ * than run against `document`, because the settings modal and the standalone
+ * settings page can each mount a Providers tab, and a document-wide query would
+ * restore focus into whichever copy the DOM happened to yield first.
  */
-export function useRowFocusRestore(): (provider: string) => void {
+export function useRowFocusRestore(
+  scopeRef: RefObject<HTMLElement | null>,
+): (provider: string) => void {
   const targetRef = useRef<string | null>(null);
   const [tick, setTick] = useState(0);
 
@@ -31,10 +38,15 @@ export function useRowFocusRestore(): (provider: string) => void {
     if (!provider || (active && active !== document.body && active.isConnected)) {
       return;
     }
-    document
-      .querySelector<HTMLElement>(`[data-provider-row="${provider}"]`)
+    // `CSS.escape`: a provider slug is server data, and an uncatalogued one is
+    // whatever was stored — a `"` or `\` in it would make this selector throw
+    // a SyntaxError from inside an effect, which React escalates.
+    scopeRef.current
+      ?.querySelector<HTMLElement>(
+        `[data-provider-row="${CSS.escape(provider)}"]`,
+      )
       ?.focus();
-  }, [tick]);
+  }, [scopeRef, tick]);
 
   return useCallback((provider: string) => {
     targetRef.current = provider;
@@ -63,14 +75,12 @@ const GHOST_MD =
 export interface PendingRemoval {
   provider: string;
   name: string;
-  consequence: string;
+  /** The whole question, built by {@link removalPrompt}. */
+  prompt: string;
 }
 
 /** "Removing OpenAI breaks the fast tier and the planner override." */
-export function consequenceOf(
-  name: string,
-  bindings: readonly ModelBinding[],
-): string {
+function consequenceOf(name: string, bindings: readonly ModelBinding[]): string {
   const parts = bindings.map(
     (b) => `the ${b.scope_key} ${b.scope_type === "tier" ? "tier" : "override"}`,
   );
@@ -79,6 +89,25 @@ export function consequenceOf(
       ? (parts[0] ?? "")
       : `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`;
   return `Removing ${name} breaks ${listed}.`;
+}
+
+/**
+ * What this removal costs, in the founder's terms.
+ *
+ * Two texts, because two different things are true. With dependent bindings the
+ * cost is downstream and needs naming. With none, the cost is still real — a
+ * stored key is destroyed and a workspace credential cannot be read back — so
+ * the question is asked anyway, in one plain sentence rather than a warning
+ * about consequences that do not exist.
+ */
+export function removalPrompt(
+  name: string,
+  bindings: readonly ModelBinding[],
+): string {
+  if (bindings.length === 0) {
+    return `Remove the ${name} key? You'll need to paste it again to reconnect.`;
+  }
+  return `${consequenceOf(name, bindings)} Those bindings fail until you point them at a connected provider.`;
 }
 
 export interface RemoveConfirmationProps {
@@ -103,11 +132,18 @@ export interface RemoveConfirmationProps {
  * `alertdialog`, not `alert`: `alert` is a passive live region that announces
  * text and never moves focus, which is precisely the failure above. An
  * alertdialog owns focus, so this component takes it on mount, answers Escape,
- * and the tab returns it to the row on dismiss.
+ * and the tab returns it to the row on dismiss. It is the least-bad of the two:
+ * the role does promise modality this panel deliberately does not have — it
+ * takes focus and answers Escape, but does not trap Tab — so an AT that enters
+ * dialog-reading mode will walk out of it into the next row. Trapping Tab inside
+ * a panel that is one item in a list would be the worse trade.
  *
- * It is a confirmation, never a block. A credential the founder cannot revoke is
- * a security problem — the dependent bindings buy a sentence and a second click,
- * not a veto.
+ * It asks on EVERY removal, not only a breaking one. A key with no dependent
+ * binding is still destroyed by that click and cannot be read back, so the
+ * question is the same question; only the sentence differs (see
+ * {@link removalPrompt}). Asking is not blocking: `Remove anyway` is one click
+ * away in both cases, because a credential the founder cannot revoke is a
+ * security problem.
  */
 export function RemoveConfirmation({
   pending,
@@ -146,8 +182,7 @@ export function RemoveConfirmation({
         id={labelId}
         className="flex-1 min-w-[200px] text-[12.5px] leading-[1.5] text-t-secondary"
       >
-        {pending.consequence} Those bindings fail until you point them at a
-        connected provider.
+        {pending.prompt}
       </p>
       <div className="flex items-center gap-[7px] shrink-0">
         <button
