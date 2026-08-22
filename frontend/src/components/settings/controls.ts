@@ -16,6 +16,16 @@
  * one call site. It states §9.10's 44px floor itself.
  */
 
+/**
+ * **No focus styles here, and none in any caller.** `globals.css`'s
+ * `:focus-visible { outline: 2px solid }` is emitted UNLAYERED while every
+ * Tailwind utility is emitted inside `@layer utilities`, and an unlayered
+ * normal declaration beats every layered one whatever its specificity. So a
+ * `focus-visible:outline-none` on a control suppresses nothing, and a
+ * `focus-visible:ring-*` beside it is a second indicator in a second colour.
+ * The note over that rule carries the full reasoning.
+ */
+
 /** §9.3 `ctl` metrics. 44px/15px/12px below `sm` (the touch-target minimum),
  *  36px/14px/10px above. Geometry only — no colour, because each state variant
  *  below replaces a different part of the palette. */

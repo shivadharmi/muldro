@@ -64,7 +64,7 @@ export function SpendingTab() {
                   step="0.01"
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
-                  className="w-32 rounded-[var(--radius-md)] bg-surface-2 border border-b-secondary px-3 py-2 text-sm text-t-primary focus:outline-none focus:ring-1 focus:ring-j-ring transition-colors"
+                  className="w-32 rounded-[var(--radius-md)] bg-surface-2 border border-b-secondary px-3 py-2 text-sm text-t-primary transition-colors"
                   autoFocus
                 />
                 <button

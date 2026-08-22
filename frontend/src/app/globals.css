@@ -223,6 +223,19 @@ body {
 }
 
 /* ── Focus ring ────────────────────────────────────────────────── */
+/* The ONE focus indicator on the surface. Do not hand-roll a second one, and do
+   not try to suppress this one from a component.
+
+   This rule is UNLAYERED. Tailwind emits its utilities inside `@layer utilities`,
+   and an unlayered normal declaration beats every layered one regardless of
+   specificity — so `focus-visible:outline-none` in a className has never
+   suppressed anything in this codebase, and a `focus-visible:ring-*` beside it
+   renders as a SECOND indicator in a second colour. Three settings controls
+   carried exactly that pair for months (the mobile back and close controls, and
+   every rail row) and drew two rings.
+
+   None of that is visible in the source; it only appears in the compiled
+   stylesheet, which is why it is written down here. */
 :focus-visible {
   outline: 2px solid var(--muldro-primary);
   outline-offset: 2px;

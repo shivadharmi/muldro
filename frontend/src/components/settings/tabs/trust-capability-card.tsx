@@ -122,7 +122,7 @@ export function TrustCapabilityCard({
                 onCeilingChange(entry.capability, e.target.value)
               }
               disabled={ceilingDisabled}
-              className="text-xs rounded-[var(--radius-md)] bg-surface-2 border border-b-secondary px-2.5 py-1.5 text-t-primary focus:outline-none focus:ring-1 focus:ring-j-ring disabled:opacity-50 cursor-pointer"
+              className="text-xs rounded-[var(--radius-md)] bg-surface-2 border border-b-secondary px-2.5 py-1.5 text-t-primary disabled:opacity-50 cursor-pointer"
             >
               {CEILING_OPTIONS.map((opt) => (
                 <option key={opt.value} value={opt.value}>

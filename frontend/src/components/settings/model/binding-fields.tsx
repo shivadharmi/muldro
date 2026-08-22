@@ -198,6 +198,14 @@ export function BindingFields({
         className="col-span-2 sm:col-span-1"
       >
         {({ id, labelId }) => (
+          // `aria-haspopup="dialog"` and NOTHING else. `aria-expanded` and
+          // `aria-controls` belong to the disclosure and combobox patterns,
+          // where the popup is a persistent sibling this control owns; the
+          // picker is a MODAL dialog mounted only while open, so `aria-controls`
+          // would name an element that does not exist for all but a moment, and
+          // `aria-expanded` would report a state this component is not given.
+          // The combobox semantics live where the combobox is — on the picker's
+          // own search field.
           <button
             id={id}
             type="button"

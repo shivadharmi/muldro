@@ -9,14 +9,21 @@
  * that only fails at run time, silently, as a focus that goes nowhere.
  */
 
-/** The row wrapper is focusable BY SCRIPT only: it is where focus returns after
- *  the removal confirmation unmounts, and where a founder sent from the Model
- *  tab lands, so that focus never falls to `<body>` inside a focus-trapped
- *  modal. */
-export const ROW_ANCHOR =
-  "outline-none focus-visible:ring-1 focus-visible:ring-inset " +
-  "focus-visible:ring-j-ring";
-
+/**
+ * The row wrapper is focusable BY SCRIPT only: it is where focus returns after
+ * the removal confirmation unmounts, and where a founder sent from the Model
+ * tab lands, so that focus never falls to `<body>` inside a focus-trapped
+ * modal.
+ *
+ * It carries no focus classes of its own. It used to wear
+ * `outline-none focus-visible:ring-1 focus-visible:ring-inset ring-j-ring`, and
+ * both halves of that were wrong: Tailwind emits its utilities inside
+ * `@layer utilities` while `globals.css`'s `:focus-visible` rule is UNLAYERED,
+ * and an unlayered normal declaration beats every layered one whatever its
+ * specificity. So the `outline-none` never suppressed anything, and the ring
+ * was a SECOND indicator in a second colour drawn over the global one. See the
+ * note over that rule in `globals.css`.
+ */
 const ROW_ANCHOR_ATTR = "data-provider-row";
 
 /** Spread onto the row wrapper. A function rather than a literal in the JSX so

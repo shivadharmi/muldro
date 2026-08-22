@@ -8,7 +8,7 @@ import { ProviderCredentialForm } from "./provider-credential-form";
 import type { ProviderEntry } from "./provider-entries";
 import { ProviderRow, ProviderRowSeparator } from "./provider-row";
 import { RemoveConfirmation, type PendingRemoval } from "./remove-confirmation";
-import { ROW_ANCHOR, rowAnchorAttrs } from "./row-anchor";
+import { rowAnchorAttrs } from "./row-anchor";
 
 export interface ProviderListProps {
   /** The rows to render, already filtered and grouped by the tab. */
@@ -67,7 +67,7 @@ export function ProviderList({
         return (
           <Fragment key={provider}>
             {index > 0 && <ProviderRowSeparator />}
-            <div {...rowAnchorAttrs(provider)} tabIndex={-1} className={ROW_ANCHOR}>
+            <div {...rowAnchorAttrs(provider)} tabIndex={-1}>
               <ProviderRow
                 status={status}
                 catalog={entry}

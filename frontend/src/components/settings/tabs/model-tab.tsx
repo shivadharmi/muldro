@@ -201,6 +201,20 @@ export function ModelTab() {
    * with a reason nobody asked for — would be an answer to a question the
    * founder did not ask.
    */
+  /**
+   * Shutting the picker. Stable, because the picker registers its Escape and
+   * arrow-key listener on `document` in a `useEffect` keyed on `onClose` — an
+   * inline arrow here re-created it on every render of this tab, so that
+   * listener was torn down and re-added each time.
+   *
+   * It was never a correctness bug: the listener is registered in the CAPTURE
+   * phase, so it beats the shell's bubble-phase Escape whatever the
+   * registration order. Which is exactly why it needed naming rather than
+   * leaving — the cost of getting this wrong is invisible until the day the
+   * phases match.
+   */
+  const closePicker = useCallback(() => setPicker(null), []);
+
   const browseProviders = useCallback(() => {
     setPicker(null);
     setActiveTab("providers");
@@ -346,7 +360,7 @@ export function ModelTab() {
         providers={catalogProviders}
         providerStatuses={providerStatuses}
         onSelect={chooseModel}
-        onClose={() => setPicker(null)}
+        onClose={closePicker}
         onBrowseProviders={browseProviders}
       />
     </>

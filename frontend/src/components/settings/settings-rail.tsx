@@ -173,7 +173,7 @@ export const SettingsRail = memo(function SettingsRail({
             type="button"
             onClick={() => onSelect(tab.key)}
             aria-current={isActive ? "true" : undefined}
-            className={`flex items-center gap-[10px] text-left rounded-[8px] px-[12px] py-[7px] min-h-[44px] sm:min-h-0 text-[13px] whitespace-nowrap transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-j-ring ${
+            className={`flex items-center gap-[10px] text-left rounded-[8px] px-[12px] py-[7px] min-h-[44px] sm:min-h-0 text-[13px] whitespace-nowrap transition-colors cursor-pointer ${
               isActive
                 ? "bg-j-primary-soft text-j-primary font-medium"
                 : "text-t-tertiary hover:text-t-primary hover:bg-surface-2"
