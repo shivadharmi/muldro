@@ -8,10 +8,11 @@ being duplicated or forcing the two test modules to import each other).
 """
 
 import asyncio
+import contextlib
 from unittest.mock import MagicMock
 
 from fastapi.testclient import TestClient
-from sqlalchemy import delete
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 from ulid import ULID
@@ -24,8 +25,10 @@ from src.api.deps import (
     get_session,
 )
 from src.config.settings import get_settings
+from src.models.model_binding import ModelBinding
 from src.models.provider_credential import ProviderCredential
 from src.models.users import User, Workspace
+from src.services.model_config_registry import DEFAULT_TIER_BINDINGS
 from tests.conftest import TEST_USER_ID, TEST_WORKSPACE_ID
 
 
@@ -142,3 +145,86 @@ def _delete_ws_credentials(factory, ws: str):
             await db.commit()
 
     asyncio.run(_cleanup())
+
+
+def _binding_rows(bindings):
+    """The 5-tuple shape of DEFAULT_TIER_BINDINGS -> ModelBinding kwargs."""
+    return [
+        {
+            "scope_type": "tier",
+            "scope_key": scope_key,
+            "provider": provider,
+            "model_id": model_id,
+            "effort": effort,
+            "max_tokens": max_tokens,
+            "enabled": True,
+        }
+        for scope_key, provider, model_id, effort, max_tokens in bindings
+    ]
+
+
+async def _snapshot_deployment_defaults(factory):
+    async with factory() as db:
+        rows = (
+            (await db.execute(select(ModelBinding).where(ModelBinding.workspace_id.is_(None))))
+            .scalars()
+            .all()
+        )
+        return [
+            {
+                "scope_type": r.scope_type,
+                "scope_key": r.scope_key,
+                "provider": r.provider,
+                "model_id": r.model_id,
+                "effort": r.effort,
+                "max_tokens": r.max_tokens,
+                "temperature": r.temperature,
+                "params": r.params,
+                "enabled": r.enabled,
+            }
+            for r in rows
+        ]
+
+
+async def _install_deployment_defaults(factory, rows):
+    async with factory() as db:
+        await db.execute(delete(ModelBinding).where(ModelBinding.workspace_id.is_(None)))
+        for row in rows:
+            db.add(ModelBinding(workspace_id=None, **row))
+        await db.commit()
+
+
+@contextlib.contextmanager
+def pinned_deployment_defaults(factory, bindings=DEFAULT_TIER_BINDINGS):
+    """Own the NULL-workspace tier bindings for the duration of one test.
+
+    Deployment defaults are shared, developer-mutable state, and nothing else in this
+    module scopes them: `_seed_ws` gives each test its own workspace and
+    `_delete_ws_credentials` cleans up after it, but NULL-workspace rows sit outside
+    both. `seed_defaults()` only fills gaps -- it never corrects a row that already
+    exists -- so a developer who points their own deployment at another provider
+    silently turns red every assertion that an untouched tier "falls through to the
+    deployment default", and every count of which bindings a revoked credential
+    orphans. Those tests were reading state they never owned.
+
+    Snapshot the developer's rows, install `bindings` (DEFAULT_TIER_BINDINGS -- the one
+    definition, not a second copy of the model ids -- or `[]` for a test that needs to
+    watch the seeder fill an empty slate), and restore the originals on the way out.
+    """
+    original = asyncio.run(_snapshot_deployment_defaults(factory))
+    asyncio.run(_install_deployment_defaults(factory, _binding_rows(bindings)))
+    try:
+        yield
+    finally:
+        asyncio.run(_install_deployment_defaults(factory, original))
+
+
+@contextlib.asynccontextmanager
+async def pinned_deployment_defaults_async(factory, bindings=DEFAULT_TIER_BINDINGS):
+    """Async form of `pinned_deployment_defaults`, for tests already inside a loop."""
+    original = await _snapshot_deployment_defaults(factory)
+    await _install_deployment_defaults(factory, _binding_rows(bindings))
+    try:
+        yield
+    finally:
+        await _install_deployment_defaults(factory, original)

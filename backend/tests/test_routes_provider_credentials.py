@@ -20,6 +20,7 @@ from tests.helpers.model_config import (
     _use_test_key,
     _ws_app,
     _ws_factory,
+    pinned_deployment_defaults,
 )
 
 
@@ -487,7 +488,7 @@ def test_delete_credential_reports_what_it_breaks_and_still_deletes(monkeypatch)
 
     try:
         app = _ws_app(factory, ws)
-        with TestClient(app) as c:
+        with pinned_deployment_defaults(factory), TestClient(app) as c:
             c.put("/v1/providers/openai/credentials", json={"api_key": "sk-x"})
             c.put(
                 "/v1/model-config",
@@ -557,7 +558,7 @@ def test_delete_reports_only_what_this_revoke_broke(monkeypatch):
 
     try:
         app = _ws_app(factory, ws)
-        with TestClient(app) as c:
+        with pinned_deployment_defaults(factory), TestClient(app) as c:
             c.put("/v1/providers/openai/credentials", json={"api_key": "sk-x"})
             c.put(
                 "/v1/model-config",

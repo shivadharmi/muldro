@@ -34,6 +34,7 @@ from tests.helpers.model_config import (
     _seed_ws,
     _ws_app,
     _ws_factory,
+    pinned_deployment_defaults,
 )
 
 
@@ -56,7 +57,7 @@ def test_put_then_get_model_config():
     app.dependency_overrides[get_session] = _override
 
     try:
-        with TestClient(app) as c:
+        with pinned_deployment_defaults(factory), TestClient(app) as c:
             put = c.put(
                 "/v1/model-config",
                 json={
