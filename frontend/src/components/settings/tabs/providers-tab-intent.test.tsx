@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { test, expect, vi, beforeEach } from "vitest";
 
@@ -88,6 +88,22 @@ test("the intent is consumed, so returning to the tab re-opens nothing", async (
   expect(screen.getByRole("button", { name: "Connect Ollama" })).toBeTruthy();
   expect(screen.queryByLabelText("Ollama base URL")).toBeNull();
   expect(screen.queryByText(REASON)).toBeNull();
+});
+
+/**
+ * The visual landing is not the landing. The founder arrives with focus on
+ * `<body>` — the button they pressed unmounted with its tab — and a keyboard or
+ * screen-reader user would otherwise be nowhere near the row, with the reason
+ * chip a bare `<span>` they never reach.
+ *
+ * Deferred rather than done on mount: the rows do not exist until the config
+ * fetch lands, so a focus call at mount would find nothing.
+ */
+test("focus lands on the row an intent named", async () => {
+  intend("ollama");
+  await mountAndSettle();
+
+  await waitFor(() => expect(document.activeElement).toBe(rowAnchor("ollama")));
 });
 
 test("the reason names whichever tier sent the founder", async () => {

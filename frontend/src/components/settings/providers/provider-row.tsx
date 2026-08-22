@@ -169,7 +169,8 @@ export interface ProviderRowProps {
   /** Disables every action while a credential call is in flight. */
   busy?: boolean;
   /** Why this row was opened for the founder, e.g. "Needed by the Fast tier".
-   *  Rendered as a chip in the header. */
+   *  Rendered as a chip in the header WHILE EXPANDED — a reason is the answer to
+   *  "why is this open", so on a collapsed row it is a caption with no subject. */
   reason?: string;
   onToggle: () => void;
   onTest: () => void;
@@ -266,7 +267,11 @@ export function ProviderRow({
 
         {entry && <Chip>{AUTH_KIND_LABELS[entry.auth_kind]}</Chip>}
         <Chip variant={presentation.chip}>{presentation.label}</Chip>
-        {reason && <Chip variant="info">{reason}</Chip>}
+        {/* Gated HERE, where the two facts sit together, rather than left to
+            every caller's ternary: a reason explains an OPEN row, and one left
+            standing on a collapsed row would caption a row that is doing
+            nothing. Callers still decide whose reason it is. */}
+        {expanded && reason && <Chip variant="info">{reason}</Chip>}
 
         <span className="flex-1 min-w-0 text-[11.5px] text-t-muted truncate">
           {detail}

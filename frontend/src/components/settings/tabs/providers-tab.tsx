@@ -1,16 +1,17 @@
 "use client";
 
 import Link from "next/link";
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useToast } from "@/components/ui/toast";
 import { errorToMessage } from "@/lib/api-error";
 import { ctl } from "../controls";
 import { SearchIcon } from "../icons";
+import { useExpandedRow } from "../hooks/use-expanded-row";
 import type { CredentialFields } from "../hooks/use-provider-credentials";
 import { useModelConfigContext } from "../model-config-context";
-import { ProviderCredentialForm } from "../providers/provider-credential-form";
 import { ProviderGroup } from "../providers/provider-group";
+import { ProviderList } from "../providers/provider-list";
 import {
   buildEntries,
   dependentBindings,
@@ -21,21 +22,11 @@ import {
   ProviderFilter,
   type ProviderFilterValue,
 } from "../providers/provider-filter";
-import { ProviderRow, ProviderRowSeparator } from "../providers/provider-row";
 import {
-  RemoveConfirmation,
   removalPrompt,
   useRowFocusRestore,
   type PendingRemoval,
 } from "../providers/remove-confirmation";
-import { useExpandedRow } from "./use-expanded-row";
-
-/** The row wrapper is focusable BY SCRIPT only: it is where focus returns after
- *  the removal confirmation unmounts, so that focus never falls to `<body>`
- *  inside a focus-trapped modal. */
-const ROW_ANCHOR =
-  "outline-none focus-visible:ring-1 focus-visible:ring-inset " +
-  "focus-visible:ring-j-ring";
 
 /**
  * The Providers tab: every model provider this workspace can call, its
@@ -67,7 +58,12 @@ export function ProvidersTab() {
   const [filter, setFilter] = useState<ProviderFilterValue>("all");
   // Which row is open, seeded from the Model tab's `Connect {provider}` — see
   // `useExpandedRow`, which owns the one-shot intent and its clearing.
-  const [expanded, setExpanded] = useExpandedRow();
+  const {
+    expanded,
+    arrivedAt,
+    open: openRow,
+    close: closeRow,
+  } = useExpandedRow();
   const [pending, setPending] = useState<PendingRemoval | null>(null);
 
   // `useModelConfigContext` fires the same `load()` and swallows the failure,
@@ -98,6 +94,35 @@ export function ProvidersTab() {
   const showAvailable = filter !== "connected" && available.length > 0;
 
   const restoreFocusTo = useRowFocusRestore(containerRef);
+
+  /**
+   * Land the founder ON the row they were sent to, not merely near it.
+   *
+   * `Connect {provider}` unmounts the Model tab while its own button holds
+   * focus, so focus falls to `<body>` inside a focus-trapped panel: the next Tab
+   * restarts at the top of the trap, and a screen-reader user is told nothing at
+   * all — the reason chip is a `<span>` in a row they were never moved to. The
+   * chip's whole audience is the person who cannot see the highlight.
+   *
+   * Keyed on `entries` rather than run once on mount, because at mount the rows
+   * DO NOT EXIST — they arrive with the config fetch, and a focus call before
+   * then would find nothing and consume its one shot. The ref makes it that one
+   * shot: a later refetch (a save, a revoke) re-runs this effect, and moving
+   * focus then would be the same defect pointed the other way.
+   *
+   * `restoreFocusTo` and not a raw `.focus()`, so this shares the removal flow's
+   * guard — it declines when focus has since landed somewhere real.
+   */
+  const arrivalAnchored = useRef(false);
+  useEffect(() => {
+    if (!arrivedAt || arrivalAnchored.current) return;
+    const anchor = containerRef.current?.querySelector(
+      `[data-provider-row="${CSS.escape(arrivedAt)}"]`,
+    );
+    if (!anchor) return;
+    arrivalAnchored.current = true;
+    restoreFocusTo(arrivedAt);
+  }, [arrivedAt, entries, restoreFocusTo]);
 
   const closeConfirmation = useCallback(
     (provider: string) => {
@@ -191,75 +216,28 @@ export function ProvidersTab() {
         throw err;
       }
       addToast(`${name} credentials saved`, "success");
-      setExpanded(null);
+      closeRow();
     },
-    // `setExpanded` is a `useState` setter and never changes, but it now arrives
-    // through `useExpandedRow` where the lint rule cannot see that — so it is
-    // declared rather than suppressed.
-    [addToast, credentials, setExpanded],
+    [addToast, credentials, closeRow],
   );
 
-  const renderRow = (item: ProviderEntry) => {
-    const { status, entry } = item;
-    const provider = status.provider;
-    const name = entry?.display_name ?? provider;
-    const open = expanded?.provider === provider;
-    const busy = credentials.isBusy(provider);
-    return (
-      <ProviderRow
-        status={status}
-        catalog={entry}
-        expanded={open}
-        busy={busy}
-        // Only an intent-opened row carries one, and only while it stays open:
-        // re-opening it by hand drops the chip, having already been read.
-        reason={open ? expanded?.reason : undefined}
-        onToggle={() => setExpanded(open ? null : { provider })}
-        onTest={() => void handleTest(provider, name)}
-        onRemove={() => handleRemove(provider, name)}
-      >
-        {/* An uncatalogued provider declares no credential schema, so it gets no
-            form rather than a zero-field one, and `ProviderRow` withholds the
-            body for the same reason. An intent naming one STILL expands it and
-            still shows the reason — its only action is Remove, and a founder
-            sent somewhere that cannot be connected has to be told why. Dropping
-            the intent would land them on an unchanged list. */}
-        {entry && (
-          <ProviderCredentialForm
-            provider={entry}
-            status={status}
-            busy={busy}
-            onSubmit={(fields) => handleSave(provider, name, fields)}
-          />
-        )}
-      </ProviderRow>
-    );
-  };
-
-  // The confirmation is interleaved directly beneath its own row, so reading
-  // order, tab order and the thing being answered for are all the same place.
-  const rows = (list: readonly ProviderEntry[]) =>
-    list.map((item, index) => {
-      const provider = item.status.provider;
-      return (
-        <Fragment key={provider}>
-          {index > 0 && <ProviderRowSeparator />}
-          <div data-provider-row={provider} tabIndex={-1} className={ROW_ANCHOR}>
-            {renderRow(item)}
-          </div>
-          {pending?.provider === provider && (
-            <>
-              <ProviderRowSeparator />
-              <RemoveConfirmation
-                pending={pending}
-                onCancel={() => closeConfirmation(provider)}
-                onConfirm={confirmRemoval}
-              />
-            </>
-          )}
-        </Fragment>
-      );
-    });
+  // Every row-level prop is the same for both groups, and the two groups are
+  // one list split for reading — so they are passed once, here.
+  const rows = (list: readonly ProviderEntry[]) => (
+    <ProviderList
+      entries={list}
+      expanded={expanded}
+      pending={pending}
+      isBusy={credentials.isBusy}
+      onOpen={openRow}
+      onClose={closeRow}
+      onTest={handleTest}
+      onRemove={handleRemove}
+      onSave={handleSave}
+      onCancelRemoval={closeConfirmation}
+      onConfirmRemoval={confirmRemoval}
+    />
+  );
 
   return (
     <div ref={containerRef} className="flex flex-col">

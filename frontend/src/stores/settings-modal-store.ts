@@ -39,9 +39,17 @@ interface SettingsModalState {
   openSettings: (tab?: SettingsTab) => void;
   closeSettings: () => void;
   setActiveTab: (tab: SettingsTab) => void;
-  /** Switch to the Providers tab WITH a provider to expand and a reason to show
-   *  on it. Both facts are set in one write, so the tab can never render before
-   *  the intent that sent the founder there. */
+  /**
+   * Switch to the Providers tab WITH a provider to expand and a reason to show
+   * on it. Every fact is set in one write, so the tab can never render before
+   * the intent that sent the founder there.
+   *
+   * It OPENS the modal as well as switching tabs, even though today's only
+   * caller is already inside it. The alternative was a docstring saying "for
+   * within-modal use only", and the first caller from outside — a workspace-level
+   * "connect a provider" prompt — would have reached for `openSettings` first,
+   * which CLEARS the intent it had just set, silently and with nothing to read.
+   */
   openProviderFor: (provider: string, reason?: string) => void;
   /**
    * The other half of consuming one: acknowledge the intent so it cannot be
@@ -68,7 +76,11 @@ export const useSettingsModalStore = create<SettingsModalState>((set, get) => ({
   closeSettings: () => set({ open: false, pendingProvider: null }),
   setActiveTab: (tab) => set({ activeTab: tab, pendingProvider: null }),
   openProviderFor: (provider, reason) =>
-    set({ activeTab: "providers", pendingProvider: { provider, reason } }),
+    set({
+      open: true,
+      activeTab: "providers",
+      pendingProvider: { provider, reason },
+    }),
   clearPendingProvider: () => {
     // Guarded so a tab mounting with no intent does not notify every subscriber
     // of a null→null "change".

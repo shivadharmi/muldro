@@ -202,9 +202,17 @@ test("a collapsed row's toggle controls nothing", () => {
   expect(toggle).not.toHaveAttribute("aria-controls");
 });
 
-test("a reason renders as a chip", () => {
-  renderRow({}, { reason: "Needed by the Fast tier" });
+test("an expanded row's reason renders as a chip", () => {
+  renderRow({}, { reason: "Needed by the Fast tier", expanded: true });
   expect(screen.getByText("Needed by the Fast tier")).toBeTruthy();
+});
+
+// A reason answers "why is this open". On a collapsed row it captions nothing,
+// and a stale one would follow whichever row the founder opened next — so the
+// row refuses it rather than trusting every caller to withhold it.
+test("a collapsed row shows no reason, even when handed one", () => {
+  renderRow({}, { reason: "Needed by the Fast tier", expanded: false });
+  expect(screen.queryByText("Needed by the Fast tier")).toBeNull();
 });
 
 test("the auth kind renders as a readable label, not the raw slug", () => {
