@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 
 import { fetchModelCatalog, fetchModelConfig, saveModelConfig } from "@/lib/api";
 import type {
@@ -12,36 +12,36 @@ import {
   type ModelDraft,
   dirtyKeysOf,
   draftFrom,
+  findByScope,
   indexOfBinding,
   listKeyFor,
   rebaseDraft,
 } from "./model-draft";
+import { useBindRejections } from "./use-bind-rejections";
 
 export type { ModelDraft } from "./model-draft";
 export { bindingKey } from "./model-draft";
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
+/**
+ * The saved config and the draft laid over it are ONE state, because every
+ * write to either is defined in terms of the other: the draft rebases onto a
+ * new config, and `dirtyKeys` is their difference. Held apart, two refetches
+ * batched into one React commit would let the second read the pre-first config
+ * as its baseline, mark everything the first changed as dirty, and discard the
+ * second response for those bindings.
+ */
+interface ModelConfigState {
+  config: ModelConfig | null;
+  draft: ModelDraft;
 }
 
-/**
- * Pull the per-binding rejections off a `PUT /v1/model-config` 422.
- *
- * The gate is STRUCTURAL, not `instanceof ApiError`: the class lives in
- * `@/lib/api` (not `@/lib/api-error`, which only holds the `BindRejection`
- * shape and the parsers), and every consumer that mocks `@/lib/api` would lose
- * an `instanceof` check.
- *
- * The ENTRIES are trusted rather than re-parsed. `parseBindRejection`
- * (`@/lib/api-error`) already validated every field and filled a missing
- * `message` with `SAFE_FALLBACK_MESSAGE`; a second per-field parse here only
- * created a chance to disagree with it — which it did, filling a blank string.
- */
-function extractBindRejections(err: unknown): ConfigWarning[] | null {
-  if (!isRecord(err)) return null;
-  const raw = err.bindRejections;
-  if (!Array.isArray(raw) || raw.length === 0) return null;
-  return raw as ConfigWarning[];
+const INITIAL_STATE: ModelConfigState = Object.freeze({
+  config: null,
+  draft: EMPTY_DRAFT,
+});
+
+function warnDev(message: string): void {
+  if (process.env.NODE_ENV !== "production") console.warn(message);
 }
 
 function warnUnknownBinding(
@@ -49,20 +49,8 @@ function warnUnknownBinding(
   scopeType: ModelBinding["scope_type"],
   scopeKey: string,
 ): void {
-  if (process.env.NODE_ENV !== "production") {
-    console.warn(
-      `useModelConfig.${op}: no ${scopeType} binding named "${scopeKey}" — ignored.`,
-    );
-  }
-}
-
-function findForScope<T extends { scope_type: string; scope_key: string }>(
-  items: readonly T[],
-  scopeType: ModelBinding["scope_type"],
-  scopeKey: string,
-): T | undefined {
-  return items.find(
-    (item) => item.scope_type === scopeType && item.scope_key === scopeKey,
+  warnDev(
+    `useModelConfig.${op}: no ${scopeType} binding named "${scopeKey}" — ignored.`,
   );
 }
 
@@ -96,17 +84,20 @@ export interface UseModelConfigResult {
     scopeKey: string,
     patch: Partial<ModelBinding>,
   ) => boolean;
-  /** Appends, or replaces a binding already under that key. */
-  addBinding: (binding: ModelBinding) => void;
+  /** Appends, or REPLACES a binding already under that key — named `upsert`
+   *  because an "add override" flow must check for the existing one itself
+   *  rather than discover it has silently overwritten it. */
+  upsertBinding: (binding: ModelBinding) => void;
   /** `false` (with a dev warning) when no such binding exists. */
   removeBinding: (
     scopeType: ModelBinding["scope_type"],
     scopeKey: string,
   ) => boolean;
   discard: () => void;
-  /** Saves the draft. Re-entrant calls share the in-flight promise. On a 422 it
-   *  records `rejections` and RE-THROWS — the caller still needs to know the
-   *  save failed, and owns the toast for every non-per-binding error. */
+  /** Saves the draft. Re-entrant calls share the in-flight promise. A no-op
+   *  before `load()` resolves (see the guard's comment). On a 422 it records
+   *  `rejections` and RE-THROWS — the caller still needs to know the save
+   *  failed, and owns the toast for every non-per-binding error. */
   save: () => Promise<void>;
   clearRejections: () => void;
   rejectionFor: (
@@ -128,23 +119,24 @@ export interface UseModelConfigResult {
  */
 export function useModelConfig(): UseModelConfigResult {
   const [catalog, setCatalog] = useState<ModelCatalog | null>(null);
-  const [config, setConfig] = useState<ModelConfig | null>(null);
-  const [draft, setDraft] = useState<ModelDraft>(EMPTY_DRAFT);
+  const [state, setState] = useState<ModelConfigState>(INITIAL_STATE);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [rejections, setRejections] = useState<ConfigWarning[]>([]);
+  const bindRejections = useBindRejections();
 
-  // Latest-value refs, so every callback below is identity-stable. A save bar
-  // may therefore bind Cmd+S once, in a mount-only effect, and still submit
-  // what is on screen. Assigned in effects only — never during render.
-  const draftRef = useRef<ModelDraft>(EMPTY_DRAFT);
-  const configRef = useRef<ModelConfig | null>(null);
-  useEffect(() => {
-    draftRef.current = draft;
-  }, [draft]);
-  useEffect(() => {
-    configRef.current = config;
-  }, [config]);
+  // WRITE-THROUGH cache, not a post-commit echo of `state`. Every write goes
+  // through `commit`, which assigns the ref BEFORE queueing the render, so a
+  // second mutation in the same event handler — `upsertBinding(x)` then
+  // `updateBinding(x, ...)` — sees the first. An effect-assigned ref would
+  // still hold the pre-handler draft there, so the existence check would fail
+  // and the second edit would vanish (silently, since the dev warning compiles
+  // out in production). It is also what makes two batched `applyServerConfig`
+  // calls read a current baseline.
+  const stateRef = useRef<ModelConfigState>(INITIAL_STATE);
+  const commit = useCallback((next: ModelConfigState) => {
+    stateRef.current = next;
+    setState(next);
+  }, []);
 
   // In-flight promises double as the re-entrancy guards: a second caller gets
   // the first call's promise rather than a silent `undefined` or a duplicate
@@ -166,8 +158,7 @@ export function useModelConfig(): UseModelConfigResult {
           fetchModelConfig(),
         ]);
         setCatalog(nextCatalog);
-        setConfig(nextConfig);
-        setDraft(draftFrom(nextConfig));
+        commit({ config: nextConfig, draft: draftFrom(nextConfig) });
       } catch (err) {
         loadedOnce.current = false;
         throw err;
@@ -179,31 +170,28 @@ export function useModelConfig(): UseModelConfigResult {
 
     loadPromiseRef.current = promise;
     return promise;
-  }, []);
+  }, [commit]);
 
-  const dropRejectionFor = useCallback(
-    (scopeType: ModelBinding["scope_type"], scopeKey: string) => {
-      setRejections((prev) =>
-        prev.some((r) => r.scope_type === scopeType && r.scope_key === scopeKey)
-          ? prev.filter(
-              (r) =>
-                !(r.scope_type === scopeType && r.scope_key === scopeKey),
-            )
-          : prev,
-      );
+  // Destructured, not used through `bindRejections`: that object is memoised on
+  // `rejections`, so reaching through it inside a callback would re-create the
+  // callback on every 422 and cost `save` its identity stability. These three
+  // are stable.
+  const {
+    dropFor: dropRejectionFor,
+    clear: clearRejections,
+    record: recordRejections,
+  } = bindRejections;
+
+  const applyServerConfig = useCallback(
+    (next: ModelConfig) => {
+      const prev = stateRef.current;
+      commit({
+        config: next,
+        draft: rebaseDraft(draftFrom(prev.config), prev.draft, draftFrom(next)),
+      });
     },
-    [],
+    [commit],
   );
-
-  const clearRejections = useCallback(() => {
-    setRejections((prev) => (prev.length === 0 ? prev : []));
-  }, []);
-
-  const applyServerConfig = useCallback((next: ModelConfig) => {
-    const baseline = draftFrom(configRef.current);
-    setConfig(next);
-    setDraft((prev) => rebaseDraft(baseline, prev, draftFrom(next)));
-  }, []);
 
   const updateBinding = useCallback(
     (
@@ -211,102 +199,111 @@ export function useModelConfig(): UseModelConfigResult {
       scopeKey: string,
       patch: Partial<ModelBinding>,
     ): boolean => {
+      const prev = stateRef.current;
       const listKey = listKeyFor(scopeType);
-      if (indexOfBinding(draftRef.current[listKey], scopeType, scopeKey) < 0) {
+      const index = indexOfBinding(prev.draft[listKey], scopeType, scopeKey);
+      if (index < 0) {
         warnUnknownBinding("updateBinding", scopeType, scopeKey);
         return false;
       }
-      setDraft((prev) => {
-        const list = prev[listKey];
-        const index = indexOfBinding(list, scopeType, scopeKey);
-        if (index < 0) return prev;
-        const next = [...list];
-        // Identity is re-asserted last: a patch may never silently re-key the
-        // binding it is patching.
-        next[index] = {
-          ...list[index],
-          ...patch,
-          scope_type: scopeType,
-          scope_key: scopeKey,
-        };
-        return { ...prev, [listKey]: next };
-      });
+      const list = [...prev.draft[listKey]];
+      // Identity is re-asserted last: a patch may never silently re-key the
+      // binding it is patching.
+      list[index] = {
+        ...list[index],
+        ...patch,
+        scope_type: scopeType,
+        scope_key: scopeKey,
+      };
+      commit({ ...prev, draft: { ...prev.draft, [listKey]: list } });
       // The user is fixing this binding — its stale verdict must not outlive it.
       dropRejectionFor(scopeType, scopeKey);
       return true;
     },
-    [dropRejectionFor],
+    [commit, dropRejectionFor],
   );
 
-  const addBinding = useCallback(
+  const upsertBinding = useCallback(
     (binding: ModelBinding) => {
+      const prev = stateRef.current;
       const listKey = listKeyFor(binding.scope_type);
-      setDraft((prev) => {
-        const list = prev[listKey];
-        const index = indexOfBinding(
-          list,
-          binding.scope_type,
-          binding.scope_key,
-        );
-        const next = [...list];
-        if (index < 0) next.push(binding);
-        else next[index] = binding;
-        return { ...prev, [listKey]: next };
-      });
+      const index = indexOfBinding(
+        prev.draft[listKey],
+        binding.scope_type,
+        binding.scope_key,
+      );
+      const list = [...prev.draft[listKey]];
+      if (index < 0) list.push(binding);
+      else list[index] = binding;
+      commit({ ...prev, draft: { ...prev.draft, [listKey]: list } });
       dropRejectionFor(binding.scope_type, binding.scope_key);
     },
-    [dropRejectionFor],
+    [commit, dropRejectionFor],
   );
 
   const removeBinding = useCallback(
-    (
-      scopeType: ModelBinding["scope_type"],
-      scopeKey: string,
-    ): boolean => {
+    (scopeType: ModelBinding["scope_type"], scopeKey: string): boolean => {
+      const prev = stateRef.current;
       const listKey = listKeyFor(scopeType);
-      if (indexOfBinding(draftRef.current[listKey], scopeType, scopeKey) < 0) {
+      if (indexOfBinding(prev.draft[listKey], scopeType, scopeKey) < 0) {
         warnUnknownBinding("removeBinding", scopeType, scopeKey);
         return false;
       }
-      setDraft((prev) => ({
-        ...prev,
-        [listKey]: prev[listKey].filter(
-          (b) => !(b.scope_type === scopeType && b.scope_key === scopeKey),
-        ),
-      }));
+      const list = prev.draft[listKey].filter(
+        (b) => !(b.scope_type === scopeType && b.scope_key === scopeKey),
+      );
+      commit({ ...prev, draft: { ...prev.draft, [listKey]: list } });
       dropRejectionFor(scopeType, scopeKey);
       return true;
     },
-    [dropRejectionFor],
+    [commit, dropRejectionFor],
   );
 
   const discard = useCallback(() => {
-    setDraft(draftFrom(configRef.current));
+    const prev = stateRef.current;
+    commit({ ...prev, draft: draftFrom(prev.config) });
     // Rejections describe changes that no longer exist. Leaving them would
     // strand a card showing an error with no edit behind it and no way to clear.
     clearRejections();
-  }, [clearRejections]);
+  }, [commit, clearRejections]);
 
   const save = useCallback((): Promise<void> => {
     if (savePromiseRef.current) return savePromiseRef.current;
 
+    // `PUT /v1/model-config` is THREE-valued: an absent key leaves that scope
+    // untouched, and any list — INCLUDING `[]` — is a complete replacement
+    // (`model_config_service.put_config` prunes with `keep=set()`, which drops
+    // every agent override in the workspace). Before `load()` resolves the
+    // draft is EMPTY_DRAFT, so saving here would silently delete them all: no
+    // 422, no warning, and `dirtyCount === 0` afterwards. Reachable from a save
+    // bar binding Cmd+S in a mount-only effect, and open permanently whenever
+    // `load()` failed. This guard is the only thing standing in the way — do
+    // not "simplify" it into a truthiness check on the draft.
+    if (stateRef.current.config === null) {
+      warnDev("useModelConfig.save: ignored — the config has not loaded yet.");
+      return Promise.resolve();
+    }
+
     const submitted: ModelDraft = {
-      tiers: [...draftRef.current.tiers],
-      agent_overrides: [...draftRef.current.agent_overrides],
+      tiers: [...stateRef.current.draft.tiers],
+      agent_overrides: [...stateRef.current.draft.agent_overrides],
     };
     setSaving(true);
 
     const promise = (async () => {
       try {
         const updated = await saveModelConfig(submitted);
-        setConfig(updated);
+        const prev = stateRef.current;
         // Rebase against what was SUBMITTED, so an edit made while the PUT was
-        // in flight survives instead of vanishing with no signal at all.
-        setDraft((prev) => rebaseDraft(submitted, prev, draftFrom(updated)));
-        setRejections([]);
+        // in flight survives, while a binding the server normalised on the way
+        // through (a clamped `max_tokens`, say) adopts the server's value.
+        commit({
+          config: updated,
+          draft: rebaseDraft(submitted, prev.draft, draftFrom(updated)),
+        });
+        clearRejections();
       } catch (err) {
-        const rejected = extractBindRejections(err);
-        if (rejected) setRejections(rejected);
+        recordRejections(err);
         throw err;
       } finally {
         setSaving(false);
@@ -316,63 +313,57 @@ export function useModelConfig(): UseModelConfigResult {
 
     savePromiseRef.current = promise;
     return promise;
-  }, []);
+  }, [commit, clearRejections, recordRejections]);
 
   const dirtyKeys = useMemo(
-    () => dirtyKeysOf(draftFrom(config), draft),
-    [config, draft],
-  );
-
-  const rejectionFor = useCallback(
-    (scopeType: ModelBinding["scope_type"], scopeKey: string) =>
-      findForScope(rejections, scopeType, scopeKey),
-    [rejections],
+    () => dirtyKeysOf(draftFrom(state.config), state.draft),
+    [state],
   );
 
   const warningFor = useCallback(
     (scopeType: ModelBinding["scope_type"], scopeKey: string) =>
-      config ? findForScope(config.warnings, scopeType, scopeKey) : undefined,
-    [config],
+      state.config
+        ? findByScope(state.config.warnings, scopeType, scopeKey)
+        : undefined,
+    [state],
   );
 
   return useMemo(
     () => ({
       catalog,
-      config,
+      config: state.config,
       loading,
       saving,
-      draft,
+      draft: state.draft,
       dirtyKeys,
       dirtyCount: dirtyKeys.size,
-      rejections,
+      rejections: bindRejections.rejections,
       load,
       applyServerConfig,
       updateBinding,
-      addBinding,
+      upsertBinding,
       removeBinding,
       discard,
       save,
       clearRejections,
-      rejectionFor,
+      rejectionFor: bindRejections.rejectionFor,
       warningFor,
     }),
     [
       catalog,
-      config,
+      state,
       loading,
       saving,
-      draft,
       dirtyKeys,
-      rejections,
+      bindRejections,
       load,
       applyServerConfig,
       updateBinding,
-      addBinding,
+      upsertBinding,
       removeBinding,
       discard,
       save,
       clearRejections,
-      rejectionFor,
       warningFor,
     ],
   );

@@ -130,6 +130,25 @@ test("rebaseDraft keeps a pending removal removed and a pending addition added",
   expect(result.tiers.map((b) => b.scope_key)).toEqual(["fast", "extra"]);
 });
 
+test("rebaseDraft moves a dirty binding the server dropped to the end", () => {
+  const baseline = draft([
+    binding("tier", "a"),
+    binding("tier", "b"),
+    binding("tier", "c"),
+  ]);
+  const pending = draft([
+    binding("tier", "a"),
+    binding("tier", "b", { effort: "high" }),
+    binding("tier", "c"),
+  ]);
+  const next = draft([binding("tier", "a"), binding("tier", "c")]);
+
+  // Documented, not accidental: order follows `next`, dirty leftovers append.
+  const result = rebaseDraft(baseline, pending, next);
+  expect(result.tiers.map((b) => b.scope_key)).toEqual(["a", "c", "b"]);
+  expect(result.tiers[2].effort).toBe("high");
+});
+
 test("rebaseDraft drops a clean binding the server no longer has", () => {
   const baseline = draft([binding("tier", "fast"), binding("tier", "gone")]);
   const next = draft([binding("tier", "fast")]);

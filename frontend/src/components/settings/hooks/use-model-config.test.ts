@@ -187,23 +187,67 @@ test("removeBinding makes the removal visible in dirtyKeys", async () => {
   expect(result.current.dirtyKeys.has("agent:planner")).toBe(true);
 });
 
-test("addBinding appends a new override and replaces an existing one", async () => {
+test("upsertBinding appends a new override and replaces an existing one", async () => {
   const { result } = await renderLoaded();
 
   act(() => {
-    result.current.addBinding(binding("agent", "executor", { provider: "openai" }));
+    result.current.upsertBinding(
+      binding("agent", "executor", { provider: "openai" }),
+    );
   });
   expect(result.current.draft.agent_overrides).toHaveLength(2);
   expect(result.current.dirtyKeys.has("agent:executor")).toBe(true);
 
   const previous = result.current.draft.agent_overrides;
   act(() => {
-    result.current.addBinding(binding("agent", "executor", { provider: "google" }));
+    result.current.upsertBinding(
+      binding("agent", "executor", { provider: "google" }),
+    );
   });
   expect(result.current.draft.agent_overrides).toHaveLength(2);
   expect(result.current.draft.agent_overrides[1].provider).toBe("google");
   expect(result.current.draft.agent_overrides).not.toBe(previous);
   expect(previous[1].provider).toBe("openai");
+});
+
+test("a second mutation in the SAME handler sees the first", async () => {
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  const { result } = await renderLoaded();
+
+  act(() => {
+    // One event handler, no re-render in between. With a ref assigned in an
+    // effect the second call reads the pre-handler draft, returns false and
+    // drops the edit — silently, since the warning compiles out in production.
+    result.current.upsertBinding(
+      binding("agent", "executor", { provider: "openai" }),
+    );
+    expect(
+      result.current.updateBinding("agent", "executor", { effort: "high" }),
+    ).toBe(true);
+    expect(result.current.removeBinding("agent", "planner")).toBe(true);
+  });
+
+  expect(warn).not.toHaveBeenCalled();
+  const overrides = result.current.draft.agent_overrides;
+  expect(overrides).toHaveLength(1);
+  expect(overrides[0].scope_key).toBe("executor");
+  expect(overrides[0].effort).toBe("high");
+  expect(result.current.dirtyKeys).toEqual(
+    new Set(["agent:executor", "agent:planner"]),
+  );
+  warn.mockRestore();
+});
+
+test("discard in the same handler as an edit still restores the config", async () => {
+  const { result } = await renderLoaded();
+
+  act(() => {
+    result.current.updateBinding("tier", "fast", { effort: "high" });
+    result.current.discard();
+  });
+
+  expect(result.current.dirtyCount).toBe(0);
+  expect(result.current.draft.tiers).toEqual(result.current.config!.tiers);
 });
 
 test("discard restores the draft to the saved config", async () => {

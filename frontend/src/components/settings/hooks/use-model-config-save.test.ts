@@ -14,11 +14,7 @@ vi.mock("@/lib/api", () => ({
 
 import type { ModelConfig } from "@/lib/types";
 import { useModelConfig } from "./use-model-config";
-import {
-  CATALOG,
-  bindRejectionError,
-  makeConfig,
-} from "./model-config-fixtures";
+import { CATALOG, makeConfig } from "./model-config-fixtures";
 
 beforeEach(() => {
   catalogMock.mockReset().mockResolvedValue(CATALOG);
@@ -33,6 +29,42 @@ async function renderLoaded() {
   });
   return view;
 }
+
+test("save before load resolves is a no-op, not a wipe of every override", async () => {
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  const { result } = renderHook(() => useModelConfig());
+
+  // `PUT /v1/model-config` treats `[]` as a COMPLETE REPLACEMENT, so an
+  // unloaded EMPTY_DRAFT would delete every agent override in the workspace
+  // with no 422 and nothing on screen looking wrong. Reachable from a save bar
+  // binding Cmd+S in a mount-only effect, before the load round-trip lands.
+  await act(async () => {
+    await result.current.save();
+  });
+  expect(saveMock).not.toHaveBeenCalled();
+  expect(warn).toHaveBeenCalledTimes(1);
+
+  // Still shut after a FAILED load — `config` stays null behind the retry toast.
+  catalogMock.mockRejectedValueOnce(new Error("boom"));
+  await act(async () => {
+    await expect(result.current.load()).rejects.toThrow("boom");
+  });
+  await act(async () => {
+    await result.current.save();
+  });
+  expect(saveMock).not.toHaveBeenCalled();
+
+  // ...and open again once a config actually exists.
+  saveMock.mockResolvedValue(makeConfig());
+  await act(async () => {
+    await result.current.load();
+  });
+  await act(async () => {
+    await result.current.save();
+  });
+  expect(saveMock).toHaveBeenCalledTimes(1);
+  warn.mockRestore();
+});
 
 test("save submits the whole draft verbatim and adopts the response", async () => {
   const { result } = await renderLoaded();
@@ -131,112 +163,27 @@ test("an edit made while the PUT is in flight survives the response", async () =
   expect(result.current.draft.tiers[1]).toEqual(result.current.config!.tiers[1]);
 });
 
-test("a 422 populates rejections, re-throws, and clears on the next good save", async () => {
+test("a binding dirty at submit time adopts the server's normalisation", async () => {
   const { result } = await renderLoaded();
 
-  saveMock.mockRejectedValueOnce(bindRejectionError("fast"));
+  // Dirty when the PUT fires, and the server clamps it on the way through.
   act(() => {
-    result.current.updateBinding("tier", "fast", { provider: "openai" });
+    result.current.updateBinding("tier", "fast", { max_tokens: 999999 });
   });
 
-  await act(async () => {
-    await expect(result.current.save()).rejects.toThrow("API 422");
-  });
+  const clamped = makeConfig();
+  clamped.tiers[1] = { ...clamped.tiers[1], max_tokens: 32000 };
+  saveMock.mockResolvedValue(clamped);
 
-  expect(result.current.rejections).toHaveLength(1);
-  expect(result.current.rejectionFor("tier", "fast")?.message).toBe(
-    "OpenAI is not configured.",
-  );
-  expect(result.current.rejectionFor("tier", "reasoning")).toBeUndefined();
-  expect(result.current.rejectionFor("agent", "fast")).toBeUndefined();
-  // The draft survives a rejection so the user can fix it in place.
-  expect(result.current.dirtyCount).toBe(1);
-  expect(result.current.saving).toBe(false);
-
-  saveMock.mockResolvedValueOnce(makeConfig());
   await act(async () => {
     await result.current.save();
   });
 
-  expect(result.current.rejections).toEqual([]);
+  // Only `baseline = submitted` gets this right. Baselined on the PRE-SAVE
+  // config the binding still reads as dirty, so the draft would keep 999999
+  // and the card would show a value the server has already refused.
+  expect(result.current.draft.tiers[1].max_tokens).toBe(32000);
   expect(result.current.dirtyCount).toBe(0);
-});
-
-test("a non-422 failure leaves existing rejections in place", async () => {
-  const { result } = await renderLoaded();
-
-  saveMock.mockRejectedValueOnce(bindRejectionError("fast"));
-  await act(async () => {
-    await expect(result.current.save()).rejects.toThrow();
-  });
-  expect(result.current.rejections).toHaveLength(1);
-
-  saveMock.mockRejectedValueOnce(new Error("network down"));
-  await act(async () => {
-    await expect(result.current.save()).rejects.toThrow("network down");
-  });
-
-  expect(result.current.rejectionFor("tier", "fast")).toBeDefined();
-});
-
-test("editing a rejected binding drops only that binding's rejection", async () => {
-  const { result } = await renderLoaded();
-
-  saveMock.mockRejectedValueOnce(
-    Object.assign(new Error("API 422"), {
-      bindRejections: [
-        bindRejectionError("fast").bindRejections[0],
-        { ...bindRejectionError("reasoning").bindRejections[0] },
-      ],
-    }),
-  );
-  await act(async () => {
-    await expect(result.current.save()).rejects.toThrow();
-  });
-  expect(result.current.rejections).toHaveLength(2);
-
-  act(() => {
-    result.current.updateBinding("tier", "fast", { provider: "google" });
-  });
-
-  expect(result.current.rejectionFor("tier", "fast")).toBeUndefined();
-  expect(result.current.rejectionFor("tier", "reasoning")).toBeDefined();
-});
-
-test("discard and clearRejections both escape a stranded 422", async () => {
-  const { result } = await renderLoaded();
-
-  saveMock.mockRejectedValue(bindRejectionError("fast"));
-  act(() => {
-    result.current.updateBinding("tier", "fast", { provider: "openai" });
-  });
-  await act(async () => {
-    await expect(result.current.save()).rejects.toThrow();
-  });
-  expect(result.current.rejections).toHaveLength(1);
-
-  // Discarding removes the change the rejection was about — the card must not
-  // keep showing an error the user has no edit left to fix.
-  act(() => {
-    result.current.discard();
-  });
-  expect(result.current.rejections).toEqual([]);
-  expect(result.current.dirtyCount).toBe(0);
-
-  act(() => {
-    result.current.updateBinding("tier", "fast", { provider: "openai" });
-  });
-  await act(async () => {
-    await expect(result.current.save()).rejects.toThrow();
-  });
-  expect(result.current.rejections).toHaveLength(1);
-
-  act(() => {
-    result.current.clearRejections();
-  });
-  expect(result.current.rejections).toEqual([]);
-  // Still dirty — clearing a verdict is not discarding the edit.
-  expect(result.current.dirtyCount).toBe(1);
 });
 
 test("applyServerConfig rebases clean bindings and preserves dirty ones", async () => {
@@ -273,6 +220,31 @@ test("applyServerConfig rebases clean bindings and preserves dirty ones", async 
   expect(result.current.dirtyKeys).toEqual(new Set(["tier:fast"]));
 });
 
+test("two applyServerConfig calls batched into one commit both land", async () => {
+  const { result } = await renderLoaded();
+
+  // Both responses touch the SAME binding — otherwise a stale baseline still
+  // happens to produce the right answer and the test proves nothing.
+  const first = makeConfig();
+  first.tiers[0] = { ...first.tiers[0], model_id: "from-first" };
+  const second = makeConfig();
+  second.tiers[0] = { ...second.tiers[0], model_id: "from-second" };
+
+  // Two overlapping credential mutations resolving in the same macrotask —
+  // exactly what `busyProviders` being a Set exists to allow. With config and
+  // draft held apart, the second reads the PRE-FIRST config as its baseline,
+  // so `tier:reasoning` looks dirty (the user did not touch it — the first
+  // response did) and rebaseDraft keeps `from-first`, discarding `from-second`.
+  act(() => {
+    result.current.applyServerConfig(first);
+    result.current.applyServerConfig(second);
+  });
+
+  expect(result.current.config).toEqual(second);
+  expect(result.current.draft.tiers[0].model_id).toBe("from-second");
+  expect(result.current.dirtyCount).toBe(0);
+});
+
 test("every action is identity-stable across draft edits", async () => {
   const { result } = await renderLoaded();
   const before = result.current;
@@ -290,7 +262,7 @@ test("every action is identity-stable across draft edits", async () => {
   expect(result.current.load).toBe(before.load);
   expect(result.current.discard).toBe(before.discard);
   expect(result.current.updateBinding).toBe(before.updateBinding);
-  expect(result.current.addBinding).toBe(before.addBinding);
+  expect(result.current.upsertBinding).toBe(before.upsertBinding);
   expect(result.current.removeBinding).toBe(before.removeBinding);
   expect(result.current.applyServerConfig).toBe(before.applyServerConfig);
   expect(result.current.clearRejections).toBe(before.clearRejections);

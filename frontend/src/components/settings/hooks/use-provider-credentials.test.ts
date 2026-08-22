@@ -75,7 +75,7 @@ test("save posts the fields, refetches the config, and returns the status", asyn
   expect(configMock).toHaveBeenCalledTimes(1);
   expect(onRefreshed).toHaveBeenCalledWith(makeConfig());
   expect(returned).toEqual(STATUS);
-  expect(result.current.busy).toBeNull();
+  expect(result.current.busyProviders.size).toBe(0);
   expect(result.current.stale).toBe(false);
 });
 
@@ -134,7 +134,7 @@ test("a failed refetch does not turn a successful mutation into a failure", asyn
   // Weaker signal, but never silent.
   expect(onRefreshFailed).toHaveBeenCalledTimes(1);
   expect(result.current.stale).toBe(true);
-  expect(result.current.busy).toBeNull();
+  expect(result.current.busyProviders.size).toBe(0);
 
   // A later refetch that lands clears the staleness.
   configMock.mockResolvedValue(makeConfig());
@@ -155,6 +155,27 @@ test("a refetch failure is tolerated with no onRefreshFailed supplied", async ()
 
   expect(returned).toEqual(STATUS);
   expect(result.current.stale).toBe(true);
+});
+
+test("a throwing consumer sink is not reported as a stale config", async () => {
+  const onRefreshed = vi.fn(() => {
+    throw new Error("render sink blew up");
+  });
+  const onRefreshFailed = vi.fn();
+  const { result } = renderHook(() =>
+    useProviderCredentials(onRefreshed, onRefreshFailed),
+  );
+
+  await act(async () => {
+    await expect(
+      result.current.save("openai", { api_key: "sk" }),
+    ).rejects.toThrow("render sink blew up");
+  });
+
+  // The refetch landed — the config is NOT out of date, the consumer is broken.
+  expect(onRefreshFailed).not.toHaveBeenCalled();
+  expect(result.current.stale).toBe(false);
+  expect(result.current.busyProviders.size).toBe(0);
 });
 
 test("overlapping providers each keep their own row busy", async () => {
@@ -187,17 +208,33 @@ test("overlapping providers each keep their own row busy", async () => {
   });
   expect(result.current.isBusy("openai")).toBe(false);
   expect(result.current.isBusy("anthropic")).toBe(true);
-  expect(result.current.busy).toBe("anthropic");
+  expect(result.current.busyProviders).toEqual(new Set(["anthropic"]));
 
   await act(async () => {
     releaseTest({ status: "ok" });
     await slow;
   });
   expect(result.current.busyProviders.size).toBe(0);
-  expect(result.current.busy).toBeNull();
 });
 
-test("busy names the provider in flight and clears afterwards", async () => {
+test("the result exposes no lossy busy scalar to reach for", async () => {
+  const { result } = renderHook(() => useProviderCredentials(vi.fn()));
+
+  // `busy === provider` is the obvious thing a row would try, and it is wrong
+  // in exactly the overlapping case `busyProviders` exists for. It must not be
+  // available to reach for at all.
+  expect("busy" in result.current).toBe(false);
+  expect(Object.keys(result.current).sort()).toEqual([
+    "busyProviders",
+    "isBusy",
+    "remove",
+    "save",
+    "stale",
+    "test",
+  ]);
+});
+
+test("a provider is busy for the duration of its own mutation", async () => {
   let release: (value: ProviderStatus) => void = () => {};
   saveCredentialMock.mockImplementation(
     () => new Promise<ProviderStatus>((r) => (release = r)),
@@ -208,16 +245,18 @@ test("busy names the provider in flight and clears afterwards", async () => {
   await act(async () => {
     pending = result.current.save("openai", { api_key: "sk" });
   });
-  expect(result.current.busy).toBe("openai");
+  expect(result.current.isBusy("openai")).toBe(true);
+  expect(result.current.isBusy("anthropic")).toBe(false);
 
   await act(async () => {
     release(STATUS);
     await pending;
   });
-  expect(result.current.busy).toBeNull();
+  expect(result.current.isBusy("openai")).toBe(false);
+  expect(result.current.busyProviders.size).toBe(0);
 });
 
-test("a mutation error propagates and busy still clears", async () => {
+test("a mutation error propagates and the busy set still clears", async () => {
   deleteKeyMock.mockRejectedValue(new Error("revoke failed"));
   const onRefreshed = vi.fn();
   const { result } = renderHook(() => useProviderCredentials(onRefreshed));
@@ -228,7 +267,7 @@ test("a mutation error propagates and busy still clears", async () => {
     );
   });
 
-  expect(result.current.busy).toBeNull();
+  expect(result.current.isBusy("openai")).toBe(false);
   expect(result.current.busyProviders.size).toBe(0);
   expect(onRefreshed).not.toHaveBeenCalled();
   // The mutation never happened, so nothing is out of date.

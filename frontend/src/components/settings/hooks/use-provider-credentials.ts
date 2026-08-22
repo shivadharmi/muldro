@@ -21,11 +21,13 @@ export interface CredentialFields {
 }
 
 export interface UseProviderCredentialsResult {
-  /** The most recently started provider still in flight, or `null` when idle.
-   *  Inherently lossy under overlap — use {@link isBusy} for per-row state. */
-  busy: string | null;
   /** Every provider with a mutation in flight. Overlapping mutations each keep
-   *  their own row spinning, and one finishing does not clear the others. */
+   *  their own row spinning, and one finishing does not clear the others.
+   *
+   *  There is deliberately NO `busy: string | null` scalar beside this. A row
+   *  would reach for `busy === provider`, which is wrong in exactly the case
+   *  the set exists for. Use {@link isBusy} per row, `busyProviders.size > 0`
+   *  for a global indicator. */
   busyProviders: ReadonlySet<string>;
   isBusy: (provider: string) => boolean;
   /** The last post-mutation refetch failed, so the config on screen is older
@@ -82,13 +84,18 @@ export function useProviderCredentials(
       });
       try {
         const result = await action();
+        let refreshed: ModelConfig;
         try {
-          refreshedRef.current(await fetchModelConfig());
-          setStale(false);
+          refreshed = await fetchModelConfig();
         } catch (err) {
           setStale(true);
           refreshFailedRef.current?.(err);
+          return result;
         }
+        // Outside the catch: a throw from the consumer's own render sink is a
+        // bug in the sink, not a stale config, and must not be reported as one.
+        refreshedRef.current(refreshed);
+        setStale(false);
         return result;
       } finally {
         setBusyProviders((prev) => {
@@ -123,15 +130,8 @@ export function useProviderCredentials(
     [busyProviders],
   );
 
-  // Set preserves insertion order, so "last started" is deterministic.
-  const busy = useMemo(() => {
-    let latest: string | null = null;
-    for (const provider of busyProviders) latest = provider;
-    return latest;
-  }, [busyProviders]);
-
   return useMemo(
-    () => ({ busy, busyProviders, isBusy, stale, save, test, remove }),
-    [busy, busyProviders, isBusy, stale, save, test, remove],
+    () => ({ busyProviders, isBusy, stale, save, test, remove }),
+    [busyProviders, isBusy, stale, save, test, remove],
   );
 }

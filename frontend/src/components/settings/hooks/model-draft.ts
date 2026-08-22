@@ -35,6 +35,20 @@ export function bindingKey(
   return `${scopeType}:${scopeKey}`;
 }
 
+/** Lookup by the `(scope_type, scope_key)` identity every scoped record shares
+ *  — draft bindings, `ModelConfig.warnings`, and a 422's bind rejections. */
+export function findByScope<
+  T extends { scope_type: string; scope_key: string },
+>(
+  items: readonly T[],
+  scopeType: ModelBinding["scope_type"],
+  scopeKey: string,
+): T | undefined {
+  return items.find(
+    (item) => item.scope_type === scopeType && item.scope_key === scopeKey,
+  );
+}
+
 export function indexOfBinding(
   list: readonly ModelBinding[],
   scopeType: ModelBinding["scope_type"],
@@ -117,8 +131,12 @@ export function dirtyKeysOf(
  *  - a save returned (`baseline` = the payload that was submitted, so "dirty"
  *    means precisely "edited while the PUT was in flight").
  *
- * A pending removal survives as an omission; a draft-only addition the server
- * does not know about yet is appended at the end of its list.
+ * A pending removal survives as an omission. ORDER follows `next`, and any
+ * dirty binding `next` does not contain is appended after it — both a
+ * draft-only addition the server has not seen, and a binding with a pending
+ * edit that the server has since dropped. So `[a, b, c]` with an edit on a
+ * server-deleted `b` comes back as `[a, c, b]`. Harmless for keyed lookup;
+ * an ordered rendering will show that row jump to the end.
  */
 export function rebaseDraft(
   baseline: ModelDraft,
