@@ -19,13 +19,16 @@ from src.config.settings import Settings
 
 if TYPE_CHECKING:
     from src.services.vector_store import VectorStore
+from src.deep_runtime.middleware.approval_persistence import PREPARED_KEY
 from src.models.approvals import Approval
 from src.models.memory import Memory
 from src.models.perception_state import PerceptionState
 from src.models.plans import Plan
 from src.models.schedules import Schedule
 from src.models.task_graph import TaskRun
+from src.services.audit import AuditService
 from src.services.execution_state import InvalidTransitionError, transition_run
+from src.services.prepared_expiry_notice import expired_prepared_notice
 
 logger = logging.getLogger(__name__)
 
@@ -38,10 +41,16 @@ class HeartbeatService:
         settings: Settings,
         db: AsyncSession,
         vector_store: "VectorStore | None" = None,
+        *,
+        notifier=None,
     ):
         self._settings = settings
         self._db = db
         self._vector_store = vector_store
+        # Optional. Expiry is recorded in the audit trail regardless; the notifier only
+        # decides whether the founder is *told* in the moment, and an unreachable one
+        # must never hold up the expiry itself.
+        self._notifier = notifier
 
     STALE_THRESHOLDS = {
         "gmail": "observation_stale_gmail_minutes",
@@ -161,7 +170,13 @@ class HeartbeatService:
         return escalated
 
     async def _expire_approvals(self, user_id: str) -> int:
-        """Expire pending approvals past their deadline."""
+        """Expire pending approvals past their deadline.
+
+        Expiry is the third outcome of an approval and the only one nobody chose, so it
+        is recorded at least as carefully as approve and reject: an audit row per
+        approval, and — for staged work, which has no run to surface its own demise —
+        one batched notification per cycle.
+        """
         now = datetime.now(timezone.utc)
 
         result = await self._db.execute(
@@ -174,9 +189,45 @@ class HeartbeatService:
         )
         approvals = list(result.scalars().all())
 
+        audit = AuditService(self._db, self._settings)
+        expired_prepared: list[Approval] = []
+
         for approval in approvals:
             approval.status = "expired"
             approval.decided_at = now
+
+            # Same discriminator the approve and reject routes use, so the three sites
+            # that must agree on "is this staged work?" cannot drift apart.
+            is_prepared = (approval.artifact_refs or {}).get(PREPARED_KEY) is True
+            if is_prepared:
+                expired_prepared.append(approval)
+
+            # Deliberately not wrapped in a swallowing except: an unwritable audit row
+            # means a staged external write vanished with no record at all, which is the
+            # failure this whole path exists to prevent.
+            await audit.log(
+                user_id=approval.user_id or user_id,
+                action_type="approval_expired",
+                workspace_id=approval.workspace_id or "",
+                approval_id=approval.approval_id,
+                execution_id=approval.execution_id or None,
+                summary=f"Expired unreviewed: {approval.title}",
+                policy_decision="expired_unanswered",
+                details={
+                    "approval_type": approval.approval_type,
+                    "risk_level": approval.risk_level,
+                    "expires_at": (
+                        approval.expires_at.isoformat() if approval.expires_at else None
+                    ),
+                    "prepared": is_prepared,
+                },
+            )
+
+            # A prepared action has no run and no step by design — it is a single tool
+            # call recorded mid-turn, not an agentic unit. Looking one up would query for
+            # the empty string and always miss.
+            if not approval.execution_id:
+                continue
 
             # Cancel the associated execution. Goes through ``transition_run`` —
             # never a direct status assignment — so the transition is VALIDATED and
@@ -214,7 +265,64 @@ class HeartbeatService:
             await self._db.flush()
             logger.info("Expired %d approvals for %s", len(approvals), user_id)
 
+        await self._notify_expired_prepared(user_id, expired_prepared)
+
         return len(approvals)
+
+    async def _notify_expired_prepared(self, user_id: str, prepared: list[Approval]) -> None:
+        """Tell the founder that staged work was dropped — once per cycle, never per item.
+
+        Run-linked approvals are left out: their run is cancelled with an explanatory
+        error and shows up in the feed on its own. Staged work has no run, which is
+        exactly why it needs saying.
+        """
+        if not prepared:
+            return
+        if self._notifier is None:
+            logger.debug(
+                "%d prepared actions expired for %s with no notifier — audit only",
+                len(prepared),
+                user_id,
+            )
+            return
+
+        # One message per workspace: a single notification listing another workspace's
+        # action titles would carry them across the isolation boundary.
+        by_workspace: dict[str, list[Approval]] = {}
+        for approval in prepared:
+            by_workspace.setdefault(approval.workspace_id or "", []).append(approval)
+
+        for workspace_id, batch in by_workspace.items():
+            notice = expired_prepared_notice(batch)
+            if notice is None:
+                continue
+            title, body = notice
+            try:
+                await self._notifier.notify(
+                    user_id=user_id,
+                    notification_type="info_update",
+                    title=title,
+                    body=body,
+                    data={
+                        "approval_ids": [a.approval_id for a in batch],
+                        # Dropped irreversible work outranks a routine update. Delivery
+                        # does not hang on clearing the priority threshold, though — the
+                        # persisted row plus the pending-notification tick is what
+                        # guarantees it eventually lands.
+                        "urgency": 0.9,
+                    },
+                    workspace_id=workspace_id,
+                )
+            except Exception:
+                # Never at the cost of the expiry itself: the approvals are already
+                # marked and audited, and rolling that back to retry a message would
+                # trade a durable record for a transient one.
+                logger.warning(
+                    "Could not notify %s that %d prepared actions expired",
+                    user_id,
+                    len(batch),
+                    exc_info=True,
+                )
 
     async def _invalidate_old_plans(self, user_id: str) -> int:
         """Invalidate plans older than the configured TTL that are still unexecuted."""

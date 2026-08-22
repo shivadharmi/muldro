@@ -1,5 +1,7 @@
 """System endpoints — heartbeat, maintenance, diagnostics, metrics, capabilities."""
 
+import logging
+
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,6 +12,7 @@ from src.middleware.observability import RequestMetrics
 from src.services.dead_letter import DeadLetterService
 from src.services.heartbeat import HeartbeatService
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
@@ -29,6 +32,22 @@ class DeadLetterStats(BaseModel):
     by_operation: dict = {}
 
 
+def _build_notifier(settings: Settings, db: AsyncSession):
+    """Best-effort Notifier for the manual heartbeat. Returns None when redis is not
+    reachable — the heartbeat's audit trail does not depend on it."""
+    try:
+        import redis.asyncio as aioredis
+
+        from src.services.notifier import Notifier
+        from src.services.surface_registry import SurfaceRegistry
+
+        redis = aioredis.from_url(settings.redis_url, decode_responses=True)
+        return Notifier(surface_registry=SurfaceRegistry(redis=redis), redis=redis, db=db)
+    except Exception:
+        logger.debug("Notifier unavailable for manual heartbeat", exc_info=True)
+        return None
+
+
 @router.post("/v1/system/heartbeat", response_model=HeartbeatResponse)
 async def heartbeat(
     user_id: str = Depends(get_current_user_id),
@@ -36,7 +55,10 @@ async def heartbeat(
     settings: Settings = Depends(get_settings),
 ):
     """Run a heartbeat cycle: expire memories, escalate stale plans, expire approvals."""
-    service = HeartbeatService(settings=settings, db=db)
+    # This endpoint expires approvals for real, so staged work dropped here is exactly
+    # as invisible as staged work dropped by the cron tick — and the counts-only
+    # response never names which actions went. It gets the same notifier.
+    service = HeartbeatService(settings=settings, db=db, notifier=_build_notifier(settings, db))
     result = await service.run(user_id)
     await db.commit()
     return HeartbeatResponse(**result)
