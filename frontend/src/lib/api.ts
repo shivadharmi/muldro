@@ -27,7 +27,7 @@ import type {
 import type { RuntimeSummary } from "./types/runtime";
 
 
-import { getStoredToken } from "./auth";
+import { getStoredToken } from "./auth-storage";
 import {
   formatApiError,
   parseApiError,
@@ -147,6 +147,15 @@ export function verifyMagicLink(
   token: string
 ): Promise<{ access_token: string; expires_at: string; user: { user_id: string; email: string; display_name: string } }> {
   return post("/auth/verify", { token });
+}
+
+/**
+ * Revoke the session server-side. Clearing localStorage only makes the browser
+ * forget the token; the session row stays valid until it expires, so anyone
+ * still holding the value keeps full access after "signing out".
+ */
+export function logoutSession(): Promise<{ status: string }> {
+  return post("/auth/logout", {});
 }
 
 export function getCurrentUser(): Promise<{

@@ -9,11 +9,20 @@ import {
   type ReactNode,
 } from "react";
 
-export interface AuthUser {
-  user_id: string;
-  email: string;
-  display_name: string | null;
-}
+import { logoutSession } from "@/lib/api";
+import {
+  clearStoredAuth,
+  getStoredToken,
+  isTokenExpired,
+  TOKEN_KEY,
+  USER_KEY,
+  EXPIRES_KEY,
+  type AuthUser,
+} from "@/lib/auth-storage";
+
+export type { AuthUser };
+// Re-exported so every existing `from "@/lib/auth"` import keeps working.
+export { getStoredToken };
 
 interface AuthContextType {
   user: AuthUser | null;
@@ -32,23 +41,6 @@ const AuthContext = createContext<AuthContextType>({
   login: () => {},
   logout: () => {},
 });
-
-const TOKEN_KEY = "muldro_auth_token";
-const USER_KEY = "muldro_auth_user";
-const EXPIRES_KEY = "muldro_auth_expires";
-
-function isTokenExpired(): boolean {
-  if (typeof window === "undefined") return false;
-  const expiresAt = localStorage.getItem(EXPIRES_KEY);
-  if (!expiresAt) return false;
-  return new Date(expiresAt).getTime() <= Date.now();
-}
-
-function clearStoredAuth(): void {
-  localStorage.removeItem(TOKEN_KEY);
-  localStorage.removeItem(USER_KEY);
-  localStorage.removeItem(EXPIRES_KEY);
-}
 
 // ── External store for auth state (hydration-safe) ─────────────────
 // useSyncExternalStore returns the server snapshot during SSR and hydration,
@@ -130,6 +122,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   const logout = useCallback(() => {
+    // Revoke server-side FIRST. `api()` builds its Authorization header
+    // synchronously while assembling the fetch arguments, so the request
+    // already carries the token by the time the next line removes it —
+    // clearing first would send an unauthenticated request and leave the
+    // session alive for whoever still holds the value.
+    //
+    // Fire-and-forget, and local state is cleared either way: a network
+    // failure must not trap someone in a session they asked to leave.
+    void logoutSession().catch(() => undefined);
     clearStoredAuth();
     emitChange();
   }, []);
@@ -152,13 +153,4 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
 export function useAuth() {
   return useContext(AuthContext);
-}
-
-export function getStoredToken(): string | null {
-  if (typeof window === "undefined") return null;
-  if (isTokenExpired()) {
-    clearStoredAuth();
-    return null;
-  }
-  return localStorage.getItem(TOKEN_KEY);
 }
