@@ -89,13 +89,21 @@ test("a not-connected provider offers only Connect", () => {
 
 // No catalog entry means no display name and no credential schema, so nothing
 // but revoking the surviving row is meaningful.
-test("an uncatalogued provider renders the raw slug and offers only Remove", () => {
+//
+// This test USED to assert the raw `legacy_vendor`, and that was the defect
+// rather than the contract: **A3** says a slug never reaches the screen, and
+// the model picker had been humanising the same fallback for months — so one
+// uncatalogued provider read "Legacy vendor" there and `legacy_vendor` here,
+// in two tabs of one modal. `labels.ts` now owns the rule for every site. The
+// expectation moved because the behaviour was corrected, not because it drifted.
+test("an uncatalogued provider renders a humanised slug and offers only Remove", () => {
   renderRow(
     { provider: "legacy_vendor", catalogued: false, source: "workspace" },
     { catalog: null },
   );
-  expect(screen.getByText("legacy_vendor")).toBeTruthy();
-  expect(screen.getByRole("button", { name: "Remove legacy_vendor" })).toBeTruthy();
+  expect(screen.getByText("Legacy vendor")).toBeTruthy();
+  expect(screen.queryByText("legacy_vendor")).toBeNull();
+  expect(screen.getByRole("button", { name: "Remove Legacy vendor" })).toBeTruthy();
   expect(screen.queryByRole("button", { name: /^Test/ })).toBeNull();
   expect(screen.queryByRole("button", { name: /^Edit/ })).toBeNull();
   expect(screen.queryByRole("button", { name: /^Connect/ })).toBeNull();
@@ -115,7 +123,8 @@ test("an uncatalogued stray with no source still offers Remove", () => {
     },
     { catalog: null },
   );
-  expect(screen.getByRole("button", { name: "Remove legacy_vendor" })).toBeTruthy();
+  // Humanised, per **A3** — see the uncatalogued test above.
+  expect(screen.getByRole("button", { name: "Remove Legacy vendor" })).toBeTruthy();
   expect(screen.getAllByRole("button")).toHaveLength(1);
 });
 

@@ -10,6 +10,7 @@ import type {
   ModelBinding,
 } from "@/lib/types";
 import { LABEL_CLASS, btn, ctl } from "../controls";
+import { humaniseSlug } from "../labels";
 import { ChevronDownIcon, ChevronRightIcon, WarningIcon } from "../icons";
 import { BindingFields, type BindingPatch } from "./binding-fields";
 
@@ -123,7 +124,8 @@ export function AgentOverrides({
   );
 
   const displayName = (scopeKey: string): string =>
-    agents.find((a) => a.name === scopeKey)?.display_name ?? scopeKey;
+    agents.find((a) => a.name === scopeKey)?.display_name ??
+    humaniseSlug(scopeKey);
 
   const add = () => {
     const agent = agents.find((a) => a.name === choice);

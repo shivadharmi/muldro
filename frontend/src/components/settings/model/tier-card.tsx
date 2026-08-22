@@ -10,6 +10,7 @@ import type {
   ModelBinding,
 } from "@/lib/types";
 import { btn } from "../controls";
+import { humaniseSlug } from "../labels";
 import { WarningIcon } from "../icons";
 import { BindingFields, type BindingPatch } from "./binding-fields";
 
@@ -195,7 +196,7 @@ export function TierCard({
 
   const noticeProviderName = notice
     ? (providers.find((p) => p.provider === notice.provider)?.display_name ??
-      notice.provider)
+      humaniseSlug(notice.provider))
     : "";
 
   /**

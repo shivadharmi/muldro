@@ -161,7 +161,9 @@ test("an intent naming an uncatalogued provider still opens and explains", async
   expect(row.firstElementChild?.className).toContain("border-j-primary");
   // …and nothing to type into, because the catalog lists no fields for it.
   expect(within(row).queryByRole("textbox")).toBeNull();
-  expect(within(row).getByRole("button", { name: "Remove legacy_vendor" })).toBeTruthy();
+  // Named "Legacy vendor": no catalog entry, so **A3**'s humanised fallback in
+  // `labels.ts` supplies the label. The anchor is still keyed by the slug.
+  expect(within(row).getByRole("button", { name: "Remove Legacy vendor" })).toBeTruthy();
 });
 
 // The tab is mounted by the shell's tab switch, and nothing else may re-consume

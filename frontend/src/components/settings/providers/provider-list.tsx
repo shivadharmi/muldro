@@ -3,6 +3,7 @@
 import { Fragment } from "react";
 
 import type { ExpandedRow } from "../hooks/use-expanded-row";
+import { humaniseSlug } from "../labels";
 import type { CredentialFields } from "../hooks/use-provider-credentials";
 import { ProviderCredentialForm } from "./provider-credential-form";
 import type { ProviderEntry } from "./provider-entries";
@@ -61,7 +62,7 @@ export function ProviderList({
       {entries.map((item, index) => {
         const { status, entry } = item;
         const provider = status.provider;
-        const name = entry?.display_name ?? provider;
+        const name = entry?.display_name ?? humaniseSlug(provider);
         const open = expanded?.provider === provider;
         const busy = isBusy(provider);
         return (

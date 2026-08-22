@@ -4,6 +4,7 @@ import { useId, useState, type ReactNode } from "react";
 
 import type { CatalogModel, CatalogProvider, ModelBinding } from "@/lib/types";
 import { LABEL_CLASS, ctl } from "../controls";
+import { humaniseSlug } from "../labels";
 import { ChevronDownIcon, SearchIcon } from "../icons";
 import {
   EFFORT_LABELS,
@@ -162,7 +163,7 @@ export function BindingFields({
   const providerSlug = selectedModel?.provider ?? binding.provider;
   const providerName =
     providers.find((p) => p.provider === providerSlug)?.display_name ??
-    providerSlug;
+    humaniseSlug(providerSlug);
 
   // A model that has left the catalog still renders its id, never an empty box.
   const modelLabel =

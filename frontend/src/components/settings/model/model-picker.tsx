@@ -4,6 +4,7 @@ import { useEffect, useId, useMemo, useRef, useState } from "react";
 
 import type { CatalogModel, CatalogProvider, ProviderStatus } from "@/lib/types";
 import { btn } from "../controls";
+import { sentenceCase } from "../labels";
 import { useFocusTrap } from "../hooks/use-focus-trap";
 import { CheckIcon, SearchIcon } from "../icons";
 import { useOverlayClaim } from "../overlay-context";
@@ -13,7 +14,6 @@ import {
   costLabel,
   formatContext,
   queryTerms,
-  sentenceCase,
   thinkingLabel,
   unconnectedLabel,
   type Row,

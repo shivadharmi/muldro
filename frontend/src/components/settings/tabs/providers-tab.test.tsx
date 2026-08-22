@@ -105,10 +105,10 @@ test("Cancel collapses the expanded row", async () => {
 test("an uncatalogued provider renders without a credential form", async () => {
   await renderTab();
   expect(
-    screen.getByRole("button", { name: "Remove legacy_vendor" }),
+    screen.getByRole("button", { name: "Remove Legacy vendor" }),
   ).toBeTruthy();
-  expect(screen.queryByRole("button", { name: "Connect legacy_vendor" })).toBeNull();
-  expect(screen.queryByRole("button", { name: "Test legacy_vendor" })).toBeNull();
+  expect(screen.queryByRole("button", { name: /Connect Legacy/ })).toBeNull();
+  expect(screen.queryByRole("button", { name: /Test Legacy/ })).toBeNull();
 });
 
 test("the subtitle points app connections at /integrations", async () => {
@@ -148,7 +148,9 @@ test("a catalog-only failure still shows a persistent retry", async () => {
   ).toBeTruthy();
   // Rows DID render from the eagerly-fetched config, so the empty state is not
   // on screen and cannot be what carries the recovery.
-  expect(screen.getByRole("button", { name: "Remove anthropic" })).toBeTruthy();
+  // "Anthropic", not `anthropic`: with the catalog down there is no entry to
+  // supply a display name, and **A3** humanises the fallback (`labels.ts`).
+  expect(screen.getByRole("button", { name: "Remove Anthropic" })).toBeTruthy();
   expect(screen.queryByText("Providers could not be loaded.")).toBeNull();
 
   vi.mocked(fetchModelCatalog).mockResolvedValue(makeCatalog());

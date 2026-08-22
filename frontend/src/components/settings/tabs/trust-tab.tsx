@@ -8,6 +8,7 @@ import { errorToMessage } from "@/lib/api-error";
 import { useToast } from "@/components/ui/toast";
 import type { TrustDashboardEntry } from "@/lib/types";
 import { TrustCapabilityCard } from "./trust-capability-card";
+import { humaniseSlug } from "../labels";
 import { TRUST_LEVEL_LABELS } from "./trust-constants";
 
 /**
@@ -50,7 +51,7 @@ export function TrustTab() {
           ),
         );
         addToast(
-          `Ceiling set to ${TRUST_LEVEL_LABELS[maxLevel] ?? maxLevel}`,
+          `Ceiling set to ${TRUST_LEVEL_LABELS[maxLevel] ?? humaniseSlug(maxLevel)}`,
           "success",
         );
       } catch (err) {
@@ -122,7 +123,7 @@ export function TrustTab() {
         families.map(([family, familyEntries]) => (
           <div key={family}>
             <h3 className="text-[11px] uppercase text-t-muted font-medium mb-2.5 tracking-wider">
-              {family}
+              {humaniseSlug(family)}
             </h3>
             <div className="space-y-2">
               {familyEntries.map((entry) => (

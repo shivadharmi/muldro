@@ -1,4 +1,5 @@
 import type { CatalogModel, CatalogProvider, ProviderStatus } from "@/lib/types";
+import { humaniseSlug, sentenceCase } from "../labels";
 
 /**
  * The §9.9 palette's data layer: catalog rows in, labelled and grouped rows out.
@@ -9,10 +10,6 @@ import type { CatalogModel, CatalogProvider, ProviderStatus } from "@/lib/types"
  * the founder cannot bind was offered anyway). Keeping them in one file also
  * put the palette at the 400-line cap with no headroom.
  */
-
-/** Sentence case, per **A3** — nothing on screen may be a raw slug. */
-export const sentenceCase = (slug: string): string =>
-  slug.charAt(0).toUpperCase() + slug.slice(1);
 
 /** `thinking_style` is a provider-shaped slug; the row needs the *behaviour*,
  *  and the provider has its own column. Unknown styles are humanised (**A3**). */
@@ -25,7 +22,7 @@ const THINKING_LABELS: Record<string, string> = {
 };
 
 export const thinkingLabel = (style: string): string =>
-  THINKING_LABELS[style] ?? sentenceCase(style.replace(/_/g, " ").trim());
+  THINKING_LABELS[style] ?? humaniseSlug(style);
 
 /** 200000 → `200K`. The unit is what makes the 52px column legible. */
 export function formatContext(tokens: number): string {
@@ -94,7 +91,7 @@ export function buildGroups(
   // No catalog entry means no display name, and **A3** forbids the slug.
   const nameOf = (slug: string): string =>
     providers.find((p) => p.provider === slug)?.display_name ??
-    sentenceCase(slug.replace(/_/g, " "));
+    humaniseSlug(slug);
 
   // Only connected providers are offered. §2.4 rejects a binding to an
   // unconfigured provider with a 422, so a cross-provider Suggested row from a

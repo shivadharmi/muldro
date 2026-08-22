@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 
 import type { CatalogProvider, ProviderStatus } from "@/lib/types";
 import { btn } from "../controls";
+import { humaniseSlug } from "../labels";
 
 /** §9.3 chip — one height (20px), one radius. The fence there is on SIZES: do
  *  not add a fourth chip size. Variants are a different axis and are added as
@@ -204,7 +205,7 @@ export function ProviderRow({
   const uncatalogued = entry === null;
 
   const presentation = presentationFor(status);
-  const name = entry?.display_name ?? status.provider;
+  const name = entry?.display_name ?? humaniseSlug(status.provider);
 
   // Remove is gated on ownership to stop a workspace deleting an env or
   // deployment-default credential that is not its to delete. An UNCATALOGUED

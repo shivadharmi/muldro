@@ -144,7 +144,11 @@ test("the provider renders as text derived from the selected model", () => {
   expect(screen.getByText("Anthropic")).toBeInTheDocument();
 });
 
-test("an uncatalogued provider falls back to its slug rather than rendering blank", () => {
+// The fallback exists so the control never renders blank. It used to print the
+// raw `groq`; **A3** forbids a slug on screen, and the model picker had long
+// been humanising this exact fallback — so the same provider was named two ways
+// on one surface. `labels.ts` now owns it. The expectation moved with the fix.
+test("an uncatalogued provider falls back to a humanised slug, never blank", () => {
   render(
     <BindingFields
       binding={binding({ provider: "groq", model_id: "llama-3.3-70b" })}
@@ -154,7 +158,8 @@ test("an uncatalogued provider falls back to its slug rather than rendering blan
       onOpenPicker={vi.fn()}
     />,
   );
-  expect(screen.getByText("groq")).toBeInTheDocument();
+  expect(screen.getByText("Groq")).toBeInTheDocument();
+  expect(screen.queryByText("groq")).not.toBeInTheDocument();
 });
 
 // ── Dirty / warning / disabled ─────────────────────────────────────────────

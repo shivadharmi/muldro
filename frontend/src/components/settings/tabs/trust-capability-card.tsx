@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import type { TrustDashboardEntry } from "@/lib/types";
+import { humaniseSlug } from "../labels";
 import { TRUST_LEVEL_COLORS, TRUST_LEVEL_LABELS, CEILING_OPTIONS } from "./trust-constants";
 
 interface TrustCapabilityCardProps {
@@ -43,7 +44,7 @@ export function TrustCapabilityCard({
               {entry.capability}
             </span>
             <span className="text-[11px] text-t-muted px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-surface-2">
-              {TRUST_LEVEL_LABELS[entry.trust_level] ?? entry.trust_level}
+              {TRUST_LEVEL_LABELS[entry.trust_level] ?? humaniseSlug(entry.trust_level)}
             </span>
           </div>
           <svg
@@ -85,12 +86,12 @@ export function TrustCapabilityCard({
               className="flex items-center justify-between text-xs"
             >
               <span className="text-t-secondary w-16 capitalize">
-                {rl.risk_level}
+                {humaniseSlug(rl.risk_level)}
               </span>
               <span
                 className={`px-1.5 py-0.5 rounded-[var(--radius-sm)] ${TRUST_LEVEL_COLORS[rl.trust_level] ?? "bg-t-muted"} text-white text-[10px] font-medium`}
               >
-                {TRUST_LEVEL_LABELS[rl.trust_level] ?? rl.trust_level}
+                {TRUST_LEVEL_LABELS[rl.trust_level] ?? humaniseSlug(rl.trust_level)}
               </span>
               <span className="text-t-tertiary">
                 {rl.approved_count}

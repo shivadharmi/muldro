@@ -7,6 +7,7 @@ import { errorToMessage } from "@/lib/api-error";
 import type { CatalogModel, ModelBinding } from "@/lib/types";
 import { useSettingsModalStore } from "@/stores/settings-modal-store";
 import { btn } from "../controls";
+import { humaniseSlug } from "../labels";
 import { bindingKey } from "../hooks/use-model-config";
 import { extractBindRejections } from "../hooks/use-bind-rejections";
 import { useModelConfigContext } from "../model-config-context";
@@ -28,11 +29,6 @@ const TIER_DESCRIPTIONS: Record<string, string> = {
   balanced: "The everyday default. Most agents run here.",
   fast: "Cheap and quick — triage, classification, summaries.",
 };
-
-/** Sentence case, per **A3** — nothing on screen may be a raw slug. */
-function sentence(slug: string): string {
-  return slug.charAt(0).toUpperCase() + slug.slice(1);
-}
 
 function tierRank(scopeKey: string): number {
   const index = TIER_ORDER.indexOf(scopeKey);
@@ -138,9 +134,9 @@ export function ModelTab() {
   const labelFor = useCallback(
     (scopeType: ModelBinding["scope_type"], scopeKey: string) =>
       scopeType === "tier"
-        ? sentence(scopeKey)
+        ? humaniseSlug(scopeKey)
         : (agents.find((a) => a.name === scopeKey)?.display_name ??
-          sentence(scopeKey)),
+          humaniseSlug(scopeKey)),
     [agents],
   );
 
@@ -233,7 +229,7 @@ export function ModelTab() {
   const connectProvider = useCallback(
     (provider: string, scopeKey: string) => {
       setPicker(null);
-      openProviderFor(provider, `Needed by the ${sentence(scopeKey)} tier`);
+      openProviderFor(provider, `Needed by the ${humaniseSlug(scopeKey)} tier`);
     },
     [openProviderFor],
   );
