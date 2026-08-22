@@ -45,7 +45,7 @@ from src.services.outcome_learner import OutcomeLearner
 from src.services.step_graph_store import StepGraphStore
 from src.services.step_runner import StepRunner
 from src.services.trust_gate import TrustGate
-from src.services.user_action_steps import handle_user_action_step
+from src.services.user_action_steps import handle_user_action_step, park_if_blocked_on_founder
 
 if TYPE_CHECKING:
     from src.services.verification import VerifyVerdict
@@ -197,7 +197,7 @@ class DagRunner:
                             workspace_id=run.workspace_id,
                         )
                     break
-                # Must be waiting for approval or external event
+                await park_if_blocked_on_founder(run, all_steps, self._emitter)
                 break
 
             # Execute ready steps sequentially (shared AsyncSession is not
