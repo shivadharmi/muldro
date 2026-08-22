@@ -1,142 +1,58 @@
 "use client";
 
 import Link from "next/link";
-import { Fragment, useCallback, useMemo, useState, type ReactNode } from "react";
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from "react";
 
 import { useToast } from "@/components/ui/toast";
 import { errorToMessage } from "@/lib/api-error";
-import type {
-  CatalogProvider,
-  ModelBinding,
-  ModelCatalog,
-  ModelConfig,
-  ProviderStatus,
-} from "@/lib/types";
+import { ctl } from "../controls";
+import { SearchIcon } from "../icons";
 import type { CredentialFields } from "../hooks/use-provider-credentials";
 import { useModelConfigContext } from "../model-config-context";
 import { ProviderCredentialForm } from "../providers/provider-credential-form";
+import {
+  buildEntries,
+  dependentBindings,
+  filterEntries,
+  type ProviderEntry,
+} from "../providers/provider-entries";
 import {
   ProviderFilter,
   type ProviderFilterValue,
 } from "../providers/provider-filter";
 import { ProviderRow, ProviderRowSeparator } from "../providers/provider-row";
+import {
+  consequenceOf,
+  RemoveConfirmation,
+  useRowFocusRestore,
+  type PendingRemoval,
+} from "../providers/remove-confirmation";
 
 /** §9.2 section header. */
 const SEC_H = "text-[11px] font-medium uppercase text-t-muted tracking-[.08em]";
 
 /** §9.3 neutral chip. Re-stated rather than imported: `Chip` is private to
- *  `provider-row.tsx`, and a count beside a group header is not a row slot. */
+ *  `provider-row.tsx`, and a count beside a group header is not a row slot —
+ *  two tab-level siblings cross-importing a presentational primitive is a worse
+ *  dependency than this duplication. `controls.ts` is its eventual home. */
 const COUNT_CHIP =
   "inline-flex items-center h-[20px] px-[8px] rounded-full text-[11px] " +
   "font-medium whitespace-nowrap shrink-0 bg-surface-3 text-t-tertiary " +
   "tabular-nums";
 
-/** §9.3 `ctl`, in its search-field form. */
-const SEARCH_CTL =
-  "flex-1 min-w-0 flex items-center justify-start gap-[9px] h-[44px] sm:h-[36px] " +
-  "px-[12px] sm:px-[10px] rounded-[var(--radius-md)] bg-surface-2 " +
-  "border border-b-secondary text-t-muted";
-
-const GHOST_BTN =
-  "inline-flex items-center justify-center h-[44px] sm:h-[30px] px-[11px] " +
-  "text-[13px] font-medium rounded-[var(--radius-md)] bg-transparent " +
-  "border border-b-primary hover:bg-surface-2 cursor-pointer";
-
-function SearchGlyph() {
-  return (
-    <svg
-      viewBox="0 0 12 12"
-      width={13}
-      height={13}
-      fill="none"
-      stroke="currentColor"
-      strokeWidth={1.4}
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-      className="shrink-0"
-    >
-      <circle cx="5.2" cy="5.2" r="3.3" />
-      <path d="M7.7 7.7l2.1 2.1" />
-    </svg>
-  );
-}
-
-/** Server state plus the catalog entry carrying the display name and credential
- *  schema. `entry` is null for an uncatalogued provider — derived from
- *  `catalogued` as well as from the lookup, so a stale catalog row cannot
- *  resurrect a schema the server disowned. */
-interface ProviderEntry {
-  status: ProviderStatus;
-  entry: CatalogProvider | null;
-  /** Lower-cased provider slug, display name, model names and model ids. */
-  haystack: string;
-}
-
-/**
- * Search matches the provider AND its models. A founder types "sonnet", not
- * "anthropic" — the model is the thing they can name, and which vendor hosts it
- * is the detail they came here to look up.
- */
-function buildEntries(
-  config: ModelConfig | null,
-  catalog: ModelCatalog | null,
-): ProviderEntry[] {
-  const byProvider = new Map(
-    (catalog?.providers ?? []).map((p) => [p.provider, p]),
-  );
-  const models = new Map<string, string>();
-  for (const model of catalog?.models ?? []) {
-    const prior = models.get(model.provider) ?? "";
-    models.set(model.provider, `${prior} ${model.display_name} ${model.model_id}`);
-  }
-  return (config?.providers ?? []).map((status) => {
-    const entry = status.catalogued
-      ? (byProvider.get(status.provider) ?? null)
-      : null;
-    const haystack = `${status.provider} ${entry?.display_name ?? ""} ${
-      models.get(status.provider) ?? ""
-    }`.toLowerCase();
-    return { status, entry, haystack };
-  });
-}
-
-/**
- * The bindings this provider currently backs — read from the SAVED config.
- *
- * `CredentialDeleteResult.orphaned_bindings` is the authority on what a delete
- * broke, but it only exists once the credential is already gone. A confirmation
- * has to be answerable BEFORE that, so the consequence is computed from the
- * config already on screen. The two can disagree if the server moved underneath
- * us, which is exactly why the post-delete result is still surfaced too.
- */
-export function dependentBindings(
-  config: ModelConfig | null,
-  provider: string,
-): ModelBinding[] {
-  if (!config) return [];
-  return [...config.tiers, ...config.agent_overrides].filter(
-    (binding) => binding.provider === provider,
-  );
-}
-
-/** "Removing OpenAI breaks the fast tier and the planner override." */
-function consequenceOf(name: string, bindings: readonly ModelBinding[]): string {
-  const parts = bindings.map(
-    (b) => `the ${b.scope_key} ${b.scope_type === "tier" ? "tier" : "override"}`,
-  );
-  const listed =
-    parts.length <= 1
-      ? (parts[0] ?? "")
-      : `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`;
-  return `Removing ${name} breaks ${listed}.`;
-}
-
-interface PendingRemoval {
-  provider: string;
-  name: string;
-  consequence: string;
-}
+/** The row wrapper is focusable BY SCRIPT only: it is where focus returns after
+ *  the removal confirmation unmounts, so that focus never falls to `<body>`
+ *  inside a focus-trapped modal. */
+const ROW_ANCHOR =
+  "outline-none focus-visible:ring-1 focus-visible:ring-inset " +
+  "focus-visible:ring-j-ring";
 
 function ProviderGroup({
   id,
@@ -173,29 +89,57 @@ function ProviderGroup({
  * It owns exactly one piece of list state the pieces below it deliberately do
  * not — which row is expanded. Expansion is exclusive, and a row cannot enforce
  * that about its siblings.
+ *
+ * Exclusivity DISCARDS a half-typed credential: opening a second row unmounts
+ * the first form and the values in it. That is the intended trade. Lifting those
+ * values into this component to survive the collapse would hold a plaintext key
+ * in memory for the rest of the visit, across every unrelated re-render, for the
+ * sake of a form the founder navigated away from — the credential form already
+ * clears its own secrets the moment the server holds them, and this is the same
+ * rule applied to abandonment.
  */
 export function ProvidersTab() {
   const { addToast } = useToast();
   const { models, credentials } = useModelConfigContext();
-  const { catalog, config } = models;
+  const { catalog, config, loading, load } = models;
 
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<ProviderFilterValue>("all");
   const [expanded, setExpanded] = useState<string | null>(null);
   const [pending, setPending] = useState<PendingRemoval | null>(null);
 
+  // `useModelConfigContext` fires the same `load()` and swallows the failure,
+  // because a shared context cannot know which of its consumers is on screen to
+  // be told. This tab IS on screen, and both calls share one promise — so this
+  // is not a second request, it is the one place that observes the outcome. A
+  // failure resets the hook's guard, which is what makes the retry below work.
+  useEffect(() => {
+    load().catch((err) => addToast(errorToMessage(err), "error"));
+  }, [load, addToast]);
+
   const entries = useMemo(() => buildEntries(config, catalog), [config, catalog]);
+  const visible = useMemo(() => filterEntries(entries, query), [entries, query]);
+  const connected = useMemo(
+    () => visible.filter((item) => item.status.configured),
+    [visible],
+  );
+  const available = useMemo(
+    () => visible.filter((item) => !item.status.configured),
+    [visible],
+  );
 
-  const visible = useMemo(() => {
-    const needle = query.trim().toLowerCase();
-    if (!needle) return entries;
-    return entries.filter((item) => item.haystack.includes(needle));
-  }, [entries, query]);
-
-  const connected = visible.filter((item) => item.status.configured);
-  const available = visible.filter((item) => !item.status.configured);
   const showConnected = filter !== "available" && connected.length > 0;
   const showAvailable = filter !== "connected" && available.length > 0;
+
+  const restoreFocusTo = useRowFocusRestore();
+
+  const closeConfirmation = useCallback(
+    (provider: string) => {
+      setPending(null);
+      restoreFocusTo(provider);
+    },
+    [restoreFocusTo],
+  );
 
   const remove = useCallback(
     async (provider: string, name: string) => {
@@ -209,18 +153,23 @@ export function ProvidersTab() {
         }
       } catch (err) {
         addToast(errorToMessage(err), "error");
+      } finally {
+        // The refetch has already been adopted, so this batches with the render
+        // that moves the row between groups.
+        restoreFocusTo(provider);
       }
     },
-    [addToast, credentials],
+    [addToast, credentials, restoreFocusTo],
   );
 
-  // Confirmation, never a block. A credential the founder cannot revoke is a
-  // security problem, so a dependent binding buys a sentence and a second
-  // click — not a veto.
   const handleRemove = useCallback(
     (provider: string, name: string) => {
       const bindings = dependentBindings(config, provider);
       if (bindings.length === 0) {
+        // An open confirmation for a DIFFERENT provider is stale the moment this
+        // one deletes: clear it rather than leave it answering for a row whose
+        // neighbour just changed underneath it.
+        setPending(null);
         void remove(provider, name);
         return;
       }
@@ -232,9 +181,9 @@ export function ProvidersTab() {
   const confirmRemoval = useCallback(() => {
     if (!pending) return;
     const { provider, name } = pending;
-    setPending(null);
+    closeConfirmation(provider);
     void remove(provider, name);
-  }, [pending, remove]);
+  }, [closeConfirmation, pending, remove]);
 
   const handleTest = useCallback(
     async (provider: string, name: string) => {
@@ -294,13 +243,30 @@ export function ProvidersTab() {
     );
   };
 
+  // The confirmation is interleaved directly beneath its own row, so reading
+  // order, tab order and the thing being answered for are all the same place.
   const rows = (list: readonly ProviderEntry[]) =>
-    list.map((item, index) => (
-      <Fragment key={item.status.provider}>
-        {index > 0 && <ProviderRowSeparator />}
-        {renderRow(item)}
-      </Fragment>
-    ));
+    list.map((item, index) => {
+      const provider = item.status.provider;
+      return (
+        <Fragment key={provider}>
+          {index > 0 && <ProviderRowSeparator />}
+          <div data-provider-row={provider} tabIndex={-1} className={ROW_ANCHOR}>
+            {renderRow(item)}
+          </div>
+          {pending?.provider === provider && (
+            <>
+              <ProviderRowSeparator />
+              <RemoveConfirmation
+                pending={pending}
+                onCancel={() => closeConfirmation(provider)}
+                onConfirm={confirmRemoval}
+              />
+            </>
+          )}
+        </Fragment>
+      );
+    });
 
   return (
     <div className="flex flex-col">
@@ -321,10 +287,15 @@ export function ProvidersTab() {
 
       {/* §9.8 puts the toolbar at `14px 24px 12px`. The 24px is the settings
           panel's own horizontal padding, so only the vertical pair is set here
-          — supplying it again would inset the toolbar past the rows below it. */}
+          — supplying it again would inset the toolbar past the rows below it,
+          and would hard-code 24px over §9.10's 16px mobile gutter. */}
       <div className="flex items-center gap-[10px] pt-[14px] pb-[12px]">
-        <label className={SEARCH_CTL}>
-          <SearchGlyph />
+        <label
+          className={ctl({
+            extra: "flex items-center justify-start gap-[9px] flex-1 min-w-0",
+          })}
+        >
+          <SearchIcon size={13} className="text-t-muted" />
           <span className="sr-only">Search providers</span>
           <input
             type="search"
@@ -338,34 +309,6 @@ export function ProvidersTab() {
         </label>
         <ProviderFilter value={filter} onChange={setFilter} />
       </div>
-
-      {pending && (
-        <div
-          role="alert"
-          className="mb-[14px] flex flex-wrap items-center gap-3 rounded-[var(--radius-lg)] border border-j-warning/35 bg-j-warning-soft px-4 py-3"
-        >
-          <p className="flex-1 min-w-[200px] text-[12.5px] leading-[1.5] text-t-secondary">
-            {pending.consequence} Those bindings fail until you point them at a
-            connected provider.
-          </p>
-          <div className="flex items-center gap-[7px] shrink-0">
-            <button
-              type="button"
-              onClick={() => setPending(null)}
-              className={`${GHOST_BTN} text-t-secondary`}
-            >
-              Keep it
-            </button>
-            <button
-              type="button"
-              onClick={confirmRemoval}
-              className={`${GHOST_BTN} text-j-error`}
-            >
-              Remove anyway
-            </button>
-          </div>
-        </div>
-      )}
 
       {showConnected && (
         <ProviderGroup
@@ -385,15 +328,42 @@ export function ProvidersTab() {
       )}
 
       {!showConnected && !showAvailable && (
-        <p className="py-6 text-center text-[12.5px] text-t-muted">
-          {entries.length === 0 ? "Loading providers…" : "No providers match."}
-        </p>
+        <div className="py-6 text-center text-[12.5px] text-t-muted">
+          {loading ? (
+            "Loading providers…"
+          ) : config === null ? (
+            // A failed load is NOT an empty list. Say so, and offer the retry —
+            // the hook resets its guard on failure, so `load()` really refetches.
+            <>
+              <p>Providers could not be loaded.</p>
+              <button
+                type="button"
+                onClick={() =>
+                  void load().catch((err) =>
+                    addToast(errorToMessage(err), "error"),
+                  )
+                }
+                className="mt-2 text-[12.5px] font-medium text-j-primary hover:underline cursor-pointer"
+              >
+                Try again
+              </button>
+            </>
+          ) : entries.length === 0 ? (
+            "No providers available."
+          ) : (
+            "No providers match."
+          )}
+        </div>
       )}
 
-      {/* A long list must read as continuing rather than as ending at the fold. */}
+      {/* A long list must read as continuing rather than as ending at the fold.
+          §9.8 says `to-surface-1`, which is the panel's fill at `sm`+ — but the
+          shell's scroll body is `bg-surface-0` below it, where a surface-1 fade
+          would end in a visible band. Deliberately spec-literal only where the
+          spec's own assumption holds. */}
       <div
         aria-hidden="true"
-        className="sticky bottom-0 h-[56px] -mt-[56px] shrink-0 pointer-events-none bg-gradient-to-b from-transparent to-surface-1"
+        className="sticky bottom-0 h-[56px] -mt-[56px] shrink-0 pointer-events-none bg-gradient-to-b from-transparent to-surface-0 sm:to-surface-1"
       />
     </div>
   );
