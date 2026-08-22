@@ -5,6 +5,17 @@ import { useId, useState, type ReactNode } from "react";
 import type { CatalogModel, CatalogProvider, ModelBinding } from "@/lib/types";
 import { LABEL_CLASS, ctl } from "../controls";
 import { ChevronDownIcon, SearchIcon } from "../icons";
+import {
+  EFFORT_LABELS,
+  EFFORT_OPTIONS,
+  EFFORT_UNSUPPORTED,
+  TEMPERATURE_UNSET,
+  TEMPERATURE_UNSUPPORTED,
+  findModel,
+  isCompleteDecimal,
+  isCompleteTokenCount,
+  toEffort,
+} from "./binding-values";
 
 /**
  * The subset of a binding this grid can edit.
@@ -20,50 +31,6 @@ import { ChevronDownIcon, SearchIcon } from "../icons";
 export type BindingPatch = Partial<
   Pick<ModelBinding, "effort" | "max_tokens" | "temperature">
 >;
-
-const EFFORT_OPTIONS: readonly ModelBinding["effort"][] = [
-  "none",
-  "low",
-  "medium",
-  "high",
-];
-
-/** Sentence case, per **A3** — a select must not announce a raw slug. */
-const EFFORT_LABELS: Record<ModelBinding["effort"], string> = {
-  none: "None",
-  low: "Low",
-  medium: "Medium",
-  high: "High",
-};
-
-/** §4.3's two fixed strings. Each is a claim about a KNOWN capability, so
- *  neither may be shown for a model whose capabilities we cannot look up. */
-const EFFORT_UNSUPPORTED = "n/a";
-const TEMPERATURE_UNSUPPORTED = "Not accepted";
-/** What a null temperature reads as when the control is not editable. */
-const TEMPERATURE_UNSET = "—";
-
-/**
- * A COMPLETE non-negative decimal literal — the only shape Temperature emits.
- *
- * `"0."` is deliberately excluded even though `Number("0.")` is a perfectly
- * finite `0`: it is the halfway state of typing `"0.7"`, not a value, and
- * emitting `0` there would push a sampling temperature the founder never chose.
- * `""`, `"."`, `"-"`, `"1e"` and `"-0.5"` are excluded too, which is where the
- * "no negative temperature" guard now lives — a real check, rather than the
- * `min={0}` attribute it replaces, which never blocked typed input.
- */
-const COMPLETE_DECIMAL = /^\d*\.?\d+$/;
-
-/** Narrow a select's raw string back to the union without an `as`. The options
- *  come from `EFFORT_OPTIONS`, so the fallback is unreachable — but it is the
- *  lookup, not an assertion, that makes that true. */
-function toEffort(
-  value: string,
-  fallback: ModelBinding["effort"],
-): ModelBinding["effort"] {
-  return EFFORT_OPTIONS.find((option) => option === value) ?? fallback;
-}
 
 interface FieldProps {
   uid: string;
@@ -92,17 +59,6 @@ function Field({ uid, name, label, className, children }: FieldProps) {
       </label>
       {children({ id, labelId })}
     </div>
-  );
-}
-
-/** The binding's model, identified by BOTH keys — a bare `model_id` is not
- *  unique across providers. `undefined` for an empty or de-listed binding. */
-function findModel(
-  models: readonly CatalogModel[],
-  binding: ModelBinding,
-): CatalogModel | undefined {
-  return models.find(
-    (m) => m.provider === binding.provider && m.model_id === binding.model_id,
   );
 }
 
@@ -162,18 +118,21 @@ export function BindingFields({
   const uid = useId();
 
   /**
-   * The in-flight text of each numeric field, or `null` when not being edited.
+   * A field needs a draft when a valid value's typing path passes through a DOM
+   * state the handler cannot distinguish from a different meaningful value.
    *
-   * A controlled numeric input hands whatever it emits straight back down as
-   * its own displayed value, so any handler that maps an unparseable keystroke
-   * onto a "safe" value rewrites the field under the founder's cursor. Both
-   * fields therefore hold their raw text here and emit a patch only for a
-   * string that is genuinely complete; `onBlur` discards the draft, so a
-   * half-typed value can never be committed.
+   * That is the whole rule. An earlier version of this comment asked instead
+   * whether the field had a legal empty state, which is true about CLEARING and
+   * silent about the decimal point — and shipped a temperature control that
+   * wiped itself the moment anyone typed one.
    *
-   * The two are NOT the same problem, and an earlier version of this comment
-   * got the distinction wrong by framing it as "does the field have a legal
-   * empty state":
+   * So: the in-flight text of each numeric field, or `null` when not being
+   * edited. A controlled input hands whatever it emits straight back down as its
+   * own displayed value, so a handler that maps an unparseable keystroke onto a
+   * "safe" value rewrites the field under the founder's cursor. Both fields hold
+   * their raw text here and emit only for a string `binding-values.ts` calls
+   * complete; `onBlur` discards the draft, so a half-typed value is never
+   * committed. The two are NOT the same problem:
    *
    *   * **Max tokens** is an integer, so no valid input passes through an
    *     unparseable prefix. `""` there means "cleared" or "garbage", and both
@@ -327,9 +286,8 @@ export function BindingFields({
             onChange={(e) => {
               const raw = e.target.value;
               setTokenDraft(raw);
-              const parsed = Number(raw);
-              if (raw !== "" && Number.isInteger(parsed) && parsed >= 1) {
-                onChange({ max_tokens: parsed });
+              if (isCompleteTokenCount(raw)) {
+                onChange({ max_tokens: Number(raw) });
               }
             }}
             onBlur={() => setTokenDraft(null)}
@@ -378,7 +336,7 @@ export function BindingFields({
                 // a state. Only the first emits.
                 if (raw === "") {
                   onChange({ temperature: null });
-                } else if (COMPLETE_DECIMAL.test(raw)) {
+                } else if (isCompleteDecimal(raw)) {
                   onChange({ temperature: Number(raw) });
                 }
               }}
