@@ -47,7 +47,29 @@ def credential_is_usable(api_key: str | None, provider: str) -> bool:
 
 
 class ModelConfigError(RuntimeError):
-    """Raised when a model cannot be resolved (unknown model / missing credential)."""
+    """A binding could not be resolved to a runnable model.
+
+    Carries the binding's identity so a caller can name the tier, the agent and the
+    provider. Nothing in src/ caught this before, so a misconfigured tier surfaced as
+    a bare RuntimeError at agent-build time naming nothing (B7).
+
+    Still a RuntimeError, so any existing broad handler keeps working.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        scope_type: str | None = None,
+        scope_key: str | None = None,
+        provider: str | None = None,
+        remediation: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.scope_type = scope_type
+        self.scope_key = scope_key
+        self.provider = provider
+        self.remediation = remediation
 
 
 @dataclass(frozen=True)
@@ -76,7 +98,12 @@ class ModelResolver:
             tier=tier, agent=agent, agent_tier=agent_tier, workspace_id=workspace_id
         )
         if binding is None:
-            raise ModelConfigError(f"no model binding for tier={tier} agent={agent}")
+            raise ModelConfigError(
+                f"no model binding for tier={tier} agent={agent}",
+                scope_type="agent" if agent else "tier",
+                scope_key=agent or tier,
+                remediation="Set a model for this tier in Settings › Model.",
+            )
 
         try:
             return await self._build_resolved(binding, workspace_id, thinking_enabled)
@@ -102,11 +129,26 @@ class ModelResolver:
     ) -> ResolvedModel:
         spec = get_model_spec(binding.provider, binding.model_id)
         if spec is None:
-            raise ModelConfigError(f"unknown model {binding.provider}/{binding.model_id}")
+            raise ModelConfigError(
+                f"unknown model {binding.provider}/{binding.model_id}",
+                scope_type=binding.scope_type,
+                scope_key=binding.scope_key,
+                provider=binding.provider,
+                remediation="Pick a different model in Settings › Model.",
+            )
 
         api_key, base_url = await self.resolve_credential(binding.provider, workspace_id)
         if not credential_is_usable(api_key, binding.provider):
-            raise ModelConfigError(f"provider {binding.provider} is not configured")
+            raise ModelConfigError(
+                f"provider {binding.provider} is not configured",
+                scope_type=binding.scope_type,
+                scope_key=binding.scope_key,
+                provider=binding.provider,
+                remediation=(
+                    f"Connect {binding.provider} in Settings › Providers, "
+                    f"or point this binding at a connected provider."
+                ),
+            )
 
         kwargs = build_model_kwargs(
             spec,

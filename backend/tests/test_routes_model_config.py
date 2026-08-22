@@ -1809,3 +1809,42 @@ def test_delete_reports_only_what_this_revoke_broke(monkeypatch):
         if app is not None:
             app.dependency_overrides.clear()
         _delete_ws_credentials(factory, ws)
+
+
+@pytest.mark.skipif(not _db_reachable(), reason="Postgres not reachable")
+def test_tier_binding_with_no_credential_raises_and_does_not_fall_back(monkeypatch):
+    """Spec §2.5. A workspace tier binding whose provider is unusable must RAISE.
+    _pick_binding prefers the workspace row over the deployment-default row by
+    EXISTENCE, and must not start skipping it on usability."""
+    import pytest as _pytest
+
+    from src.services.model_resolver import ModelConfigError, ModelResolver
+
+    monkeypatch.setattr(get_settings(), "openai_api_key", "", raising=False)
+    factory, ws = _ws_factory()
+
+    async def _seed_and_resolve():
+        async with factory() as db:
+            db.add(
+                ModelBinding(
+                    workspace_id=ws,
+                    scope_type="tier",
+                    scope_key="reasoning",
+                    provider="openai",
+                    model_id="gpt-5",
+                    effort="high",
+                    max_tokens=8192,
+                    enabled=True,
+                )
+            )
+            await db.commit()
+        async with factory() as db:
+            with _pytest.raises(ModelConfigError) as excinfo:
+                await ModelResolver(db).resolve(tier="reasoning", workspace_id=ws)
+            return excinfo.value
+
+    err = asyncio.run(_seed_and_resolve())
+    assert err.provider == "openai"
+    assert err.scope_type == "tier"
+    assert err.scope_key == "reasoning"
+    assert "Settings" in (err.remediation or "")
