@@ -1,20 +1,17 @@
 "use client";
 
-import { useCallback, useEffect, useMemo } from "react";
+import { useCallback, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
+  dismissUnit,
   fetchRuntimeSummary,
   fetchSystemDashboard,
-  fetchWorkspaceSurfaces,
+  fetchWorkspaceUnits,
 } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { resolveFirstRunState } from "@/lib/first-run-state";
 import { useMuldroWs } from "@/hooks/use-muldro-ws";
-import { useSurfaceStore } from "@/stores/surface-store";
-import type { WorkspaceSurface } from "@/stores/surface-store";
-import { normalizeSurfaceKind } from "@/lib/types/surfaces";
-import { unitFromSurface } from "@/lib/types/unit-bridge";
-import { sortSurfacesActiveFirst } from "@/lib/surface-merge";
+import { useUnitStore } from "@/stores/unit-store";
 import { useWsActionStore } from "@/stores/ws-action-store";
 import { formatApiError, type ParsedApiError } from "@/lib/api-error";
 import { useToast } from "@/components/ui/toast";
@@ -23,18 +20,20 @@ import { BriefingGatheringCard } from "@/components/dashboard/briefing-gathering
 import { OnboardingCard } from "@/components/dashboard/onboarding-card";
 import { WorkspaceCanvas } from "@/components/workspace/workspace-canvas";
 import { WorkspaceStatusBar } from "@/components/workspace/workspace-status-bar";
-import { SurfaceDetailModal } from "@/components/workspace/surface-detail-modal";
-import type { WorkspaceSurfacePush, SurfaceUpdate } from "@/lib/a2ui-types";
+import { UnitDetail } from "@/components/workspace/unit-detail";
+import { PreparedQueue } from "@/components/workspace/prepared-queue";
+import type { Unit } from "@/lib/types/unit";
 
 export default function WorkspacePage() {
   const { user } = useAuth();
-  const { addSurface } = useSurfaceStore();
-  const updateSurface = useSurfaceStore((s) => s.updateSurface);
-  const wsSurfaces = useSurfaceStore((s) => s.surfaces);
-  const activeSurfaceId = useSurfaceStore((s) => s.activeSurfaceId);
-  const detailModalOpen = useSurfaceStore((s) => s.detailModalOpen);
-  const openDetailModal = useSurfaceStore((s) => s.openDetailModal);
-  const closeDetailModal = useSurfaceStore((s) => s.closeDetailModal);
+  const setUnits = useUnitStore((s) => s.setUnits);
+  const upsertUnit = useUnitStore((s) => s.upsertUnit);
+  const removeUnit = useUnitStore((s) => s.removeUnit);
+  const units = useUnitStore((s) => s.units);
+  const activeKey = useUnitStore((s) => s.activeKey);
+  const detailOpen = useUnitStore((s) => s.detailOpen);
+  const openDetail = useUnitStore((s) => s.openDetail);
+  const closeDetail = useUnitStore((s) => s.closeDetail);
   const setGlobalSendAction = useWsActionStore((s) => s.setSendAction);
   const { addToast } = useToast();
 
@@ -55,86 +54,36 @@ export default function WorkspacePage() {
     refetchInterval: 30_000,
   });
 
-  const { data: workspaceData } = useQuery({
-    queryKey: ["workspace-surfaces"],
-    queryFn: fetchWorkspaceSurfaces,
+  const { data: unitData } = useQuery({
+    queryKey: ["workspace-units"],
+    queryFn: fetchWorkspaceUnits,
     refetchInterval: 15_000,
   });
 
-  // Convert REST response to WorkspaceSurface
-  const restSurfaces = useMemo((): WorkspaceSurface[] => {
-    const raw = workspaceData?.surfaces ?? [];
-    return raw.map((s) => ({
-      id: s.id,
-      kind: normalizeSurfaceKind(s.kind, s.id),
-      preview: s.preview,
-      detail_config: s.detail_config,
-      source_run_id: s.source_run_id ?? null,
-      response_preview: s.response_preview ?? null,
-      created_at: s.created_at ?? new Date().toISOString(),
-      surface_data: s.surface_data ?? null,
-      trust_context: s.trust_context ?? null,
-      // Execution state from persisted last_surface_update
-      ...(s.phase && { phase: s.phase }),
-      ...(s.steps && { steps: s.steps }),
-      ...(s.current_step !== undefined && { current_step: s.current_step }),
-      ...(s.progress && { progress: s.progress }),
-      ...(s.approval && { approval: s.approval }),
-      ...(s.results && { results: s.results }),
-    }));
-  }, [workspaceData]);
+  // The server is the ordering authority (spec §6): it ranks, and the client
+  // renders that order. A REST refresh therefore REPLACES the list rather than
+  // merging into it — a client-side merge would reintroduce arrival order,
+  // which is one of the three non-decisions §6 exists to remove. Live pushes
+  // land on top via upsertUnit until the next refresh re-ranks.
+  useEffect(() => {
+    if (unitData?.units) setUnits(unitData.units);
+  }, [unitData, setUnits]);
 
-  // Merge REST + WS surfaces (WS wins on duplicate IDs), then order active-first.
-  const allSurfaces = useMemo(() => {
-    const map = new Map<string, WorkspaceSurface>();
-    for (const s of restSurfaces) map.set(s.id, s);
-    for (const s of wsSurfaces) map.set(s.id, s);
-    return sortSurfacesActiveFirst(Array.from(map.values()));
-  }, [restSurfaces, wsSurfaces]);
+  const handleUnitPush = useCallback((unit: Unit) => upsertUnit(unit), [upsertUnit]);
 
-  // TEMPORARY bridge — see unitFromSurface. Removed with the surface store
-  // once the backend publishes Units directly.
-  const units = useMemo(() => allSurfaces.map(unitFromSurface), [allSurfaces]);
-
-  const sourceCount = system?.observations
-    ? Object.keys(system.observations).length
-    : 0;
-
-  const approvalCount = allSurfaces.filter((s) => s.kind === "approval").length;
-  const briefing = allSurfaces.find((s) => s.kind === "briefing");
-  // Optional all the way down: this runs in the page body, above the per-card
-  // ErrorBoundary, so a briefing surface pushed without a `preview` would blank
-  // the whole workspace rather than one card.
-  const headline = briefing?.preview?.title ?? null;
-  // First-load state: onboarding (no source yet), gathering (source connected,
-  // briefing pending), or active (briefing exists). See resolveFirstRunState.
-  const firstRunState = resolveFirstRunState(sourceCount, Boolean(briefing));
-
-  // WS push → store
-  const handleSurfacePush = useCallback(
-    (push: WorkspaceSurfacePush) => {
-      addSurface({
-        id: push.id,
-        kind: normalizeSurfaceKind(push.kind, push.id),
-        preview: push.preview,
-        detail_config: push.detail_config,
-        source_run_id: push.source_run_id,
-        response_preview: push.response_preview,
-        created_at: push.created_at || new Date().toISOString(),
-        surface_data: push.surface_data ?? null,
-        trust_context: push.trust_context ?? null,
-      });
+  const handleDismiss = useCallback(
+    (key: string) => {
+      removeUnit(key);
+      // Demotion only, and fire-and-forget: the card is gone from THIS view
+      // either way, and a failed write costs a ranking signal, not the action.
+      void dismissUnit(key).catch(() => undefined);
     },
-    [addSurface]
+    [removeUnit]
   );
 
   const { sendAction } = useMuldroWs({
     userId: user?.user_id ?? "",
-    onSurfacePush: handleSurfacePush,
-    onSurfaceUpdate: useCallback(
-      (update: SurfaceUpdate) => updateSurface(update.surface_id, update),
-      [updateSurface]
-    ),
+    onUnitPush: handleUnitPush,
     onError: handleWsError,
     enabled: !!user,
   });
@@ -143,9 +92,16 @@ export default function WorkspacePage() {
     setGlobalSendAction(sendAction);
   }, [sendAction, setGlobalSendAction]);
 
-  const activeSurface = activeSurfaceId
-    ? allSurfaces.find((s) => s.id === activeSurfaceId) ?? null
-    : null;
+  const active = activeKey ? units.find((u) => u.frame.key === activeKey) ?? null : null;
+
+  const sourceCount = system?.observations ? Object.keys(system.observations).length : 0;
+
+  const briefing = units.find((u) => u.frame.kind === "briefing") ?? null;
+  const headline = briefing?.frame.headline ?? null;
+  const approvalCount = units.filter((u) => u.frame.status === "needs_you").length;
+  // First-load state: onboarding (no source yet), gathering (source connected,
+  // briefing pending), or active (briefing exists). See resolveFirstRunState.
+  const firstRunState = resolveFirstRunState(sourceCount, Boolean(briefing));
 
   return (
     <div className="p-4 sm:p-6 space-y-4 animate-fade-in">
@@ -163,17 +119,18 @@ export default function WorkspacePage() {
       {firstRunState === "onboarding" && <OnboardingCard />}
       {firstRunState === "gathering" && <BriefingGatheringCard />}
 
-      {allSurfaces.length > 0 && (
-        <WorkspaceCanvas units={units} onOpen={openDetailModal} />
-      )}
+      {/* The canvas owns its own empty state — the caller's length guard made
+          that state unreachable outside its own test (FOLLOWUPS §5). */}
+      <WorkspaceCanvas units={units} onOpen={openDetail} onDismiss={handleDismiss} />
 
-      {activeSurface && (
-        <SurfaceDetailModal
-          surface={activeSurface}
-          open={detailModalOpen}
-          onClose={closeDetailModal}
-        />
-      )}
+      <UnitDetail
+        unit={active}
+        open={detailOpen}
+        onClose={closeDetail}
+        onAct={(capability) => sendAction("capability", { capability, key: active?.frame.key })}
+      >
+        {active?.frame.entity_type === "prepared_work" && <PreparedQueue />}
+      </UnitDetail>
     </div>
   );
 }

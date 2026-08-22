@@ -9,9 +9,10 @@ interface Props {
   units: Unit[];
   onOpen: (key: string) => void;
   onAct?: (key: string, capability: string) => void;
+  onDismiss?: (key: string) => void;
 }
 
-export function WorkspaceCanvas({ units, onOpen, onAct }: Props) {
+export function WorkspaceCanvas({ units, onOpen, onAct, onDismiss }: Props) {
   if (units.length === 0) {
     return (
       <div className="rounded-[var(--radius-xl)] border border-b-secondary bg-surface-1 p-8 sm:p-12">
@@ -78,6 +79,7 @@ export function WorkspaceCanvas({ units, onOpen, onAct }: Props) {
             unit={u}
             onOpen={() => onOpen(u.frame.key)}
             onAct={(cap) => onAct?.(u.frame.key, cap)}
+            onDismiss={onDismiss ? () => onDismiss(u.frame.key) : undefined}
           />
         </ErrorBoundary>
       ))}
