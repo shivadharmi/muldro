@@ -251,6 +251,7 @@ class ModelConfigService:
                     base_url=base_url,
                     extra_config_public=public,
                     extra_config_secret_keys=secret_keys,
+                    catalogued=provider in MODEL_CATALOG,
                 )
             )
         return statuses

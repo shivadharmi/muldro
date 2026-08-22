@@ -1081,6 +1081,9 @@ def test_credential_for_uncatalogued_provider_is_still_visible(monkeypatch):
             assert "retired_vendor" in names
             # Catalogued providers keep their order; strays are appended.
             assert names.index("anthropic") < names.index("retired_vendor")
+            by_provider = {p["provider"]: p for p in body["providers"]}
+            assert by_provider["retired_vendor"]["catalogued"] is False
+            assert by_provider["anthropic"]["catalogued"] is True
     finally:
         if app is not None:
             app.dependency_overrides.clear()

@@ -62,6 +62,10 @@ class ProviderStatus(BaseModel):
     base_url: str | None = None
     extra_config_public: dict[str, str] = Field(default_factory=dict)
     extra_config_secret_keys: list[str] = Field(default_factory=list)
+    # False means a credential row survives for a provider the catalog no longer
+    # lists (B6): the client has no display name or credential schema to render
+    # for it, but should still offer Remove.
+    catalogued: bool = True
 
 
 class ModelConfigResponse(BaseModel):
