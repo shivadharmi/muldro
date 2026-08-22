@@ -29,6 +29,7 @@ from src.orchestrator.plan_store import PlanStore
 from src.orchestrator.surface_pusher import SurfacePusher, _clean_insight_title
 from src.orchestrator.tracing import TraceManager
 from src.view.perception import units_from_events
+from src.view.publish import publish_units
 
 logger = logging.getLogger(__name__)
 
@@ -273,25 +274,29 @@ class PerceptionRunner:
                 cursor_type=cursor_type,
             )
 
-            # One Unit per THING, not one signal per poll cycle. Deliberately
-            # additive: the per-cycle PerceptionSignal below is untouched and
-            # still feeds the Planner. Nothing transports these Units yet —
-            # they exist so the grouping is proven against live traffic before
-            # the old path is removed. `events` vs `units` is the whole point:
-            # equal numbers mean nothing grouped, and three polls of one thread
-            # should now read `events=3 units=1`.
+            # One Unit per THING, not one signal per poll cycle — and now the
+            # Units are PUBLISHED rather than counted. `events` vs `units` is
+            # still the diagnostic: three polls of one thread read
+            # `events=3 units=1`.
             #
-            # These are pre-ingest RawEvents, so `frame.importance` is 0.0 —
-            # the scorer runs at ingest. Nothing ranks on it here.
+            # These are pre-ingest RawEvents, so `frame.importance` is 0.0 and
+            # nothing here ranks. The REST feed (`GET /v1/workspace/units`)
+            # re-derives every Unit from the stored rows and ranks THERE; this
+            # push exists so a card appears without waiting for a poll of the
+            # frontend's own.
             #
-            # Wrapped because this is a live poll: units_from_events already
-            # skips a single unbuildable thing, but a bug in the view layer
-            # must not be able to take down perception for a whole source,
-            # which would be far worse than a missing diagnostic line.
+            # `ensure_event_bus()`, not the `event_bus` property: the property
+            # is lazily initialised and is None until something has awaited the
+            # accessor, so on the first poll after a restart the push would be
+            # a silent no-op.
+            #
+            # Wrapped because this is a live poll: a bug in the view layer must
+            # not take down perception for a whole source.
             try:
                 units = units_from_events(raw_events)
+                await publish_units(await self._events.ensure_event_bus(), units, user_id=user_id)
                 logger.info(
-                    "perception_units_built source=%s events=%d units=%d",
+                    "perception_units_published source=%s events=%d units=%d",
                     source,
                     len(raw_events),
                     len(units),
@@ -301,7 +306,7 @@ class PerceptionRunner:
                         "units": len(units),
                     },
                 )
-            except Exception as unit_error:  # noqa: BLE001 - diagnostic only
+            except Exception as unit_error:  # noqa: BLE001 - never costs the poll
                 logger.warning(
                     "perception_units_failed source=%s error=%s",
                     source,
