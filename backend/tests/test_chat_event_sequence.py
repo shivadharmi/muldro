@@ -493,7 +493,6 @@ class TestTerminalTextInvariant:
         # The two things that must NOT happen: a success claim, or a completion tail.
         assert "run_completed" not in types
         assert "presentation" not in types
-        orch._surfaces.push_presenter_surface.assert_not_awaited()
 
     async def test_error_frame_failure_reuses_the_frames_own_safe_fields(self):
         """The frame's ``code``/``message``/``correlation_id`` are already client-safe, so the

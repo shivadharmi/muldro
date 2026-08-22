@@ -285,8 +285,8 @@ class _LeadHarness(_ChatSingleLeadMixin):
     """Minimal host for the mixin — real ``_stream_lead_and_complete``, real completion tail.
 
     Only the collaborators the mixin reaches through ``self`` are stubbed: the invoker (whose
-    stream is replayed from a REAL streamed run, never hand-written), the runtime event
-    publisher, and the surface pusher. ``_interaction_learner=None`` skips the learner branch.
+    stream is replayed from a REAL streamed run, never hand-written) and the runtime event
+    publisher. ``_interaction_learner=None`` skips the learner branch.
     """
 
     def __init__(self, frames: list[dict]) -> None:
@@ -294,7 +294,6 @@ class _LeadHarness(_ChatSingleLeadMixin):
         self._spawned: list[Any] = []
         self._interaction_learner = None
         self._events = SimpleNamespace(emit_runtime_event=AsyncMock(return_value=None))
-        self._surfaces = SimpleNamespace(push_presenter_surface=AsyncMock(return_value=None))
 
         invoker = create_autospec(AgentInvoker, instance=True)
         invoker.stream_deep_lead.side_effect = self._replay

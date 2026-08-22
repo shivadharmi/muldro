@@ -60,12 +60,10 @@ def _make_orchestrator(*, lead_text: str = "Hello! How can I help?"):
     orch._chat._invoker.stream_deep_lead = _stream_deep_lead
     orch._chat._invoker.has_durable_checkpointer = MagicMock(return_value=True)
     orch._chat._plans.log_interaction = AsyncMock(return_value="ilog_01")
-    orch._push_workspace_surface = AsyncMock()
     orch._chat._events.emit_runtime_event = AsyncMock()
     orch._chat._context.load_conversation_history = AsyncMock(return_value="")
     orch._chat._context.assemble_context = AsyncMock(return_value="")
     orch._chat._get_available_capabilities = AsyncMock(return_value=[])
-    orch._chat._surfaces.push_presenter_surface = AsyncMock(return_value=None)
     return orch
 
 

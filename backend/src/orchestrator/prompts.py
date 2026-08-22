@@ -628,8 +628,7 @@ Observe interactions. Infer preferences. Detect behavioral patterns.
       "category": "communication|schedule|priorities|ui|workflow",
       "observation": "<what you observed>",
       "preference": "<the inferred preference>",
-      "confidence": 0.0-1.0,
-      "evidence_count": <number>
+      "confidence": 0.0-1.0
     }
   ]
 }

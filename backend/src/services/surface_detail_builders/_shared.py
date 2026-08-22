@@ -80,12 +80,11 @@ async def _resolve_briefing(surface: Any, db: Any):
     Briefing-kind surfaces can originate from two places:
     1. ``SurfaceService._build_briefing_surface`` — id is ``briefing_{id}`` so
        ``_extract_briefing_id`` yields the id directly.
-    2. ``surface_pusher.push_workspace_surface`` — a Presenter-derived surface
-       persisted with id ``surf_{ULID}`` and **no** ``briefing_id`` in its
-       payload. For these we fall back to the most recent briefing for the
-       surface's owner (user/workspace scoped), so the visible grid card and
-       its detail tabs agree on the same briefing instead of dead-ending on
-       "No linked briefing found."
+    2. A Presenter-derived surface persisted with id ``surf_{ULID}`` and **no**
+       ``briefing_id`` in its payload. For these we fall back to the most recent
+       briefing for the surface's owner (user/workspace scoped), so the visible
+       grid card and its detail tabs agree on the same briefing instead of
+       dead-ending on "No linked briefing found."
 
     Returns ``(briefing | None, had_id)`` where ``had_id`` is True when the
     surface carried a resolvable briefing id (used to disambiguate

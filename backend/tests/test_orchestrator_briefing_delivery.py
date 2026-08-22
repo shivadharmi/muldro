@@ -1,8 +1,8 @@
 """Bug B: orchestrator.generate_briefing delivers exactly once per (user, date).
 
-A scheduled briefing run must produce exactly ONE notification and ONE surface
-push. A second run for the same date (slow tick / worker restart) must NOT
-re-deliver — the per-day briefing row is the idempotency key.
+A scheduled briefing run must produce exactly ONE notification. A second run for
+the same date (slow tick / worker restart) must NOT re-deliver — the per-day
+briefing row is the idempotency key.
 """
 
 from unittest.mock import AsyncMock, MagicMock
@@ -30,8 +30,8 @@ def _build_orchestrator(notifier, *, briefing_exists: bool):
     mock_db.commit = AsyncMock()
 
     # db.execute → first call is the idempotency check (existing-briefing
-    # lookup, returns a row iff briefing_exists); subsequent calls are the
-    # delivery-path Briefing fetch (only reached when briefing_exists=False).
+    # lookup, returns a row iff briefing_exists). The extra results below cover
+    # any further Briefing read the delivery path makes.
     idem_result = MagicMock()
     idem_result.scalar_one_or_none.return_value = (
         MagicMock(briefing_id="brief_existing") if briefing_exists else None
@@ -60,7 +60,6 @@ def _build_orchestrator(notifier, *, briefing_exists: bool):
     orch._execute_tool = AsyncMock(return_value={"headline": "quiet"})
     orch._call_agent = AsyncMock(return_value="Today is quiet.")
     orch._publish_event = AsyncMock()
-    orch._push_briefing_surface = AsyncMock()
     # request_services returns a container whose notifier is the one under test.
     orch._request_services = MagicMock(return_value=services)
     return orch
@@ -68,7 +67,7 @@ def _build_orchestrator(notifier, *, briefing_exists: bool):
 
 @pytest.mark.asyncio
 async def test_scheduled_briefing_delivers_once():
-    """First scheduled run (no prior briefing today) → exactly 1 notify + 1 push."""
+    """First scheduled run (no prior briefing today) → exactly 1 notify."""
     notifier = MagicMock()
     notifier.notify = AsyncMock()
 
@@ -76,7 +75,6 @@ async def test_scheduled_briefing_delivers_once():
     await orch.generate_briefing(user_id=TEST_USER_ID, workspace_id=WS)
 
     assert notifier.notify.await_count == 1
-    orch._push_briefing_surface.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -89,7 +87,6 @@ async def test_scheduled_briefing_second_run_does_not_redeliver():
     await orch.generate_briefing(user_id=TEST_USER_ID, workspace_id=WS)
 
     assert notifier.notify.await_count == 0
-    orch._push_briefing_surface.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -99,8 +96,8 @@ async def test_scheduled_briefing_second_run_skips_generation_entirely():
     The duplicate-briefing bug was that the "already delivered" guard ran AFTER
     get_briefing (the tool) and the Presenter agent — so the Presenter agent had
     already delivered the briefing to the user before the guard fired. The guard
-    must check-before-generate: when today's briefing exists, no get_briefing call,
-    no Presenter LLM reformat, no push.
+    must check-before-generate: when today's briefing exists, no get_briefing call
+    and no Presenter LLM reformat.
     """
     notifier = MagicMock()
     notifier.notify = AsyncMock()

@@ -22,9 +22,9 @@ Presenter agent in <product>"); ``PRESENTER_VOICE`` itself was byte-identical ac
 rebrand, so the reusable voice fragment carries no rebrand delta.
 
 It was re-baselined a third time when the surface-kind guidance was corrected in **both**
-directions. ``message`` — the kind defined for Presenter-authored content, with its own
-promotion path in ``surface_pusher`` — was never offered in the kinds table, so the model was
-never told its own default existed; it was added. And the "do not use" list forbade only
+directions. ``message`` — the kind defined for Presenter-authored content, which had its own
+promotion path at the time — was never offered in the kinds table, so the model was never
+told its own default existed; it was added. And the "do not use" list forbade only
 ``approval`` and ``proactive_insight``, leaving ``run``, ``prepared_work`` and the legacy
 ``plan`` emittable, since ``SurfaceSpec.kind`` validates against the whole Literal and forbids
 nothing the prompt does not; all three were added. ``prepared_work`` in particular, because

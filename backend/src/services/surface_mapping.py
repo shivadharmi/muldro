@@ -115,9 +115,8 @@ def build_surface_preview_from_plan(
 
 def build_briefing_preview(briefing: "Briefing"):
     """Structured preview for a Briefing row — the single source of truth for a
-    briefing card. Both the REST rebuild (SurfaceService._build_briefing_surface)
-    and the live push (SurfacePusher.push_briefing_surface) call this so the two
-    paths produce an identical, structured (never markdown-blob) card.
+    briefing card. The REST rebuild (SurfaceService._build_briefing_surface)
+    calls this so a briefing card is structured, never a markdown blob.
 
     items = priority titles (top 5); metrics = Priorities/Actions counts;
     subtitle = first priority (plain text, capped).

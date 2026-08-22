@@ -118,9 +118,6 @@ def _make_chat(
     chat._system_capability_handler = MagicMock()
     chat._system_capability_handler.handle_system_capability = AsyncMock(return_value="SYS_OK")
 
-    chat._surfaces = MagicMock()
-    chat._surfaces.push_presenter_surface = AsyncMock(return_value=None)
-
     # Per-agent call — only the Planner makes one. Recorded so a test can assert that no
     # OTHER agent was invoked (there is no per-step routing left to invoke one).
     async def _call_agent_stream(agent_name, *, message, **kw):
@@ -337,9 +334,9 @@ async def test_single_lead_emits_user_actions_ready():
 # ── Output re-homing (C-CORR2) ────────────────────────────────────────────────
 
 
-async def test_single_lead_rehomes_output_stripped_reply_raw_surface_and_learner():
+async def test_single_lead_rehomes_output_stripped_reply_and_raw_learner():
     """The lead's agent_done text is re-homed: Presentation gets the STRIPPED text,
-    while the shared tail's surface push + learner receive the RAW text."""
+    while the shared tail's learner receives the RAW text."""
     plan = PlanOutput(goal="g", reasoning="r", steps=[_step("s1", "respond")])
     chat, rec = _make_chat(lead_text="REPLY_RAW")
 
@@ -348,12 +345,8 @@ async def test_single_lead_rehomes_output_stripped_reply_raw_surface_and_learner
     learner.learn = MagicMock(return_value=MagicMock())
     chat._interaction_learner = learner
 
-    spec = MagicMock()
-    spec.should_surface = True
-
     ctx = _patches(plan, []) + [
         patch(f"{_LEAD}.strip_surface_blocks", new=lambda t: f"STRIPPED::{t}"),
-        patch(f"{_LEAD}.extract_surface_spec", new=MagicMock(return_value=spec)),
     ]
     for c in ctx:
         c.start()
@@ -365,70 +358,9 @@ async def test_single_lead_rehomes_output_stripped_reply_raw_surface_and_learner
 
     # Presentation carries the STRIPPED reply (chat-visible).
     assert _responses(stream) == ["STRIPPED::REPLY_RAW"]
-    # Shared tail surface push gets the RAW presenter_text.
-    push = chat._surfaces.push_presenter_surface
-    push.assert_awaited_once()
-    assert push.await_args.kwargs["response_text"] == "REPLY_RAW"
     # Learner gets the RAW presenter_text as agent_response.
     learner.learn.assert_called_once()
     assert learner.learn.call_args.kwargs["agent_response"] == "REPLY_RAW"
-
-
-_FENCED_REPLY = """Here you go.
-
-```json:surface
-{"should_surface": true, "kind": "summary", "title": "Open PRs"}
-```"""
-
-
-async def test_a_legacy_fenced_surface_block_logs_a_deprecation_warning(caplog):
-    """The fenced ```json:surface``` path is deprecated — nothing asks the model for one
-    any more — but it is kept because a model may still emit the old shape from habit. A
-    silent fallback is one nobody can decide to remove, so it must log.
-
-    Deliberately drives the REAL `extract_surface_spec` over a real fenced block rather
-    than a mocked spec — a warning that only fires for a MagicMock proves nothing about
-    what the runtime actually sees.
-    """
-    plan = PlanOutput(goal="g", reasoning="r", steps=[_step("s1", "respond")])
-    chat, _ = _make_chat(lead_text=_FENCED_REPLY)
-
-    ctx = _patches(plan, [])
-    for c in ctx:
-        c.start()
-    try:
-        with caplog.at_level("WARNING", logger=_LEAD):
-            await _run_stream(chat, permission_mode="bypass")
-    finally:
-        for c in ctx:
-            c.stop()
-
-    assert any(
-        "legacy fenced surface block" in r.message
-        for r in caplog.records
-        if r.levelname == "WARNING"
-    ), f"no deprecation warning logged; saw {[r.message for r in caplog.records]}"
-    # The deprecated path still WORKS — deprecating it must not break it.
-    chat._surfaces.push_presenter_surface.assert_awaited_once()
-
-
-async def test_an_ordinary_reply_logs_no_deprecation_warning(caplog):
-    """Teeth in the other direction: a warning that fires on every turn is noise, and
-    would let the test above pass without the fenced block being what triggered it."""
-    plan = PlanOutput(goal="g", reasoning="r", steps=[_step("s1", "respond")])
-    chat, _ = _make_chat(lead_text="just a plain reply")
-
-    ctx = _patches(plan, [])
-    for c in ctx:
-        c.start()
-    try:
-        with caplog.at_level("WARNING", logger=_LEAD):
-            await _run_stream(chat, permission_mode="bypass")
-    finally:
-        for c in ctx:
-            c.stop()
-
-    assert not [r for r in caplog.records if "legacy fenced surface block" in r.message]
 
 
 async def test_single_lead_builds_lead_with_plan_steps_scope_and_raw_message():
@@ -674,8 +606,7 @@ async def test_single_lead_pause_suspends_turn_and_skips_tail():
     assert "response" not in events
     assert "done" not in events
     assert "SHOULD_NOT_APPEAR" not in "".join(str(e) for e in stream)
-    # The completion tail (surface push + learner spawn) never ran for a suspended turn.
-    chat._surfaces.push_presenter_surface.assert_not_awaited()
+    # The completion tail (learner spawn) never ran for a suspended turn.
     learner.learn.assert_not_called()
     # finish_trace STILL ran (the finally survives the early return).
     chat._trace_manager.finish_trace.assert_awaited_once()

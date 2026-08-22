@@ -8,9 +8,9 @@ The connector-facing half — polling, raw-event ingest, and cursor I/O — live
 ``ConnectorPoller``, which this class composes.
 
 Depends downward on ConnectorPoller (connector I/O), AgentInvoker (running
-sub-agents), EventPublisher (event bus + runtime events), SurfacePusher (insight
-surfaces), PlanStore (plan persistence), and the SystemCapabilityHandler — never
-on the chat path, which is what keeps the chat<->perception relationship acyclic.
+sub-agents), EventPublisher (event bus + runtime events), PlanStore (plan
+persistence), and the SystemCapabilityHandler — never on the chat path, which is
+what keeps the chat<->perception relationship acyclic.
 """
 
 import logging
@@ -26,7 +26,6 @@ from src.orchestrator.connector_poller import ConnectorPoller
 from src.orchestrator.event_publisher import EventPublisher
 from src.orchestrator.intent_classifier import extract_plan
 from src.orchestrator.plan_store import PlanStore
-from src.orchestrator.surface_pusher import SurfacePusher, _clean_insight_title
 from src.orchestrator.tracing import TraceManager
 from src.view.perception import units_from_events
 from src.view.publish import publish_units
@@ -100,7 +99,6 @@ class PerceptionRunner:
         poller: ConnectorPoller,
         invoker: AgentInvoker,
         events: EventPublisher,
-        surfaces: SurfacePusher,
         plans: PlanStore,
         system_capability_handler,
         spawn_background,
@@ -116,7 +114,6 @@ class PerceptionRunner:
         self._poller = poller
         self._invoker = invoker
         self._events = events
-        self._surfaces = surfaces
         self._plans = plans
         self._system_capability_handler = system_capability_handler
         self._spawn_background = spawn_background
@@ -442,15 +439,14 @@ class PerceptionRunner:
                     try:
                         async with self._db_factory() as db:
                             mem_svc = MemoryService(self._settings, db)
-                            # Use the clean human headline (not the raw
-                            # "Polled ... (event_id=...)" observer prose) so the
-                            # briefing memory and any surface built from it stay
-                            # user-facing-clean.
-                            briefing_headline = _clean_insight_title(signal.summary)
                             await mem_svc.store_briefing_memory(
                                 user_id=user_id,
                                 workspace_id=workspace_id,
-                                text=f"{briefing_headline}\n\nWhy: {assessment.reasoning}",
+                                # The signal summary is per-POLL observer prose
+                                # ("Polled gmail: 3 new event(s)…"), which is why
+                                # it needed cleaning. The assessment's reasoning
+                                # is muldro's own sentence about why this matters.
+                                text=assessment.reasoning,
                                 source=f"perception:{source}",
                                 relevance_score=assessment.relevance_score,
                                 signal_source=source,
@@ -460,15 +456,17 @@ class PerceptionRunner:
                         logger.warning("Failed to store briefing memory", exc_info=True)
 
                 elif assessment.notification_tier == "push":
-                    try:
-                        await self._surfaces.push_insight_surface(
-                            signal, assessment, user_id, workspace_id
-                        )
-                    except Exception:
-                        logger.warning(
-                            "Failed to push insight surface for signal",
-                            exc_info=True,
-                        )
+                    # No per-poll insight surface any more: the three identical
+                    # "New activity" cards WERE this branch, one per poll cycle.
+                    # The Unit for each actual thing is published by
+                    # ``publish_units`` above, keyed on the thing the connector
+                    # named rather than on the tick. The tier is still logged so
+                    # relevance stays measurable.
+                    logger.info(
+                        "perception_push_tier source=%s score=%.2f",
+                        source,
+                        assessment.relevance_score,
+                    )
 
                 else:
                     # silent tier: in world model from Librarian, record as ignored

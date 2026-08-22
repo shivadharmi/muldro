@@ -1,8 +1,7 @@
 """build_briefing_preview: one structured SurfacePreview from a Briefing row.
 
-Guards the single-source-of-truth helper that both the REST rebuild
-(_build_briefing_surface) and the live push (push_briefing_surface) call, so a
-briefing card is never a markdown blob and never duplicated.
+Guards the helper the REST rebuild (_build_briefing_surface) calls, so a
+briefing card is never a markdown blob.
 """
 
 from types import SimpleNamespace
