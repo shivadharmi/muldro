@@ -36,7 +36,16 @@ class Settings(BaseSettings):
     # Per-sub-tick timeout: a single hung sub-tick (e.g. perception holding a
     # lock) must never starve later sub-ticks (resume / health). On timeout the
     # dispatcher logs and continues to the next sub-tick.
-    scheduler_subtick_timeout_s: float = 90.0
+    #
+    # 90s was too tight for perception and the failure was silent in the worst
+    # way: the cancellation landed AFTER the poll had ingested, triaged and
+    # published its cards but BEFORE the Planner gate, so the feed kept filling
+    # while no plan and no task run was ever created. Perception logged success
+    # up to the cut. A perception tick is not one operation — it is a poll plus
+    # a triage call plus a relevance call plus up to MAX_BODIES_PER_POLL body
+    # calls, each a round trip to a provider whose latency is not ours to
+    # promise — so it cannot be bounded by a number chosen for a lock-holder.
+    scheduler_subtick_timeout_s: float = 300.0
     # Stale approval-resume reaper: a run approved by the user but never resumed
     # by the background tick is re-driven through resume_run after this age, and
     # failed after the attempt cap to avoid hot-looping.

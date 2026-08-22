@@ -56,7 +56,9 @@ class SchedulerBase:
         """Per-sub-tick wall-clock budget. Each sub-tick uses its own DB
         session, so a timed-out tick's session is torn down by its own
         ``async with`` context — nothing leaks across the boundary."""
-        return float(getattr(self._settings, "scheduler_subtick_timeout_s", 90.0))
+        # The fallback must match Settings' own default, or a settings object
+        # that predates the field silently reinstates the old ceiling.
+        return float(getattr(self._settings, "scheduler_subtick_timeout_s", 300.0))
 
     async def _run_subtick(self, name: str, coro) -> bool:
         """Run a single sub-tick under a wall-clock timeout.
