@@ -131,8 +131,9 @@ export function trackCount(utility: string): number {
  * Is this class unprefixed, i.e. does it apply below `sm`?
  *
  * A bare `!cls.includes(":")` is the obvious test and the wrong one: Tailwind's
- * arbitrary values can carry a colon of their own — `bg-[url(https://…)]`, or
- * `grid-cols-[repeat(2,minmax(0,1fr))]` after some future edit — and such a
+ * arbitrary values can carry a colon of their own — a background-image class
+ * whose URL contains `https://`, or `grid-cols-[repeat(2,minmax(0,1fr))]`
+ * after some future edit — and such a
  * class would be misread as carrying a variant and silently skipped. Nothing on
  * this surface hits it today; the bracketed segments are stripped first so that
  * a later one cannot make a passing assertion quietly stop looking at anything.

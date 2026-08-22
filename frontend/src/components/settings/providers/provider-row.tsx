@@ -231,6 +231,24 @@ export function ProviderRow({
       ? `${entry.model_count} models`
       : "";
 
+  /**
+   * The raw slug, shown as a DETAIL on an uncatalogued row only.
+   *
+   * **A3** says a slug is never a name, and the heading above obeys that — a
+   * stray reads "Legacy vendor", not `legacy_vendor`. But on this row and only
+   * this row the identifier is also a recognition affordance: the catalog has
+   * no name for the thing, "Legacy vendor" is neither the slug nor a real
+   * product name, and a founder looking at a stray is trying to work out which
+   * stored credential they are about to destroy. So it appears in the slot that
+   * already carries `base_url` — as an identifier, in the mono face, beside the
+   * name rather than instead of it.
+   *
+   * `data-raw-slug` marks it for `slug-audit.test.tsx`, which otherwise fails
+   * the whole surface on exactly this string. Marking the ONE node is the point:
+   * loosening the regex would exempt every future leak with it.
+   */
+  const rawSlug = uncatalogued ? status.provider : null;
+
   // An uncatalogued provider has no credential schema, so a form rendered for
   // it would have zero fields — and a zero-field form's required-field check is
   // vacuously satisfied, leaving a live Save button that 400s on the backend's
@@ -268,9 +286,17 @@ export function ProviderRow({
 
         <span className="flex-1 min-w-0 text-[11.5px] text-t-muted truncate">
           {detail}
-          {status.base_url && (
+          {rawSlug && (
             <>
               {detail && " · "}
+              <span data-raw-slug="true" className="font-mono">
+                {rawSlug}
+              </span>
+            </>
+          )}
+          {status.base_url && (
+            <>
+              {(detail || rawSlug) && " · "}
               <span className="font-mono">{status.base_url}</span>
             </>
           )}

@@ -9,7 +9,7 @@
  * everything a screen reader would announce, and fails on anything shaped like
  * `lower_snake_case`.
  *
- * It is the same move `design-tokens.test.ts` makes for dead tokens — catch the
+ * It is the same move `token-audit.test.ts` makes for dead tokens — catch the
  * class, not the instances. The two failure modes are cousins: a slug and a
  * nonexistent token are both just strings, and both survive `tsc` and `eslint`
  * because nothing in the type system knows one from a sentence.
@@ -24,6 +24,13 @@
  * `aria-labelledby`, `aria-controls`, `aria-activedescendant`. Those are machine
  * identifiers, they are supposed to carry slugs, and reading them would make the
  * guard permanently red for the wrong reason.
+ *
+ * **One node is exempt, by mark rather than by rule.** An uncatalogued provider
+ * row shows its raw slug in the detail slot, because there the identifier is a
+ * recognition affordance and the humanised name is neither the slug nor a real
+ * name (see `providers/provider-row.tsx`). It carries `data-raw-slug`, and this
+ * sweep skips that subtree. Loosening the REGEX instead would have exempted
+ * every future leak along with it.
  */
 
 import { act, cleanup, render, screen } from "@testing-library/react";
@@ -229,14 +236,18 @@ const SLUG = /^[a-z0-9]+(_[a-z0-9]+)+$/;
  *  slug. */
 const SPOKEN = ["aria-label", "aria-description", "placeholder", "title", "alt"];
 
+/** The one deliberate exemption. See this file's docblock. */
+const EXEMPT = "[data-raw-slug]";
+
 function announcedStrings(root: Element): string[] {
   const out: string[] = [];
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
   for (let n = walker.nextNode(); n; n = walker.nextNode()) {
     const text = n.textContent?.trim();
-    if (text) out.push(text);
+    if (text && !n.parentElement?.closest(EXEMPT)) out.push(text);
   }
   for (const el of [root, ...Array.from(root.querySelectorAll("*"))]) {
+    if (el.closest(EXEMPT)) continue;
     for (const attr of SPOKEN) {
       const value = el.getAttribute(attr)?.trim();
       if (value) out.push(value);

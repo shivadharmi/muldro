@@ -2,6 +2,14 @@
  * Resolve the design tokens a settings component NAMES against the ones
  * `globals.css` actually DEFINES.
  *
+ * Named `token-audit`, not `design-tokens`: `lib/design-tokens.ts` already
+ * exists, is production code with ten importers, and hands out Tailwind colour
+ * classes from a status map — which is exactly the kind of place a dead token
+ * hides. Two modules under one name with opposite bundling constraints (this
+ * one imports `node:fs` and must never reach a bundle) is a trap. The
+ * `-fixtures` / `-audit` suffix is this surface's convention for test-only
+ * modules.
+ *
  * This is the one guard in the settings tree that catches a defect class both
  * `tsc` and `eslint` are structurally blind to: **a Tailwind class is a string,
  * and a nonexistent token is just a string that generates no rule.** Three
@@ -24,13 +32,19 @@
  * **What neither can see:** a class assembled at run time from a fragment
  * (`"bg-j-" + tone`). No settings component does that today, and
  * `providers/provider-row.tsx` documents why its dot tone is a union of whole
- * literals rather than a stem plus a suffix. If one ever is, the source scan
- * will silently skip it — the stem matches no token, so it is not reported as
- * a missing one either.
+ * literals rather than a stem plus a suffix.
+ *
+ * A concatenated stem is invisible to both. A TEMPLATE-literal one is not quite:
+ * the source scan reads the stem up to the interpolation and reports `j-` as an
+ * undefined token, which is a true finding wearing a confusing name — there is
+ * no token called `j-`, and a reader will go looking for one. Treat it as "this
+ * class is composed at run time and cannot be checked", and rewrite the call
+ * site as whole literals, which is what `provider-row.tsx` did.
  */
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 /** Utility prefixes whose value is a colour token. `shadow-` is deliberately
  *  absent: every shadow on this surface is an arbitrary value or a size. */
@@ -38,7 +52,6 @@ const COLOUR_PREFIXES = [
   "bg",
   "text",
   "border",
-  "ring",
   "outline",
   "divide",
   "fill",
@@ -47,9 +60,15 @@ const COLOUR_PREFIXES = [
   "accent",
   "decoration",
   "placeholder",
+  // Longest-first: `ring-offset-j-danger` must not be read as `ring-` plus
+  // `offset-j-danger`. `PREFIX` alternates in this order, so these two have to
+  // precede `ring`, which is why the list is not alphabetical.
+  "ring-offset",
+  "inset-ring",
   "from",
   "via",
   "to",
+  "ring",
 ] as const;
 
 /** Colours Tailwind resolves with no `--color-*` entry of our own. */
@@ -82,13 +101,20 @@ const NON_COLOUR = new Set([
   // Background geometry.
   "fixed", "local", "scroll", "auto", "cover", "contain",
   "top", "bottom", "repeat", "round", "space",
+  // SVG presentation ATTRIBUTES, which share the `stroke-` prefix with the
+  // colour utility. `settings/icons.tsx` escapes this only because JSX spells
+  // them camelCase; a plain `style`/`transition` string or a data-URI SVG
+  // elsewhere in the app spells them kebab-case and would otherwise be read as
+  // four undefined colour tokens.
+  "width", "linecap", "linejoin", "dasharray", "dashoffset", "miterlimit",
+  "opacity",
 ]);
 
 /** Multi-segment suffixes whose FIRST segment settles that it is not a colour:
  *  `bg-gradient-to-b`, `ring-offset-2`, `bg-repeat-x`, `bg-clip-text`. */
 const NON_COLOUR_HEADS = new Set([
   "gradient", "linear", "radial", "conic",
-  "offset", "origin", "clip", "size", "position", "blend", "repeat", "no",
+  "origin", "clip", "size", "position", "blend", "repeat", "no",
 ]);
 
 /** `t-`, `b-`, `l-` … as a SIDE rather than as the first half of a token name.
@@ -98,14 +124,28 @@ const SIDE = /^[trblsexy]-/;
 
 const PREFIX = new RegExp(`^(?:${COLOUR_PREFIXES.join("|")})-(.+)$`);
 
+const GLOBALS_CSS = join(
+  fileURLToPath(import.meta.url),
+  "../../../app/globals.css",
+);
+
 let defined: Set<string> | null = null;
 
-/** Every `--color-*` name `globals.css` declares, plus Tailwind's built-ins.
- *  Parsed, never transcribed — a hand-copied list is the same defect wearing a
- *  second hat. */
+/**
+ * Every `--color-*` name `globals.css` declares, plus Tailwind's built-ins.
+ * Parsed, never transcribed — a hand-copied list is the same defect wearing a
+ * second hat.
+ *
+ * Resolved relative to THIS FILE, not to `process.cwd()`. A cwd-relative path
+ * works only when vitest is started from `frontend/`; from the repo root with
+ * `--root frontend`, or from a workspace runner, `readFileSync` throws ENOENT
+ * and every assertion in the sweep fails at once naming a missing FILE. The
+ * natural reaction to that is to disable the sweep, which is the one outcome
+ * this guard cannot survive.
+ */
 export function definedTokens(): Set<string> {
   if (defined) return defined;
-  const css = readFileSync(join(process.cwd(), "src/app/globals.css"), "utf8");
+  const css = readFileSync(GLOBALS_CSS, "utf8");
   const names = Array.from(
     css.matchAll(/--color-([a-z0-9-]+)\s*:/g),
     (m) => m[1],
@@ -119,13 +159,25 @@ export function definedTokens(): Set<string> {
  *
  * Variant prefixes (`sm:`, `hover:`, `focus-visible:`, `disabled:`) and opacity
  * suffixes (`/50`, `/35`) are stripped, so a hover colour and a tinted fill are
- * both checked. Arbitrary values (`text-[11.5px]`, `bg-[url(…)]`) name no token
- * and are skipped.
+ * both checked. Arbitrary values (`text-[11.5px]`, or a bracketed background-image
+ * URL) name no token and are skipped.
+ *
+ * NOTE: never spell a bracketed arbitrary class literally in a comment on this
+ * surface — write it in prose instead, as above. Tailwind scans
+ * source files for class-like strings and does not skip comments, so it emitted
+ * `background-image: url(…)` into globals.css and the CSS build failed with
+ * "Module not found: Can't resolve '…'". Every test, tsc and eslint stayed green —
+ * only starting the app revealed it.
  */
 export function tokenOf(raw: string): string | null {
   const utility = raw.split(":").pop() ?? "";
-  if (utility.includes("[")) return null;
-  const match = PREFIX.exec(utility.replace(/\/\d+$/, ""));
+  // Opacity FIRST, then the arbitrary-value test. The other order is a
+  // one-keystroke bypass: Tailwind also spells the modifier `/[0.5]`, and an
+  // `includes("[")` that runs first skips `bg-j-danger/[0.5]` entirely — on a
+  // surface already full of `/50` tints, the likeliest variant anyone writes.
+  const base = utility.replace(/\/(?:\d+|\[[^\]]*\])$/, "");
+  if (base.includes("[")) return null;
+  const match = PREFIX.exec(base);
   if (!match) return null;
   const value = match[1];
   if (NON_COLOUR.has(value)) return null;

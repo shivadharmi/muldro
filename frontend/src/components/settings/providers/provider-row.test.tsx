@@ -102,7 +102,14 @@ test("an uncatalogued provider renders a humanised slug and offers only Remove",
     { catalog: null },
   );
   expect(screen.getByText("Legacy vendor")).toBeTruthy();
-  expect(screen.queryByText("legacy_vendor")).toBeNull();
+  // The slug survives as an IDENTIFIER, in the detail slot beside base_url,
+  // never as the name. On an uncatalogued row it is a recognition affordance:
+  // the catalog has no name for the thing, so "Legacy vendor" is neither the
+  // slug nor a real product name, and the founder is deciding which stored
+  // credential to destroy. Marked `data-raw-slug` so the A3 sweep skips that
+  // one node rather than the whole rule.
+  const identifier = screen.getByText("legacy_vendor");
+  expect(identifier.getAttribute("data-raw-slug")).toBe("true");
   expect(screen.getByRole("button", { name: "Remove Legacy vendor" })).toBeTruthy();
   expect(screen.queryByRole("button", { name: /^Test/ })).toBeNull();
   expect(screen.queryByRole("button", { name: /^Edit/ })).toBeNull();

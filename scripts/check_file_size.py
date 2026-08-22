@@ -39,7 +39,14 @@ GRANDFATHERED: dict[str, int] = {
     # grows it further; recorded here rather than split, matching every other
     # pre-existing oversized file's treatment.
     "frontend/src/lib/types.ts": 590,
-    "frontend/src/components/chat/chat-panel.tsx": 678,
+    # Recorded at adoption as `components/chat/chat-panel.tsx` (678 lines). The
+    # Jarvis→Muldro rebrand (e4a9468) moved the directory to `components/muldro/`
+    # and did not move this key with it, so the cap silently stopped applying and
+    # the file grew to 736 with nothing reporting it — a guard that could not
+    # fail. Re-pointed at the real path and recorded at its CURRENT size, which
+    # is the honest baseline; it must shrink from here. This change does not grow
+    # it (one dead colour token renamed).
+    "frontend/src/components/muldro/chat-panel.tsx": 736,
     "frontend/src/components/history/run-detail-modal.tsx": 543,
     "frontend/src/app/settings/page.tsx": 522,
 }

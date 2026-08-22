@@ -215,7 +215,7 @@ export function SurfaceDetailModal({ surface, open, onClose }: Props) {
 
           {showTabs && loading && (
             <div className="flex items-center justify-center py-8">
-              <div className="w-5 h-5 border-2 border-accent-primary/30 border-t-accent-primary rounded-full animate-spin" />
+              <div className="w-5 h-5 border-2 border-j-primary/30 border-t-j-primary rounded-full animate-spin" />
               <span className="ml-2 text-sm text-t-tertiary">Loading {activeTab?.label}...</span>
             </div>
           )}

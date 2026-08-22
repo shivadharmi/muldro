@@ -17,7 +17,7 @@
  * would make a providers component depend on a model-picker module for no
  * reason but where the function happened to be typed first. The root is where
  * this surface already keeps what every folder shares — `controls.ts`,
- * `design-tokens.ts`, `icons.tsx`, `overlay-context.ts`.
+ * `token-audit.ts`, `icons.tsx`, `overlay-context.ts`.
  *
  * **A humanised slug is still a fallback, never a lookup.** Every call site
  * reaches here only after the catalog failed to supply a `display_name`. The

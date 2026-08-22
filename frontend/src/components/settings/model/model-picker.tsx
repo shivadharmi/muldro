@@ -233,7 +233,7 @@ function PickerPanel(props: ModelPickerProps) {
         }}
         className={
           "absolute inset-0 flex flex-col overflow-hidden bg-surface-1 border border-b-strong " +
-          "shadow-[0_24px_60px_rgba(0,0,0,.55)] outline-none sm:inset-auto sm:left-1/2 " +
+          "shadow-[0_24px_60px_rgba(0,0,0,.55)] sm:inset-auto sm:left-1/2 " +
           "sm:top-[78px] sm:h-auto sm:w-[560px] sm:-translate-x-1/2 sm:rounded-[14px]"
         }
       >
@@ -255,7 +255,7 @@ function PickerPanel(props: ModelPickerProps) {
               setQuery(e.target.value);
               setActive(0);
             }}
-            className="min-w-0 flex-1 bg-transparent text-[15px] text-t-primary outline-none placeholder:text-t-muted"
+            className="min-w-0 flex-1 bg-transparent text-[15px] text-t-primary placeholder:text-t-muted"
           />
           <span className="shrink-0 text-[11px] text-t-muted">{tierName}</span>
           <Kbd>esc</Kbd>

@@ -9,8 +9,8 @@
  * against `globals.css`, so a token that does not exist fails the suite instead
  * of silently rendering transparent.
  *
- * That mechanism now lives in `../design-tokens.ts` and covers every settings
- * component from `../design-tokens.test.ts`. This call is the RENDERED half of
+ * That mechanism now lives in `../token-audit.ts` and covers every settings
+ * component from `../token-audit.test.ts`. This call is the RENDERED half of
  * it — proof that the classes which actually reached the DOM resolve, which a
  * source scan cannot claim.
  */
@@ -19,7 +19,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { test, expect, vi } from "vitest";
 
-import { tokensIn } from "../design-tokens";
+import { tokensIn } from "../token-audit";
 import { SaveBar } from "./save-bar";
 import { classesOf } from "../responsive-fixtures";
 

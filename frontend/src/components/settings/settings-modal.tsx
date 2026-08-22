@@ -157,7 +157,7 @@ function SettingsDialog() {
       <div
         ref={panelRef}
         tabIndex={-1}
-        className="relative flex flex-col sm:flex-row overflow-hidden w-full h-full min-h-0 bg-surface-1 outline-none animate-scale-in sm:mx-4 sm:w-full sm:max-w-4xl sm:h-[min(820px,calc(100dvh-4rem))] sm:border sm:border-b-secondary sm:rounded-[var(--radius-xl)] sm:shadow-[var(--shadow-lg)]"
+        className="relative flex flex-col sm:flex-row overflow-hidden w-full h-full min-h-0 bg-surface-1 animate-scale-in sm:mx-4 sm:w-full sm:max-w-4xl sm:h-[min(820px,calc(100dvh-4rem))] sm:border sm:border-b-secondary sm:rounded-[var(--radius-xl)] sm:shadow-[var(--shadow-lg)]"
       >
         <SettingsRail
           activeTab={activeTab}

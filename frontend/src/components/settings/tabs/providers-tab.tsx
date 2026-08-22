@@ -264,7 +264,7 @@ export function ProvidersTab() {
   );
 
   return (
-    <div ref={containerRef} tabIndex={-1} className="flex flex-col outline-none">
+    <div ref={containerRef} tabIndex={-1} className="flex flex-col">
       {/* §2.2. An inference key is not an install: it grants Muldro no access
           to the founder's world and mints no capability. */}
       <p className="text-[12.5px] leading-[1.5] text-t-tertiary">
@@ -302,7 +302,7 @@ export function ProvidersTab() {
             placeholder={`Search ${entries.length} providers`}
             autoComplete="off"
             spellCheck={false}
-            className="flex-1 min-w-0 bg-transparent text-[15px] sm:text-[14px] text-t-primary placeholder:text-t-muted outline-none"
+            className="flex-1 min-w-0 bg-transparent text-[15px] sm:text-[14px] text-t-primary placeholder:text-t-muted"
           />
         </label>
         <ProviderFilter

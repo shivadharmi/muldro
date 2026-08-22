@@ -57,10 +57,10 @@ export function LiveActivityFeed() {
 
 function EventDot({ type }: { type: string }) {
   let color = "bg-surface-2";
-  if (type === "run_completed") color = "bg-status-success";
-  if (type === "run_failed") color = "bg-status-error";
-  if (type === "approval_requested") color = "bg-status-warning";
-  if (type.includes("tool_call")) color = "bg-accent-primary";
+  if (type === "run_completed") color = "bg-j-success";
+  if (type === "run_failed") color = "bg-j-error";
+  if (type === "approval_requested") color = "bg-j-warning";
+  if (type.includes("tool_call")) color = "bg-j-primary";
 
   return <span className={`w-2 h-2 rounded-full mt-1.5 ${color}`} />;
 }
