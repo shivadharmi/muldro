@@ -87,6 +87,13 @@ class ApprovalResponse(BaseModel):
     approval_type: str
     risk_level: str = "medium"
     created_at: datetime | None = None
+    # Which surface can DECIDE this row: "queue" or "chat". A chat approval
+    # resumes a suspended turn through /v1/muldro/chat/resume and is 409'd by
+    # the decide endpoints on purpose. The client cannot work that out —
+    # `artifact_refs` is on the detail response, not here — so a review queue
+    # offered Approve on a row the server would refuse and surfaced the refusal
+    # as an unexplained error. Defaulted so an older caller is unaffected.
+    decision_route: str = "queue"
 
 
 # ── Tasks ─────────────────────────────────────────────────────────

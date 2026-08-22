@@ -332,7 +332,6 @@ async def prepared_work_unit(db: Any, *, workspace_id: str, user_id: str) -> Uni
     `internal.list_approvals`, and inventing one is forbidden: an affordance
     whose capability does not resolve is not rendered at all.
     """
-    from src.deep_runtime.middleware.approval_persistence import PREPARED_APPROVAL_TYPE
     from src.models.approvals import Approval
     from src.view.contracts import Affordance
 
@@ -342,8 +341,26 @@ async def prepared_work_unit(db: Any, *, workspace_id: str, user_id: str) -> Uni
             .where(
                 Approval.workspace_id == workspace_id,
                 Approval.user_id == user_id,
-                Approval.approval_type == PREPARED_APPROVAL_TYPE,
                 Approval.status == "pending",
+                # EVERY type the queue can actually act on, not just prepared
+                # actions. The queue filtered on one type while five exist, so a
+                # `filter_proposal`, a `step:*` and the Governor's plan-level
+                # rows were written and rendered nowhere — and a queue nobody
+                # renders looks exactly like a queue with nothing in it.
+                #
+                # Chat approvals are the one deliberate exclusion. They carry
+                # `artifact_refs["chat"] is True`, which routes them to
+                # /v1/muldro/chat/resume; the decide endpoints 409 them on
+                # purpose. They are not orphaned by this — they are answered
+                # inline in the conversation that raised them, which is where
+                # the context to answer them lives.
+                # IS DISTINCT FROM, not `!=`. A row with no `chat` key yields
+                # SQL NULL from the JSONB lookup, and `NULL != 'true'` is NULL
+                # rather than TRUE — so a plain inequality dropped every
+                # approval that was NOT a chat one, the exact opposite of the
+                # intent. Caught end to end against real SQL; a fake db would
+                # have agreed with the wrong version.
+                Approval.artifact_refs["chat"].astext.is_distinct_from("true"),
             )
             .order_by(Approval.created_at.desc())
             .limit(PREPARED_QUEUE_LIMIT)
@@ -356,7 +373,12 @@ async def prepared_work_unit(db: Any, *, workspace_id: str, user_id: str) -> Uni
         return None
 
     count = len(rows)
-    noun = "action" if count == 1 else "actions"
+    # "waiting for your decision", not "prepared for your review". The queue
+    # now holds every type it can act on, and only a prepared action has been
+    # PREPARED — a step approval sits on a run that is already underway, and a
+    # filter proposal has nothing staged at all. The old wording asserted
+    # something untrue of most of its own contents.
+    noun = "decision" if count == 1 else "decisions"
     capped = "+" if count >= PREPARED_QUEUE_LIMIT else ""
     try:
         frame = frame_for_row(
@@ -365,7 +387,7 @@ async def prepared_work_unit(db: Any, *, workspace_id: str, user_id: str) -> Uni
             entity_id=workspace_id,
             kind="proposal",
             status="needs_you",
-            headline=f"{count}{capped} {noun} prepared for your review",
+            headline=f"{count}{capped} {noun} waiting for you",
             occurred_at=getattr(rows[0], "created_at", None),
             event_count=count,
             affordances=[

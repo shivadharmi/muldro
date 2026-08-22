@@ -8,7 +8,12 @@ is the better reason to have looked for the seam.
 
 from src.integrations.capabilities import CAPABILITY_CATALOG
 
-__all__ = ["rejected_capability"]
+__all__ = [
+    "DECISION_ROUTE_CHAT",
+    "DECISION_ROUTE_QUEUE",
+    "decision_route",
+    "rejected_capability",
+]
 
 
 def rejected_capability(approval_type: str | None) -> str | None:
@@ -40,3 +45,22 @@ def rejected_capability(approval_type: str | None) -> str | None:
         return None
     candidate = approval_type.split(":", 1)[1] if ":" in approval_type else approval_type
     return candidate if candidate in CAPABILITY_CATALOG else None
+
+
+# Where a decision on this approval has to be sent. The chat gate stamps
+# `artifact_refs["chat"] = True` and the decide endpoints 409 those on purpose:
+# a chat approval resumes a suspended turn through /v1/muldro/chat/resume, and
+# nothing else can answer it.
+#
+# The CLIENT could not tell the difference — `artifact_refs` is on the detail
+# response, not the list — so a general review queue offered Approve on a row
+# the server would refuse, and the failure came back as an unexplained error.
+# The server knows; it should say so rather than let the client guess.
+DECISION_ROUTE_QUEUE = "queue"
+DECISION_ROUTE_CHAT = "chat"
+
+
+def decision_route(artifact_refs: dict | None) -> str:
+    """Which surface can decide this approval."""
+    refs = artifact_refs if isinstance(artifact_refs, dict) else {}
+    return DECISION_ROUTE_CHAT if refs.get("chat") is True else DECISION_ROUTE_QUEUE

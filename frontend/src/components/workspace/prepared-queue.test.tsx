@@ -38,9 +38,16 @@ describe("PreparedQueue", () => {
     rejectAction.mockReset().mockResolvedValue({});
   });
 
-  it("asks only for prepared actions", async () => {
+  it("asks for everything pending, not one type", async () => {
+    /* It asked for `prepared_action` alone while five types existed, so a
+       filter proposal, a step approval and the Governor's plan-level rows were
+       written and rendered nowhere. The old test pinned the exact arguments,
+       so it moved with any change instead of validating one. */
     render(<PreparedQueue />);
-    await waitFor(() => expect(fetchApprovals).toHaveBeenCalledWith("pending", "prepared_action"));
+    await waitFor(() => expect(fetchApprovals).toHaveBeenCalled());
+    const [status, type] = fetchApprovals.mock.calls[0];
+    expect(status).toBe("pending");
+    expect(type).toBeUndefined();
   });
 
   it("lists each prepared action by title", async () => {
@@ -83,5 +90,64 @@ describe("PreparedQueue", () => {
     fetchApprovals.mockRejectedValue(new Error("nope"));
     render(<PreparedQueue />);
     expect(await screen.findByText(/could not be loaded/i)).toBeInTheDocument();
+  });
+
+  it("shows a row of every type, labelled", async () => {
+    fetchApprovals.mockResolvedValue([
+      ROW,
+      { ...ROW, approval_id: "apr_2", approval_type: "filter_proposal", title: "Quiet 6 senders?" },
+      { ...ROW, approval_id: "apr_3", approval_type: "step:email.send", title: "Send the update" },
+    ]);
+    render(<PreparedQueue />);
+    expect(await screen.findByText("Quiet 6 senders?")).toBeInTheDocument();
+    expect(screen.getByText("Send the update")).toBeInTheDocument();
+    expect(screen.getByText("Prepared write")).toBeInTheDocument();
+    expect(screen.getByText("Filter proposal")).toBeInTheDocument();
+    expect(screen.getByText("email.send")).toBeInTheDocument();
+  });
+
+  it("only a prepared write claims nothing has run", async () => {
+    /* The old copy asserted "Nothing has run" of every row. A step approval
+       sits on a run that is already underway. */
+    fetchApprovals.mockResolvedValue([
+      ROW,
+      { ...ROW, approval_id: "apr_2", approval_type: "step:email.send" },
+    ]);
+    render(<PreparedQueue />);
+    await screen.findByText("Prepared write");
+    expect(screen.getAllByText(/nothing has run yet/i)).toHaveLength(1);
+  });
+
+  it("a chat approval is not offered a button that would 409", async () => {
+    /* Those resume a suspended turn via /chat/resume and are refused by these
+       endpoints on purpose. */
+    fetchApprovals.mockResolvedValue([
+      ROW,
+      {
+        ...ROW,
+        approval_id: "apr_chat",
+        title: "A chat-turn write",
+        decision_route: "chat",
+      },
+    ]);
+    render(<PreparedQueue />);
+    await screen.findByText("Send the term sheet reply to Sarah Chen");
+    expect(screen.queryByText("A chat-turn write")).toBeNull();
+  });
+
+  it("a failed decision costs its own row, not the queue", async () => {
+    /* One shared flag replaced the ENTIRE list with "could not be loaded" —
+       wrong message, wrong scope, unrecoverable without a remount. */
+    fetchApprovals.mockResolvedValue([
+      ROW,
+      { ...ROW, approval_id: "apr_2", title: "The other one" },
+    ]);
+    rejectAction.mockRejectedValue(new Error("API 409: cannot decide here"));
+    render(<PreparedQueue />);
+    await screen.findByText("The other one");
+    await userEvent.click(screen.getAllByRole("button", { name: "Reject" })[0]);
+    expect(await screen.findByText(/API 409/)).toBeInTheDocument();
+    expect(screen.getByText("The other one")).toBeInTheDocument();
+    expect(screen.queryByText(/could not be loaded/i)).toBeNull();
   });
 });

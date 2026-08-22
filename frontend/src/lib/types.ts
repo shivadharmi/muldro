@@ -115,6 +115,13 @@ export interface Approval {
   approval_type: string;
   risk_level: string;
   created_at: string | null;
+  /**
+   * Which surface can DECIDE this row: "queue" or "chat". A chat approval
+   * resumes a suspended turn via /v1/muldro/chat/resume and is 409'd by the
+   * decide endpoints on purpose. The client cannot derive this — `artifact_refs`
+   * is on the detail response, not here.
+   */
+  decision_route?: string;
 }
 
 export interface ApprovalDetail {

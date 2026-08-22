@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from ulid import ULID
 
-from src.api.approval_trust_scope import rejected_capability
+from src.api.approval_trust_scope import decision_route, rejected_capability
 from src.api.deps import get_current_user_id, get_current_workspace_id, get_session
 from src.api.routes_approvals_prepared import publish_prepared_decision, run_prepared_action
 from src.api.schemas import ApprovalDecisionRequest, ApprovalDetailResponse, ApprovalResponse
@@ -23,6 +23,8 @@ from src.models.plans import Plan
 from src.models.task_graph import TaskRun, TaskStep
 from src.services.audit import AuditService
 from src.services.execution_state import transition_run, transition_step
+from src.services.filter_proposals import FILTER_PROPOSAL_TYPE
+from src.services.filter_rules import apply_approved_proposal
 from src.services.graph_executor import create_graph_executor
 
 logger = logging.getLogger(__name__)
@@ -113,6 +115,7 @@ async def list_approvals(
             approval_type=a.approval_type,
             risk_level=a.risk_level,
             created_at=a.created_at,
+            decision_route=decision_route(a.artifact_refs),
         )
         for a in approvals
     ]
@@ -231,6 +234,14 @@ async def approve_action(
     approval.artifact_refs = {**(approval.artifact_refs or {}), "decision_type": decision_type}
 
     await db.commit()
+
+    # A confirmed FILTER PROPOSAL becomes rules. Same principle as a prepared
+    # action one branch below: the addresses come off the row the founder read,
+    # never off fresh evidence. It does not return early — no later branch
+    # matches a proposal, and the generic response is the right one.
+    if approval.approval_type == FILTER_PROPOSAL_TYPE:
+        await apply_approved_proposal(db, approval)
+        await db.commit()
 
     # PREPARED actions: the action was fully derived on the original turn and recorded on this
     # row. Confirmation REPLAYS that recorded payload — it must NOT be routed through
