@@ -81,6 +81,10 @@ class ApprovalResponse(BaseModel):
     status: str
     title: str
     summary: str | None = None
+    # Required on purpose: the prepared-work queue is the only route to action for a
+    # prepared action (CLAUDE.md), and a caller that silently dropped this field would
+    # leave staged writes indistinguishable from ordinary approvals.
+    approval_type: str
     risk_level: str = "medium"
     created_at: datetime | None = None
 

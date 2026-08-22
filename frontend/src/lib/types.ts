@@ -112,6 +112,7 @@ export interface Approval {
   status: string;
   title: string;
   summary: string | null;
+  approval_type: string;
   risk_level: string;
   created_at: string | null;
 }

@@ -82,21 +82,26 @@ async def get_approval_detail(
 @router.get("/v1/approvals", response_model=list[ApprovalResponse])
 async def list_approvals(
     status: str = "pending",
+    approval_type: str = "",
     user_id: str = Depends(get_current_user_id),
     workspace_id: str = Depends(get_current_workspace_id),
     db: AsyncSession = Depends(get_session),
 ):
-    """List approvals for the user, filtered by status."""
-    result = await db.execute(
-        select(Approval)
-        .where(
-            Approval.user_id == user_id,
-            Approval.workspace_id == workspace_id,
-            Approval.status == status,
-        )
-        .order_by(Approval.created_at.desc())
-        .limit(50)
+    """List approvals for the user, filtered by status and optionally by type.
+
+    `approval_type` exists so the prepared-work queue can ask for exactly the
+    rows it is the only route to — see CLAUDE.md, "a prepared action has no run
+    and no step". An empty value means no filter, which is the pre-existing
+    behaviour byte for byte.
+    """
+    stmt = select(Approval).where(
+        Approval.user_id == user_id,
+        Approval.workspace_id == workspace_id,
+        Approval.status == status,
     )
+    if approval_type:
+        stmt = stmt.where(Approval.approval_type == approval_type)
+    result = await db.execute(stmt.order_by(Approval.created_at.desc()).limit(50))
     approvals = result.scalars().all()
     return [
         ApprovalResponse(
@@ -104,6 +109,7 @@ async def list_approvals(
             status=a.status,
             title=a.title,
             summary=a.summary,
+            approval_type=a.approval_type,
             risk_level=a.risk_level,
             created_at=a.created_at,
         )
@@ -169,6 +175,7 @@ async def approve_action(
             status=approval.status,
             title=approval.title,
             summary=approval.summary,
+            approval_type=approval.approval_type,
             risk_level=approval.risk_level,
             created_at=approval.created_at,
         )
@@ -243,6 +250,7 @@ async def approve_action(
             status=approval.status,
             title=approval.title,
             summary=approval.summary,
+            approval_type=approval.approval_type,
             risk_level=approval.risk_level,
             created_at=approval.created_at,
         )
@@ -413,6 +421,7 @@ async def approve_action(
         status=approval.status,
         title=approval.title,
         summary=approval.summary,
+        approval_type=approval.approval_type,
         risk_level=approval.risk_level,
         created_at=approval.created_at,
     )
@@ -442,6 +451,7 @@ async def reject_action(
             status=approval.status,
             title=approval.title,
             summary=approval.summary,
+            approval_type=approval.approval_type,
             risk_level=approval.risk_level,
             created_at=approval.created_at,
         )
@@ -499,6 +509,7 @@ async def reject_action(
             status=approval.status,
             title=approval.title,
             summary=approval.summary,
+            approval_type=approval.approval_type,
             risk_level=approval.risk_level,
             created_at=approval.created_at,
         )
@@ -602,6 +613,7 @@ async def reject_action(
         status=approval.status,
         title=approval.title,
         summary=approval.summary,
+        approval_type=approval.approval_type,
         risk_level=approval.risk_level,
         created_at=approval.created_at,
     )
@@ -656,6 +668,7 @@ async def edit_approval(
         status=approval.status,
         title=approval.title,
         summary=approval.summary,
+        approval_type=approval.approval_type,
         risk_level=approval.risk_level,
         created_at=approval.created_at,
     )

@@ -378,8 +378,11 @@ export function fetchRuntimeSummary(): Promise<RuntimeSummary> {
 
 // ── Approvals ───────────────────────────────────────────────────
 
-export function fetchApprovals(status?: string): Promise<Approval[]> {
-  const qs = status ? `?status=${status}` : "";
+export function fetchApprovals(status?: string, approvalType?: string): Promise<Approval[]> {
+  const params = new URLSearchParams();
+  if (status) params.set("status", status);
+  if (approvalType) params.set("approval_type", approvalType);
+  const qs = params.toString() ? `?${params}` : "";
   return api(`/approvals${qs}`);
 }
 
