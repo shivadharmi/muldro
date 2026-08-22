@@ -271,7 +271,12 @@ class PerceptionRunner:
             )
 
             await publish_perception_units(
-                raw_events, source=source, user_id=user_id, events=self._events
+                raw_events,
+                source=source,
+                user_id=user_id,
+                workspace_id=workspace_id,
+                events=self._events,
+                db_factory=self._db_factory,
             )
 
             # Fetch full thread context for reply emails
