@@ -124,6 +124,11 @@ class StepGraphStore:
                 status="pending",
                 input_data=step_input or None,
                 name=step_name,
+                # The column existed and was never populated, so the one fact
+                # that says "this step is the FOUNDER's to perform, not
+                # muldro's" survived only inside input_data. The DAG read
+                # neither and ran user-action steps through an agent.
+                step_type=task.task_type,
             )
             self._db.add(step)
 

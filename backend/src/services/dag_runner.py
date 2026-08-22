@@ -45,6 +45,7 @@ from src.services.outcome_learner import OutcomeLearner
 from src.services.step_graph_store import StepGraphStore
 from src.services.step_runner import StepRunner
 from src.services.trust_gate import TrustGate
+from src.services.user_action_steps import handle_user_action_step
 
 if TYPE_CHECKING:
     from src.services.verification import VerifyVerdict
@@ -289,6 +290,9 @@ class DagRunner:
             capability = (step.input_data or {}).get(
                 "capability", (step.input_data or {}).get("task_type", "")
             )
+
+            if await handle_user_action_step(step, run, self._emitter, self._db):
+                return
 
             # ── Fail-closed contract guard ───────────────────────────────
             # The autonomous path MUST be gated by the TrustEngine. Two
