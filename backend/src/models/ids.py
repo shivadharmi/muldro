@@ -54,6 +54,7 @@ ID_PREFIXES = {
     "pst": "perception_state",
     "mbind": "Model binding (tier/agent -> provider+model)",
     "pcred": "Provider credential (encrypted API key)",
+    "ubody": "unit_body",
 }
 
 
