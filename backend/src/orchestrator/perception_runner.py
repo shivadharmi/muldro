@@ -85,6 +85,34 @@ async def _fetch_thread_contexts(
     return contexts
 
 
+# A Planner response that would not parse falls back to `PlanOutput(goal=
+# response_text, ...)` in `extract_plan` — the ENTIRE raw model output, kept
+# as a diagnostic. That is fine internally and it is already logged, but this
+# branch turns a goal into prose the founder reads, and a raw JSON blob
+# arrived as a card whose headline was "{".
+#
+# So the boundary checks the shape rather than trusting the field: an insight
+# is a sentence muldro wrote for a person. Deliberately NOT a JSON parse — a
+# fragment, a code fence or a truncated dump is just as unreadable as valid
+# JSON, and all of them start by announcing themselves.
+_NOT_PROSE_PREFIXES = ("{", "[", "```", '"goal"', "goal:")
+
+# Long enough to be a claim. The fallback dumps hundreds of characters, so this
+# only rejects the other end: a bare token that says nothing.
+_MIN_INSIGHT_CHARS = 12
+
+
+def _is_publishable_insight(goal: str | None) -> bool:
+    """Whether a plan goal is prose a human should be shown."""
+    text = (goal or "").strip()
+    if len(text) < _MIN_INSIGHT_CHARS:
+        return False
+    if text.startswith(_NOT_PROSE_PREFIXES):
+        return False
+    # A dump that opens with prose and then carries structure is still a dump.
+    return '"steps"' not in text and '"capability"' not in text
+
+
 class PerceptionRunner:
     """Runs perception cycles and cross-source synthesis for the orchestrator."""
 
@@ -664,7 +692,7 @@ class PerceptionRunner:
             # cross-cutting insight (esp. on the synthesis path, which has no
             # prior relevance-routing step). Surface it as a briefing item so
             # the reasoning isn't silently discarded.
-            if plan.goal and plan.goal.strip():
+            if _is_publishable_insight(plan.goal):
                 try:
                     from src.services.memory_service import MemoryService
 

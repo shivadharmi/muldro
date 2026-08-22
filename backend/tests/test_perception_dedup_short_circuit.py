@@ -104,3 +104,42 @@ class TestPartialDedupStillObserves:
         assert "1 new event(s)" in prompt
         assert "5 new event(s)" not in prompt
         assert "Series A term sheet" in prompt
+
+
+class TestOnlyProseBecomesAnInsight:
+    """`extract_plan` falls back to `PlanOutput(goal=response_text, ...)` when
+    the Planner's reply will not parse — the entire raw output, kept as a
+    diagnostic and already logged. This branch turns a goal into prose the
+    founder reads, and a raw JSON blob reached the workspace as a card whose
+    headline was "{".
+    """
+
+    @pytest.mark.parametrize(
+        "goal",
+        [
+            '{\n  "goal": "Review the single new Gmail event"',
+            '[{"step": 1}]',
+            "```json\n{}\n```",
+            '"goal": "x"',
+            'Triage the inbox and then "steps": [{...}]',
+            "ok",
+            "",
+            None,
+        ],
+    )
+    def test_a_dump_is_not_an_insight(self, goal):
+        from src.orchestrator.perception_runner import _is_publishable_insight
+
+        assert _is_publishable_insight(goal) is False
+
+    @pytest.mark.parametrize(
+        "goal",
+        [
+            "Dana needs an answer on the liability cap before Tuesday.",
+            "Two invoices are overdue and one is from a new counterparty.",
+        ],
+    )
+    def test_a_sentence_is(self, goal):
+        from src.orchestrator.perception_runner import _is_publishable_insight
+
+        assert _is_publishable_insight(goal) is True

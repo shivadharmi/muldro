@@ -22,6 +22,7 @@ from src.view.contracts import Unit
 from src.view.domain_units import (
     briefing_units,
     connector_health_unit,
+    insight_units,
     prepared_work_unit,
     run_units,
 )
@@ -86,6 +87,9 @@ async def assemble_feed(
         units.append(prepared)
     units.extend(await briefing_units(db, workspace_id=workspace_id, user_id=user_id))
     units.extend(await run_units(db, workspace_id=workspace_id, now=now))
+    # What muldro concluded, ahead of the perceived things it concluded it
+    # FROM: an interpretation is worth more than the raw signal behind it.
+    units.extend(await insight_units(db, workspace_id=workspace_id, user_id=user_id, now=now))
     health = await connector_health_unit(db, workspace_id=workspace_id)
     if health is not None:
         units.append(health)

@@ -311,3 +311,61 @@ class TestFinishedRunsStaySeeable:
 
         assert COMPLETED_RUN_WINDOW_HOURS < FAILED_RUN_WINDOW_HOURS
         assert COMPLETED_RUN_WINDOW_HOURS >= 8  # an overnight
+
+
+class TestInsightUnits:
+    """What muldro CONCLUDED, not what it merely saw.
+
+    The soul's initiative sequence is observe -> interpret -> surface. The view
+    layer had observe and surface and no home for interpret: a conclusion went
+    into a `briefing_item` memory and waited for a briefing generated at 07:00,
+    which on a workspace with no briefing row yet meant never.
+    """
+
+    def test_the_headline_is_the_first_claim_not_a_truncation(self):
+        from src.view.domain_units import _insight_headline
+
+        text = (
+            "Dana needs an answer on the liability cap before Tuesday. "
+            "She has written twice and the board meets that morning."
+        )
+        assert _insight_headline(text) == (
+            "Dana needs an answer on the liability cap before Tuesday."
+        )
+
+    def test_a_short_leading_fragment_does_not_become_the_headline(self):
+        """ "Re. " is a sentence end by punctuation and a nonsense headline."""
+        from src.view.domain_units import _insight_headline
+
+        assert _insight_headline("Re. the renewal, legal wants $2M.").startswith("Re. the renewal")
+
+    def test_a_single_line_with_no_terminator_is_used_whole(self):
+        from src.view.domain_units import _insight_headline
+
+        assert _insight_headline("Two invoices are overdue") == "Two invoices are overdue"
+
+    def test_only_the_first_line_is_considered(self):
+        from src.view.domain_units import _insight_headline
+
+        assert _insight_headline("The claim.\nSupporting detail.") == "The claim."
+
+    def test_blank_text_yields_a_blank_headline_rather_than_raising(self):
+        from src.view.domain_units import _insight_headline
+
+        assert _insight_headline("") == ""
+        assert _insight_headline("   \n  ") == ""
+
+    def test_a_conclusion_is_a_finding_and_muldros_own(self):
+        """`finding` carries the largest lede budget of any kind, because
+        research and synthesis are legitimately long."""
+        from src.view.body import LEDE_BUDGETS
+
+        assert "finding" in LEDE_BUDGETS
+        assert LEDE_BUDGETS["finding"] >= LEDE_BUDGETS["proposal"]
+
+    def test_the_window_cannot_outlive_the_memory_it_reads(self):
+        """These memories carry ttl_days=1; a wider window would select rows
+        that expire out from under the feed."""
+        from src.view.domain_units import INSIGHT_WINDOW_HOURS
+
+        assert 0 < INSIGHT_WINDOW_HOURS <= 24

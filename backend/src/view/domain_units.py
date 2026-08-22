@@ -20,6 +20,7 @@ from typing import Any
 
 from sqlalchemy import select
 
+from src.models.memory import Memory
 from src.models.plans import Plan
 from src.models.task_graph import TaskRun, TaskStep
 from src.view.contracts import FrameStatus, Unit
@@ -33,6 +34,7 @@ __all__ = [
     "MAX_RUN_UNITS",
     "briefing_units",
     "connector_health_unit",
+    "insight_units",
     "prepared_work_unit",
     "run_headline",
     "run_unit",
@@ -179,6 +181,97 @@ async def run_units(db: Any, *, workspace_id: str, now: datetime) -> list[Unit]:
         )
         if unit is not None:
             units.append(unit)
+    return units
+
+
+# How far back the feed shows muldro's own conclusions. They carry a 1-day TTL
+# of their own, so this only decides how much of that day is on the workspace.
+INSIGHT_WINDOW_HOURS = 24
+
+# Ceiling per feed build. A conclusion is worth more than an email and there
+# should never be many, so this is a runaway guard rather than a budget.
+MAX_INSIGHT_UNITS = 10
+
+# `store_briefing_memory` writes these, from two places: the relevance
+# assessor routing a signal to the `briefing` tier, and the Planner's
+# non-actionable branch keeping a cross-cutting insight rather than discarding
+# it. Both are muldro's OWN reasoning about what it saw.
+_INSIGHT_MEMORY_TYPE = "briefing_item"
+
+
+def _insight_headline(text: str) -> str:
+    """The conclusion's first sentence, as a headline.
+
+    Not a truncation of the body: the first sentence of a conclusion IS the
+    claim, and the rest is support. `frame_for_row` neutralizes it — this text
+    is model-authored, and while muldro wrote it, it wrote it ABOUT external
+    content and must not be trusted to have kept markdown out.
+    """
+    first = (text or "").strip().split("\n", 1)[0].strip()
+    for stop in (". ", "? ", "! "):
+        head, sep, _ = first.partition(stop)
+        if sep and len(head) >= 20:
+            return head + sep.strip()
+    return first
+
+
+async def insight_units(db: Any, *, workspace_id: str, user_id: str, now: datetime) -> list[Unit]:
+    """What muldro CONCLUDED, as `finding` Units. Never raises.
+
+    The soul's initiative sequence is observe -> interpret -> surface
+    selectively. The view layer had observe (a card per perceived thing) and
+    surface, and no home for interpret: a conclusion went into a
+    `briefing_item` memory and waited for a briefing generated at 07:00. On a
+    workspace with no briefing row yet, it was never seen at all.
+
+    `finding` is the kind the contracts already reserved for this — its lede
+    budget is the largest of any card kind precisely because research and
+    synthesis are legitimately long — and nothing emitted one from `muldro`
+    until now.
+
+    The body is muldro's own prose, exactly as `briefing_units` treats a
+    briefing's `full_text`. No Quote: a conclusion is not external text, and
+    attributing it to a person would be the misattribution `run_unit` already
+    refuses in the other direction.
+    """
+    since = now - timedelta(hours=INSIGHT_WINDOW_HOURS)
+    try:
+        result = await db.execute(
+            select(Memory)
+            .where(
+                Memory.workspace_id == workspace_id,
+                Memory.user_id == user_id,
+                Memory.memory_type == _INSIGHT_MEMORY_TYPE,
+                Memory.status == "active",
+                Memory.created_at >= since,
+            )
+            .order_by(Memory.created_at.desc())
+            .limit(MAX_INSIGHT_UNITS)
+        )
+        rows = list(result.scalars().all())
+    except Exception as exc:  # noqa: BLE001 - one family must not cost the feed
+        logger.warning("feed_insight_read_failed workspace=%s error=%s", workspace_id, exc)
+        return []
+
+    units: list[Unit] = []
+    for row in rows:
+        text = (getattr(row, "fact_text", "") or "").strip()
+        if not text:
+            continue
+        try:
+            frame = frame_for_row(
+                source="muldro",
+                entity_type="insight",
+                entity_id=row.memory_id,
+                kind="finding",
+                status="new",
+                headline=_insight_headline(text),
+                occurred_at=getattr(row, "created_at", None),
+            )
+        except Exception as exc:  # noqa: BLE001 - one bad row costs its own card
+            logger.warning("feed_insight_unit_failed id=%r error=%s", row.memory_id, exc)
+            continue
+        units.append(Unit(frame=frame, body=text, quotes=()))
     return units
 
 
