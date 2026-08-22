@@ -236,6 +236,37 @@ test("an unrecognised status falls back to its raw text", () => {
   expect(screen.getByText("quarantined")).toBeTruthy();
 });
 
+/** The dot is the only `aria-hidden` element in a row. */
+function dotTokens(container: HTMLElement): string[] {
+  const dot = container.querySelector('[aria-hidden="true"]');
+  return (dot?.className ?? "").split(/\s+/);
+}
+
+// The dot is the smallest and most glanceable element in the row. If it and the
+// chip come from separate tables they drift, and the drift shows up exactly
+// where it matters least visible: an amber dot beside a red chip.
+test.each([
+  ["invalid", "Invalid credential", "bg-j-error", "bg-j-error-soft"],
+  ["valid", "Connected", "bg-j-success", "bg-j-success-soft"],
+  ["untested", "Untested", "bg-j-warning", "bg-j-warning-soft"],
+  ["quarantined", "quarantined", "bg-j-warning", "bg-j-warning-soft"],
+])("the dot and the chip agree for %s", (status, label, dotToken, chipToken) => {
+  const { container } = renderRow({ status });
+  expect(dotTokens(container)).toContain(dotToken);
+  expect(screen.getByText(label).className).toContain(chipToken);
+});
+
+test("a not-connected row's dot is an outline, not a colour", () => {
+  const { container } = renderRow({
+    configured: false,
+    status: "unconfigured",
+    source: "none",
+  });
+  const tokens = dotTokens(container);
+  expect(tokens).toContain("border-t-muted");
+  expect(tokens.some((token) => token.startsWith("bg-j-"))).toBe(false);
+});
+
 // Class-attribute order does not decide a cascade conflict — stylesheet order
 // does, and `.text-j-error` is emitted BEFORE `.text-t-secondary`. Carrying both
 // would render the destructive action grey.
@@ -284,12 +315,10 @@ test("Test and Remove call their own handlers", async () => {
   expect(onRemove).toHaveBeenCalledTimes(1);
 });
 
-// A rule element, not a border: it must stay outside the expanded row's tint,
-// and it is decorative, so it is hidden from assistive tech.
-test("the separator is a 1px hairline hidden from assistive tech", () => {
+// Its only behavioural claim: the rule is decoration, so it must not reach
+// assistive tech. Its thickness and colour are cosmetics and are not pinned —
+// a restyle should not have to edit a test.
+test("the separator is hidden from assistive tech", () => {
   const { container } = render(<ProviderRowSeparator />);
-  const rule = container.firstElementChild as HTMLElement;
-  expect(rule.className).toContain("h-px");
-  expect(rule.className).toContain("bg-b-secondary");
-  expect(rule).toHaveAttribute("aria-hidden", "true");
+  expect(container.firstElementChild).toHaveAttribute("aria-hidden", "true");
 });

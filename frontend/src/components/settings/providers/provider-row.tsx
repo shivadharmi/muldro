@@ -72,44 +72,60 @@ const SOURCE_DETAIL: Record<ProviderStatus["source"], string> = {
   none: "",
 };
 
-/** How a configured provider's `status` reads. The three keys are the whole set
- *  the backend produces for a credential row: `untested` is the column default,
- *  `valid` and `invalid` are what a test writes back.
+/** Everything one connection state decides — the dot's colour AND the chip's,
+ *  from a single entry.
+ *
+ *  Split across two tables they drift: a chip variant added for `invalid`
+ *  without a matching dot colour renders an amber dot beside a red chip, and
+ *  the dot is the smaller, more glanceable of the two. */
+interface StatusPresentation {
+  label: string;
+  chip: ChipVariant;
+  dot: string;
+}
+
+const NOT_CONNECTED: StatusPresentation = {
+  label: "Not connected",
+  chip: "outline",
+  dot: "border-[1.5px] border-t-muted bg-transparent",
+};
+
+/** An unrecognised status is neither trusted nor called a hard failure. */
+function unknownStatus(status: string): StatusPresentation {
+  return { label: status, chip: "warning", dot: "bg-j-warning" };
+}
+
+/** How a configured provider's `status` reads. These three are the whole set
+ *  the backend produces for a credential row today: `untested` is the column
+ *  default, `valid` and `invalid` are what a test writes back.
+ *
+ *  The map is deliberately OPEN (`Record<string, …>`), not a closed union: the
+ *  wire contract really is a bare `str` (`ProviderStatus.status`, a
+ *  `String(16)` column), so a status added on the backend must degrade through
+ *  `unknownStatus` rather than crash a settings screen. Do not narrow it.
  *
  *  `invalid` is NOT amber. It means the provider REJECTED the credential, so
  *  every tier bound to it fails at runtime — rendering it in the same colour as
  *  the benign `untested` teaches the founder to read the second as the first. */
-const STATUS_CHIPS: Record<string, { label: string; variant: ChipVariant }> = {
-  valid: { label: "Connected", variant: "success" },
-  invalid: { label: "Invalid credential", variant: "error" },
-  untested: { label: "Untested", variant: "warning" },
+const STATUS_PRESENTATION: Record<string, StatusPresentation> = {
+  valid: { label: "Connected", chip: "success", dot: "bg-j-success" },
+  invalid: { label: "Invalid credential", chip: "error", dot: "bg-j-error" },
+  untested: { label: "Untested", chip: "warning", dot: "bg-j-warning" },
 };
 
-/** An unrecognised status is neither trusted nor treated as a hard failure. */
-function statusChipFor(status: string): { label: string; variant: ChipVariant } {
-  return STATUS_CHIPS[status] ?? { label: status, variant: "warning" };
+/** The one call that decides how a row reads. An unconfigured provider never
+ *  reaches the status table — its `status` is the synthetic `"unconfigured"`,
+ *  which is a statement about the ROW existing, not about a credential. */
+function presentationFor(status: ProviderStatus): StatusPresentation {
+  if (!status.configured) return NOT_CONNECTED;
+  return STATUS_PRESENTATION[status.status] ?? unknownStatus(status.status);
 }
 
-/** Three states, derived once, driving the dot. `degraded` is
- *  configured-but-not-valid: there IS a credential, it just did not answer. */
-type Connection = "connected" | "degraded" | "disconnected";
-
-function connectionOf(status: ProviderStatus): Connection {
-  if (!status.configured) return "disconnected";
-  return status.status === "valid" ? "connected" : "degraded";
-}
-
-const DOT_CLASSES: Record<Connection, string> = {
-  connected: "bg-j-success",
-  degraded: "bg-j-warning",
-  disconnected: "border-[1.5px] border-t-muted bg-transparent",
-};
-
-function StatusDot({ connection }: { connection: Connection }) {
+function StatusDot({ tone }: { tone: string }) {
   return (
     <span
       aria-hidden="true"
-      className={`w-[7px] h-[7px] rounded-full shrink-0 ${DOT_CLASSES[connection]}`}
+      className={`w-[7px] h-[7px] rounded-full shrink-0 ${tone}`}
     />
   );
 }
@@ -179,7 +195,7 @@ export function ProviderRow({
   const entry = status.catalogued ? (catalog ?? null) : null;
   const uncatalogued = entry === null;
 
-  const connection = connectionOf(status);
+  const presentation = presentationFor(status);
   const name = entry?.display_name ?? status.provider;
 
   // Remove is gated on ownership to stop a workspace deleting an env or
@@ -199,8 +215,6 @@ export function ProviderRow({
       : status.source === "workspace"
         ? "Edit"
         : "Override";
-
-  const chip = statusChipFor(status.status);
 
   const detail = status.configured
     ? SOURCE_DETAIL[status.source]
@@ -224,7 +238,7 @@ export function ProviderRow({
       }`}
     >
       <div className="flex items-center gap-[13px] py-[11px] px-[20px]">
-        <StatusDot connection={connection} />
+        <StatusDot tone={presentation.dot} />
 
         {/* `truncate` on a fixed width silently eats a long display name, and
             there is no other place it appears — so keep it reachable on hover. */}
@@ -236,11 +250,7 @@ export function ProviderRow({
         </span>
 
         {entry && <Chip>{AUTH_KIND_LABELS[entry.auth_kind]}</Chip>}
-        {status.configured ? (
-          <Chip variant={chip.variant}>{chip.label}</Chip>
-        ) : (
-          <Chip variant="outline">Not connected</Chip>
-        )}
+        <Chip variant={presentation.chip}>{presentation.label}</Chip>
         {reason && <Chip variant="info">{reason}</Chip>}
 
         <span className="flex-1 min-w-0 text-[11.5px] text-t-muted truncate">
