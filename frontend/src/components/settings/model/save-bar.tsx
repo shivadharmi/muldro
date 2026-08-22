@@ -58,10 +58,21 @@ export function SaveBar({
       // has no note pointing here, so this comment is the only link, and the
       // symptom of a silent drift is a bar inset from the panel edge rather
       // than anything that fails a test.
+      //
+      // §9.10 below `sm`: an OPAQUE `bg-surface-2` and `12px 16px 26px`.
+      // Both halves are load-bearing on a phone and neither is on a desktop.
+      // The translucent fill is a desktop nicety — over a full-bleed sheet it
+      // lets the scrolling tier cards read through the bar they are supposed to
+      // be scrolling UNDER, and `backdrop-blur` is the one effect a mid-range
+      // phone drops first. The 26px bottom is not padding for its own sake: on
+      // a gesture-navigation phone the home indicator is drawn OVER the layout,
+      // so a bar padded 12px puts `Save changes` under the founder's own swipe
+      // target. The 16px sides mirror the shell's mobile gutter — see the note above.
       className={
         "sticky bottom-0 z-10 -mx-4 sm:-mx-6 mt-auto " +
-        "border-t border-b-secondary bg-surface-2/50 backdrop-blur-sm " +
-        "px-[24px] py-[12px] flex items-center gap-3"
+        "border-t border-b-secondary bg-surface-2 sm:bg-surface-2/50 " +
+        "sm:backdrop-blur-sm flex items-center gap-3 " +
+        "px-[16px] sm:px-[24px] pt-[12px] pb-[26px] sm:pb-[12px]"
       }
     >
       {clean ? (

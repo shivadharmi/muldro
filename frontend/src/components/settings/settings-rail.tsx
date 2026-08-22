@@ -137,6 +137,12 @@ interface SettingsRailProps {
  * the sheet's root view — a full-width push list, never a horizontal scroller
  * (defect L4). Which of the two it is, is the caller's layout decision.
  *
+ * `min-h-[44px] sm:min-h-0` and not a fixed height: below `sm` each row is the
+ * ONLY way into a tab, so it has to be a legal touch target (§9.10). It is a
+ * minimum rather than a height because the `providers` row carries a counted
+ * suffix and a long label must be allowed to grow rather than be clipped; at
+ * `sm`+ the rail is a dense 200px list again and the floor is released.
+ *
  * Memoised: it renders seven inline SVGs, and the shell above it re-renders for
  * reasons that have nothing to do with the tab list.
  */
@@ -167,7 +173,7 @@ export const SettingsRail = memo(function SettingsRail({
             type="button"
             onClick={() => onSelect(tab.key)}
             aria-current={isActive ? "true" : undefined}
-            className={`flex items-center gap-[10px] text-left rounded-[8px] px-[12px] py-[7px] text-[13px] whitespace-nowrap transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-j-ring ${
+            className={`flex items-center gap-[10px] text-left rounded-[8px] px-[12px] py-[7px] min-h-[44px] sm:min-h-0 text-[13px] whitespace-nowrap transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-j-ring ${
               isActive
                 ? "bg-j-primary-soft text-j-primary font-medium"
                 : "text-t-tertiary hover:text-t-primary hover:bg-surface-2"

@@ -104,13 +104,20 @@ test("§9.7's geometry is on the section itself, not on a wrapper", () => {
   const className = bar().getAttribute("class") ?? "";
 
   // The separator, the fill and the padding are the three things that make it
-  // read as a footer rather than as the last card in the list.
+  // read as a footer rather than as the last card in the list. Two of the three
+  // are breakpoint-split by §9.10, and the mobile half is asserted alongside the
+  // desktop one — an unqualified `bg-surface-2/50` would still be "contained" by
+  // `sm:bg-surface-2/50`, so the pairs are named in full.
   for (const utility of [
     "border-t",
     "border-b-secondary",
-    "bg-surface-2/50",
-    "px-[24px]",
-    "py-[12px]",
+    "bg-surface-2 ",
+    "sm:bg-surface-2/50",
+    "px-[16px]",
+    "sm:px-[24px]",
+    "pt-[12px]",
+    "pb-[26px]",
+    "sm:pb-[12px]",
     "flex",
     "items-center",
     "gap-3",

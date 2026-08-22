@@ -228,7 +228,13 @@ export function TierCard({
       // reaches the card afterwards still hears why it is amber.
       aria-describedby={notice ? consequenceId : undefined}
       className={
-        "bg-surface-1 border rounded-[var(--radius-lg)] pt-[13px] px-[20px] pb-[11px] " +
+        // §9.10's mobile padding (`14px 16px 12px`) is the LEADING value and the
+        // desktop one is the `sm:` override, because the horizontal half is not
+        // cosmetic: the shell's body gutter drops to 16px below `sm`, so a card
+        // that kept `px-[20px]` there would sit its controls 36px from a 390px
+        // screen edge and cost the grid a tenth of its width.
+        "bg-surface-1 border rounded-[var(--radius-lg)] " +
+        "pt-[14px] sm:pt-[13px] px-[16px] sm:px-[20px] pb-[12px] sm:pb-[11px] " +
         (warned ? "border-j-warning/35" : "border-b-secondary")
       }
     >
@@ -279,7 +285,12 @@ export function TierCard({
           moment a credential was revoked. */}
       <div
         className={
+          // `leading-[1.6]` below `sm` only (§9.10): at 390px the context, the
+          // price and the thinking style do not fit on one line, so the row's
+          // own spans wrap internally — and at the desktop line-height two
+          // wrapped lines of 11.5px text read as one smudge.
           "mt-[10px] pt-[9px] border-t flex items-center gap-[9px] " +
+          "leading-[1.6] sm:leading-[inherit] " +
           (warned ? "border-j-warning/25" : "border-b-secondary")
         }
       >

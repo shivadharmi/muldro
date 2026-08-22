@@ -3,27 +3,20 @@
 import { useCallback, useState } from "react";
 
 import type { CatalogProvider, CredentialFields, ProviderStatus } from "@/lib/types";
+import { LABEL_CLASS, btn, ctl } from "../controls";
 import {
   buildCredentialFields,
   hasMissingRequired,
   isSecretStored,
 } from "./credential-body";
 
-const CTL_CLASS =
-  "w-full h-[44px] sm:h-[36px] text-[15px] sm:text-[14px] px-[12px] sm:px-[10px] " +
-  "rounded-[var(--radius-md)] bg-surface-2 border border-b-secondary text-t-primary " +
-  "disabled:opacity-45";
-
-const LABEL_CLASS =
-  "block text-[10px] font-medium uppercase text-t-muted tracking-[.07em] " +
-  "mb-[6px] sm:mb-[5px]";
+/** §9.3, from `controls.ts` — these were a hand-rolled copy of it, written
+ *  before that module existed. Composed once at module scope: both are pure
+ *  functions of their arguments and neither varies per field or per render. */
+const CTL_CLASS = ctl({ extra: "disabled:opacity-45" });
+const PRIMARY_BTN_CLASS = btn({ size: "md", variant: "primary" });
 
 const HINT_CLASS = "text-[11.5px] text-t-muted";
-
-const PRIMARY_BTN_CLASS =
-  "h-[44px] sm:h-[32px] px-[18px] sm:px-[13px] text-[13px] font-medium " +
-  "rounded-[var(--radius-md)] bg-j-primary text-j-primary-fg hover:bg-j-primary-hover " +
-  "disabled:opacity-45 cursor-pointer disabled:cursor-default";
 
 /** The hint shown under a secret whose value the server already holds. The value
  *  is never returned, so the input stays empty and blank means "keep it". */

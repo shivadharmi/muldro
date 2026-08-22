@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 
 import type { ModelBinding } from "@/lib/types";
+import { btn } from "../controls";
 
 /**
  * Put focus back on a provider row after whatever held it has unmounted.
@@ -55,21 +56,23 @@ export function useRowFocusRestore(
 }
 
 /**
- * §9.3 `md` ghost button — 32px, padding-x 12px, and 44px below `sm` so it stays
- * a legal touch target. `sm` (30px/11px) is the size assigned to controls inside
- * a dense list row; this panel is card-level, and §9.6 specifies `md` for the
- * warning card's own action.
+ * §9.3 `md` ghost — 32px at `sm`+, 44px below it so it stays a legal touch
+ * target (§9.10). `sm` (30px) is the size assigned to controls inside a dense
+ * list row; this panel is card-level, and §9.6 specifies `md` for the warning
+ * card's own action.
  *
- * Carries NO text colour: the two variants below set their own, and a colour in
- * the base would compete at equal specificity with the one appended after it —
- * which of the two won would then be decided by Tailwind's output order rather
- * than by this file.
+ * The tint is a VARIANT rather than a class appended to a shared base: at equal
+ * specificity `text-j-error` after `text-t-secondary` is decided by Tailwind's
+ * output order, not by the call site. `controls.ts` owns that rule now — this
+ * file used to restate both the geometry and the trap.
+ *
+ * The focus ring goes with the hand-rolled copy and is not replaced: the global
+ * `:focus-visible { outline: 2px solid }` in `globals.css` already covers every
+ * button on the surface, and the local `focus-visible:outline-none` here was
+ * suppressing it in order to redraw the same ring as a box-shadow.
  */
-const GHOST_MD =
-  "inline-flex items-center justify-center h-[44px] sm:h-[32px] px-[12px] " +
-  "text-[13px] font-medium rounded-[var(--radius-md)] bg-transparent " +
-  "border border-b-primary hover:bg-surface-2 cursor-pointer " +
-  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-j-ring";
+const KEEP_BTN = btn({ size: "md" });
+const REMOVE_BTN = btn({ size: "md", variant: "danger" });
 
 /** The removal awaiting an answer. Held by the tab, one at a time. */
 export interface PendingRemoval {
@@ -189,14 +192,14 @@ export function RemoveConfirmation({
           ref={cancelRef}
           type="button"
           onClick={onCancel}
-          className={`${GHOST_MD} text-t-secondary`}
+          className={KEEP_BTN}
         >
           Keep it
         </button>
         <button
           type="button"
           onClick={onConfirm}
-          className={`${GHOST_MD} text-j-error`}
+          className={REMOVE_BTN}
         >
           Remove anyway
         </button>

@@ -175,7 +175,7 @@ function SettingsDialog() {
             <button
               type="button"
               onClick={() => setPushed(false)}
-              className="sm:hidden flex items-center gap-0.5 h-11 px-2 text-[15px] text-j-primary rounded-[var(--radius-md)] hover:bg-surface-2 transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-j-ring"
+              className="sm:hidden flex items-center gap-0.5 h-[44px] px-[8px] text-[15px] text-j-primary rounded-[var(--radius-md)] hover:bg-surface-2 transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-j-ring"
             >
               <ChevronLeft />
               Settings
@@ -194,7 +194,7 @@ function SettingsDialog() {
 
             <button
               onClick={closeSettings}
-              className="shrink-0 flex items-center justify-center h-11 w-11 sm:h-auto sm:w-auto sm:p-1 rounded-[var(--radius-sm)] text-t-muted hover:text-t-primary hover:bg-surface-2 transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-j-ring"
+              className="shrink-0 flex items-center justify-center h-[44px] w-[44px] sm:h-auto sm:w-auto sm:p-1 rounded-[var(--radius-sm)] text-t-muted hover:text-t-primary hover:bg-surface-2 transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-j-ring"
               aria-label="Close settings"
             >
               <CloseIcon />

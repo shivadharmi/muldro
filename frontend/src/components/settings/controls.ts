@@ -1,12 +1,19 @@
 /**
  * The §9.3 control primitives, in one place.
  *
- * These metrics were already triplicated across the settings surface
- * (`model/binding-fields.tsx`, `providers/provider-credential-form.tsx`,
- * `tabs/providers-tab.tsx`) before anyone had written a fourth copy — so the
- * next tweak to a control height meant finding every literal. This module is the
- * single definition; new settings controls import it rather than restate it.
- * The two files above are held by other implementers and are migrated later.
+ * These metrics were already triplicated across the settings surface before
+ * anyone had written a fourth copy — so the next tweak to a control height meant
+ * finding every literal. This module is the single definition; every settings
+ * control and button imports it rather than restating it, and the last
+ * hand-rolled copies (`providers/provider-credential-form.tsx`,
+ * `providers/provider-row.tsx`, `providers/remove-confirmation.tsx`) were folded
+ * in with the §9.10 mobile pass.
+ *
+ * The one deliberate exception is `providers/provider-filter.tsx`: a segment in
+ * a segmented group is not a button in a row — it has no border of its own, it
+ * carries its own selected fill, and its 28px `sm`+ height is smaller than any
+ * size here. Making it a fifth `btn()` variant would widen this module to cover
+ * one call site. It states §9.10's 44px floor itself.
  */
 
 /** §9.3 `ctl` metrics. 44px/15px/12px below `sm` (the touch-target minimum),

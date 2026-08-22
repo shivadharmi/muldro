@@ -3,6 +3,7 @@
 import type { ReactNode } from "react";
 
 import type { CatalogProvider, ProviderStatus } from "@/lib/types";
+import { btn } from "../controls";
 
 /** §9.3 chip — one height (20px), one radius. The fence there is on SIZES: do
  *  not add a fourth chip size. Variants are a different axis and are added as
@@ -34,28 +35,19 @@ function Chip({
   return <span className={`${CHIP_BASE} ${CHIP_VARIANTS[variant]}`}>{children}</span>;
 }
 
-/** `sm` ghost button, MINUS its text colour. 44px tall below the `sm`
- *  breakpoint so a row action stays a legal touch target on a phone.
- *
- *  The colour is deliberately not in here. Stacking `text-j-error` after
- *  `text-t-secondary` in the class attribute does NOT make it win: at equal
- *  specificity the cascade is decided by STYLESHEET order, and Tailwind emits
- *  colour utilities sorted by token — `.text-j-error` lands before
- *  `.text-t-secondary`, so grey would win and the destructive action would
- *  render identical to the benign ones. */
-const GHOST_BTN_BASE =
-  "inline-flex items-center justify-center h-[44px] sm:h-[30px] px-[11px] " +
-  "text-[13px] font-medium rounded-[var(--radius-md)] bg-transparent " +
-  "border border-b-primary hover:bg-surface-2 " +
-  "disabled:opacity-45 cursor-pointer disabled:cursor-default";
-
-const GHOST_BTN = `${GHOST_BTN_BASE} text-t-secondary`;
+/** §9.3 `sm` ghost — the dense size, because these sit inside a list row.
+ *  30px at `sm`+, 44px below it so a row action stays a legal touch target on a
+ *  phone (§9.10). Both metrics come from `controls.ts` now; this file used to
+ *  restate them, and the colour trap that justified the split lives there:
+ *  stacking `text-j-error` after `text-t-secondary` does NOT make it win, so
+ *  the tint is a VARIANT rather than a class a caller appends. */
+const GHOST_BTN = btn({ size: "sm" });
 
 /** Ghost in the error colour AT REST — not on hover. A hover-only danger colour
  *  lives inside `@media (hover: hover)`, so on a phone the destructive action
  *  would never be coloured at all. Still ghost, not a filled danger button:
  *  revoking a key is a normal workspace action. */
-const DANGER_GHOST_BTN = `${GHOST_BTN_BASE} text-j-error`;
+const DANGER_GHOST_BTN = btn({ size: "sm", variant: "danger" });
 
 const AUTH_KIND_LABELS: Record<CatalogProvider["auth_kind"], string> = {
   api_key: "API key",

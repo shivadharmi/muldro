@@ -182,7 +182,14 @@ export function AgentOverrides({
                 <section
                   key={override.scope_key}
                   aria-labelledby={headingId}
-                  className="bg-surface-1 border border-b-secondary rounded-[var(--radius-lg)] pt-[13px] px-[20px] pb-[13px]"
+                  // The same mobile gutter as `tier-card.tsx`, for the same
+                  // reason: these two cards sit in one stack, and a 20px inset
+                  // here against a 16px one there would step the left edge
+                  // in and out down the column on a 390px screen.
+                  className={
+                    "bg-surface-1 border border-b-secondary rounded-[var(--radius-lg)] " +
+                    "pt-[14px] sm:pt-[13px] px-[16px] sm:px-[20px] pb-[13px]"
+                  }
                 >
                   <div className="flex items-center justify-between gap-3 mb-[11px]">
                     <h4
