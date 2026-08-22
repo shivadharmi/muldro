@@ -36,13 +36,15 @@ test("an intent may carry no reason", () => {
 });
 
 /**
- * What makes the intent ONE-SHOT is that every other navigation drops it.
+ * What makes the intent ONE-SHOT is that every other navigation drops it — plus
+ * `clearPendingProvider`, which is not a navigation but the acknowledgement the
+ * Providers tab makes on arrival, and which has to leave the same nothing behind.
  *
- * Each of these is a separate object literal handed to `set`, and `set` merges:
- * a field added to one of them without re-stating `pendingProvider: null` leaves
- * a sticky intent that re-opens a row on some later, unrelated visit. Nothing
- * else would catch that — every other test in the suite seeds the store
- * directly instead of navigating to it.
+ * Each is a separate object literal handed to `set`, and `set` merges: a field
+ * added to one of them without re-stating `pendingProvider: null` leaves a
+ * sticky intent that re-opens a row on some later, unrelated visit. Nothing else
+ * would catch that — every other test in the suite seeds the store directly
+ * instead of navigating to it.
  */
 test.each([
   ["openSettings", () => state().openSettings()],
@@ -50,7 +52,7 @@ test.each([
   ["closeSettings", () => state().closeSettings()],
   ["setActiveTab", () => state().setActiveTab("model")],
   ["clearPendingProvider", () => state().clearPendingProvider()],
-])("%s drops a standing intent", (_name, navigate) => {
+])("%s leaves no standing intent", (_name, navigate) => {
   state().openProviderFor("groq", "Needed by the Fast tier");
   expect(state().pendingProvider).not.toBeNull();
 

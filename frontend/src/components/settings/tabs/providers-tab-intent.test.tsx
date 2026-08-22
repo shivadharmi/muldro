@@ -106,6 +106,39 @@ test("focus lands on the row an intent named", async () => {
   await waitFor(() => expect(document.activeElement).toBe(rowAnchor("ollama")));
 });
 
+/**
+ * `arrivedAt` is a fact about how the mount BEGAN, and it must not be re-derived
+ * from `expanded?.reason` — the obvious collapse for the next reader, since the
+ * two sit side by side. Every other focus test would survive that change; this
+ * one is the reason it cannot ship, because a reasonless intent is legal
+ * (`openProviderFor(provider)`) and would silently stop moving focus.
+ */
+test("a reasonless intent still moves focus to its row", async () => {
+  useSettingsModalStore.getState().openProviderFor("ollama");
+  await mountAndSettle();
+
+  await waitFor(() => expect(document.activeElement).toBe(rowAnchor("ollama")));
+});
+
+/**
+ * The failure path is where WCAG 2.4.3 actually bites: the founder pressed a
+ * button that then unmounted, the load failed, there is no row to land on, and
+ * focus is sitting on `<body>` inside a focus trap — from which the next Tab
+ * restarts at the top. The panel itself is then the entry point; it holds the
+ * message and the retry.
+ */
+test("a failed load still gives the trap something to hold", async () => {
+  vi.mocked(fetchModelCatalog).mockRejectedValue(new Error("catalog 500"));
+  vi.mocked(fetchModelConfig).mockRejectedValue(new Error("config 500"));
+  intend("ollama");
+
+  const { container } = mountTab();
+  await screen.findByText("Providers could not be loaded.");
+
+  await waitFor(() => expect(document.activeElement).not.toBe(document.body));
+  expect(container.contains(document.activeElement)).toBe(true);
+});
+
 test("the reason names whichever tier sent the founder", async () => {
   intend("ollama", "Needed by the Reasoning tier");
   await mountAndSettle();

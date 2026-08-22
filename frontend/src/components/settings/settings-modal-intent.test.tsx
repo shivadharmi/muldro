@@ -186,11 +186,19 @@ test("focus lands on the row the founder was sent to", async () => {
   );
 });
 
-// The one-shot, through the shell that makes it one: leaving the tab and coming
-// back must not re-open a row the founder has already dealt with.
+/**
+ * The one-shot, through the shell that makes it one: leaving the tab and coming
+ * back must not re-open a row the founder has already dealt with.
+ *
+ * The consume is asserted DIRECTLY rather than left to the round trip. Reaching
+ * the second half of this test requires the first half to have worked, so a
+ * break in the arrival would fail this on its precondition and say nothing about
+ * what it is named for — the assertion below is the one that pins the store.
+ */
 test("returning to Providers later re-opens nothing", async () => {
   await openWarnedModelTab();
   await screen.findByRole("button", { name: "Cancel Groq" });
+  expect(useSettingsModalStore.getState().pendingProvider).toBeNull();
 
   await userEvent.click(within(rail()).getByRole("button", { name: /^Model/ }));
   await screen.findByRole("button", { name: "Connect Groq" });

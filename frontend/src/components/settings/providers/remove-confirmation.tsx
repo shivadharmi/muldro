@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState, type RefObject } from "react"
 
 import type { ModelBinding } from "@/lib/types";
 import { btn } from "../controls";
+import { focusWasLost, rowAnchorSelector } from "./row-anchor";
 
 /**
  * Put focus back on a provider row after whatever held it has unmounted.
@@ -16,6 +17,13 @@ import { btn } from "../controls";
  *
  * The target is held in a ref and read by an effect keyed on a tick, so a
  * restore never schedules a render whose only purpose is to clear a flag.
+ *
+ * ONE target ref serves every caller — `closeConfirmation` and `remove` in the
+ * Providers tab — so two restores requested in the same batch resolve as
+ * last-write-wins, silently. That is survivable rather than designed: the two
+ * name the same provider whenever they overlap, and a lost restore lands on
+ * `focusWasLost` declining rather than on focus going somewhere wrong. A caller
+ * with a DIFFERENT target would need a queue, not a ref.
  *
  * `scopeRef` is the owning tab's container: the lookup is scoped to it rather
  * than run against `document`, because the settings modal and the standalone
@@ -32,20 +40,11 @@ export function useRowFocusRestore(
     if (tick === 0) return;
     const provider = targetRef.current;
     targetRef.current = null;
-    const active = document.activeElement;
-    // Only when focus was ACTUALLY lost. A delete resolves asynchronously, and
-    // by then the founder may have moved on — restoring over them would be the
-    // same defect pointed the other way.
-    if (!provider || (active && active !== document.body && active.isConnected)) {
-      return;
-    }
-    // `CSS.escape`: a provider slug is server data, and an uncatalogued one is
-    // whatever was stored — a `"` or `\` in it would make this selector throw
-    // a SyntaxError from inside an effect, which React escalates.
+    // A delete resolves asynchronously, and by then the founder may have moved
+    // on — restoring over them would be the same defect pointed the other way.
+    if (!provider || !focusWasLost()) return;
     scopeRef.current
-      ?.querySelector<HTMLElement>(
-        `[data-provider-row="${CSS.escape(provider)}"]`,
-      )
+      ?.querySelector<HTMLElement>(rowAnchorSelector(provider))
       ?.focus();
   }, [scopeRef, tick]);
 

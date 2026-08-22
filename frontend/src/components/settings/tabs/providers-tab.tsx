@@ -27,6 +27,7 @@ import {
   useRowFocusRestore,
   type PendingRemoval,
 } from "../providers/remove-confirmation";
+import { focusWasLost, rowAnchorSelector } from "../providers/row-anchor";
 
 /**
  * The Providers tab: every model provider this workspace can call, its
@@ -75,8 +76,14 @@ export function ProvidersTab() {
     () => load().catch((err) => addToast(errorToMessage(err), "error")),
     [load, addToast],
   );
+  // Whether the fetch has finished — succeeded or failed. Not the same fact as
+  // `loading`, which is false BOTH before the load starts and after it ends;
+  // the focus fallback below has to tell "no row YET" from "there will never be
+  // a row". Set from the promise's continuation, so the commit that carries it
+  // also carries whatever the load produced.
+  const [settled, setSettled] = useState(false);
   useEffect(() => {
-    void retryLoad();
+    void retryLoad().finally(() => setSettled(true));
   }, [retryLoad]);
 
   const entries = useMemo(() => buildEntries(config, catalog), [config, catalog]);
@@ -100,29 +107,46 @@ export function ProvidersTab() {
    *
    * `Connect {provider}` unmounts the Model tab while its own button holds
    * focus, so focus falls to `<body>` inside a focus-trapped panel: the next Tab
-   * restarts at the top of the trap, and a screen-reader user is told nothing at
-   * all — the reason chip is a `<span>` in a row they were never moved to. The
-   * chip's whole audience is the person who cannot see the highlight.
+   * restarts at the top of the trap (WCAG 2.4.3), and a screen-reader user is
+   * told nothing at all — the reason chip is a `<span>` in a row they were never
+   * moved to. The chip's whole audience is the person who cannot see the
+   * highlight.
    *
-   * Keyed on `entries` rather than run once on mount, because at mount the rows
-   * DO NOT EXIST — they arrive with the config fetch, and a focus call before
-   * then would find nothing and consume its one shot. The ref makes it that one
-   * shot: a later refetch (a save, a revoke) re-runs this effect, and moving
-   * focus then would be the same defect pointed the other way.
+   * **Keyed on the list, not run once on mount — but not for the Connect trip.**
+   * `ModelConfigProvider` wraps the whole modal and its load is once-only, so by
+   * the time the founder presses Connect the config is already in hand and the
+   * rows are in the DOM on this tab's first commit. It is a COLD mount that
+   * needs the deferral — a deep link, or a caller from outside the modal, which
+   * `openProviderFor` opening the modal deliberately made reachable — where the
+   * rows arrive with the fetch and a mount-time lookup finds nothing. Only the
+   * tab-level test covers that; the shell test passes either way.
    *
-   * `restoreFocusTo` and not a raw `.focus()`, so this shares the removal flow's
-   * guard — it declines when focus has since landed somewhere real.
+   * **And when there is never a row, focus still has to go somewhere.** A failed
+   * load renders a message and a retry and no rows at all, and leaving focus on
+   * `<body>` inside the trap is the exact failure this effect exists to fix —
+   * reached, on that path, by pressing a button that then unmounted. The panel
+   * is the entry point: it holds the message and the retry.
+   *
+   * **One shot**, and the scenario that needs the ref is not the obvious one. A
+   * revoke does not: focus has moved on by then and `focusWasLost` declines. The
+   * one that does is arrive on Ollama → collapse it → edit Anthropic → Save: the
+   * save unmounts the Save button holding focus, so focus IS lost, and its
+   * refetch changes `entries` — without the ref this fires again and drags the
+   * founder back to a row they left. The shot is burned even when the move is
+   * declined, because a decline means focus is somewhere real.
    */
   const arrivalAnchored = useRef(false);
   useEffect(() => {
     if (!arrivedAt || arrivalAnchored.current) return;
-    const anchor = containerRef.current?.querySelector(
-      `[data-provider-row="${CSS.escape(arrivedAt)}"]`,
+    const anchor = containerRef.current?.querySelector<HTMLElement>(
+      rowAnchorSelector(arrivedAt),
     );
-    if (!anchor) return;
+    // No row yet and the fetch still running: keep the shot for the row.
+    const target = anchor ?? (settled ? containerRef.current : null);
+    if (!target) return;
     arrivalAnchored.current = true;
-    restoreFocusTo(arrivedAt);
-  }, [arrivedAt, entries, restoreFocusTo]);
+    if (focusWasLost()) target.focus();
+  }, [arrivedAt, entries, settled]);
 
   const closeConfirmation = useCallback(
     (provider: string) => {
@@ -240,7 +264,7 @@ export function ProvidersTab() {
   );
 
   return (
-    <div ref={containerRef} className="flex flex-col">
+    <div ref={containerRef} tabIndex={-1} className="flex flex-col outline-none">
       {/* §2.2. An inference key is not an install: it grants Muldro no access
           to the founder's world and mints no capability. */}
       <p className="text-[12.5px] leading-[1.5] text-t-tertiary">

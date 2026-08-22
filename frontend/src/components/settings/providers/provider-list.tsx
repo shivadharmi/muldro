@@ -8,14 +8,7 @@ import { ProviderCredentialForm } from "./provider-credential-form";
 import type { ProviderEntry } from "./provider-entries";
 import { ProviderRow, ProviderRowSeparator } from "./provider-row";
 import { RemoveConfirmation, type PendingRemoval } from "./remove-confirmation";
-
-/** The row wrapper is focusable BY SCRIPT only: it is where focus returns after
- *  the removal confirmation unmounts and where a founder sent from the Model
- *  tab lands, so that focus never falls to `<body>` inside a focus-trapped
- *  modal. The owning tab finds it by `[data-provider-row]`. */
-const ROW_ANCHOR =
-  "outline-none focus-visible:ring-1 focus-visible:ring-inset " +
-  "focus-visible:ring-j-ring";
+import { ROW_ANCHOR, rowAnchorAttrs } from "./row-anchor";
 
 export interface ProviderListProps {
   /** The rows to render, already filtered and grouped by the tab. */
@@ -74,11 +67,7 @@ export function ProviderList({
         return (
           <Fragment key={provider}>
             {index > 0 && <ProviderRowSeparator />}
-            <div
-              data-provider-row={provider}
-              tabIndex={-1}
-              className={ROW_ANCHOR}
-            >
+            <div {...rowAnchorAttrs(provider)} tabIndex={-1} className={ROW_ANCHOR}>
               <ProviderRow
                 status={status}
                 catalog={entry}
