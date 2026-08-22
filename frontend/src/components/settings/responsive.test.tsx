@@ -180,6 +180,36 @@ test(`at ${MOBILE_WIDTH}px the override card is padded like the tier card`, asyn
   expectSmClass(card, "pb-[13px]", "the override card's desktop bottom padding");
 });
 
+test(`at ${MOBILE_WIDTH}px the overrides disclosure is a 44px touch target`, () => {
+  // FOUND IN A BROWSER, NOT HERE. This control declares no height, so it was
+  // sized by its own 12.5px line box and measured 19px at 390px — while every
+  // test in this file passed. `expectTouchTarget` reads a DECLARED height (see
+  // its note in responsive-fixtures.ts) and jsdom computes no layout, so a
+  // control that is too small purely by OMISSION is invisible to both. The
+  // assertion below only works because the fix declares a floor; if someone
+  // removes the class and reverts to implicit sizing, this fails — which is the
+  // only shape of guard available for this class of defect.
+  render(
+    <AgentOverrides
+      agents={[{ name: "planner", display_name: "Planner", tier: "reasoning" }]}
+      overrides={[]}
+      tiers={[]}
+      models={[]}
+      providers={[]}
+      dirty={() => false}
+      rejection={() => undefined}
+      onAdd={vi.fn()}
+      onChange={vi.fn()}
+      onRemove={vi.fn()}
+      onOpenPicker={vi.fn()}
+    />,
+  );
+  expectTouchTarget(
+    screen.getByRole("button", { name: /per-agent overrides/i }),
+    "the per-agent overrides disclosure",
+  );
+});
+
 test(`at ${MOBILE_WIDTH}px the tier card's own actions are 44px touch targets`, () => {
   // A warned card — its Connect button is the card's only chrome-level control.
   const { container } = renderCard({

@@ -152,7 +152,14 @@ export function AgentOverrides({
         aria-controls={panelId}
         onClick={() => setOpen((v) => !v)}
         className={
+          // §9.10's 44px floor. This control declares no height — it is sized by
+          // its own 12.5px line box, which measured 19px in a browser. The
+          // responsive suite could not catch that: `expectTouchTarget` reads a
+          // DECLARED height (see responsive-fixtures.ts), and jsdom computes no
+          // layout, so a control that is too small purely by omission is invisible
+          // to every test we have. Found by measuring the real page at 390px.
           "flex items-center gap-[7px] w-full text-left text-[12.5px] " +
+          "min-h-[44px] sm:min-h-0 " +
           "text-t-secondary hover:text-t-primary transition-colors cursor-pointer"
         }
       >
