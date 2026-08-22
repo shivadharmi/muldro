@@ -563,6 +563,12 @@ export function fetchMemories(
 export function fetchWorkspaceUnits(): Promise<{
   units: import("@/lib/types/unit").Unit[];
   count: number;
+  /**
+   * Index into `units` where attention stops: everything from here on is
+   * collapsed behind one row. NOT a filter — the tail is on the wire, ordered
+   * and reachable. `fold_after === count` means nothing folds.
+   */
+  fold_after: number;
 }> {
   return api("/workspace/units");
 }

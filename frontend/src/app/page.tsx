@@ -121,7 +121,12 @@ export default function WorkspacePage() {
 
       {/* The canvas owns its own empty state. Do not guard on units.length
           here — that made the empty state unreachable outside its own test. */}
-      <WorkspaceCanvas units={units} onOpen={openDetail} onDismiss={handleDismiss} />
+      <WorkspaceCanvas
+        units={units}
+        onOpen={openDetail}
+        onDismiss={handleDismiss}
+        foldAfter={unitData?.fold_after}
+      />
 
       <UnitDetail
         unit={active}

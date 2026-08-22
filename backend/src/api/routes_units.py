@@ -27,6 +27,10 @@ logger = logging.getLogger(__name__)
 class UnitFeedResponse(BaseModel):
     units: list[Unit]
     count: int
+    # Index into `units` where attention stops: everything from here on is
+    # collapsed behind one row. NOT a filter — the tail is still on the wire,
+    # still ranked, still reachable. `count == fold_after` means nothing folds.
+    fold_after: int
 
 
 def parse_frame_key(key: str) -> tuple[str, str, str] | None:
@@ -55,10 +59,10 @@ async def get_workspace_units(
     A pure projection of live domain rows — no cache, no stored feed, and no
     expiry. The Unit exists exactly as long as the row it projects.
     """
-    units = await assemble_feed(
+    feed = await assemble_feed(
         db, workspace_id=workspace_id, user_id=user_id, now=datetime.now(timezone.utc)
     )
-    return UnitFeedResponse(units=units, count=len(units))
+    return UnitFeedResponse(units=feed.units, count=len(feed.units), fold_after=feed.fold_after)
 
 
 # Sources whose Units are muldro's OWN rows, not perception signals. Dismissing
