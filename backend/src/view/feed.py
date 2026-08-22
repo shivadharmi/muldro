@@ -45,7 +45,12 @@ __all__ = [
 
 
 async def drop_dismissed(
-    db: Any, units: Sequence[Unit], *, workspace_id: str, user_id: str
+    db: Any,
+    units: Sequence[Unit],
+    *,
+    workspace_id: str,
+    user_id: str,
+    events_by_key: Mapping[str, Sequence[Any]],
 ) -> list[Unit]:
     """Remove the things this person has cleared and that have not moved since.
 
@@ -57,6 +62,10 @@ async def drop_dismissed(
     refuses to dismiss one, so no such row should be written — but the review
     queue, the briefing and the runs are the founder's only route to work
     muldro is holding, and a stray key must not be able to take that away.
+
+    `events_by_key` comes from `stored_perception_units`, which has already
+    read exactly these rows — so "has this changed since it was cleared?" is
+    answered from what the feed is holding rather than from a second query.
     """
     try:
         dismissals = await load_dismissals(db, workspace_id=workspace_id, user_id=user_id)
@@ -69,7 +78,7 @@ async def drop_dismissed(
         unit
         for unit in units
         if getattr(getattr(unit, "frame", None), "source", None) == OWN_SOURCE
-        or not is_hidden(unit, dismissals)
+        or not is_hidden(unit, dismissals, events_by_key)
     ]
 
 
@@ -251,7 +260,9 @@ async def assemble_feed(
 
     # Before the body lookup and before ranking: a thing the founder has
     # cleared should cost neither a stored body nor a rank slot.
-    units = await drop_dismissed(db, units, workspace_id=workspace_id, user_id=user_id)
+    units = await drop_dismissed(
+        db, units, workspace_id=workspace_id, user_id=user_id, events_by_key=events_by_key
+    )
 
     # The prose is written by the poll and stored; the feed reads it back. A
     # feed read never generates - see `attach_stored_bodies`.

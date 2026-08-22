@@ -12,7 +12,7 @@ founder sees can be read and tested without a database in the way.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime
 from typing import Any
 
@@ -83,14 +83,44 @@ async def load_dismissals(
     return {row.frame_key: row.dismissed_at for row in result.all()}
 
 
-def is_hidden(unit: Any, dismissals: Mapping[str, datetime]) -> bool:
+def last_observed(events: Iterable[Any]) -> datetime | None:
+    """When muldro last INGESTED something about this thing, or None.
+
+    `created_at` is the row's arrival, not the event's subject-time. That
+    distinction is the whole reason this function exists: `frame.updated_at`
+    comes from `occurred_at`, and for a calendar unit `occurred_at` is when the
+    MEETING IS. Every meeting on the founder's calendar therefore carries a
+    future `updated_at`, so a rule comparing it against "now" can never call
+    one settled and a dismissed meeting reappeared on the very next poll.
+
+    Ingest time moves when, and only when, a connector brings something new —
+    a reply on a thread, a rescheduled meeting — which is exactly the question
+    "has this changed since I cleared it?" is asking.
+    """
+    stamps = [
+        stamp
+        for stamp in (ensure_aware_utc(getattr(event, "created_at", None)) for event in events)
+        if stamp is not None
+    ]
+    return max(stamps) if stamps else None
+
+
+def is_hidden(
+    unit: Any,
+    dismissals: Mapping[str, datetime],
+    events_by_key: Mapping[str, Sequence[Any]],
+) -> bool:
     """Has this unit been dismissed, and has it stood still since? Never raises.
 
     The re-surfacing rule lives here, and it is one comparison: hidden while
-    `frame.updated_at <= dismissed_at`, visible again the moment the thing
-    moves past the instant the founder cleared it. A reply on a dismissed
-    thread is new information and must come back; the same thread untouched
-    must stay gone. No timer, and no permanence.
+    nothing has been observed about the thing since `dismissed_at`, visible
+    again the moment something is. A reply on a dismissed thread is new
+    information and must come back; the same thread untouched must stay gone.
+    No timer, and no permanence.
+
+    A unit whose events cannot be dated stays VISIBLE. Showing a card the
+    founder cleared is a smaller failure than silently swallowing one they
+    never touched, and it is the posture the rest of the feed already takes.
     """
     frame = getattr(unit, "frame", None)
     key = getattr(frame, "key", None)
@@ -99,14 +129,7 @@ def is_hidden(unit: Any, dismissals: Mapping[str, datetime]) -> bool:
     dismissed_at = ensure_aware_utc(dismissals.get(key))
     if dismissed_at is None:
         return False
-
-    updated_at = getattr(frame, "updated_at", None)
-    # An offset-less stamp does not name an instant — it can be local time,
-    # hours either side of what it claims — while `dismissed_at` is always UTC.
-    # Ordering the two would then be decided by an unknown offset, so an
-    # undatable unit stays VISIBLE: showing a card the founder cleared is a
-    # smaller failure than silently swallowing one they never touched.
-    if not isinstance(updated_at, datetime) or updated_at.tzinfo is None:
+    observed_at = last_observed(events_by_key.get(key) or ())
+    if observed_at is None:
         return False
-    aware_updated = ensure_aware_utc(updated_at)
-    return aware_updated is not None and aware_updated <= dismissed_at
+    return observed_at <= dismissed_at
