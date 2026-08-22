@@ -40,8 +40,8 @@ SurfaceKind = Literal[
     "prepared_work",
     # Agent-managed (inline children, no detail API)
     "message",  # Presenter-authored rich response promoted to workspace feed
-    # Legacy kinds retained: `plan` is still produced by derive_surface_kind;
-    # `approval` is demoted-to-inline but its detail tabs are still used.
+    # Legacy kinds retained for rows already on disk. Nothing produces `plan` any
+    # more; `approval` is demoted-to-inline but its detail tabs are still used.
     "plan",
     "approval",
 ]

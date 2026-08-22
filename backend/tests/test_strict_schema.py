@@ -4,8 +4,8 @@ Provider-side enforcement (OpenAI Structured Outputs and the strict tool-schema 
 modelled on it) needs `additionalProperties: false` on every object and every declared key
 listed in `required`. Pydantic emits neither. Making the *models* strict would be the wrong
 fix — `component_properties.py` also validates inbound payloads on the legacy fenced path,
-where `extract_surface_data` drops the WHOLE surface on one validation failure. So the
-transformation happens on the way out.
+which drops the WHOLE surface on one validation failure. So the transformation happens on
+the way out.
 
 The load-bearing test here is `test_the_untransformed_schema_fails_the_same_assertions`:
 without it, the strict assertions could be passing because the input was already compliant.

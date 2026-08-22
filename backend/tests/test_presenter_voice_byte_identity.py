@@ -30,18 +30,17 @@ told its own default existed; it was added. And the "do not use" list forbade on
 nothing the prompt does not; all three were added. ``prepared_work`` in particular, because
 settled decision D2 makes that review queue the ONLY place an action staged with no human
 present can be acted on — an agent-authored second one would split it. The companion
-``test_surface_kind_guidance`` parses the table rows and the bullet list as structure and
-asserts set relations against the Literal in both directions, so this correction cannot drift
-back silently.
+``test_surface_kind_guidance`` parsed the table rows and the bullet list as structure and
+asserted set relations against the Literal in both directions; it was deleted with the prose
+it read.
 
 It was re-baselined a fourth time when ``TableProperties.rows`` became positional ``cells``.
 The prompt was the only *other* producer of Table components — the lead authors them directly
 in a ```json:surface_data``` block — and it taught row-keyed-by-column-key, a shape the closed
-model now rejects. That is not a cosmetic drift: one bad Table makes ``extract_surface_data``
-return ``None`` for the WHOLE payload, so every section of the surface is dropped silently.
-The companion ``TestPresenterVoiceExampleMatchesTheSchema`` in ``test_surface_spec.py`` now
-runs the prompt's own worked example through the real parser, so prose and schema can no
-longer disagree without CI saying so.
+model now rejects. That is not a cosmetic drift: one bad Table made the fenced parser return
+``None`` for the WHOLE payload, so every section of the surface was dropped silently. A
+companion test ran the prompt's own worked example through the real parser; it was deleted
+with that parser.
 
 It was re-baselined a fifth time when ``EntityCardProperties.attributes`` became a closed list
 of ``{"key", "value"}`` pairs. The prompt taught ``"attributes"?: {}`` — an open map, which is

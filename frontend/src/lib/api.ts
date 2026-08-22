@@ -513,15 +513,7 @@ export function dismissInsight(
   return post(`/insights/${surfaceId}/dismiss`, { reason: reason || null });
 }
 
-// ── UI Surfaces ─────────────────────────────────────────────────
-
-export function fetchSurfaces() {
-  return api("/ui/surfaces");
-}
-
-export function fetchSurface(surfaceId: string) {
-  return api(`/ui/surfaces/${surfaceId}`);
-}
+// ── Workspace feed ──────────────────────────────────────────────
 
 export function fetchWorkspaceUnits(): Promise<{
   units: import("@/lib/types/unit").Unit[];

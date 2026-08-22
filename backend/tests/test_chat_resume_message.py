@@ -9,7 +9,7 @@ C-CORR2 failure P1 fixed for the initial turn, un-fixed on resume [Corr-C1].
 These pin the continuation semantics:
 
 * **reply persisted** — an approve continuation whose ``resume_deep_lead`` yields
-  text_delta + ``agent_done`` → a ``Presentation(strip_surface_blocks(text))``.
+  text_delta + ``agent_done`` → a ``Presentation`` carrying the lead's text.
 * **chained pause** — a resumed continuation that re-pauses (2nd write) → a typed
   ``ApprovalRequired`` and STOPS, SKIPPING the completion tail (no ``RunCompleted``) —
   while ``finish_trace`` still runs (the ``finally``).
@@ -24,7 +24,7 @@ model, DB, or Redis.
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -43,8 +43,7 @@ pytestmark = pytest.mark.asyncio
 
 TRACE_ID = "trace_resume"
 # ``resume_message_events`` + its shared completion tail live in the single-lead mixin
-# (P2.2c). ``strip_surface_blocks`` resolves in THAT module's namespace, so patches
-# target it.
+# (P2.2c), so patches target THAT module's namespace.
 _MOD = "src.orchestrator.chat_single_lead"
 
 
@@ -131,7 +130,7 @@ def _sse(events: list) -> list[dict]:
 
 async def test_resume_reply_persisted_as_presentation():
     """An approve continuation (text_delta + agent_done) yields a Presentation carrying the
-    stripped reply — the frame routes_chat persists so the chat bubble is not empty."""
+    reply — the frame routes_chat persists so the chat bubble is not empty."""
     frames = [
         {"event": "agent_start", "agent": "lead", "model": "m"},
         {"event": "text_delta", "agent": "lead", "text": "All "},
@@ -139,8 +138,7 @@ async def test_resume_reply_persisted_as_presentation():
         {"event": "agent_done", "agent": "lead", "text": "All done."},
     ]
     chat, rec = _make_resume_chat(frames=frames)
-    with patch(f"{_MOD}.strip_surface_blocks", new=lambda t: f"STRIPPED::{t}"):
-        events = await _drive(chat)
+    events = await _drive(chat)
 
     # resume_deep_lead was driven with the forwarded decision/ids.
     assert rec.resume_calls == [
@@ -152,14 +150,14 @@ async def test_resume_reply_persisted_as_presentation():
             "workspace_id": "ws_1",
         }
     ]
-    # Exactly one Presentation, carrying the STRIPPED reply.
+    # Exactly one Presentation, carrying the lead's reply.
     presentations = [e for e in events if isinstance(e, Presentation)]
     assert len(presentations) == 1
-    assert presentations[0].text == "STRIPPED::All done."
+    assert presentations[0].text == "All done."
     # Terminal RunCompleted still closes the turn.
     assert isinstance(events[-1], RunCompleted)
     # The SSE view carries the `response` frame routes_chat persists on.
-    assert {"event": "response", "text": "STRIPPED::All done."} in _sse(events)
+    assert {"event": "response", "text": "All done."} in _sse(events)
 
 
 async def test_resume_reject_reason_is_forwarded():
@@ -225,8 +223,7 @@ async def test_resume_fires_interaction_learner_with_original_user_message():
     learner.learn = MagicMock()
     chat._interaction_learner = learner
 
-    with patch(f"{_MOD}.strip_surface_blocks", new=lambda t: t):
-        events = await _drive(chat)
+    events = await _drive(chat)
 
     # The turn completed (so the tail — and its learner spawn — ran).
     assert isinstance(events[-1], RunCompleted)

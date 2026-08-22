@@ -334,9 +334,9 @@ async def test_single_lead_emits_user_actions_ready():
 # ── Output re-homing (C-CORR2) ────────────────────────────────────────────────
 
 
-async def test_single_lead_rehomes_output_stripped_reply_and_raw_learner():
-    """The lead's agent_done text is re-homed: Presentation gets the STRIPPED text,
-    while the shared tail's learner receives the RAW text."""
+async def test_single_lead_rehomes_output_to_presentation_and_learner():
+    """The lead's agent_done text is re-homed: it reaches BOTH the chat-visible
+    Presentation and the shared tail's learner, from the one agent_done frame."""
     plan = PlanOutput(goal="g", reasoning="r", steps=[_step("s1", "respond")])
     chat, rec = _make_chat(lead_text="REPLY_RAW")
 
@@ -345,9 +345,7 @@ async def test_single_lead_rehomes_output_stripped_reply_and_raw_learner():
     learner.learn = MagicMock(return_value=MagicMock())
     chat._interaction_learner = learner
 
-    ctx = _patches(plan, []) + [
-        patch(f"{_LEAD}.strip_surface_blocks", new=lambda t: f"STRIPPED::{t}"),
-    ]
+    ctx = _patches(plan, [])
     for c in ctx:
         c.start()
     try:
@@ -356,9 +354,9 @@ async def test_single_lead_rehomes_output_stripped_reply_and_raw_learner():
         for c in ctx:
             c.stop()
 
-    # Presentation carries the STRIPPED reply (chat-visible).
-    assert _responses(stream) == ["STRIPPED::REPLY_RAW"]
-    # Learner gets the RAW presenter_text as agent_response.
+    # Presentation carries the lead's reply (chat-visible).
+    assert _responses(stream) == ["REPLY_RAW"]
+    # Learner gets the same presenter_text as agent_response.
     learner.learn.assert_called_once()
     assert learner.learn.call_args.kwargs["agent_response"] == "REPLY_RAW"
 

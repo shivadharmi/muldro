@@ -4,10 +4,9 @@
 frame here is built through `frame_for_row`, so a model-authored plan goal or
 briefing headline is neutralized rather than raising inside Frame's validator.
 
-`run` and `alert` used to be two surface kinds over one table
-(`surface_builder._build_run_surfaces` / `_build_alert_surfaces`). FrameKind
-has one `run` and FrameStatus carries the difference, because you cannot rank
-things that do not look alike (spec §4.1).
+`run` and `alert` used to be two surface kinds over one table. FrameKind has one
+`run` and FrameStatus carries the difference, because a single ranker cannot
+order items that do not share a shape.
 
 Every function here is TOTAL. A family that cannot be read returns nothing and
 logs; it never costs the feed.

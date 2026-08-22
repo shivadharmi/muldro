@@ -44,7 +44,6 @@ from src.orchestrator.core_events import (
     UserActionsReady,
     agent_event_from_sse,
 )
-from src.services.surface_mapping import strip_surface_blocks
 
 logger = logging.getLogger(__name__)
 
@@ -266,7 +265,7 @@ class _ChatSingleLeadMixin:
                 # persisted (routes_chat persists only on Presentation) and the chat bubble
                 # is empty. Keep presenter_text RAW for the shared tail's learner;
                 # only the CHAT-VISIBLE text falls back when there is nothing to show.
-                reply = strip_surface_blocks(presenter_text).strip()
+                reply = presenter_text.strip()
                 yield Presentation(text=reply or _NO_REPLY_TEXT)
 
         if not saw_agent_done:
@@ -477,7 +476,7 @@ class _ChatSingleLeadMixin:
                         # A1: resume_deep_lead piggybacks the ORIGINAL user message here so the
                         # tail can fire the interaction-learner (see the completion tail below).
                         resume_user_message = frame.get("user_message", "")
-                        yield Presentation(text=strip_surface_blocks(presenter_text))
+                        yield Presentation(text=presenter_text)
 
                 # COMPLETION TAIL (the shared ``_emit_completion_tail``: run_completed →
                 # surface push → interaction-learner → RunCompleted). Runs ONLY on the terminal

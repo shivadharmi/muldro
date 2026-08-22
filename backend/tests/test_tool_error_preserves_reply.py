@@ -369,8 +369,8 @@ async def test_agent_done_text_becomes_a_presentation() -> None:
     """The surviving ``agent_done`` text really is what the user is shown.
 
     Drives the REAL ``_ChatSingleLeadMixin._stream_lead_and_complete`` (including the real
-    ``strip_surface_blocks`` / ``_NO_REPLY_TEXT`` fallback) over the frames produced by a REAL
-    streamed run — no hand-written agent_done.
+    ``_NO_REPLY_TEXT`` fallback) over the frames produced by a REAL streamed run — no
+    hand-written agent_done.
     """
     frames = await _stream_turn(
         tool_name=TOOL_NAME, execute_tool=_returns_invalid_args, thread_id="t_present"

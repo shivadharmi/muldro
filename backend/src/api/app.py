@@ -37,7 +37,6 @@ from src.api.routes_settings import router as settings_router
 from src.api.routes_system import router as system_router
 from src.api.routes_traces import router as traces_router
 from src.api.routes_trust import router as trust_router
-from src.api.routes_ui import router as ui_router
 from src.api.routes_units import router as units_router
 from src.api.routes_webhooks import router as webhooks_router
 from src.api.routes_workspace_settings import router as workspace_settings_router
@@ -485,14 +484,8 @@ def create_app() -> FastAPI:
     # JWKS (no /v1 prefix — well-known endpoints must be root-level)
     app.include_router(jwks_router, tags=["auth"])
 
-    # A2UI surface state REST endpoints
-    app.include_router(ui_router, tags=["ui"])
-
-    # The view layer's typed Unit feed (spec step 3b). Replaces the surfaces
-    # endpoint above, which is deleted once the frontend stops reading it.
+    # The view layer's typed Unit feed — the single read path for the workspace.
     app.include_router(units_router, tags=["units"])
-
-    # Surface detail modal tabs
 
     # WebSocket for real-time A2UI surface streaming
     app.include_router(ws_router, tags=["websocket"])

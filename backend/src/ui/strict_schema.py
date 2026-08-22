@@ -9,9 +9,9 @@ Pydantic emits neither: ``extra="ignore"`` produces no ``additionalProperties`` 
 
 The obvious fix — making the models themselves strict — would be wrong, because the same
 models parse *inbound* payloads. ``src/ui/component_properties.py`` is shared with the legacy
-``A2UIComponent._validate_properties`` path, where ``extract_surface_data`` returns ``None``
-for the **whole payload** on any validation failure. Under ``extra="forbid"`` a model that
-emitted one stray key would not lose that key — it would lose the entire surface.
+``A2UIComponent._validate_properties`` path, which rejects the **whole payload** on any
+validation failure. Under ``extra="forbid"`` a model that emitted one stray key would not
+lose that key — it would lose the entire surface.
 
 So strictness is a property of what we hand a provider, not of how we parse. This module
 walks the generated schema and returns a new, strict structure; the models stay lenient and
