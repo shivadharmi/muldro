@@ -43,6 +43,18 @@ const TEMPERATURE_UNSUPPORTED = "Not accepted";
 /** What a null temperature reads as when the control is not editable. */
 const TEMPERATURE_UNSET = "—";
 
+/**
+ * A COMPLETE non-negative decimal literal — the only shape Temperature emits.
+ *
+ * `"0."` is deliberately excluded even though `Number("0.")` is a perfectly
+ * finite `0`: it is the halfway state of typing `"0.7"`, not a value, and
+ * emitting `0` there would push a sampling temperature the founder never chose.
+ * `""`, `"."`, `"-"`, `"1e"` and `"-0.5"` are excluded too, which is where the
+ * "no negative temperature" guard now lives — a real check, rather than the
+ * `min={0}` attribute it replaces, which never blocked typed input.
+ */
+const COMPLETE_DECIMAL = /^\d*\.?\d+$/;
+
 /** Narrow a select's raw string back to the union without an `as`. The options
  *  come from `EFFORT_OPTIONS`, so the fallback is unreachable — but it is the
  *  lookup, not an assertion, that makes that true. */
@@ -150,20 +162,39 @@ export function BindingFields({
   const uid = useId();
 
   /**
-   * The in-flight text of the Max tokens field, or `null` when not being edited.
+   * The in-flight text of each numeric field, or `null` when not being edited.
    *
-   * `<input type="number">` reports `""` for an emptied field AND for every
-   * unparseable intermediate ("abc", "0."), so there is no way to distinguish
-   * "cleared" from "mid-edit" at the DOM. Mapping that to a number and emitting
-   * it is what made the field rewrite itself: clearing `8192` to type `16384`
-   * emitted `1`, the parent merged it, and the controlled input came back
-   * showing `1` for the next keystroke to append to.
+   * A controlled numeric input hands whatever it emits straight back down as
+   * its own displayed value, so any handler that maps an unparseable keystroke
+   * onto a "safe" value rewrites the field under the founder's cursor. Both
+   * fields therefore hold their raw text here and emit a patch only for a
+   * string that is genuinely complete; `onBlur` discards the draft, so a
+   * half-typed value can never be committed.
    *
-   * So the raw string is held here and a patch is emitted only for a value that
-   * is actually valid. Temperature needs no equivalent, because it HAS a legal
-   * empty state (`null`): there, `""` is a value to emit, not a state to hold.
+   * The two are NOT the same problem, and an earlier version of this comment
+   * got the distinction wrong by framing it as "does the field have a legal
+   * empty state":
+   *
+   *   * **Max tokens** is an integer, so no valid input passes through an
+   *     unparseable prefix. `""` there means "cleared" or "garbage", and both
+   *     want the same answer — emit nothing — so collapsing them is correct.
+   *     Its draft protects the DISPLAY.
+   *   * **Temperature** is a decimal, and typing one goes *through* an
+   *     incomplete literal every time: `"0."` is the halfway state of `"0.7"`,
+   *     not a value. `""` there means "cleared" (emit `null`) OR "mid-decimal"
+   *     (emit nothing) — two different answers — so its draft protects the
+   *     MEANING, and the raw string must survive to tell them apart.
+   *
+   * That last point is why Temperature is the one `type="text"` control here.
+   * `<input type="number">` applies HTML value sanitization, so `.value` reads
+   * `""` for a raw `"0."` and collapses the two meanings before any handler can
+   * see them; the browser's discriminator, `validity.badInput`, is hard-coded
+   * `false` in jsdom, so that branch could never be tested. `inputMode="decimal"`
+   * keeps the mobile decimal keypad, the only part of `type="number"` this
+   * control actually needs.
    */
   const [tokenDraft, setTokenDraft] = useState<string | null>(null);
+  const [temperatureDraft, setTemperatureDraft] = useState<string | null>(null);
 
   const selectedModel = findModel(models, binding);
 
@@ -327,31 +358,31 @@ export function BindingFields({
           ) : (
             <input
               id={id}
-              type="number"
+              // `text`, not `number` — see the draft docblock above for why.
+              type="text"
               inputMode="decimal"
-              // No `max`. The valid ceiling is provider-specific — 1 for
-              // Anthropic, 2 for OpenAI — and `CatalogModel` carries no range to
-              // read it from, so any single number here would be a guess that
-              // silently mislabels one provider's legal value as out of range.
-              // HTML range attributes do not block typing anyway; they only set
-              // `:invalid`. The policy is therefore the same one Max tokens
-              // follows: refuse only what is invalid for EVERY provider, and let
-              // the server's 422 surface the rest on the card (§4.4).
-              min={0}
-              step={0.1}
-              value={binding.temperature ?? ""}
+              // The range guard lives in the emit rule below, not in `min`/`max`:
+              // those never blocked typed input (they only set `:invalid`) and on
+              // a text input they do nothing at all. Still no ceiling — the valid
+              // maximum is provider-specific (1 for Anthropic, 2 for OpenAI) and
+              // `CatalogModel` carries no range to read it from, so any number
+              // here would mislabel one provider's legal value. Same policy as
+              // Max tokens: refuse only what is invalid for EVERY provider and
+              // let the server's 422 surface the rest (§4.4).
+              value={temperatureDraft ?? (binding.temperature ?? "")}
               disabled={disabled}
               onChange={(e) => {
                 const raw = e.target.value;
+                setTemperatureDraft(raw);
+                // Cleared is a VALUE (`null` is legal); an incomplete literal is
+                // a state. Only the first emits.
                 if (raw === "") {
                   onChange({ temperature: null });
-                  return;
-                }
-                const parsed = Number(raw);
-                if (Number.isFinite(parsed) && parsed >= 0) {
-                  onChange({ temperature: parsed });
+                } else if (COMPLETE_DECIMAL.test(raw)) {
+                  onChange({ temperature: Number(raw) });
                 }
               }}
+              onBlur={() => setTemperatureDraft(null)}
               className={ctl({ dirty, extra: "tabular-nums disabled:opacity-45" })}
             />
           )

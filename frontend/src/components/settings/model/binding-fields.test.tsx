@@ -1,109 +1,14 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { useState } from "react";
 import { test, expect, vi } from "vitest";
 
 import { BindingFields } from "./binding-fields";
-import type { BindingPatch } from "./binding-fields";
-import type { CatalogModel, CatalogProvider, ModelBinding } from "@/lib/types";
-
-function model(over: Partial<CatalogModel> = {}): CatalogModel {
-  return {
-    provider: "anthropic",
-    model_id: "claude-opus-4-5",
-    display_name: "Claude Opus 4.5",
-    thinking_style: "adaptive",
-    accepts_temperature: true,
-    suggested_tier: "reasoning",
-    context_window: 200000,
-    input_cost_per_1k: 0.005,
-    output_cost_per_1k: 0.025,
-    supports_prompt_cache: true,
-    ...over,
-  };
-}
-
-const ANTHROPIC: CatalogProvider = {
-  provider: "anthropic",
-  display_name: "Anthropic",
-  auth_kind: "api_key",
-  credential_fields: [],
-  model_count: 4,
-  docs_url: null,
-};
-
-function binding(over: Partial<ModelBinding> = {}): ModelBinding {
-  return {
-    scope_type: "tier",
-    scope_key: "reasoning",
-    provider: "anthropic",
-    model_id: "claude-opus-4-5",
-    effort: "high",
-    max_tokens: 8192,
-    temperature: 0.7,
-    ...over,
-  };
-}
-
-function renderFields(
-  over: {
-    binding?: Partial<ModelBinding>;
-    model?: Partial<CatalogModel>;
-    dirty?: boolean;
-    disabled?: boolean;
-    warning?: boolean;
-  } = {},
-) {
-  const value = binding(over.binding);
-  const onChange = vi.fn();
-  const onOpenPicker = vi.fn();
-  render(
-    <BindingFields
-      binding={value}
-      models={[model(over.model)]}
-      providers={[ANTHROPIC]}
-      onChange={onChange}
-      onOpenPicker={onOpenPicker}
-      dirty={over.dirty}
-      disabled={over.disabled}
-      warning={over.warning}
-    />,
-  );
-  return { value, onChange, onOpenPicker };
-}
+import { binding, model, renderFields } from "./binding-fields-fixtures";
 
 /**
- * The grid wired to a real controlled parent.
- *
- * `vi.fn()` alone cannot see the defect class these fields are most prone to:
- * an emitted patch merges into the draft and comes straight back down as the
- * displayed value, so a handler that maps an intermediate keystroke to a
- * "safe" number rewrites the field under the founder's cursor. That round trip
- * only exists when something actually feeds the patch back.
+ * What the grid SHOWS. The emit rules for the two numeric fields — which raw
+ * strings become a patch — live in `binding-fields-numeric.test.tsx`.
  */
-function Harness({
-  initial,
-  onChange,
-  models = [model()],
-}: {
-  initial: ModelBinding;
-  onChange: (patch: BindingPatch) => void;
-  models?: CatalogModel[];
-}) {
-  const [current, setCurrent] = useState(initial);
-  return (
-    <BindingFields
-      binding={current}
-      models={models}
-      providers={[ANTHROPIC]}
-      onChange={(patch) => {
-        onChange(patch);
-        setCurrent((prev) => ({ ...prev, ...patch }));
-      }}
-      onOpenPicker={vi.fn()}
-    />
-  );
-}
 
 // ── F4: unsupported controls are disabled, never unmounted ─────────────────
 // Unmounting reflowed the whole row on every model change. The assertion is
@@ -116,20 +21,6 @@ test("temperature renders present-and-disabled when the model does not accept it
   expect(control).toBeInTheDocument();
   expect(control).toBeDisabled();
   expect(control).toHaveValue("Not accepted");
-});
-
-test("temperature is editable when the model accepts it", async () => {
-  const { onChange } = renderFields();
-  const control = screen.getByLabelText("Temperature");
-  expect(control).not.toBeDisabled();
-  await userEvent.clear(control);
-  expect(onChange).toHaveBeenCalledWith({ temperature: null });
-});
-
-// A stored 0 is a real temperature, not an absent one. `||` would swallow it.
-test("a stored temperature of 0 renders as 0, not as empty", () => {
-  renderFields({ binding: { temperature: 0 } });
-  expect(screen.getByLabelText("Temperature")).toHaveValue(0);
 });
 
 // ── B4: `effort: "none"` is a legal contract value ─────────────────────────
@@ -215,67 +106,6 @@ test("every control is named by a visible label, not by aria-label alone", () =>
     expect(label).toBeTruthy();
     expect(label).toBeVisible();
   }
-});
-
-// ── Max tokens: no silent rewrite ──────────────────────────────────────────
-
-test("editing max tokens emits a patch and does not mutate the binding", async () => {
-  const { value, onChange } = renderFields({ binding: { max_tokens: 8192 } });
-  const before = { ...value };
-  await userEvent.type(screen.getByLabelText("Max tokens"), "4");
-  expect(onChange).toHaveBeenCalledWith({ max_tokens: 81924 });
-  expect(value).toEqual(before);
-  expect(value.max_tokens).toBe(8192);
-});
-
-// The regression this whole draft mechanism exists for: clearing the field to
-// retype it must not emit a "safe" number that comes back as the field's value.
-test("clearing max tokens emits nothing and leaves the field empty", async () => {
-  const { onChange } = renderFields({ binding: { max_tokens: 8192 } });
-  const input = screen.getByLabelText("Max tokens");
-  await userEvent.clear(input);
-  expect(onChange).not.toHaveBeenCalled();
-  expect(input).toHaveValue(null);
-});
-
-test("clearing and retyping max tokens lands the typed value, through a real parent", async () => {
-  const onChange = vi.fn();
-  render(<Harness initial={binding({ max_tokens: 8192 })} onChange={onChange} />);
-  const input = screen.getByLabelText("Max tokens");
-  await userEvent.clear(input);
-  await userEvent.type(input, "16384");
-  // Not 116384, and not 1 — the field never rewrote itself mid-edit.
-  expect(input).toHaveValue(16384);
-  expect(onChange).toHaveBeenLastCalledWith({ max_tokens: 16384 });
-});
-
-test("a fractional max tokens is never emitted — the column is an int", async () => {
-  const onChange = vi.fn();
-  render(<Harness initial={binding({ max_tokens: 8192 })} onChange={onChange} />);
-  const input = screen.getByLabelText("Max tokens");
-  await userEvent.clear(input);
-  await userEvent.type(input, "1.5");
-  for (const [patch] of onChange.mock.calls) {
-    expect(Number.isInteger(patch.max_tokens)).toBe(true);
-  }
-  expect(onChange).not.toHaveBeenCalledWith({ max_tokens: 1.5 });
-});
-
-test("max tokens never emits 0 — the backend rejects it", async () => {
-  const { onChange } = renderFields({ binding: { max_tokens: 8192 } });
-  const input = screen.getByLabelText("Max tokens");
-  await userEvent.clear(input);
-  await userEvent.type(input, "0");
-  expect(onChange).not.toHaveBeenCalled();
-});
-
-test("blurring a half-typed max tokens reverts to the stored value", async () => {
-  const { onChange } = renderFields({ binding: { max_tokens: 8192 } });
-  const input = screen.getByLabelText("Max tokens");
-  await userEvent.clear(input);
-  await userEvent.tab();
-  expect(onChange).not.toHaveBeenCalled();
-  expect(input).toHaveValue(8192);
 });
 
 // ── The picker, not a dropdown ─────────────────────────────────────────────
