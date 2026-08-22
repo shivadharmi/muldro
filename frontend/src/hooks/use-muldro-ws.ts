@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { ActionResult, MuldroMessage, SurfaceUpdate, WorkspaceSurfacePush } from "@/lib/a2ui-types";
 import { parseWsError, type ParsedApiError } from "@/lib/api-error";
 import { getStoredToken } from "@/lib/auth";
+import type { Unit } from "@/lib/types/unit";
 
 function getWsUrl(userId: string): string {
   if (process.env.NEXT_PUBLIC_WS_URL) {
@@ -18,6 +19,8 @@ function getWsUrl(userId: string): string {
 
 interface UseMuldroWsOptions {
   userId: string;
+  /** A live Unit from the view layer. See backend src/view/publish.py. */
+  onUnitPush?: (unit: Unit) => void;
   onSurfacePush?: (surface: WorkspaceSurfacePush) => void;
   onSurfaceUpdate?: (update: SurfaceUpdate) => void;
   onActionResult?: (result: ActionResult) => void;
@@ -27,8 +30,89 @@ interface UseMuldroWsOptions {
   enabled?: boolean;
 }
 
+/**
+ * Handlers the dispatcher may call. Every field optional — a page wires only
+ * what it renders.
+ */
+export interface MuldroHandlers {
+  onUnitPush?: (unit: Unit) => void;
+  onSurfacePush?: (surface: WorkspaceSurfacePush) => void;
+  onSurfaceUpdate?: (update: SurfaceUpdate) => void;
+  onActionResult?: (result: ActionResult) => void;
+  onNotification?: (msg: MuldroMessage) => void;
+  onError?: (err: ParsedApiError) => void;
+  onAuthOk?: () => void;
+  onAuthError?: (err: ParsedApiError) => void;
+}
+
+/**
+ * Route one parsed WS frame. Pure; no socket, no refs — which is what makes
+ * the identity guards testable rather than eyeballed.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function dispatchMuldroMessage(msg: any, h: MuldroHandlers): void {
+  if (!msg || typeof msg !== "object") return;
+
+  // Standardized top-level error frame: { status:"error", code, message,
+  // correlation_id } — has no `type`. Surface the safe message only.
+  if (!("type" in msg) && "status" in msg && msg.status === "error") {
+    h.onError?.(parseWsError(msg));
+    return;
+  }
+  if (!("type" in msg)) return;
+
+  if (msg.type === "auth_ok") {
+    h.onAuthOk?.();
+  } else if (msg.type === "auth_error") {
+    h.onAuthError?.({
+      code: "auth_error",
+      message: typeof msg.message === "string" ? msg.message : "Authentication failed",
+      correlationId: null,
+    });
+  } else if (msg.type === "unit" && h.onUnitPush) {
+    // Guard on identity before dispatching. render_surface emitted
+    // `surface_id` where the old branch read `id` and was dropped in silence
+    // for months (spec §1); the guard stays and the publisher states the field.
+    if (msg.key && msg.unit?.frame?.key) {
+      h.onUnitPush(msg.unit as Unit);
+    }
+  } else if (msg.type === "surface" && h.onSurfacePush) {
+    if (msg.surface?.id) {
+      h.onSurfacePush(msg.surface);
+    }
+  } else if (msg.type === "action_result" && h.onActionResult) {
+    const status = (msg.status as "success" | "error") ?? "success";
+    const parsed = status === "error" ? parseWsError(msg) : null;
+    h.onActionResult({
+      action: msg.action,
+      status,
+      result: msg.result,
+      message: parsed?.message,
+      code: parsed?.code,
+      correlationId: parsed?.correlationId,
+    });
+  } else if (msg.type === "surface_update" && h.onSurfaceUpdate) {
+    // KEPT. app/history/page.tsx consumes this for live run rows; it is not
+    // on spec §11's delete list and must survive the A2UI cutover.
+    h.onSurfaceUpdate({
+      surface_id: msg.surface_id,
+      phase: msg.phase,
+      steps: msg.steps,
+      current_step: msg.current_step,
+      progress: msg.progress,
+      approval: msg.approval,
+      results: msg.results,
+    });
+  } else if (msg.type === "heartbeat") {
+    // no-op
+  } else {
+    h.onNotification?.(msg);
+  }
+}
+
 export function useMuldroWs({
   userId,
+  onUnitPush,
   onSurfacePush,
   onSurfaceUpdate,
   onActionResult,
@@ -40,11 +124,15 @@ export function useMuldroWs({
   const [connected, setConnected] = useState(false);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
 
+  const onUnitPushRef = useRef(onUnitPush);
   const onSurfacePushRef = useRef(onSurfacePush);
   const onActionResultRef = useRef(onActionResult);
   const onSurfaceUpdateRef = useRef(onSurfaceUpdate);
   const onNotificationRef = useRef(onNotification);
   const onErrorRef = useRef(onError);
+  useEffect(() => {
+    onUnitPushRef.current = onUnitPush;
+  }, [onUnitPush]);
   useEffect(() => {
     onSurfacePushRef.current = onSurfacePush;
   }, [onSurfacePush]);
@@ -100,59 +188,22 @@ export function useMuldroWs({
           return;
         }
 
-        if (!msg || typeof msg !== "object") return;
-
-        // Standardized top-level error frame: { status:"error", code, message,
-        // correlation_id } — has no `type`. Surface the safe message only.
-        if (!("type" in msg) && "status" in msg && msg.status === "error") {
-          onErrorRef.current?.(parseWsError(msg));
-          return;
-        }
-
-        if (!("type" in msg)) return;
-
-        if (msg.type === "auth_ok") {
-          setConnected(true);
-        } else if (msg.type === "auth_error") {
-          // Terminal for this identity: stop reconnecting and surface it so the
-          // UI can prompt a re-auth rather than silently looping.
-          authRejected = true;
-          onErrorRef.current?.({
-            code: "auth_error",
-            message: typeof msg.message === "string" ? msg.message : "Authentication failed",
-            correlationId: null,
-          });
-          ws.close();
-        } else if (msg.type === "surface" && onSurfacePushRef.current) {
-          if (msg.surface?.id) {
-            onSurfacePushRef.current(msg.surface);
-          }
-        } else if (msg.type === "action_result" && onActionResultRef.current) {
-          const status = (msg.status as "success" | "error") ?? "success";
-          const parsed = status === "error" ? parseWsError(msg) : null;
-          onActionResultRef.current({
-            action: msg.action,
-            status,
-            result: msg.result,
-            message: parsed?.message,
-            code: parsed?.code,
-            correlationId: parsed?.correlationId,
-          });
-        } else if (msg.type === "surface_update" && onSurfaceUpdateRef.current) {
-          onSurfaceUpdateRef.current({
-            surface_id: msg.surface_id,
-            phase: msg.phase,
-            steps: msg.steps,
-            current_step: msg.current_step,
-            progress: msg.progress,
-            approval: msg.approval,
-            results: msg.results,
-          });
-        } else if (msg.type === "heartbeat") {
-          // no-op
-        } else if (onNotificationRef.current) {
-          onNotificationRef.current(msg);
-        }
+        dispatchMuldroMessage(msg, {
+          onUnitPush: onUnitPushRef.current,
+          onSurfacePush: onSurfacePushRef.current,
+          onSurfaceUpdate: onSurfaceUpdateRef.current,
+          onActionResult: onActionResultRef.current,
+          onNotification: onNotificationRef.current,
+          onError: onErrorRef.current,
+          onAuthOk: () => setConnected(true),
+          onAuthError: (err) => {
+            // Terminal for this identity: stop reconnecting and surface it so
+            // the UI can prompt a re-auth rather than silently looping.
+            authRejected = true;
+            onErrorRef.current?.(err);
+            ws.close();
+          },
+        });
       };
 
       ws.onclose = () => {
