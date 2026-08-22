@@ -187,12 +187,6 @@ class TestDurableSurfaceUpdates:
 
         assert hasattr(GraphExecutor, "_emit_surface_update")
 
-    def test_ui_surface_model_has_payload(self):
-        """UISurface has payload JSONB column for storing surface state."""
-        from src.models.ui_state import UISurface
-
-        assert hasattr(UISurface, "payload")
-
     def test_emit_surface_update_accepts_workspace_id(self):
         """_emit_surface_update signature includes optional workspace_id param."""
         import inspect
@@ -202,16 +196,20 @@ class TestDurableSurfaceUpdates:
         sig = inspect.signature(GraphExecutor._emit_surface_update)
         assert "workspace_id" in sig.parameters
 
-    def test_emit_surface_update_persists_to_db(self):
-        """SurfaceEmitter.emit_surface_update source contains DB persistence logic.
+    def test_emit_surface_update_keeps_no_durable_copy(self):
+        """A surface update is published live and nowhere else.
 
-        The emission cluster was extracted to the SurfaceEmitter collaborator
-        (SVC-P1-3); the persistence logic now lives there.
+        Nothing persists a view — a view is a pure function of a live row, so
+        there is nothing to store and nothing to expire. A client that was
+        offline for an update recovers it by re-reading the run over REST, not
+        from a replayed frame. Reintroducing a durable copy would resurrect a
+        second, staler source of truth alongside the TaskRun row.
         """
         import inspect
 
         from src.services.execution_surface_emitter import SurfaceEmitter
 
         source = inspect.getsource(SurfaceEmitter.emit_surface_update)
-        assert "last_surface_update" in source
-        assert "persist_db" in source
+        assert "muldro:a2ui:" in source  # still published live
+        assert "persist_db" not in source
+        assert "add(" not in source

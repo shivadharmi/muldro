@@ -116,7 +116,6 @@ class GraphExecutor:
             db=db,
             event_bus=event_bus,
             redis=redis,
-            db_factory=db_factory,
         )
         # Step-DAG persistence (build/query/readiness/refs/checkpoint) lives in an
         # injected leaf collaborator; the hub forwards to it via facades so the

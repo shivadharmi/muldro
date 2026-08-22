@@ -504,15 +504,6 @@ export function fetchMemories(
 }
 
 
-// ── Insights ───────────────────────────────────────────────────
-
-export function dismissInsight(
-  surfaceId: string,
-  reason?: string
-): Promise<{ status: string; surface_id: string }> {
-  return post(`/insights/${surfaceId}/dismiss`, { reason: reason || null });
-}
-
 // ── Workspace feed ──────────────────────────────────────────────
 
 export function fetchWorkspaceUnits(): Promise<{

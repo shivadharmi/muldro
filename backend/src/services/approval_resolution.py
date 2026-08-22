@@ -1,14 +1,14 @@
-"""Shared resolution of a persisted rich ``ApprovalContext`` (B12 / P3.2).
+"""Shared classification of a rich ``ApprovalContext`` carried on a payload.
 
-The autonomous surface machine persists the full ``ApprovalContext`` under
-``UISurface.payload["last_surface_update"]["approval"]`` (execution_surface_emitter).
-Every persisted approval surface — the history LIST endpoint and the run/summary
-approval DETAIL tab — reads it from the SAME place so they all render the rich
-context the live-WS path emits.
+The rich context used to be read back from a persisted copy of the last surface
+update. Nothing persists a view any more — a view is a pure function of a live
+row, so there is no view to store — which leaves the rich context with no
+source: every caller now passes ``None`` and takes the ABSENT branch, i.e. the
+thin context assembled from the ``Approval`` row itself.
 
-This module is the SINGLE source of the absent / well-formed / malformed rule.
-Each caller applies its own fallback on ABSENT/MALFORMED (the classification is
-shared; the action on each outcome is caller-specific).
+The classification is kept rather than inlined because it is the SINGLE place
+the absent / well-formed / malformed rule is stated, and it still applies to
+whatever a caller passes. Each caller owns its own action on ABSENT/MALFORMED.
 """
 
 from __future__ import annotations

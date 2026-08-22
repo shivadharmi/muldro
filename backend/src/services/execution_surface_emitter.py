@@ -3,8 +3,7 @@
 Extracted from ``GraphExecutor`` (SVC-P1-3): the executor is a frozen god
 object, so its cohesive Redis/event-bus emission cluster lives here as an
 injected collaborator. This module owns the best-effort publishing of domain
-events, WebSocket run-progress, and live ``SurfaceUpdate`` streaming (with a
-durable DB fallback).
+events, WebSocket run-progress, and live ``SurfaceUpdate`` streaming.
 
 It is a leaf under ``src.services`` — it must never import ``graph_executor``.
 All datastore/transport dependencies are injected; nothing is reached back out
@@ -25,7 +24,7 @@ class SurfaceEmitter:
     """Best-effort surface/event publisher for graph execution.
 
     Holds the same datastore/transport handles the executor was injected with
-    (``event_bus``, ``redis``, ``db``, ``db_factory``, ``settings``); every
+    (``event_bus``, ``redis``, ``db``, ``settings``); every
     method is best-effort and never raises into the execution path, EXCEPT
     ``emit_event(..., durable=True)``, which deliberately propagates a persist
     failure so a state-recording event's transaction aborts atomically
@@ -39,13 +38,11 @@ class SurfaceEmitter:
         db,
         event_bus=None,
         redis=None,
-        db_factory=None,
     ):
         self._settings = settings
         self._db = db
         self._event_bus = event_bus
         self._redis = redis
-        self._db_factory = db_factory
 
     async def emit_event(
         self,
@@ -135,8 +132,12 @@ class SurfaceEmitter:
     ) -> None:
         """Publish a SurfaceUpdate to Redis for live workspace streaming.
 
-        Also persists the latest surface state to the DB as a durable fallback
-        so reconnecting clients can recover missed updates.
+        No durable copy is kept. Nothing persists a view — a view is a pure
+        function of a live row, so there is nothing to store and nothing to
+        expire — which means a client that was offline for an update recovers it
+        by re-reading the run over REST (GET /v1/history) rather than from a
+        replayed frame. The live push is the live push; the durable truth is the
+        TaskRun row.
 
         ``tokens``/``cost_usd`` carry the run's usage rollup on terminal frames
         (completed/failed); live frames may omit them.
@@ -175,66 +176,3 @@ class SurfaceEmitter:
                 await self._event_bus.publish_to_channel(channel, payload)
         except Exception:
             logger.debug("Failed to emit surface update", exc_info=True)
-
-        # Durable fallback: persist latest surface state to DB so reconnecting
-        # clients can recover updates that were missed while disconnected.
-        try:
-            if self._db_factory and workspace_id:
-                from sqlalchemy import select
-
-                from src.models.ui_state import UISurface
-
-                async with self._db_factory() as persist_db:
-                    result = await persist_db.execute(
-                        select(UISurface).where(UISurface.surface_id == surface_id)
-                    )
-                    existing = result.scalar_one_or_none()
-
-                    from src.contracts import SurfaceUpdate
-
-                    surface_data = SurfaceUpdate(
-                        surface_id=surface_id,
-                        phase=phase,
-                        steps=steps or [],
-                        current_step=current_step,
-                        progress=progress,
-                        approval=approval,
-                        results=results,
-                        tokens=tokens,
-                        cost_usd=cost_usd,
-                    ).model_dump(mode="json")
-
-                    # The unified run surface id IS the run_id; persist it in the
-                    # payload so the detail builders' explicit-linkage path
-                    # (_extract_run_id) resolves the run without relying on
-                    # surface_id derivation. Self-describing rows.
-                    run_meta = {"run_id": surface_id}
-                    if existing:
-                        existing.payload = {
-                            **(existing.payload or {}),
-                            "metadata": {
-                                **(existing.payload or {}).get("metadata", {}),
-                                **run_meta,
-                            },
-                            "last_surface_update": surface_data,
-                        }
-                        # Normalize legacy "execution" kinds to "run" so the
-                        # frontend dispatches to the unified run renderer.
-                        if existing.surface_type in ("execution", "plan"):
-                            existing.surface_type = "run"
-                    else:
-                        persist_db.add(
-                            UISurface(
-                                surface_id=surface_id,
-                                user_id=user_id,
-                                workspace_id=workspace_id,
-                                surface_type="run",
-                                payload={
-                                    "metadata": run_meta,
-                                    "last_surface_update": surface_data,
-                                },
-                            )
-                        )
-                    await persist_db.commit()
-        except Exception:
-            logger.debug("Failed to persist surface update to DB", exc_info=True)

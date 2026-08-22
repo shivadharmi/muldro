@@ -135,23 +135,6 @@ class TestEvictSessions:
         db.flush.assert_awaited_once()
 
 
-class TestEvictSurfaces:
-    """Test UI surface eviction."""
-
-    @pytest.mark.asyncio
-    async def test_evicts_expired_surfaces_past_grace(self):
-        db = AsyncMock()
-        mock_result = MagicMock()
-        mock_result.rowcount = 3
-        db.execute.return_value = mock_result
-
-        svc = _make_eviction_service(db)
-        count = await svc._evict_surfaces()
-
-        assert count == 3
-        db.flush.assert_awaited_once()
-
-
 class TestEvictApprovals:
     """Test approval eviction."""
 
@@ -265,7 +248,6 @@ class TestRunFullEviction:
 
         assert "memories" in results
         assert "sessions" in results
-        assert "ui_surfaces" in results
         assert "approvals" in results
         assert "events" in results
         assert "low_stability" in results

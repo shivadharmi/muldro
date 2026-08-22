@@ -35,7 +35,6 @@ from src.models.tool_definitions import ToolDefinition
 from src.models.traces import ModelCall, Trace
 from src.models.triggers import Trigger
 from src.models.trust_state import TrustCeiling, TrustState
-from src.models.ui_state import UISurface
 from src.models.users import (
     MagicLink,
     Session,
@@ -70,7 +69,6 @@ __all__ = [
     "AgentDecisionLog",
     "ObservationCursor",
     "OAuthToken",
-    "UISurface",
     # Multi-tenant
     "User",
     "Workspace",

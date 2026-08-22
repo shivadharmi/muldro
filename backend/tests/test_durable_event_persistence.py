@@ -16,7 +16,7 @@ def _emitter_with_failing_flush():
     db.flush = AsyncMock(side_effect=RuntimeError("db down"))
     settings = MagicMock()
     # No event_bus/redis so we isolate the DB-persist path.
-    return SurfaceEmitter(settings=settings, db=db, event_bus=None, redis=None, db_factory=None)
+    return SurfaceEmitter(settings=settings, db=db, event_bus=None, redis=None)
 
 
 async def test_durable_event_propagates_persist_failure():

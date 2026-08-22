@@ -18,7 +18,6 @@ from src.api.routes_feedback import router as feedback_router
 from src.api.routes_graph import router as graph_router
 from src.api.routes_health import router as health_router
 from src.api.routes_history import router as history_router
-from src.api.routes_insights import router as insights_router
 from src.api.routes_integrations import router as integrations_router
 from src.api.routes_jwks import router as jwks_router
 from src.api.routes_knowledge import router as knowledge_router
@@ -544,7 +543,6 @@ def create_app() -> FastAPI:
     app.include_router(runtime_router, tags=["runtime"])
 
     # Insight surfaces (dismiss + execute)
-    app.include_router(insights_router, tags=["insights"])
     app.include_router(workspace_settings_router, tags=["workspace-settings"])
 
     return app

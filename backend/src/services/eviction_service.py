@@ -1,7 +1,7 @@
 """EvictionService — hard-delete expired data with cascade cleanup.
 
 Runs periodically from SchedulerLoop._tick_eviction().
-Handles: memories, sessions, ui_surfaces, approvals, events.
+Handles: memories, sessions, approvals, events.
 Cascades to: Qdrant vectors, Neo4j entity graph.
 
 Postgres FTS (tsvector columns) is cleaned automatically when rows are deleted
@@ -27,7 +27,6 @@ logger = logging.getLogger(__name__)
 
 # Grace periods beyond TTL / expires_at before hard delete
 MEMORY_EXPIRED_GRACE_DAYS = 7
-SURFACE_GRACE_HOURS = 24
 APPROVAL_RETENTION_DAYS = 30
 EVENT_RETENTION_DAYS = 90
 INTERACTION_LOG_RETENTION_DAYS = 90
@@ -71,7 +70,6 @@ class EvictionService:
         results: dict[str, int] = {}
         results["memories"] = await self._evict_memories()
         results["sessions"] = await self._evict_sessions()
-        results["ui_surfaces"] = await self._evict_surfaces()
         results["approvals"] = await self._evict_approvals()
         results["events"] = await self._evict_old_events()
         results["interaction_logs"] = await self._evict_interaction_logs()
@@ -180,26 +178,6 @@ class EvictionService:
 
         now = datetime.now(timezone.utc)
         result = await self._db.execute(delete(Session).where(Session.expires_at < now))
-        count = result.rowcount or 0
-        if count:
-            await self._db.flush()
-        return count
-
-    # ------------------------------------------------------------------
-    # UI Surface eviction
-    # ------------------------------------------------------------------
-
-    async def _evict_surfaces(self) -> int:
-        """Hard-delete expired UI surfaces past grace period."""
-        from src.models.ui_state import UISurface
-
-        grace = datetime.now(timezone.utc) - timedelta(hours=SURFACE_GRACE_HOURS)
-        result = await self._db.execute(
-            delete(UISurface).where(
-                UISurface.expires_at.isnot(None),
-                UISurface.expires_at < grace,
-            )
-        )
         count = result.rowcount or 0
         if count:
             await self._db.flush()

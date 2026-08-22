@@ -1,9 +1,10 @@
-"""B12 / P3.2 — persisted-REST approval → rich ``ApprovalContext`` unification.
+"""Classification of a rich ``ApprovalContext`` carried on a surface payload.
 
-Every persisted approval surface historically dropped the rich context. This makes
-them all carry the SAME rich ``src.contracts.ApprovalContext`` the live-WS path emits,
-sourced from ``UISurface.payload.last_surface_update.approval``, for the history
-LIST endpoint (``resolve_history_approval``).
+The rich context no longer has a persisted source — nothing stores a view — so
+``resolve_history_approval``'s production callers all pass ``None`` and take the
+ABSENT branch. These cases keep the CLASSIFICATION honest: it is the single
+place the absent / well-formed / malformed rule is stated, and it still applies
+to whatever a caller hands it.
 
 Single shared rule (``extract_persisted_rich_approval``):
   * persisted approval present + well-formed → RICH ``ApprovalContext``;
@@ -17,7 +18,7 @@ from src.contracts import ApprovalContext
 
 
 def _rich_approval_dict(**overrides) -> dict:
-    """The approval sub-dict as ``emit_surface_update`` persists it under
+    """The approval sub-dict as ``emit_surface_update`` publishes it under
     ``last_surface_update.approval`` (an ``ApprovalContext.model_dump(mode="json")``)."""
     base = {
         "approval_id": "apr_1",
@@ -40,7 +41,7 @@ def _rich_approval_dict(**overrides) -> dict:
 
 
 def _surface_payload(approval: object) -> dict:
-    """A persisted run ``UISurface.payload`` carrying the last surface update."""
+    """A payload shaped like the surface update the emitter publishes live."""
     return {
         "metadata": {"run_id": "run_1"},
         "last_surface_update": {
