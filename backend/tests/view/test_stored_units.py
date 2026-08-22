@@ -130,3 +130,32 @@ async def test_the_window_is_bounded_and_does_not_read_the_clock_itself():
     await stored_perception_units(db, workspace_id="ws_1", user_id="usr_1", now=now)
     assert len(db.statements) == 1
     assert now - timedelta(days=1) < now  # sanity: the window is computed from `now`
+
+
+async def test_a_far_future_event_is_outside_the_feed_window():
+    """The window bounds BOTH sides.
+
+    A calendar asks `timeMin=now` with no `timeMax`, so it returns every future
+    occurrence. Bounding only the past put a card on today's workspace for a
+    meeting two months out — and one per occurrence of every recurring series.
+    Asserted against the compiled SQL because the fake DB ignores WHERE.
+    """
+    now = datetime(2026, 8, 22, 12, 0, tzinfo=timezone.utc)
+    db = _DB([])
+    await stored_perception_units(db, workspace_id="ws_1", user_id="u_1", now=now)
+    sql = str(db.statements[0].compile(compile_kwargs={"literal_binds": True}))
+    assert sql.count("occurred_at") >= 2, "expected a lower AND an upper bound"
+    assert ">=" in sql and "<=" in sql
+
+
+async def test_the_horizon_is_ahead_of_now_and_the_window_behind_it():
+    from src.view.stored_units import FEED_HORIZON_DAYS, FEED_WINDOW_DAYS
+
+    assert FEED_WINDOW_DAYS > 0 and FEED_HORIZON_DAYS > 0
+    now = datetime(2026, 8, 22, 12, 0, tzinfo=timezone.utc)
+    db = _DB([])
+    await stored_perception_units(db, workspace_id="ws_1", user_id="u_1", now=now)
+    sql = str(db.statements[0].compile(compile_kwargs={"literal_binds": True}))
+    # The bounds bracket `now`: the past edge is earlier, the future edge later.
+    assert str((now - timedelta(days=FEED_WINDOW_DAYS)).date()) in sql
+    assert str((now + timedelta(days=FEED_HORIZON_DAYS)).date()) in sql

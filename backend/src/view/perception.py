@@ -205,6 +205,33 @@ def quotes_from_events(events: list[Any]) -> list[Quote]:
     return quotes[-MAX_QUOTES:]
 
 
+# What a perceived thing IS, per source. A perception unit is something muldro
+# NOTICED, never something it proposes to do — `proposal` belongs to muldro's
+# own work (the review queue, a run), and calling an incoming bank alert a
+# "Proposal" made every card claim an intent muldro never formed.
+#
+# `record` for calendar: an accepted meeting is already on the books, not a
+# finding about the world. Anything absent from this map is a `finding`, which
+# is the honest default for "observed, meaning not yet established".
+#
+# Declared as a per-source FACT for the same reason `VERBATIM_TEXT_FIELD` is:
+# a NEW CONNECTOR must answer the question explicitly rather than inherit a
+# guess. Both maps read from the same `event.source`.
+PERCEPTION_KIND: dict[str, str] = {
+    "calendar": "record",
+}
+
+_DEFAULT_PERCEPTION_KIND = "finding"
+
+# Perception NEVER produces `needs_you`. That status means a decision is
+# waiting on the founder, and it is earned by an unresolved affordance — not by
+# something having been observed. Stamping it on every perceived thing made the
+# workspace report "85 pending" for an inbox nobody had asked a question of,
+# which is exactly the "compete for presence" the ranker exists to avoid. A
+# newly observed thing is `new`; being seen is what moves it on.
+PERCEPTION_STATUS = "new"
+
+
 def units_from_events(events: list[Any]) -> list[Unit]:
     """Turn one poll's events into one Unit per thing, newest first.
 
@@ -222,10 +249,11 @@ def units_from_events(events: list[Any]) -> list[Unit]:
     units: list[Unit] = []
     for group in group_events_by_key(list(events)):
         try:
+            source = getattr(group.latest, "source", "")
             frame = frame_for_event(
                 group.latest,
-                kind="proposal",
-                status="needs_you",
+                kind=PERCEPTION_KIND.get(source, _DEFAULT_PERCEPTION_KIND),
+                status=PERCEPTION_STATUS,
                 event_count=group.event_count,
                 updated_at=_occurred(group.latest),
             )

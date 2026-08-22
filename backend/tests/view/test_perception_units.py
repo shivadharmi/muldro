@@ -9,7 +9,7 @@ fallback constant. Grouping by frame key is what makes them one.
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
-from src.view.perception import group_events_by_key
+from src.view.perception import group_events_by_key, units_from_events
 
 
 def _event(entity_id="t_1", title="Series A term sheet", minute=0, source="gmail"):
@@ -152,3 +152,58 @@ def test_a_non_datetime_timestamp_sorts_oldest_instead_of_raising():
     assert len(groups) == 1
     # The junk timestamp sorts oldest, so the event that HAS a time is latest.
     assert groups[0].latest.title == "real time"
+
+
+class TestKindAndStatusAreDerived:
+    """Perception does not stamp `proposal`/`needs_you` on everything.
+
+    Both were hardcoded, so a bank alert, a GitHub notice and a recurring
+    standup all rendered as "Proposal / Needs you" and the workspace reported
+    every observed thing as pending. Nothing pinned those values, which is how
+    the placeholder survived.
+    """
+
+    def _ev(self, source="gmail", entity_type="email_thread", entity_id="t_1"):
+        return SimpleNamespace(
+            source=source,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            occurred_at=datetime(2026, 8, 22, 12, 0, tzinfo=timezone.utc),
+            title="Transaction alert",
+            summary="Your card was used.",
+            actor_entities=[{"name": "Bank"}],
+        )
+
+    def test_an_observed_thing_is_a_finding_not_a_proposal(self):
+        (unit,) = units_from_events([self._ev()])
+        assert unit.frame.kind == "finding"
+
+    def test_a_calendar_entry_is_a_record(self):
+        (unit,) = units_from_events(
+            [self._ev(source="calendar", entity_type="meeting", entity_id="m_1")]
+        )
+        assert unit.frame.kind == "record"
+
+    def test_perception_never_claims_a_decision_is_pending(self):
+        events = [
+            self._ev(source="gmail", entity_id="t_1"),
+            self._ev(source="slack", entity_type="channel_message", entity_id="c_1"),
+            self._ev(source="calendar", entity_type="meeting", entity_id="m_1"),
+        ]
+        units = units_from_events(events)
+        assert len(units) == 3
+        assert {u.frame.status for u in units} == {"new"}
+
+    def test_an_unlisted_source_falls_back_to_finding(self):
+        (unit,) = units_from_events(
+            [self._ev(source="notion", entity_type="page", entity_id="p_1")]
+        )
+        assert unit.frame.kind == "finding"
+
+    def test_every_kind_perception_emits_has_a_lede_budget(self):
+        """A kind with no budget raises KeyError inside build_body_request."""
+        from src.view.body import LEDE_BUDGETS
+        from src.view.perception import _DEFAULT_PERCEPTION_KIND, PERCEPTION_KIND
+
+        for kind in {*PERCEPTION_KIND.values(), _DEFAULT_PERCEPTION_KIND}:
+            assert kind in LEDE_BUDGETS, kind
