@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { WorkspaceSurfacePush } from "@/lib/a2ui-types";
 import type { ActionResult, MuldroMessage, SurfaceUpdate } from "@/lib/types/execution";
 import { parseWsError, type ParsedApiError } from "@/lib/api-error";
 import { getStoredToken } from "@/lib/auth";
@@ -22,7 +21,6 @@ interface UseMuldroWsOptions {
   userId: string;
   /** A live Unit from the view layer. See backend src/view/publish.py. */
   onUnitPush?: (unit: Unit) => void;
-  onSurfacePush?: (surface: WorkspaceSurfacePush) => void;
   onSurfaceUpdate?: (update: SurfaceUpdate) => void;
   onActionResult?: (result: ActionResult) => void;
   onNotification?: (msg: MuldroMessage) => void;
@@ -37,7 +35,6 @@ interface UseMuldroWsOptions {
  */
 export interface MuldroHandlers {
   onUnitPush?: (unit: Unit) => void;
-  onSurfacePush?: (surface: WorkspaceSurfacePush) => void;
   onSurfaceUpdate?: (update: SurfaceUpdate) => void;
   onActionResult?: (result: ActionResult) => void;
   onNotification?: (msg: MuldroMessage) => void;
@@ -71,15 +68,11 @@ export function dispatchMuldroMessage(msg: any, h: MuldroHandlers): void {
       correlationId: null,
     });
   } else if (msg.type === "unit" && h.onUnitPush) {
-    // Guard on identity before dispatching. render_surface emitted
-    // `surface_id` where the old branch read `id` and was dropped in silence
-    // for months (spec §1); the guard stays and the publisher states the field.
+    // Guard on identity before dispatching. The predecessor push emitted
+    // `surface_id` where this branch read `id`, so every frame was dropped in
+    // silence for months; the guard stays and the publisher states the field.
     if (msg.key && msg.unit?.frame?.key) {
       h.onUnitPush(msg.unit as Unit);
-    }
-  } else if (msg.type === "surface" && h.onSurfacePush) {
-    if (msg.surface?.id) {
-      h.onSurfacePush(msg.surface);
     }
   } else if (msg.type === "action_result" && h.onActionResult) {
     const status = (msg.status as "success" | "error") ?? "success";
@@ -93,8 +86,8 @@ export function dispatchMuldroMessage(msg: any, h: MuldroHandlers): void {
       correlationId: parsed?.correlationId,
     });
   } else if (msg.type === "surface_update" && h.onSurfaceUpdate) {
-    // KEPT. app/history/page.tsx consumes this for live run rows; it is not
-    // on spec §11's delete list and must survive the A2UI cutover.
+    // Not part of the A2UI surface push and does not go with it:
+    // app/history/page.tsx renders live run rows from these frames.
     h.onSurfaceUpdate({
       surface_id: msg.surface_id,
       phase: msg.phase,
@@ -114,7 +107,6 @@ export function dispatchMuldroMessage(msg: any, h: MuldroHandlers): void {
 export function useMuldroWs({
   userId,
   onUnitPush,
-  onSurfacePush,
   onSurfaceUpdate,
   onActionResult,
   onNotification,
@@ -126,7 +118,6 @@ export function useMuldroWs({
   const reconnectTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
 
   const onUnitPushRef = useRef(onUnitPush);
-  const onSurfacePushRef = useRef(onSurfacePush);
   const onActionResultRef = useRef(onActionResult);
   const onSurfaceUpdateRef = useRef(onSurfaceUpdate);
   const onNotificationRef = useRef(onNotification);
@@ -134,9 +125,6 @@ export function useMuldroWs({
   useEffect(() => {
     onUnitPushRef.current = onUnitPush;
   }, [onUnitPush]);
-  useEffect(() => {
-    onSurfacePushRef.current = onSurfacePush;
-  }, [onSurfacePush]);
   useEffect(() => {
     onSurfaceUpdateRef.current = onSurfaceUpdate;
   }, [onSurfaceUpdate]);
@@ -191,7 +179,6 @@ export function useMuldroWs({
 
         dispatchMuldroMessage(msg, {
           onUnitPush: onUnitPushRef.current,
-          onSurfacePush: onSurfacePushRef.current,
           onSurfaceUpdate: onSurfaceUpdateRef.current,
           onActionResult: onActionResultRef.current,
           onNotification: onNotificationRef.current,

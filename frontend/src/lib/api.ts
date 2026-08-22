@@ -523,28 +523,6 @@ export function fetchSurface(surfaceId: string) {
   return api(`/ui/surfaces/${surfaceId}`);
 }
 
-interface WorkspaceSurfaceResponse {
-  id: string;
-  kind: import("@/lib/a2ui-types").SurfaceKind;
-  preview: import("@/lib/a2ui-types").SurfacePreview;
-  detail_config: import("@/lib/a2ui-types").DetailConfig | null;
-  source_run_id?: string | null;
-  response_preview?: string | null;
-  created_at?: string | null;
-  phase?: import("@/lib/types/execution").ExecutionPhase;
-  steps?: import("@/lib/types/execution").StepState[];
-  current_step?: string | null;
-  progress?: string;
-  approval?: import("@/lib/types/execution").ApprovalContext | null;
-  results?: import("@/lib/types/execution").ResultSummary | null;
-  surface_data?: import("@/lib/a2ui-types").SurfaceDataPayload | null;
-  trust_context?: Record<string, string> | null;
-}
-
-export function fetchWorkspaceSurfaces(): Promise<{ surfaces: WorkspaceSurfaceResponse[]; count: number }> {
-  return api("/workspace/surfaces");
-}
-
 export function fetchWorkspaceUnits(): Promise<{
   units: import("@/lib/types/unit").Unit[];
   count: number;
@@ -554,13 +532,6 @@ export function fetchWorkspaceUnits(): Promise<{
 
 export function dismissUnit(frameKey: string): Promise<{ status: string }> {
   return post("/workspace/units/dismiss", { frame_key: frameKey });
-}
-
-export function fetchSurfaceDetail(
-  surfaceId: string,
-  tabId: string
-): Promise<import("@/lib/a2ui-types").DetailTabResponse> {
-  return api(`/surfaces/${surfaceId}/detail/${tabId}`);
 }
 
 // ── Message Context / Evidence ──────────────────────────────────
