@@ -5,10 +5,11 @@ from unittest.mock import MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import delete
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
+from src.api.routes_model_config import merge_extra_config
 from src.config.settings import get_settings
 from src.models.model_binding import ModelBinding
 from src.models.provider_credential import ProviderCredential
@@ -590,6 +591,101 @@ def test_delete_reports_only_what_this_revoke_broke(monkeypatch):
             orphaned = body["orphaned_bindings"]
             assert [w["scope_key"] for w in orphaned] == ["fast"]
             assert all(w["provider"] == "openai" for w in orphaned)
+    finally:
+        if app is not None:
+            app.dependency_overrides.clear()
+        _delete_ws_credentials(factory, ws)
+
+
+def test_merge_extra_config_is_three_valued():
+    """The pure rule behind the extra_config merge, pinned without a database.
+
+    extra_config carries SECRETS whose values a client can never read back, so the
+    only thing a client can do with one is OMIT it. Omission must therefore mean
+    "keep", or the form's "leave blank to keep" hint is a lie.
+    """
+    stored = {"region": "us-east-1", "secret_access_key": "shhh"}
+
+    # Omitted key -> kept. The founder edited the region and could not resend the
+    # secret; the secret survives.
+    assert merge_extra_config(stored, {"region": "eu-west-1"}) == {
+        "region": "eu-west-1",
+        "secret_access_key": "shhh",
+    }
+    # Explicit null -> that key alone is deleted.
+    assert merge_extra_config(stored, {"secret_access_key": None}) == {"region": "us-east-1"}
+    # A new key joins the stored ones.
+    assert merge_extra_config(stored, {"deployment": "gpt4o"})["deployment"] == "gpt4o"
+    # Top-level explicit null still clears the whole map.
+    assert merge_extra_config(stored, None) is None
+    # Nothing stored yet: a null-valued key is dropped, not written as a JSON null.
+    assert merge_extra_config(None, {"region": None}) is None
+    assert merge_extra_config(None, {"region": "us-east-1"}) == {"region": "us-east-1"}
+    # The stored dict is never mutated in place.
+    assert stored == {"region": "us-east-1", "secret_access_key": "shhh"}
+
+
+def _stored_extra_config(factory, ws: str, provider: str):
+    async def _read():
+        async with factory() as db:
+            rows = await db.execute(
+                select(ProviderCredential).where(
+                    ProviderCredential.workspace_id == ws,
+                    ProviderCredential.provider == provider,
+                )
+            )
+            row = rows.scalars().first()
+            return None if row is None else row.extra_config
+
+    return asyncio.run(_read())
+
+
+@pytest.mark.skipif(not _db_reachable(), reason="Postgres not reachable")
+def test_editing_a_public_extra_field_preserves_a_stored_extra_secret(monkeypatch):
+    """B1 one level down, end to end.
+
+    A Bedrock-shaped credential keeps its secret INSIDE extra_config. The client
+    pre-fills the public fields, renders the secret blank ("configured -- leave blank
+    to keep") and omits it on save. Replacing the map wholesale destroyed it,
+    unrecoverably, against what the form had just promised.
+    """
+    _use_test_key(monkeypatch)
+    factory, ws = _ws_factory()
+    app = None
+
+    try:
+        app = _ws_app(factory, ws)
+        with TestClient(app) as c:
+            first = c.put(
+                "/v1/providers/anthropic/credentials",
+                json={
+                    "api_key": "sk-original",
+                    "extra_config": {"region": "us-east-1", "secret_access_key": "shhh"},
+                },
+            )
+            assert first.status_code == 200, first.text
+
+            # Only the region is edited; the secret is omitted, not resent.
+            edit = c.put(
+                "/v1/providers/anthropic/credentials",
+                json={"extra_config": {"region": "eu-west-1"}},
+            )
+            assert edit.status_code == 200, edit.text
+            assert _stored_extra_config(factory, ws, "anthropic") == {
+                "region": "eu-west-1",
+                "secret_access_key": "shhh",
+            }
+
+            # An explicit null deletes one key without touching the rest.
+            drop = c.put(
+                "/v1/providers/anthropic/credentials",
+                json={"extra_config": {"secret_access_key": None}},
+            )
+            assert drop.status_code == 200, drop.text
+            assert _stored_extra_config(factory, ws, "anthropic") == {"region": "eu-west-1"}
+
+            # The secret value is never echoed on the way out; only its key name is public.
+            assert "shhh" not in first.text + edit.text + drop.text
     finally:
         if app is not None:
             app.dependency_overrides.clear()

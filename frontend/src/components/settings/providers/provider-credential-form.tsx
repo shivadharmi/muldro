@@ -48,7 +48,7 @@ function LockIcon() {
 /** Whether the server already holds a value for this SECRET field. `api_key` is
  *  reported by `configured` (it is the credential itself); every other secret is
  *  listed by key in `extra_config_secret_keys`. */
-function isSecretStored(key: string, status: ProviderStatus | null | undefined): boolean {
+function isSecretStored(key: string, status: ProviderStatus | null): boolean {
   if (!status) return false;
   return (
     status.extra_config_secret_keys.includes(key) ||
@@ -58,7 +58,7 @@ function isSecretStored(key: string, status: ProviderStatus | null | undefined):
 
 /** The value a non-secret field starts at. The server deliberately returns these
  *  so the form round-trips them instead of clearing what was not retyped. */
-function storedValue(key: string, status: ProviderStatus | null | undefined): string {
+function storedValue(key: string, status: ProviderStatus | null): string {
   if (!status) return "";
   if (key === "base_url") return status.base_url ?? "";
   return status.extra_config_public[key] ?? "";
@@ -68,7 +68,7 @@ function storedValue(key: string, status: ProviderStatus | null | undefined): st
  *  client, so pre-filling one would be inventing a value. */
 function initialValues(
   provider: CatalogProvider,
-  status: ProviderStatus | null | undefined,
+  status: ProviderStatus | null,
 ): Record<string, string> {
   return Object.fromEntries(
     provider.credential_fields.map((field) => [
@@ -78,11 +78,27 @@ function initialValues(
   );
 }
 
+/** Identity of the state currently held. The loaded-ness of `status` is part of it
+ *  because a `status` that arrives AFTER first mount must still be folded in: this
+ *  form always sends the fields it declares, so a stale empty pre-fill is not a
+ *  no-op, it is a silent clear of a value the founder never touched. A status
+ *  REPLACED by a later one (a refetch after save) deliberately does not re-derive,
+ *  which is what stops a background refresh wiping half-typed input. */
+function deriveKey(provider: CatalogProvider, status: ProviderStatus | null): string {
+  return `${provider.provider}:${status ? "loaded" : "empty"}`;
+}
+
 /**
  * Fold the typed values into the request body. Exactly two field keys are
  * top-level — `api_key` and `base_url`; EVERY other declared field is a member
  * of `extra_config`. A blank secret is omitted entirely rather than sent as `""`
- * or `null`, which is what makes "leave blank to keep" true at the wire level.
+ * or `null`, which is what makes "leave blank to keep" true at the wire level —
+ * the server merges `extra_config` per key, so an omitted key is retained.
+ *
+ * Values are trimmed. No provider's key, region, endpoint or deployment name may
+ * carry surrounding whitespace, and trimming kills the commonest paste failure
+ * (a trailing newline off a terminal or a docs page) before it becomes an opaque
+ * provider auth error.
  */
 export function buildCredentialFields(
   fields: readonly CredentialFieldSpec[],
@@ -110,12 +126,29 @@ export function buildCredentialFields(
   };
 }
 
+/** A required secret that is already stored may legitimately be blank — blank
+ *  means "keep the stored one". Every other required field must carry a value. */
+function hasMissingRequired(
+  fields: readonly CredentialFieldSpec[],
+  values: Record<string, string>,
+  status: ProviderStatus | null,
+): boolean {
+  return fields.some(
+    (field) =>
+      field.required &&
+      !(values[field.key] ?? "").trim() &&
+      !(field.kind === "secret" && isSecretStored(field.key, status)),
+  );
+}
+
 export interface ProviderCredentialFormProps {
   /** Carries the credential SCHEMA. The field set is read from here and never
    *  hard-coded: a provider that declares no `api_key` renders no key input. */
   provider: CatalogProvider;
-  /** Current server-side state, or null/undefined for an unconfigured provider. */
-  status?: ProviderStatus | null;
+  /** Current server-side state — `null` for a provider with no credential. Required
+   *  rather than optional so a caller cannot forget it and silently get the
+   *  unconfigured rendering for a configured provider. */
+  status: ProviderStatus | null;
   busy: boolean;
   /** Submits the body. This component never calls the API itself — the owning
    *  tab holds the credentials hook. A rejection leaves the typed values alone
@@ -137,29 +170,35 @@ export function ProviderCredentialForm({
   busy,
   onSubmit,
 }: ProviderCredentialFormProps) {
-  // Keyed by provider so switching providers re-derives rather than leaking one
-  // provider's typed values into another's form. Adjusted during render (React's
-  // supported derive-on-prop-change pattern), never from an effect.
+  // Keyed so switching providers — or a status arriving late — re-derives rather
+  // than leaking one state's values into another's form. Adjusted during render
+  // (React's supported derive-on-prop-change pattern), never from an effect.
   const [state, setState] = useState(() => ({
-    key: provider.provider,
+    key: deriveKey(provider, status),
     values: initialValues(provider, status),
   }));
-  if (state.key !== provider.provider) {
+  const key = deriveKey(provider, status);
+  if (state.key !== key) {
     // Re-renders immediately with the new state; this pass's output is discarded.
-    setState({ key: provider.provider, values: initialValues(provider, status) });
+    setState({ key, values: initialValues(provider, status) });
   }
   const values = state.values;
 
-  const setValue = useCallback((key: string, value: string) => {
-    setState((prev) => ({ ...prev, values: { ...prev.values, [key]: value } }));
+  const setValue = useCallback((fieldKey: string, value: string) => {
+    setState((prev) => ({ ...prev, values: { ...prev.values, [fieldKey]: value } }));
   }, []);
+
+  const fields = provider.credential_fields;
+  const missingRequired = hasMissingRequired(fields, values, status);
 
   const handleSubmit = useCallback(
     async (event: React.FormEvent) => {
       event.preventDefault();
-      if (busy) return;
+      // The disabled button and this guard state the same rule; both enforce it,
+      // so an implicit Enter-submit can never outrun the button's disabled state.
+      if (busy || hasMissingRequired(fields, values, status)) return;
       try {
-        await onSubmit(buildCredentialFields(provider.credential_fields, values));
+        await onSubmit(buildCredentialFields(fields, values));
       } catch {
         // REPORTING a failure is the caller's job — it owns the toast and the
         // error text. All this form needs from a rejection is "do not clear
@@ -171,31 +210,26 @@ export function ProviderCredentialForm({
       setState((prev) => ({
         ...prev,
         values: Object.fromEntries(
-          Object.entries(prev.values).map(([key, value]) => {
-            const spec = provider.credential_fields.find((f) => f.key === key);
-            return [key, spec?.kind === "secret" ? "" : value];
+          Object.entries(prev.values).map(([k, value]) => {
+            const spec = fields.find((f) => f.key === k);
+            return [k, spec?.kind === "secret" ? "" : value];
           }),
         ),
       }));
     },
-    [busy, onSubmit, provider.credential_fields, values],
-  );
-
-  // A required secret that is already stored may legitimately be blank — blank
-  // means "keep the stored one". Every other required field must carry a value.
-  const missingRequired = provider.credential_fields.some(
-    (field) =>
-      field.required &&
-      !(values[field.key] ?? "").trim() &&
-      !(field.kind === "secret" && isSecretStored(field.key, status)),
+    [busy, fields, onSubmit, status, values],
   );
 
   return (
+    // noValidate: this form owns its own required-check (see hasMissingRequired),
+    // and browser constraint bubbles would contradict a Save button that is
+    // already disabled for exactly the same reason.
     <form noValidate onSubmit={handleSubmit} className="px-[20px] pb-[15px]">
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-[12px] mb-[11px]">
-        {provider.credential_fields.map((field) => {
+        {fields.map((field) => {
           const id = `cred-${provider.provider}-${field.key}`;
-          const stored = field.kind === "secret" && isSecretStored(field.key, status);
+          const isSecret = field.kind === "secret";
+          const stored = isSecret && isSecretStored(field.key, status);
           return (
             <div key={field.key}>
               <label htmlFor={id} className={LABEL_CLASS}>
@@ -203,16 +237,31 @@ export function ProviderCredentialForm({
               </label>
               <input
                 id={id}
-                type={field.kind === "secret" ? "password" : "text"}
+                type={isSecret ? "password" : "text"}
                 inputMode={field.kind === "url" ? "url" : undefined}
-                autoComplete="off"
+                // Chrome and Safari deliberately IGNORE autocomplete="off" on a
+                // password field and still offer to save it — which would put the
+                // founder's key in a synced browser store, outside the
+                // encrypted-at-rest guarantee this form's own footer makes.
+                autoComplete={isSecret ? "new-password" : "off"}
+                // iOS Safari capitalises the first character of a text input:
+                // `us-east-1` becomes `Us-east-1` and an access key ID is corrupted
+                // into an opaque provider auth error rather than a form error.
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
                 disabled={busy}
                 placeholder={field.placeholder ?? undefined}
+                aria-describedby={stored ? `${id}-hint` : undefined}
                 value={values[field.key] ?? ""}
                 onChange={(e) => setValue(field.key, e.target.value)}
                 className={CTL_CLASS}
               />
-              {stored && <p className={`${HINT_CLASS} mt-[5px]`}>{STORED_SECRET_HINT}</p>}
+              {stored && (
+                <p id={`${id}-hint`} className={`${HINT_CLASS} mt-[5px]`}>
+                  {STORED_SECRET_HINT}
+                </p>
+              )}
             </div>
           );
         })}

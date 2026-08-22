@@ -200,6 +200,35 @@ class CredentialBody(BaseModel):
     extra_config: dict | None = None
 
 
+def merge_extra_config(stored: dict | None, submitted: dict | None) -> dict | None:
+    """Per-key merge of extra_config, mirroring the top-level partial-update rule.
+
+    ``extra_config`` holds SECRETS as well as public fields (``_split_extra_config``
+    splits one stored dict by declared kind), and a secret's value is never returned
+    to a client. So a client editing a public field alongside a stored secret has no
+    way to resend that secret -- it can only omit it. Replacing the whole map
+    therefore destroyed the secret, while the form's "configured -- leave blank to
+    keep" hint promised the opposite. That is B1 one level down.
+
+    Three-valued, exactly like base_url:
+      * key omitted from ``submitted``      -> keep the stored value
+      * key present with an explicit ``None`` -> delete that key
+      * key present with a value             -> set it
+
+    ``submitted is None`` is the top-level explicit null and still clears the map;
+    a merge that empties it collapses to ``None`` so the column stays tidy.
+    """
+    if submitted is None:
+        return None
+    merged = dict(stored or {})
+    for key, value in submitted.items():
+        if value is None:
+            merged.pop(key, None)
+        else:
+            merged[key] = value
+    return merged or None
+
+
 class TestResult(BaseModel):
     model_config = ConfigDict(extra="ignore")
     status: str
@@ -240,6 +269,10 @@ async def put_provider_credential(
     Assigning every field unconditionally meant a client that sent only the key it was
     rotating silently nulled base_url and extra_config -- and for ollama, whose
     base_url IS the credential, that unconfigured the provider outright (B1).
+
+    The same rule holds one level down, per KEY inside extra_config -- see
+    ``merge_extra_config``. Replacing that map wholesale destroyed any secret the
+    client had omitted, and a client cannot resend a secret it can never read back.
     """
     _require_known_provider(provider)
 
@@ -264,7 +297,11 @@ async def put_provider_credential(
         if "base_url" in fields:
             existing.base_url = fields["base_url"]
         if "extra_config" in fields:
-            existing.extra_config = fields["extra_config"]
+            # Merge, never replace: an omitted key is "leave it alone", which is the
+            # only way a client can keep a secret it is never allowed to read back.
+            existing.extra_config = merge_extra_config(
+                existing.extra_config, fields["extra_config"]
+            )
         if fields:
             # Only a real write invalidates a prior verification. An empty body changes
             # nothing, so it must not downgrade a `valid` provider to `untested` --
@@ -280,7 +317,9 @@ async def put_provider_credential(
                 # Keyless providers (ollama) store no ciphertext -- only base_url configures them.
                 api_key_encrypted=secret_crypto.encrypt_secret(api_key) if api_key else None,
                 base_url=fields.get("base_url"),
-                extra_config=fields.get("extra_config"),
+                # No stored row to merge against, but the null-deletes-a-key rule
+                # still applies so a create and an edit agree on what a null means.
+                extra_config=merge_extra_config(None, fields.get("extra_config")),
                 status="untested",
                 enabled=True,
             )

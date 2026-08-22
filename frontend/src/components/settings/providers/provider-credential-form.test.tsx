@@ -2,7 +2,10 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { test, expect, vi } from "vitest";
 
-import { ProviderCredentialForm } from "./provider-credential-form";
+import {
+  ProviderCredentialForm,
+  buildCredentialFields,
+} from "./provider-credential-form";
 import type { CatalogProvider, CredentialFieldSpec, ProviderStatus } from "@/lib/types";
 
 function field(over: Partial<CredentialFieldSpec> & { key: string }): CredentialFieldSpec {
@@ -197,4 +200,160 @@ test("busy disables the fields and the button", () => {
   expect(
     (screen.getByRole("button", { name: "Save & test" }) as HTMLButtonElement).disabled,
   ).toBe(true);
+});
+
+const BEDROCK_STORED = providerStatus({
+  provider: "bedrock",
+  configured: true,
+  source: "workspace",
+  extra_config_public: { region: "us-east-1", access_key_id: "AKIA123" },
+  extra_config_secret_keys: ["secret_access_key"],
+});
+
+test("editing a public extra field omits the stored extra secret from the body", async () => {
+  // The server merges extra_config PER KEY, so an omitted key is retained. Sending
+  // the map without `secret_access_key` is how the form keeps a secret it cannot read.
+  const onSubmit = vi.fn().mockResolvedValue(undefined);
+  render(
+    <ProviderCredentialForm
+      provider={BEDROCK}
+      status={BEDROCK_STORED}
+      busy={false}
+      onSubmit={onSubmit}
+    />,
+  );
+  const region = screen.getByLabelText("Region") as HTMLInputElement;
+  await userEvent.clear(region);
+  await userEvent.type(region, "eu-west-1");
+  await userEvent.click(screen.getByRole("button", { name: "Save & test" }));
+
+  expect(onSubmit.mock.calls[0][0]).toEqual({
+    extra_config: { region: "eu-west-1", access_key_id: "AKIA123" },
+  });
+  expect(onSubmit.mock.calls[0][0].extra_config).not.toHaveProperty("secret_access_key");
+});
+
+test("a rejected submit preserves what was typed", async () => {
+  const onSubmit = vi.fn().mockRejectedValue(new Error("nope"));
+  render(
+    <ProviderCredentialForm
+      provider={ANTHROPIC}
+      status={providerStatus({ configured: true, source: "workspace" })}
+      busy={false}
+      onSubmit={onSubmit}
+    />,
+  );
+  await userEvent.type(screen.getByLabelText("API Key"), "sk-typed");
+  await userEvent.click(screen.getByRole("button", { name: "Save & test" }));
+
+  await waitFor(() => expect(onSubmit).toHaveBeenCalled());
+  expect((screen.getByLabelText("API Key") as HTMLInputElement).value).toBe("sk-typed");
+});
+
+test("a status arriving after mount is folded into the pre-fill", () => {
+  // This form always sends the fields it declares, so a stale empty pre-fill is not
+  // a no-op — it is a silent clear of a base URL the founder never touched.
+  const { rerender } = render(
+    <ProviderCredentialForm provider={ANTHROPIC} status={null} busy={false} onSubmit={vi.fn()} />,
+  );
+  expect((screen.getByLabelText("Base URL") as HTMLInputElement).value).toBe("");
+
+  rerender(
+    <ProviderCredentialForm
+      provider={ANTHROPIC}
+      status={providerStatus({
+        configured: true,
+        source: "workspace",
+        base_url: "https://proxy.internal/v1",
+      })}
+      busy={false}
+      onSubmit={vi.fn()}
+    />,
+  );
+  expect((screen.getByLabelText("Base URL") as HTMLInputElement).value).toBe(
+    "https://proxy.internal/v1",
+  );
+});
+
+test("a secret opts out of password-manager capture; every input opts out of autocapitalize", () => {
+  render(
+    <ProviderCredentialForm provider={BEDROCK} status={null} busy={false} onSubmit={vi.fn()} />,
+  );
+  // autocomplete="off" is deliberately ignored by Chrome/Safari on password fields.
+  expect(screen.getByLabelText("Secret Key").getAttribute("autocomplete")).toBe(
+    "new-password",
+  );
+  expect(screen.getByLabelText("Region").getAttribute("autocomplete")).toBe("off");
+  for (const label of ["Region", "Access Key ID", "Secret Key"]) {
+    const input = screen.getByLabelText(label);
+    expect(input.getAttribute("autocapitalize")).toBe("none");
+    expect(input.getAttribute("autocorrect")).toBe("off");
+    expect(input.getAttribute("spellcheck")).toBe("false");
+  }
+});
+
+test("the stored-secret hint is announced with its input", () => {
+  render(
+    <ProviderCredentialForm
+      provider={BEDROCK}
+      status={BEDROCK_STORED}
+      busy={false}
+      onSubmit={vi.fn()}
+    />,
+  );
+  const input = screen.getByLabelText("Secret Key");
+  const hintId = input.getAttribute("aria-describedby");
+  expect(hintId).toBeTruthy();
+  expect(document.getElementById(hintId as string)?.textContent).toBe(
+    "configured — leave blank to keep",
+  );
+  // A field with nothing stored has nothing to describe.
+  expect(screen.getByLabelText("Region").getAttribute("aria-describedby")).toBeNull();
+});
+
+// --- the pure body-builder, driven directly against a schema ------------------
+
+test("buildCredentialFields splits top-level keys from extra_config", () => {
+  expect(
+    buildCredentialFields(ANTHROPIC.credential_fields, {
+      api_key: "sk-1",
+      base_url: "https://x/v1",
+    }),
+  ).toEqual({ api_key: "sk-1", base_url: "https://x/v1" });
+
+  expect(
+    buildCredentialFields(BEDROCK.credential_fields, {
+      region: "us-east-1",
+      access_key_id: "AKIA1",
+      secret_access_key: "",
+    }),
+  ).toEqual({ extra_config: { region: "us-east-1", access_key_id: "AKIA1" } });
+});
+
+test("buildCredentialFields omits a blank secret and nulls a blank base_url", () => {
+  expect(
+    buildCredentialFields(ANTHROPIC.credential_fields, { api_key: "", base_url: "" }),
+  ).toEqual({ base_url: null });
+  expect(
+    buildCredentialFields(BEDROCK.credential_fields, {
+      region: "",
+      access_key_id: "",
+      secret_access_key: "",
+    }),
+  ).toEqual({});
+});
+
+test("buildCredentialFields trims values", () => {
+  // A key pasted off a terminal or a docs page carries a trailing newline, which
+  // otherwise surfaces as an opaque provider auth error rather than a form error.
+  expect(
+    buildCredentialFields(ANTHROPIC.credential_fields, {
+      api_key: "  sk-1\n",
+      base_url: " https://x/v1 ",
+    }),
+  ).toEqual({ api_key: "sk-1", base_url: "https://x/v1" });
+  // Whitespace alone is blank, not a value.
+  expect(
+    buildCredentialFields(ANTHROPIC.credential_fields, { api_key: "   ", base_url: "" }),
+  ).toEqual({ base_url: null });
 });
