@@ -28,6 +28,7 @@ from src.view.frame import frame_for_row
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "COMPLETED_RUN_WINDOW_HOURS",
     "FAILED_RUN_WINDOW_HOURS",
     "MAX_RUN_UNITS",
     "briefing_units",
@@ -41,6 +42,15 @@ __all__ = [
 # A failed run is worth the founder's attention for a day; after that it is
 # history, and `/history` is where history lives.
 FAILED_RUN_WINDOW_HOURS = 24
+
+# A run that SUCCEEDED still has to be seen once. Only active and failed runs
+# used to surface, so autonomous work appeared while it ran and then vanished —
+# the workspace could never answer "what did you do overnight", and the only
+# record was a briefing generated at 07:00. Shorter than the failed window: a
+# success is worth reporting, not chasing. Long enough to span a night, so the
+# answer is still there at breakfast.
+COMPLETED_RUN_WINDOW_HOURS = 12
+
 MAX_RUN_UNITS = 20
 
 # TaskRun.status -> FrameStatus. Exhaustive over the statuses the query below
@@ -52,9 +62,20 @@ _RUN_STATUS: dict[str, FrameStatus] = {
     "awaiting_input": "needs_you",
     "blocked": "needs_you",
     "failed": "failed",
+    "timed_out": "failed",
+    "completed": "done",
+    # A read-back that CONTRADICTED what the step reported. Not a success and
+    # not a clean failure — the one terminal state that genuinely wants a
+    # human, which is why it maps to `needs_you` rather than to `done`.
+    "partially_completed": "needs_you",
 }
 
 _ACTIVE = ("running", "paused", "awaiting_approval", "awaiting_input", "blocked")
+
+# Terminal states that linger. `partially_completed` rides the failed window:
+# a contradicted read-back deserves the same day of attention a failure gets.
+_RECENT_FAILED = ("failed", "timed_out", "partially_completed")
+_RECENT_DONE = ("completed",)
 
 
 def run_headline(*, plan_goal: str | None, step_name: str | None) -> str:
@@ -121,8 +142,13 @@ async def _first_step_names(db: Any, run_ids: list[str]) -> dict[str, str]:
 
 
 async def run_units(db: Any, *, workspace_id: str, now: datetime) -> list[Unit]:
-    """One `run` Unit per active run, plus each run that failed recently."""
-    cutoff = now - timedelta(hours=FAILED_RUN_WINDOW_HOURS)
+    """One `run` Unit per active run, plus each run that recently finished.
+
+    "Finished" covers both outcomes on purpose. A success that vanishes the
+    moment it lands leaves the workspace unable to say what muldro did.
+    """
+    failed_cutoff = now - timedelta(hours=FAILED_RUN_WINDOW_HOURS)
+    done_cutoff = now - timedelta(hours=COMPLETED_RUN_WINDOW_HOURS)
     try:
         result = await db.execute(
             select(TaskRun, Plan.goal)
@@ -131,7 +157,8 @@ async def run_units(db: Any, *, workspace_id: str, now: datetime) -> list[Unit]:
                 TaskRun.workspace_id == workspace_id,
                 TaskRun.source != "user_message",
                 (TaskRun.status.in_(_ACTIVE))
-                | ((TaskRun.status == "failed") & (TaskRun.updated_at >= cutoff)),
+                | (TaskRun.status.in_(_RECENT_FAILED) & (TaskRun.updated_at >= failed_cutoff))
+                | (TaskRun.status.in_(_RECENT_DONE) & (TaskRun.updated_at >= done_cutoff)),
             )
             .order_by(TaskRun.updated_at.desc())
             .limit(MAX_RUN_UNITS)

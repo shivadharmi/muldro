@@ -266,3 +266,48 @@ async def test_failing_sources_become_one_record_unit_with_a_real_key():
 
 async def test_healthy_connectors_produce_no_card():
     assert await connector_health_unit(_DB([]), workspace_id="ws_1") is None
+
+
+class TestFinishedRunsStaySeeable:
+    """A success that vanishes the moment it lands is work nobody can see.
+
+    Only active and failed runs surfaced, so autonomous work appeared while it
+    ran and then disappeared — the workspace could not answer "what did you do
+    overnight" and the only record was a briefing generated at 07:00.
+    """
+
+    def test_completed_maps_to_done_not_to_running(self):
+        from src.view.domain_units import _RUN_STATUS
+
+        assert _RUN_STATUS["completed"] == "done"
+
+    def test_a_contradicted_read_back_wants_a_human(self):
+        """`partially_completed` is neither a success nor a clean failure."""
+        from src.view.domain_units import _RUN_STATUS
+
+        assert _RUN_STATUS["partially_completed"] == "needs_you"
+
+    def test_a_timeout_reads_as_a_failure(self):
+        from src.view.domain_units import _RUN_STATUS
+
+        assert _RUN_STATUS["timed_out"] == "failed"
+
+    def test_every_lingering_status_has_a_frame_status(self):
+        """The map must be exhaustive over what the query selects, or a row
+        falls through to the "running" default and a finished run reads live."""
+        from src.view.domain_units import (
+            _ACTIVE,
+            _RECENT_DONE,
+            _RECENT_FAILED,
+            _RUN_STATUS,
+        )
+
+        for status in (*_ACTIVE, *_RECENT_FAILED, *_RECENT_DONE):
+            assert status in _RUN_STATUS, status
+
+    def test_a_success_is_reported_not_chased(self):
+        """Shorter window than a failure, long enough to span a night."""
+        from src.view.domain_units import COMPLETED_RUN_WINDOW_HOURS, FAILED_RUN_WINDOW_HOURS
+
+        assert COMPLETED_RUN_WINDOW_HOURS < FAILED_RUN_WINDOW_HOURS
+        assert COMPLETED_RUN_WINDOW_HOURS >= 8  # an overnight
