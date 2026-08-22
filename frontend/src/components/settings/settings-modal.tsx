@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { useAuth } from "@/lib/auth";
 import {
@@ -8,9 +8,8 @@ import {
   type SettingsTab,
 } from "@/stores/settings-modal-store";
 import { useFocusTrap } from "./hooks/use-focus-trap";
-import { useInertBackground } from "./hooks/use-inert-background";
 import { ModelConfigProvider, useProviderCounts } from "./model-config-context";
-import { SettingsOverlayProvider } from "./overlay-context";
+import { SettingsOverlayProvider, useOverlayClaims } from "./overlay-context";
 import {
   SETTINGS_TABS,
   SETTINGS_TITLE_ID,
@@ -106,20 +105,17 @@ function SettingsDialog() {
   // or a mobile deep link would drop the user on the list it asked past.
   const [pushed, setPushed] = useState(() => activeTab !== SETTINGS_TABS[0].key);
 
-  // A nested overlay portalled out of the panel (the model picker) claims the
-  // keyboard while it is open; see `overlay-context.tsx`.
-  const [overlayOpen, setOverlayOpen] = useState(false);
-  const overlay = useMemo(() => ({ setOverlayOpen }), []);
+  // A nested overlay portalled out of the panel (the model picker) leases the
+  // keyboard while it is open; see `overlay-context.ts`.
+  const overlay = useOverlayClaims();
 
+  // The whole dialog, backdrop included — the trap's own container is only the
+  // panel, and inerting the backdrop would kill click-outside-to-close.
   const dialogRef = useRef<HTMLDivElement | null>(null);
-  // ORDER IS LOAD-BEARING. Effect cleanups run in declaration order, and the
-  // focus trap's cleanup restores focus to the control that opened the dialog —
-  // which lives in the background this hook marks `inert`. Declared the other
-  // way round, the restore would run while that ancestor was still inert and a
-  // real browser would silently refuse the focus (jsdom, which does not
-  // implement `inert`, would never show it).
-  useInertBackground(dialogRef);
-  const panelRef = useFocusTrap<HTMLDivElement>({ paused: overlayOpen });
+  const panelRef = useFocusTrap<HTMLDivElement>({
+    paused: overlay.claimed,
+    isolate: dialogRef,
+  });
   const meta = tabMetaFor(activeTab);
 
   const selectTab = useCallback(
@@ -201,7 +197,7 @@ function SettingsDialog() {
           </div>
 
           <div className="flex-1 min-h-0 overflow-y-auto flex flex-col gap-[18px] bg-surface-0 px-4 py-[18px] sm:bg-transparent sm:px-6 sm:py-5">
-            <SettingsOverlayProvider value={overlay}>
+            <SettingsOverlayProvider value={overlay.value}>
               <TabBody tab={activeTab} />
             </SettingsOverlayProvider>
           </div>

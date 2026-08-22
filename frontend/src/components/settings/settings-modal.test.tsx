@@ -183,15 +183,28 @@ test("the shell fetches no tab's data for a tab that is not on screen (L5)", asy
   expect(fetchBudget).not.toHaveBeenCalled();
 });
 
-test("the model config loads once for the surface, not per tab visit", async () => {
+test("opening the surface fetches the config for the badge, and no catalog", async () => {
   render(<SettingsModal />);
   await waitFor(() => expect(fetchModelConfig).toHaveBeenCalledTimes(1));
-  // Visiting Model and leaving again must not re-fetch: the state is owned
-  // above both the rail and the tab, not by the tab that happens to be open.
+  // The catalog is every provider's models and credential schemas, and only
+  // two tabs render it. Most Settings visits are someone changing a theme.
+  expect(fetchModelCatalog).not.toHaveBeenCalled();
+});
+
+test("the catalog arrives with the first tab that needs it, once", async () => {
+  render(<SettingsModal />);
+  await waitFor(() => expect(fetchModelConfig).toHaveBeenCalledTimes(1));
+
   await userEvent.click(within(rail()).getByRole("button", { name: /^model$/i }));
+  await waitFor(() => expect(fetchModelCatalog).toHaveBeenCalledTimes(1));
+
+  // Leaving and returning must not re-fetch either: the state is owned above
+  // both the rail and the tab, not by the tab that happens to be open.
   await userEvent.click(within(rail()).getByRole("button", { name: /^trust$/i }));
-  expect(fetchModelConfig).toHaveBeenCalledTimes(1);
+  await userEvent.click(within(rail()).getByRole("button", { name: /^model$/i }));
   expect(fetchModelCatalog).toHaveBeenCalledTimes(1);
+  // And the eager fetch is not repeated by the tab's own full load.
+  expect(fetchModelConfig).toHaveBeenCalledTimes(1);
 });
 
 test("the rail omits the provider count until the config lands, then shows it", async () => {
@@ -257,6 +270,43 @@ test("Esc that a nested overlay already handled does not close the dialog", () =
   inner.removeEventListener("keydown", claim);
   fireEvent.keyDown(inner, { key: "Escape" });
   expect(useSettingsModalStore.getState().open).toBe(false);
+});
+
+test("focus is captured BEFORE the background goes inert (A1)", () => {
+  const invoker = document.createElement("button");
+  document.body.appendChild(invoker);
+  invoker.focus();
+
+  // jsdom implements neither `inert` nor the blur it causes, so the ordering
+  // this guards is invisible by default. Per HTML, a node becoming inert
+  // unfocuses a focused descendant (Blink clears `focused_element_`) — and the
+  // control that opened the dialog is inside the region about to go inert.
+  // Patching `setAttribute` reproduces that synchronously; a MutationObserver
+  // could not, because its callback is a microtask and would land after the
+  // capture either way.
+  const realSetAttribute = Element.prototype.setAttribute;
+  const patched = vi
+    .spyOn(Element.prototype, "setAttribute")
+    .mockImplementation(function (this: Element, name: string, value: string) {
+      realSetAttribute.call(this, name, value);
+      if (name !== "inert") return;
+      const active = document.activeElement;
+      if (active instanceof HTMLElement && this.contains(active)) active.blur();
+    });
+
+  try {
+    const { rerender } = render(<SettingsModal />);
+    // Read after isolation: the invoker really was blurred, so a capture that
+    // ran second would have recorded nothing.
+    expect(document.activeElement).not.toBe(invoker);
+
+    useSettingsModalStore.setState({ open: false });
+    rerender(<SettingsModal />);
+    expect(document.activeElement).toBe(invoker);
+  } finally {
+    patched.mockRestore();
+    invoker.remove();
+  }
 });
 
 test("the page behind the dialog is inert, but live regions are not", () => {

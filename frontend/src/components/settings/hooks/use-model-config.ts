@@ -1,12 +1,7 @@
 import { useCallback, useMemo, useRef, useState } from "react";
 
-import { fetchModelCatalog, fetchModelConfig, saveModelConfig } from "@/lib/api";
-import type {
-  ConfigWarning,
-  ModelBinding,
-  ModelCatalog,
-  ModelConfig,
-} from "@/lib/types";
+import { saveModelConfig } from "@/lib/api";
+import type { ConfigWarning, ModelBinding, ModelConfig } from "@/lib/types";
 import {
   EMPTY_DRAFT,
   type ModelDraft,
@@ -18,6 +13,7 @@ import {
   rebaseDraft,
 } from "./model-draft";
 import { useBindRejections } from "./use-bind-rejections";
+import { useModelLoads, type ModelLoads } from "./use-model-loads";
 
 export type { ModelDraft } from "./model-draft";
 export { bindingKey } from "./model-draft";
@@ -54,11 +50,13 @@ function warnUnknownBinding(
   );
 }
 
-export interface UseModelConfigResult {
-  catalog: ModelCatalog | null;
+/**
+ * The fetch lifecycle ({@link ModelLoads}) plus the draft state laid over it.
+ * Inherited rather than restated, so the two loaders are documented once.
+ */
+export interface UseModelConfigResult extends ModelLoads {
   /** The last config the server acknowledged — the baseline `draft` diffs against. */
   config: ModelConfig | null;
-  loading: boolean;
   saving: boolean;
   draft: ModelDraft;
   /** Keys (`scope_type:scope_key`) whose draft binding differs from the saved
@@ -71,10 +69,6 @@ export interface UseModelConfigResult {
    *  per binding by any mutator that touches it. A non-422 failure leaves them
    *  alone (the caller toasts that; the cards keep the server's last verdict). */
   rejections: ConfigWarning[];
-  /** Fetches the catalog and config exactly once. Concurrent callers get the
-   *  SAME promise, so each observes the outcome; a failure resets the guard so
-   *  a retry works, and re-throws so the caller can toast. */
-  load: () => Promise<void>;
   /** Adopt a config fetched elsewhere (a credential mutation refetches it).
    *  Clean bindings rebase onto it; pending edits survive. */
   applyServerConfig: (next: ModelConfig) => void;
@@ -118,9 +112,7 @@ export interface UseModelConfigResult {
  * mutation lives here so the components consuming it never re-derive it.
  */
 export function useModelConfig(): UseModelConfigResult {
-  const [catalog, setCatalog] = useState<ModelCatalog | null>(null);
   const [state, setState] = useState<ModelConfigState>(INITIAL_STATE);
-  const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const bindRejections = useBindRejections();
 
@@ -138,39 +130,26 @@ export function useModelConfig(): UseModelConfigResult {
     setState(next);
   }, []);
 
-  // In-flight promises double as the re-entrancy guards: a second caller gets
-  // the first call's promise rather than a silent `undefined` or a duplicate
-  // request whose completion order would decide which response wins.
-  const loadPromiseRef = useRef<Promise<void> | null>(null);
   const savePromiseRef = useRef<Promise<void> | null>(null);
-  const loadedOnce = useRef(false);
 
-  const load = useCallback((): Promise<void> => {
-    if (loadPromiseRef.current) return loadPromiseRef.current;
-    if (loadedOnce.current) return Promise.resolve();
-    loadedOnce.current = true;
-    setLoading(true);
+  // The one way a server config enters this state: rebase the draft onto it so
+  // clean bindings adopt it and pending edits survive. Both the eager
+  // `loadConfig` and `applyServerConfig` are this, and they must stay one
+  // implementation — a second, plainer assignment somewhere would be the bug
+  // where a background refetch silently drops what the user typed.
+  const adoptConfig = useCallback(
+    (next: ModelConfig) => {
+      const prev = stateRef.current;
+      commit({
+        config: next,
+        draft: rebaseDraft(draftFrom(prev.config), prev.draft, draftFrom(next)),
+      });
+    },
+    [commit],
+  );
 
-    const promise = (async () => {
-      try {
-        const [nextCatalog, nextConfig] = await Promise.all([
-          fetchModelCatalog(),
-          fetchModelConfig(),
-        ]);
-        setCatalog(nextCatalog);
-        commit({ config: nextConfig, draft: draftFrom(nextConfig) });
-      } catch (err) {
-        loadedOnce.current = false;
-        throw err;
-      } finally {
-        setLoading(false);
-        loadPromiseRef.current = null;
-      }
-    })();
+  const { catalog, loading, load, loadConfig } = useModelLoads(adoptConfig);
 
-    loadPromiseRef.current = promise;
-    return promise;
-  }, [commit]);
 
   // Destructured, not used through `bindRejections`: that object is memoised on
   // `rejections`, so reaching through it inside a callback would re-create the
@@ -182,16 +161,9 @@ export function useModelConfig(): UseModelConfigResult {
     record: recordRejections,
   } = bindRejections;
 
-  const applyServerConfig = useCallback(
-    (next: ModelConfig) => {
-      const prev = stateRef.current;
-      commit({
-        config: next,
-        draft: rebaseDraft(draftFrom(prev.config), prev.draft, draftFrom(next)),
-      });
-    },
-    [commit],
-  );
+  /** @see adoptConfig — the same operation, named for the caller that adopts a
+   *  config a credential mutation fetched. */
+  const applyServerConfig = adoptConfig;
 
   const updateBinding = useCallback(
     (
@@ -339,6 +311,7 @@ export function useModelConfig(): UseModelConfigResult {
       dirtyCount: dirtyKeys.size,
       rejections: bindRejections.rejections,
       load,
+      loadConfig,
       applyServerConfig,
       updateBinding,
       upsertBinding,
@@ -357,6 +330,7 @@ export function useModelConfig(): UseModelConfigResult {
       dirtyKeys,
       bindRejections,
       load,
+      loadConfig,
       applyServerConfig,
       updateBinding,
       upsertBinding,

@@ -1,4 +1,6 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, type RefObject } from "react";
+
+import { inertBackground } from "./inert-background";
 
 /**
  * Everything the browser will land on with Tab. Deliberately a query rather
@@ -27,16 +29,39 @@ const FOCUSABLE_SELECTOR = [
  * implement it. Computed style is used rather than `getClientRects()` for the
  * same reason — jsdom reports no rects for anything, which would empty the
  * cycle under test.
+ *
+ * The cache is per-sweep and matters: candidates are siblings, so the naive
+ * form re-walks and re-measures the same chain once per control.
  */
-function isVisible(el: HTMLElement): boolean {
-  for (let node: HTMLElement | null = el; node; node = node.parentElement) {
-    const style = window.getComputedStyle(node);
-    if (style.display === "none" || style.visibility === "hidden") return false;
-  }
-  return true;
+function visibilityChecker(): (el: Element) => boolean {
+  const known = new Map<Element, boolean>();
+  return (el: Element): boolean => {
+    const chain: Element[] = [];
+    let node: Element | null = el;
+    let visible = true;
+    while (node) {
+      const cached = known.get(node);
+      if (cached !== undefined) {
+        visible = cached;
+        break;
+      }
+      chain.push(node);
+      const style = window.getComputedStyle(node);
+      if (style.display === "none" || style.visibility === "hidden") {
+        visible = false;
+        break;
+      }
+      node = node.parentElement;
+    }
+    // Every node walked shares the verdict: hidden stops at the offending
+    // ancestor, so nothing above it is recorded.
+    for (const walked of chain) known.set(walked, visible);
+    return visible;
+  };
 }
 
 function focusableWithin(container: HTMLElement): HTMLElement[] {
+  const isVisible = visibilityChecker();
   return Array.from(
     container.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR),
   ).filter(isVisible);
@@ -49,16 +74,45 @@ export interface FocusTrapOptions {
    * the trap is document-scoped and pulls focus back in from anywhere, so an
    * unpaused trap would rip focus out of that overlay on its first Tab.
    *
-   * Pausing deliberately does NOT restore focus — that rides on unmount, so a
-   * nested overlay opening cannot fling focus back to whatever opened the
-   * dialog in the first place.
+   * While paused, Tab is entirely UNCONSTRAINED — this releases the keyboard,
+   * it does not hand it over. An overlay that claims `paused` MUST ship its own
+   * trap, or Tab walks straight out of both it and the dialog behind it.
+   *
+   * Pausing deliberately does NOT restore focus: capture and restore ride on
+   * mount/unmount, so a nested overlay opening cannot fling focus back to
+   * whatever opened the dialog in the first place.
    */
   paused?: boolean;
+  /**
+   * The subtree to keep reachable; everything outside it is made `inert` and
+   * `aria-hidden` for the lifetime of the trap. Usually the whole dialog
+   * INCLUDING its backdrop, where the trap container is only the panel — the
+   * backdrop must stay clickable. Omit to isolate around the container itself,
+   * or pass nothing to skip isolation.
+   */
+  isolate?: RefObject<HTMLElement | null>;
 }
 
 /**
- * Traps Tab inside the returned container, moves focus into it on mount, and
- * restores focus to whatever was focused beforehand on unmount (defect A1).
+ * Traps Tab inside the returned container, moves focus into it on mount,
+ * isolates the rest of the page, and restores focus to whatever was focused
+ * beforehand on unmount (defect A1).
+ *
+ * ONE effect owns capture → isolate → focus, and its cleanup owns release →
+ * restore, because both orderings are load-bearing and neither survives being
+ * split across two hooks:
+ *
+ *  - Capture must precede isolation. Per HTML, a node becoming `inert`
+ *    unfocuses a focused descendant — and the control that opened the dialog is
+ *    in the region about to go inert. Read `document.activeElement` afterwards
+ *    and it may already be `body`, so nothing is restored on close and A1
+ *    quietly returns.
+ *  - Release must precede restore, for the mirror reason: focus cannot be moved
+ *    into a still-inert ancestor, and the call fails silently.
+ *
+ * As two hooks these depended on React iterating effects in declaration order,
+ * one direction was always wrong, and jsdom — which implements neither `inert`
+ * nor the blur it triggers — could not see either.
  *
  * Capture/restore ride on MOUNT, not on a flag: the settings dialog is mounted
  * only while it is open, so its lifetime already is the trap's lifetime, and
@@ -69,22 +123,30 @@ export interface FocusTrapOptions {
  */
 export function useFocusTrap<T extends HTMLElement>({
   paused = false,
+  isolate,
 }: FocusTrapOptions = {}) {
   const containerRef = useRef<T | null>(null);
-  const restoreRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
+    // 1. Capture, BEFORE anything goes inert and takes the focus with it.
     const previous = document.activeElement;
-    restoreRef.current =
+    const restore =
       previous instanceof HTMLElement && previous !== document.body
         ? previous
         : null;
+
+    // 2. Isolate the rest of the page.
+    const release = inertBackground(isolate ? isolate.current : containerRef.current);
+
+    // 3. Move focus in.
     containerRef.current?.focus();
+
     return () => {
-      restoreRef.current?.focus();
-      restoreRef.current = null;
+      // Release first: the element being restored to lives in that region.
+      release();
+      restore?.focus();
     };
-  }, []);
+  }, [isolate]);
 
   const onKeyDown = useCallback((event: KeyboardEvent) => {
     if (event.key !== "Tab") return;

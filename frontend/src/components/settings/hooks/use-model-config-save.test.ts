@@ -44,8 +44,9 @@ test("save before load resolves is a no-op, not a wipe of every override", async
   expect(saveMock).not.toHaveBeenCalled();
   expect(warn).toHaveBeenCalledTimes(1);
 
-  // Still shut after a FAILED load — `config` stays null behind the retry toast.
-  catalogMock.mockRejectedValueOnce(new Error("boom"));
+  // Still shut after a failed CONFIG load — `config` stays null behind the
+  // retry toast, so the draft is still the empty one.
+  configMock.mockRejectedValueOnce(new Error("boom"));
   await act(async () => {
     await expect(result.current.load()).rejects.toThrow("boom");
   });
@@ -64,6 +65,57 @@ test("save before load resolves is a no-op, not a wipe of every override", async
   });
   expect(saveMock).toHaveBeenCalledTimes(1);
   warn.mockRestore();
+});
+
+test("a catalog-only failure leaves the save bar armed", async () => {
+  // The guard is "no config yet", not "the load call failed". Since the two
+  // fetches were split, a catalog outage no longer takes the config with it —
+  // the draft on screen is a REAL one, so saving it is safe and refusing would
+  // strand the founder's edits behind an unrelated endpoint.
+  const { result } = renderHook(() => useModelConfig());
+  catalogMock.mockRejectedValueOnce(new Error("catalog down"));
+  await act(async () => {
+    await expect(result.current.load()).rejects.toThrow("catalog down");
+  });
+
+  expect(result.current.catalog).toBeNull();
+  expect(result.current.config).not.toBeNull();
+
+  saveMock.mockResolvedValue(makeConfig());
+  await act(async () => {
+    await result.current.save();
+  });
+  expect(saveMock).toHaveBeenCalledTimes(1);
+});
+
+test("the eager config load pulls no catalog, and the full load reuses it", async () => {
+  const { result } = renderHook(() => useModelConfig());
+
+  // What the rail's badge costs on every Settings open: one GET, no catalog.
+  await act(async () => {
+    await result.current.loadConfig();
+  });
+  expect(configMock).toHaveBeenCalledTimes(1);
+  expect(catalogMock).not.toHaveBeenCalled();
+  expect(result.current.config).not.toBeNull();
+
+  // Opening a tab that needs the catalog adds exactly the catalog.
+  await act(async () => {
+    await result.current.load();
+  });
+  expect(catalogMock).toHaveBeenCalledTimes(1);
+  expect(configMock).toHaveBeenCalledTimes(1);
+});
+
+test("concurrent eager and full loads issue one config fetch", async () => {
+  const { result } = renderHook(() => useModelConfig());
+  await act(async () => {
+    // The real ordering on a Settings open straight onto the Model tab: the
+    // provider's eager fetch is still in flight when the tab mounts.
+    await Promise.all([result.current.loadConfig(), result.current.load()]);
+  });
+  expect(configMock).toHaveBeenCalledTimes(1);
+  expect(catalogMock).toHaveBeenCalledTimes(1);
 });
 
 test("save submits the whole draft verbatim and adopts the response", async () => {
