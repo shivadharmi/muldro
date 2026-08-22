@@ -36,6 +36,16 @@ _ENV_KEY_ATTR = {
 KEYLESS_PROVIDERS = frozenset({"ollama"})
 
 
+def credential_is_usable(api_key: str | None, provider: str) -> bool:
+    """The runtime's own definition of "configured", stated once.
+
+    ``_build_resolved`` raises unless there is an api_key or the provider is keyless,
+    so anything that REPORTS configuration state has to agree with exactly this
+    condition -- otherwise the API calls a provider ready while every run on it dies.
+    """
+    return api_key is not None or provider in KEYLESS_PROVIDERS
+
+
 class ModelConfigError(RuntimeError):
     """Raised when a model cannot be resolved (unknown model / missing credential)."""
 
@@ -95,7 +105,7 @@ class ModelResolver:
             raise ModelConfigError(f"unknown model {binding.provider}/{binding.model_id}")
 
         api_key, base_url = await self.resolve_credential(binding.provider, workspace_id)
-        if api_key is None and binding.provider not in KEYLESS_PROVIDERS:
+        if not credential_is_usable(api_key, binding.provider):
             raise ModelConfigError(f"provider {binding.provider} is not configured")
 
         kwargs = build_model_kwargs(
@@ -247,7 +257,19 @@ class ModelResolver:
         )
         row = (await self._db.execute(stmt)).scalars().first()
         if row and row.api_key_encrypted:
-            return secret_crypto.decrypt_secret(row.api_key_encrypted), row.base_url
+            try:
+                return secret_crypto.decrypt_secret(row.api_key_encrypted), row.base_url
+            except Exception:
+                # An undecryptable ciphertext is an UNUSABLE credential, not a crash --
+                # the master key may have been rotated out from under it. Falling through
+                # means GET /v1/model-config WARNS about the provider instead of 500ing on
+                # the one page that could delete the bad row, and the runtime raises an
+                # articulate ModelConfigError instead of a raw Fernet error.
+                logger.warning(
+                    "credential for provider %s could not be decrypted; treating it as "
+                    "unconfigured (has the config encryption key been rotated?)",
+                    provider,
+                )
         # env fallback
         attr = _ENV_KEY_ATTR.get(provider)
         env_key = getattr(get_settings(), attr, "") if attr else ""

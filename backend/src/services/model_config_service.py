@@ -28,7 +28,12 @@ from src.contracts.model_config import (
 )
 from src.models.model_binding import ModelBinding
 from src.models.provider_credential import ProviderCredential
-from src.services.model_resolver import _ENV_KEY_ATTR, KEYLESS_PROVIDERS, ModelResolver
+from src.services.model_resolver import (
+    _ENV_KEY_ATTR,
+    KEYLESS_PROVIDERS,
+    ModelResolver,
+    credential_is_usable,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -186,7 +191,7 @@ class ModelConfigService:
             ok = usable.get(b.provider)
             if ok is None:
                 api_key, _ = await resolver.resolve_credential(b.provider, workspace_id)
-                ok = api_key is not None or b.provider in KEYLESS_PROVIDERS
+                ok = credential_is_usable(api_key, b.provider)
                 usable[b.provider] = ok
             if ok:
                 continue
@@ -279,7 +284,13 @@ class ModelConfigService:
         statuses = []
         for provider in [*MODEL_CATALOG, *strays]:
             cred = cred_by_provider.get(provider)
-            if cred is not None:
+            # "configured" must mean what the RUNTIME means: usable credential material,
+            # not merely a row. A keyed provider whose key was cleared has a row and no
+            # credential, and ModelResolver raises for exactly that state.
+            has_material = cred is not None and (
+                bool(cred.api_key_encrypted) or provider in KEYLESS_PROVIDERS
+            )
+            if has_material:
                 # A real credential row always wins (its own status). Only a row
                 # OWNED by this workspace is deletable through the credentials API —
                 # the NULL-workspace row is the deployment default and shared.

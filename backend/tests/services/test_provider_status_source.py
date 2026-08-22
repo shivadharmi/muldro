@@ -32,12 +32,20 @@ def _cred(provider: str, workspace_id: str | None, status: str = "valid") -> Sim
     # base_url/extra_config mirror ProviderCredential's nullable columns (both default
     # None on a real row) so this stub keeps matching _provider_statuses's attribute
     # access as it grows -- these tests assert on source/configured only.
+    #
+    # api_key_encrypted defaults to a stand-in ciphertext: every _cred() in this file
+    # represents a real, previously-PUT credential (per the module docstring -- "this
+    # workspace's own ProviderCredential row"), which always has key material. A
+    # cleared-key row (api_key_encrypted=None) is a different fixture, exercised by
+    # ModelConfigService's own has_material tests, not this file's source/configured
+    # matrix.
     return SimpleNamespace(
         provider=provider,
         workspace_id=workspace_id,
         status=status,
         base_url=None,
         extra_config=None,
+        api_key_encrypted="stub-ciphertext",
     )
 
 

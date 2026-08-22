@@ -21,6 +21,7 @@ from src.models.model_binding import ModelBinding
 from src.models.provider_credential import ProviderCredential
 from src.models.users import User, Workspace
 from src.services.model_config_service import ModelConfigService
+from src.services.model_resolver import ModelResolver
 
 
 def _db_reachable() -> bool:
@@ -122,3 +123,30 @@ async def test_legacy_invalid_effort_is_coerced_to_none():
         resp = await ModelConfigService(db).get_config_response(ws)
         tiers = {t.scope_key: t for t in resp.tiers}
         assert tiers["balanced"].effort == "none"
+
+
+async def test_undecryptable_credential_reads_as_unconfigured_not_a_crash(monkeypatch):
+    """A rotated MULDRO_CONFIG_ENCRYPTION_KEY leaves stored ciphertexts undecryptable.
+
+    Before this fix, resolve_credential propagated the raw Fernet error straight out of
+    decrypt_secret -- turning GET /v1/model-config into a 500 for every provider with a
+    now-undecryptable row, including the one page that could delete the bad row. It must
+    instead fall through to the env fallback and treat the row as unusable.
+    """
+    # resolve_credential consults the env fallback last, and this worktree's .env has
+    # MULDRO_OPENAI_API_KEY set -- blank it so the env key cannot mask the result.
+    monkeypatch.setattr(get_settings(), "openai_api_key", "", raising=False)
+
+    async with _session() as db:
+        ws = await _seed_workspace(db)
+        db.add(
+            ProviderCredential(
+                workspace_id=ws,
+                provider="openai",
+                api_key_encrypted="not-valid-fernet-ciphertext",
+            )
+        )
+        await db.flush()
+
+        api_key, _base_url = await ModelResolver(db).resolve_credential("openai", ws)
+        assert api_key is None

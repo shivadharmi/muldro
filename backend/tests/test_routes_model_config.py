@@ -1508,3 +1508,70 @@ def test_deployment_default_binding_warns_without_passing_through_put_config(mon
         asyncio.run(_drop_default_binding())
         if saved is not None:
             asyncio.run(_restore_default_binding(saved))
+
+
+@pytest.mark.skipif(not _db_reachable(), reason="Postgres not reachable")
+def test_clearing_a_key_reports_the_provider_unconfigured(monkeypatch):
+    """PUT {"api_key": null} clears the stored key but leaves the row in place.
+
+    ``configured`` must mean what ModelResolver means -- usable credential material,
+    not merely a row -- so a cleared key must read as unconfigured, not as still
+    configured because a ProviderCredential row still exists.
+    """
+    _use_test_key(monkeypatch)
+    # resolve_credential consults the env fallback last, and this worktree's .env has
+    # MULDRO_OPENAI_API_KEY set -- blank it so the env key cannot mask the result.
+    # (anthropic_api_key can't be used for this trick: validate_startup() requires it
+    # to be set, so blanking it before the app boots would break TestClient startup.)
+    monkeypatch.setattr(get_settings(), "openai_api_key", "", raising=False)
+    factory, ws = _ws_factory()
+    app = None
+
+    try:
+        app = _ws_app(factory, ws)
+        with TestClient(app) as c:
+            created = c.put(
+                "/v1/providers/openai/credentials",
+                json={"api_key": "sk-original"},
+            )
+            assert created.status_code == 200, created.text
+
+            cleared = c.put("/v1/providers/openai/credentials", json={"api_key": None})
+            assert cleared.status_code == 200, cleared.text
+
+            body = c.get("/v1/model-config").json()
+            openai = next(p for p in body["providers"] if p["provider"] == "openai")
+            assert openai["configured"] is False
+    finally:
+        if app is not None:
+            app.dependency_overrides.clear()
+        _delete_ws_credentials(factory, ws)
+
+
+@pytest.mark.skipif(not _db_reachable(), reason="Postgres not reachable")
+def test_keyless_provider_with_a_base_url_is_still_configured(monkeypatch):
+    """Pins that the has_material fix does not break keyless providers.
+
+    ollama has no api_key_encrypted -- base_url IS its credential -- so it must stay
+    configured even though it never has key material.
+    """
+    _use_test_key(monkeypatch)
+    factory, ws = _ws_factory()
+    app = None
+
+    try:
+        app = _ws_app(factory, ws)
+        with TestClient(app) as c:
+            r = c.put(
+                "/v1/providers/ollama/credentials",
+                json={"base_url": "http://localhost:11434"},
+            )
+            assert r.status_code == 200, r.text
+
+            body = c.get("/v1/model-config").json()
+            ollama = next(p for p in body["providers"] if p["provider"] == "ollama")
+            assert ollama["configured"] is True
+    finally:
+        if app is not None:
+            app.dependency_overrides.clear()
+        _delete_ws_credentials(factory, ws)
