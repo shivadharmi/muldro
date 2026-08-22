@@ -22,6 +22,7 @@ vi.mock("@/lib/api", () => ({
 }));
 
 import { fetchModelCatalog, fetchModelConfig, saveModelConfig } from "@/lib/api";
+import { useSettingsModalStore } from "@/stores/settings-modal-store";
 import { ModelConfigProvider } from "../model-config-context";
 import { ModelTab } from "./model-tab";
 
@@ -167,6 +168,56 @@ async function openOverrides() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  useSettingsModalStore.setState({ activeTab: "model", pendingProvider: null });
+});
+
+/** Fast bound to Groq, which resolves no credential — the state §9.6 renders as
+ *  a consequence and offers `Connect Groq` for. The binding has to name the
+ *  warned provider or `TierCard` ignores the warning as already answered. */
+const warnedConfig: ModelConfig = {
+  ...config,
+  tiers: [
+    tier("reasoning", "claude-opus-4-5"),
+    tier("balanced", "claude-sonnet-4-6"),
+    { ...tier("fast", "llama-3.3-70b"), provider: "groq" },
+  ],
+  warnings: [
+    {
+      scope_type: "tier",
+      scope_key: "fast",
+      provider: "groq",
+      code: "provider_not_configured",
+      message: "Groq is not connected.",
+    },
+  ],
+};
+
+// The slug alone would land the founder on a list of providers with nothing
+// said about which one they came for — the defect this wiring closes.
+test("Connect on a warned tier opens Providers FOR that provider", async () => {
+  await renderTab(warnedConfig);
+  await userEvent.click(screen.getByRole("button", { name: "Connect Groq" }));
+
+  const state = useSettingsModalStore.getState();
+  expect(state.activeTab).toBe("providers");
+  // The reason names the TIER that sent them, not the provider they can see.
+  expect(state.pendingProvider).toEqual({
+    provider: "groq",
+    reason: "Needed by the Fast tier",
+  });
+});
+
+// The picker's footer has no provider in mind, so it must not invent one.
+test("Browse all providers switches tab and names no provider", async () => {
+  await renderTab();
+  await userEvent.click(within(card("Fast")).getByLabelText(/^Model/));
+  await userEvent.click(
+    screen.getByRole("button", { name: /browse all providers/i }),
+  );
+
+  const state = useSettingsModalStore.getState();
+  expect(state.activeTab).toBe("providers");
+  expect(state.pendingProvider).toBeNull();
 });
 
 test("F3: Save is inert until something changes, and counts what did", async () => {

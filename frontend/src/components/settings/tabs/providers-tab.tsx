@@ -28,6 +28,7 @@ import {
   useRowFocusRestore,
   type PendingRemoval,
 } from "../providers/remove-confirmation";
+import { useExpandedRow } from "./use-expanded-row";
 
 /** The row wrapper is focusable BY SCRIPT only: it is where focus returns after
  *  the removal confirmation unmounts, so that focus never falls to `<body>`
@@ -64,7 +65,9 @@ export function ProvidersTab() {
   const containerRef = useRef<HTMLDivElement>(null);
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<ProviderFilterValue>("all");
-  const [expanded, setExpanded] = useState<string | null>(null);
+  // Which row is open, seeded from the Model tab's `Connect {provider}` — see
+  // `useExpandedRow`, which owns the one-shot intent and its clearing.
+  const [expanded, setExpanded] = useExpandedRow();
   const [pending, setPending] = useState<PendingRemoval | null>(null);
 
   // `useModelConfigContext` fires the same `load()` and swallows the failure,
@@ -190,14 +193,17 @@ export function ProvidersTab() {
       addToast(`${name} credentials saved`, "success");
       setExpanded(null);
     },
-    [addToast, credentials],
+    // `setExpanded` is a `useState` setter and never changes, but it now arrives
+    // through `useExpandedRow` where the lint rule cannot see that — so it is
+    // declared rather than suppressed.
+    [addToast, credentials, setExpanded],
   );
 
   const renderRow = (item: ProviderEntry) => {
     const { status, entry } = item;
     const provider = status.provider;
     const name = entry?.display_name ?? provider;
-    const open = expanded === provider;
+    const open = expanded?.provider === provider;
     const busy = credentials.isBusy(provider);
     return (
       <ProviderRow
@@ -205,12 +211,19 @@ export function ProvidersTab() {
         catalog={entry}
         expanded={open}
         busy={busy}
-        onToggle={() => setExpanded(open ? null : provider)}
+        // Only an intent-opened row carries one, and only while it stays open:
+        // re-opening it by hand drops the chip, having already been read.
+        reason={open ? expanded?.reason : undefined}
+        onToggle={() => setExpanded(open ? null : { provider })}
         onTest={() => void handleTest(provider, name)}
         onRemove={() => handleRemove(provider, name)}
       >
         {/* An uncatalogued provider declares no credential schema, so it gets no
-            form at all rather than a zero-field one. */}
+            form rather than a zero-field one, and `ProviderRow` withholds the
+            body for the same reason. An intent naming one STILL expands it and
+            still shows the reason — its only action is Remove, and a founder
+            sent somewhere that cannot be connected has to be told why. Dropping
+            the intent would land them on an unchanged list. */}
         {entry && (
           <ProviderCredentialForm
             provider={entry}

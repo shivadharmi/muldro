@@ -78,6 +78,7 @@ export function ModelTab() {
   const { discard, save, rejectionFor, warningFor } = modelState;
 
   const setActiveTab = useSettingsModalStore((s) => s.setActiveTab);
+  const openProviderFor = useSettingsModalStore((s) => s.openProviderFor);
 
   /**
    * Which binding the picker is choosing a model for, or `null` when it is shut.
@@ -185,10 +186,34 @@ export function ModelTab() {
     [picker, updateBinding],
   );
 
-  const goToProviders = useCallback(() => {
+  /**
+   * The picker's footer link. It switches tabs and carries NO intent: there is
+   * no provider in mind, and pre-expanding an arbitrary row — or chipping one
+   * with a reason nobody asked for — would be an answer to a question the
+   * founder did not ask.
+   */
+  const browseProviders = useCallback(() => {
     setPicker(null);
     setActiveTab("providers");
   }, [setActiveTab]);
+
+  /**
+   * §4.4's remediation, completed: switch to Providers with the offending
+   * provider already open and the reason stated on the row.
+   *
+   * The sentence is composed HERE because only this tab knows what a tier is —
+   * the Providers tab renders whatever string it is handed, and teaching it to
+   * turn `fast` into "the Fast tier" would put tier vocabulary in a tab that
+   * has none. Sentence-cased through the same `sentence` every other tier label
+   * on this tab goes through (**A3**: nothing on screen is a raw slug).
+   */
+  const connectProvider = useCallback(
+    (provider: string, scopeKey: string) => {
+      setPicker(null);
+      openProviderFor(provider, `Needed by the ${sentence(scopeKey)} tier`);
+    },
+    [openProviderFor],
+  );
 
   const handleSave = useCallback(async () => {
     try {
@@ -248,7 +273,11 @@ export function ModelTab() {
                   updateBinding("tier", tier.scope_key, patch)
                 }
                 onOpenPicker={() => openPicker("tier", tier.scope_key)}
-                onConnectProvider={goToProviders}
+                // The card supplies the SLUG it is warned about; the tier it
+                // belongs to is this loop's, not the card's to repeat.
+                onConnectProvider={(provider) =>
+                  connectProvider(provider, tier.scope_key)
+                }
               />
             ))}
           </div>
@@ -289,7 +318,7 @@ export function ModelTab() {
         providerStatuses={providerStatuses}
         onSelect={chooseModel}
         onClose={() => setPicker(null)}
-        onBrowseProviders={goToProviders}
+        onBrowseProviders={browseProviders}
       />
     </>
   );
