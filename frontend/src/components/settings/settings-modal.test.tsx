@@ -112,13 +112,27 @@ beforeEach(() => {
   useSettingsModalStore.setState({ open: true, activeTab: "account" });
 });
 
-test("renders the five settings tabs", () => {
+// Named exhaustively rather than counted: the previous version asserted five of
+// them and was already blind to Model, so a tab could vanish entirely and stay green.
+const TAB_LABELS = [
+  "account",
+  "preferences",
+  "policy",
+  "budget",
+  "trust",
+  "filters",
+  "model",
+];
+
+test("renders every settings tab", () => {
   render(<SettingsModal />);
-  expect(screen.getByRole("button", { name: /^account$/i })).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: /^preferences$/i })).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: /^policy$/i })).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: /^budget$/i })).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: /^trust$/i })).toBeInTheDocument();
+  for (const label of TAB_LABELS) {
+    expect(
+      screen.getByRole("button", { name: new RegExp(`^${label}$`, "i") }),
+    ).toBeInTheDocument();
+  }
+  const nav = screen.getByRole("dialog").querySelector("nav");
+  expect(nav?.querySelectorAll("button")).toHaveLength(TAB_LABELS.length);
 });
 
 test("does not render when closed", () => {

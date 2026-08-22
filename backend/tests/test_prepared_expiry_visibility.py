@@ -116,6 +116,34 @@ async def test_prepared_expiry_sends_exactly_one_notification():
     assert kwargs["workspace_id"] == "ws_test"
 
 
+async def test_each_workspace_gets_its_own_notification():
+    """A batch spanning two workspaces must not be collapsed into one message.
+
+    ``_expire_approvals`` sweeps by ``user_id`` alone, and a founder can belong to
+    several workspaces. One notification for the whole batch would carry one
+    workspace's action titles into another's message — a leak that every
+    single-workspace assertion in this file passes straight over.
+    """
+    approvals = [
+        _make_approval("apr_a", title="Send to Acme", workspace_id="ws_a"),
+        _make_approval("apr_b", title="Post to #general", workspace_id="ws_b"),
+    ]
+    notifier = MagicMock()
+    notifier.notify = AsyncMock()
+    _, service = _make_service(approvals, notifier=notifier)
+
+    await service._expire_approvals("usr_test")
+
+    assert notifier.notify.await_count == 2, "one message per workspace, not one per cycle"
+    by_workspace = {
+        call.kwargs["workspace_id"]: call.kwargs for call in notifier.notify.await_args_list
+    }
+    assert set(by_workspace) == {"ws_a", "ws_b"}
+    for workspace_id, other_title in (("ws_a", "Post to #general"), ("ws_b", "Send to Acme")):
+        assert other_title not in by_workspace[workspace_id]["body"]
+        assert by_workspace[workspace_id]["title"] == "1 staged action expired unreviewed"
+
+
 async def test_notification_says_the_actions_were_not_performed():
     """The single most important sentence: nothing ran."""
     approvals = [
