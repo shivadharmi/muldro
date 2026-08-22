@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from ulid import ULID
 
+from src.api.approval_trust_scope import rejected_capability
 from src.api.deps import get_current_user_id, get_current_workspace_id, get_session
 from src.api.routes_approvals_prepared import publish_prepared_decision, run_prepared_action
 from src.api.schemas import ApprovalDecisionRequest, ApprovalDetailResponse, ApprovalResponse
@@ -551,18 +552,16 @@ async def reject_action(
         details={"reason": req.reason if req else None},
     )
 
-    # Trust feedback loop — record rejection for graduated autonomy
-    try:
-        from src.services.risk_assessor import record_approval_decision
+    # Only when the thing rejected IS a capability — see `rejected_capability`.
+    if capability := rejected_capability(approval.approval_type):
+        try:
+            from src.services.risk_assessor import record_approval_decision
 
-        capability = approval.approval_type
-        if ":" in capability:
-            capability = capability.split(":", 1)[1]
-        await record_approval_decision(
-            db, workspace_id, capability, approval.risk_level or "low", "rejected"
-        )
-    except Exception:
-        logger.warning("Trust feedback failed for rejection %s", approval_id, exc_info=True)
+            await record_approval_decision(
+                db, workspace_id, capability, approval.risk_level or "low", "rejected"
+            )
+        except Exception:
+            logger.warning("Trust feedback failed for rejection %s", approval_id, exc_info=True)
 
     await db.commit()
 
