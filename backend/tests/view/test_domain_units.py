@@ -9,7 +9,14 @@ needs.
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
-from src.view.domain_units import run_headline, run_unit, run_units
+from src.view.domain_units import (
+    briefing_units,
+    connector_health_unit,
+    prepared_work_unit,
+    run_headline,
+    run_unit,
+    run_units,
+)
 
 NOW = datetime(2026, 8, 22, 12, 0, tzinfo=timezone.utc)
 
@@ -178,3 +185,85 @@ async def test_a_step_name_read_failure_still_yields_cards():
 
     units = await run_units(_HalfBoom(), workspace_id="ws_1", now=NOW)
     assert [u.frame.headline for u in units] == ["muldro run"]
+
+
+# ── briefing_units / prepared_work_unit / connector_health_unit ────────
+
+
+def _briefing(**kw):
+    defaults = dict(
+        briefing_id="brf_01A",
+        headline="Three things need you today",
+        briefing_date=datetime(2026, 8, 22, tzinfo=timezone.utc).date(),
+        created_at=datetime(2026, 8, 22, 7, 0, tzinfo=timezone.utc),
+        full_text="Long body.",
+    )
+    defaults.update(kw)
+    return SimpleNamespace(**defaults)
+
+
+def _approval(approval_id="apr_01A", risk_level="high", **kw):
+    defaults = dict(
+        approval_id=approval_id,
+        risk_level=risk_level,
+        created_at=datetime(2026, 8, 22, 10, 0, tzinfo=timezone.utc),
+        title="Send the term sheet reply",
+    )
+    defaults.update(kw)
+    return SimpleNamespace(**defaults)
+
+
+async def test_a_briefing_is_a_briefing_frame():
+    units = await briefing_units(_DB([_briefing()]), workspace_id="ws_1", user_id="usr_1")
+    assert units[0].frame.kind == "briefing"
+    assert units[0].frame.key == "muldro:briefing:brf_01A"
+
+
+async def test_a_markdown_briefing_headline_is_neutralized_not_dropped():
+    units = await briefing_units(
+        _DB([_briefing(headline="**Three** things")]), workspace_id="ws_1", user_id="usr_1"
+    )
+    assert units[0].frame.headline == "Three things"
+
+
+async def test_no_briefing_yields_no_unit():
+    assert await briefing_units(_DB([]), workspace_id="ws_1", user_id="usr_1") == []
+
+
+async def test_prepared_work_is_a_singleton_keyed_on_the_workspace():
+    unit = await prepared_work_unit(_DB([_approval()]), workspace_id="ws_1", user_id="usr_1")
+    assert unit is not None
+    assert unit.frame.key == "muldro:prepared_work:ws_1"
+    assert unit.frame.status == "needs_you"
+
+
+async def test_prepared_work_counts_what_is_waiting():
+    unit = await prepared_work_unit(
+        _DB([_approval("a"), _approval("b")]), workspace_id="ws_1", user_id="usr_1"
+    )
+    assert unit.frame.event_count == 2
+
+
+async def test_an_empty_queue_is_absent_rather_than_a_card_announcing_idleness():
+    assert await prepared_work_unit(_DB([]), workspace_id="ws_1", user_id="usr_1") is None
+
+
+async def test_prepared_work_offers_a_code_authored_affordance():
+    """spec §10 invariant 5: an affordance names a real capability, labelled in code."""
+    unit = await prepared_work_unit(_DB([_approval()]), workspace_id="ws_1", user_id="usr_1")
+    assert [a.capability for a in unit.frame.affordances] == ["internal.approve_action"]
+    assert unit.frame.affordances[0].label == "Review"
+
+
+async def test_failing_sources_become_one_record_unit_with_a_real_key():
+    """`rec_{i}` was defect 6's own example of an id that resolves to nothing."""
+    state = SimpleNamespace(source="gmail", circuit_state="open")
+    unit = await connector_health_unit(_DB([state]), workspace_id="ws_1")
+    assert unit is not None
+    assert unit.frame.key == "muldro:connector_health:ws_1"
+    assert unit.frame.kind == "record"
+    assert unit.frame.status == "failed"
+
+
+async def test_healthy_connectors_produce_no_card():
+    assert await connector_health_unit(_DB([]), workspace_id="ws_1") is None

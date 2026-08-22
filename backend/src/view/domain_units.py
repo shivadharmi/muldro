@@ -28,7 +28,16 @@ from src.view.frame import frame_for_row
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["FAILED_RUN_WINDOW_HOURS", "MAX_RUN_UNITS", "run_headline", "run_unit", "run_units"]
+__all__ = [
+    "FAILED_RUN_WINDOW_HOURS",
+    "MAX_RUN_UNITS",
+    "briefing_units",
+    "connector_health_unit",
+    "prepared_work_unit",
+    "run_headline",
+    "run_unit",
+    "run_units",
+]
 
 # A failed run is worth the founder's attention for a day; after that it is
 # history, and `/history` is where history lives.
@@ -145,3 +154,151 @@ async def run_units(db: Any, *, workspace_id: str, now: datetime) -> list[Unit]:
         if unit is not None:
             units.append(unit)
     return units
+
+
+# The queue card counts up to this many rows; beyond it the count reads "N+".
+PREPARED_QUEUE_LIMIT = 25
+
+
+async def briefing_units(db: Any, *, workspace_id: str, user_id: str) -> list[Unit]:
+    """The most recent briefing, as one `briefing` Unit. At most one."""
+    from src.models.briefings import Briefing
+
+    try:
+        result = await db.execute(
+            select(Briefing)
+            .where(Briefing.workspace_id == workspace_id, Briefing.user_id == user_id)
+            .order_by(Briefing.briefing_date.desc(), Briefing.created_at.desc())
+            .limit(1)
+        )
+        rows = list(result.scalars().all())
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("feed_briefing_read_failed workspace=%s error=%s", workspace_id, exc)
+        return []
+    if not rows:
+        return []
+
+    briefing = rows[0]
+    try:
+        frame = frame_for_row(
+            source="muldro",
+            entity_type="briefing",
+            entity_id=briefing.briefing_id,
+            kind="briefing",
+            status="new",
+            headline=getattr(briefing, "headline", "") or "",
+            occurred_at=getattr(briefing, "created_at", None),
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("feed_briefing_unit_failed id=%s error=%s", briefing.briefing_id, exc)
+        return []
+    # `full_text` is the briefing's own model-authored prose: it IS a body, in
+    # the one place a body already exists before spec step 2b writes them.
+    return [Unit(frame=frame, body=getattr(briefing, "full_text", "") or "", quotes=())]
+
+
+async def prepared_work_unit(db: Any, *, workspace_id: str, user_id: str) -> Unit | None:
+    """The standing review queue, or None when nothing is waiting.
+
+    None rather than an empty card: an idle queue should be ABSENT from the
+    workspace, not a card announcing idleness.
+
+    This Unit is load-bearing. CLAUDE.md: the prepared-work queue is the only
+    place a prepared action can be acted on. Its `Review` affordance is what
+    opens `UnitDetail`'s queue block (Task 12) once `SurfaceDetailModal` and
+    its `queue` tab are gone.
+
+    The affordance names `internal.approve_action` because that is the only
+    approval capability CAPABILITY_CATALOG carries — there is no read-side
+    `internal.list_approvals`, and spec §10 invariant 5 forbids inventing one:
+    an affordance whose capability does not resolve is not rendered at all.
+    """
+    from src.deep_runtime.middleware.approval_persistence import PREPARED_APPROVAL_TYPE
+    from src.models.approvals import Approval
+    from src.view.contracts import Affordance
+
+    try:
+        result = await db.execute(
+            select(Approval)
+            .where(
+                Approval.workspace_id == workspace_id,
+                Approval.user_id == user_id,
+                Approval.approval_type == PREPARED_APPROVAL_TYPE,
+                Approval.status == "pending",
+            )
+            .order_by(Approval.created_at.desc())
+            .limit(PREPARED_QUEUE_LIMIT)
+        )
+        rows = list(result.scalars().all())
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("feed_prepared_read_failed workspace=%s error=%s", workspace_id, exc)
+        return None
+    if not rows:
+        return None
+
+    count = len(rows)
+    noun = "action" if count == 1 else "actions"
+    capped = "+" if count >= PREPARED_QUEUE_LIMIT else ""
+    try:
+        frame = frame_for_row(
+            source="muldro",
+            entity_type="prepared_work",
+            entity_id=workspace_id,
+            kind="proposal",
+            status="needs_you",
+            headline=f"{count}{capped} {noun} prepared for your review",
+            occurred_at=getattr(rows[0], "created_at", None),
+            event_count=count,
+            affordances=[
+                Affordance(capability="internal.approve_action", label="Review", variant="primary")
+            ],
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("feed_prepared_unit_failed workspace=%s error=%s", workspace_id, exc)
+        return None
+    return Unit(frame=frame, body="", quotes=())
+
+
+async def connector_health_unit(db: Any, *, workspace_id: str) -> Unit | None:
+    """One `record` Unit when sources are failing, else None.
+
+    Replaces `_build_recommendation_surfaces`, whose only real output was this
+    and whose `rec_{i}` ids are spec §1 defect 6's own example of an id that
+    resolves to nothing. The information keeps a real, deterministic key.
+    """
+    from src.models.perception_state import PerceptionState
+
+    try:
+        result = await db.execute(
+            select(PerceptionState)
+            .where(
+                PerceptionState.workspace_id == workspace_id,
+                PerceptionState.circuit_state == "open",
+            )
+            .limit(10)
+        )
+        rows = list(result.scalars().all())
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("feed_connector_health_failed workspace=%s error=%s", workspace_id, exc)
+        return None
+    if not rows:
+        return None
+
+    sources = sorted({str(getattr(r, "source", "")) for r in rows if getattr(r, "source", "")})
+    count = len(sources)
+    noun = "source" if count == 1 else "sources"
+    try:
+        frame = frame_for_row(
+            source="muldro",
+            entity_type="connector_health",
+            entity_id=workspace_id,
+            kind="record",
+            status="failed",
+            headline=f"{count} data {noun} not responding: {', '.join(sources)}",
+            occurred_at=None,
+            event_count=max(1, count),
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("feed_connector_health_unit_failed error=%s", exc)
+        return None
+    return Unit(frame=frame, body="", quotes=())
