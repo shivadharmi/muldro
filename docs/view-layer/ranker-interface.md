@@ -106,7 +106,12 @@ class Counterparty(BaseModel):
 
     known: bool                      # EntityAlias hit on email/handle — a lookup
     relationship: str | None = None  # EntityRelationship.relation_type
-    prior_threads: int = 0           # distinct entity_ids seen from this counterparty
+    # None, never 0. `actor_entities` is unindexed JSONB, so a real count is a
+    # sequential scan per counterparty per refresh, and Entity.source_refs caps
+    # its event ids at 20 — a systematic under-count. A `0` on a known
+    # counterparty asserts "you have never corresponded", which is the same
+    # failure `you_replied=False` would be. Absent means absent.
+    prior_threads: int | None = None
     interaction_count: int = 0       # Entity.interaction_count
     days_since_last_seen: int | None = None
 
@@ -170,9 +175,49 @@ async def rank_with_model(
     """
 ```
 
-`build_features(units, *, db, workspace_id) -> list[RankFeatures]` does the I/O and is the only
-place the DB is touched, keeping `rank()` a pure function over a record — which is what makes it
-testable against ordering cases rather than eyeballed.
+`build_features(units, *, db, workspace_id, user_id, now, events_by_key=None)` does the I/O and is
+the only place the DB is touched, keeping `rank()` a pure function over a record — which is what
+makes it testable against ordering cases rather than eyeballed.
+
+Three arguments beyond the obvious, each forced by a real fact:
+
+- **`user_id`** — the thread-count index is `(user_id, source, entity_id)`.
+- **`now`** — for the same reason `extract_deadline` requires it: a function that reads the clock
+  cannot be tested deterministically.
+- **`events_by_key`** — three features rest on facts that live on the *event*, not the frame: the
+  counterparty's strong identifier, the triage provenance flag, and the event type. Keyed by
+  `frame.key`, which is what `perception.group_events_by_key` already returns. **Optional**: absent
+  it, those three degrade to neutral values, never to a guess.
+
+**Deadline text is read from `unit.quotes`, not from a second copy of the verbatim map.** A `Quote`
+is built from exactly the field `VERBATIM_TEXT_FIELD` names and is the only route external text
+takes into the view layer, so this keeps **one** per-source verbatim map in the codebase instead of
+two that can disagree. Two consequences, both fail-closed and both deliberate: an *unattributed*
+message contributes no quote and therefore no deadline, and `MAX_QUOTES` caps the scan at the three
+newest messages of a poll — an older message's deadline is not seen. Both cost a signal rather than
+opening a hole.
+
+### The weights
+
+Every positive term is normalised to `[0,1]` and scaled, so each constant reads directly as relative
+importance. `spec.md` §13 leaves the numbers open; these are the starting point, not a measurement.
+
+| term | weight | shape |
+|---|---|---|
+| deadline | 3.0 | linear ramp — `1.0` due today, `0.0` at 14 days |
+| goal match | 2.0 | graph-join hit |
+| recency | 2.0 | linear decay over 72h |
+| unresolved affordance | 1.5 | a decision literally waiting |
+| counterparty | 1.5 | known · relationship · saturating `interaction_count` · seen-within-7-days |
+| `you_replied` | 1.5 | reserved; `None` and `False` both score 0 |
+| thread depth | 0.75 | saturates at 10 messages — volume is not importance |
+| bulk mail | **−2.5** | rules-origin only |
+| engagement | **−2.0 × penalty** | demotion only |
+
+The two demotions are **subtracted**, so the sign itself is the guarantee that engagement can never
+promote — §6.2's self-sealing loop closed by arithmetic rather than by a rule someone must remember.
+Ties break on `(-score, age_hours, key)`, which is total, so no dict or set iteration order can leak
+into the output.
 
 ### Why a permutation is checkable where a score is not
 
