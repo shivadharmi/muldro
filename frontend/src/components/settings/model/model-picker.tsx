@@ -3,8 +3,21 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 
 import type { CatalogModel, CatalogProvider, ProviderStatus } from "@/lib/types";
+import { btn } from "../controls";
+import { useFocusTrap } from "../hooks/use-focus-trap";
 import { CheckIcon, SearchIcon } from "../icons";
 import { useOverlayClaim } from "../overlay-context";
+import {
+  buildGroups,
+  connectedProviders,
+  costLabel,
+  formatContext,
+  queryTerms,
+  sentenceCase,
+  thinkingLabel,
+  unconnectedLabel,
+  type Row,
+} from "./model-picker-catalog";
 
 /** §9.3 `kbd` — picker only. */
 const KBD_CLASS =
@@ -19,111 +32,12 @@ const TCHIP_CLASS =
 /** The metadata columns. Fixed widths, so the numbers line up down the list. */
 const COL_CLASS = "shrink-0 text-right text-[11.5px] tabular-nums";
 
-const FOCUSABLE_SELECTOR =
-  'a[href],button:not([disabled]),input:not([disabled]),[tabindex]:not([tabindex="-1"])';
-
 function Kbd({ children }: { children: string }) {
   return <kbd className={KBD_CLASS}>{children}</kbd>;
 }
 
-/** Sentence case, per **A3** — nothing on screen may be a raw slug. */
-const sentenceCase = (slug: string): string =>
-  slug.charAt(0).toUpperCase() + slug.slice(1);
-
-/** `thinking_style` is a provider-shaped slug; the row needs the *behaviour*,
- *  and the provider has its own column. Unknown styles are humanised (**A3**). */
-const THINKING_LABELS: Record<string, string> = {
-  anthropic_adaptive: "Adaptive",
-  anthropic_legacy: "Budgeted",
-  openai_effort: "Effort",
-  gemini: "Thinking",
-  none: "No thinking",
-};
-
-const thinkingLabel = (style: string): string =>
-  THINKING_LABELS[style] ?? sentenceCase(style.replace(/_/g, " ").trim());
-
-/** 200000 → `200K`. The unit is what makes the 52px column legible. */
-function formatContext(tokens: number): string {
-  if (tokens >= 1_000_000) return `${Math.round((tokens / 1_000_000) * 10) / 10}M`;
-  if (tokens >= 1_000) return `${Math.round(tokens / 1_000)}K`;
-  return String(tokens);
-}
-
-/** Per-1k stored, per-Mtok shown, so ×1000 — rounded, because `0.005 * 1000`
- *  is not exactly 5 in binary floating point. */
-const usdPerMtok = (perThousand: number): string =>
-  `$${Math.round(perThousand * 1000 * 100) / 100}`;
-
-const costLabel = (m: CatalogModel): string =>
-  `${usdPerMtok(m.input_cost_per_1k)} / ${usdPerMtok(m.output_cost_per_1k)}`;
-
-/** Searchable text. Numeric facts go in twice — formatted *and* raw — so
- *  `"200k"` and `"200000"` both find the same model. */
-function haystack(m: CatalogModel, providerName: string): string {
-  const parts = [m.display_name, providerName, thinkingLabel(m.thinking_style),
-    formatContext(m.context_window), m.context_window, costLabel(m)];
-  return parts.join(" ").toLowerCase();
-}
-
-/** Every term must match, not the whole query as one string: a concatenated
- *  `includes` fails on `"anthropic sonnet"` — never adjacent in one field. */
-const matchesQuery = (hay: string, terms: readonly string[]): boolean =>
-  terms.every((term) => hay.includes(term));
-
-interface Row {
-  /** Unique per RENDERED row — a suggested model repeats in its provider's
-   *  group, so a bare `model_id` collides and breaks `aria-activedescendant`. */
-  id: string;
-  model: CatalogModel;
-  providerName: string;
-}
-
-interface Group {
-  key: string;
-  title: string;
-  /** Only "Suggested" crosses providers, so only it earns the provider column. */
-  crossProvider: boolean;
-  rows: Row[];
-}
-
-function buildGroups(
-  uid: string, models: readonly CatalogModel[], providers: readonly CatalogProvider[],
-  connected: ReadonlySet<string>, tier: string, terms: readonly string[],
-): Group[] {
-  // No catalog entry means no display name, and **A3** forbids the slug.
-  const nameOf = (slug: string): string =>
-    providers.find((p) => p.provider === slug)?.display_name ??
-    sentenceCase(slug.replace(/_/g, " "));
-
-  // Only connected providers are offered — binding a tier to one with no
-  // credential is §9.6's broken state. They are not hidden: the footer counts
-  // them and routes to the Providers tab, which is the point of the footer.
-  const visible = models.filter(
-    (m) =>
-      connected.has(m.provider) && matchesQuery(haystack(m, nameOf(m.provider)), terms),
-  );
-  const rowsOf = (key: string, subset: readonly CatalogModel[]): Row[] =>
-    subset.map((model) => ({
-      id: `${uid}-${key}-${model.provider}-${model.model_id}`,
-      model,
-      providerName: nameOf(model.provider),
-    }));
-
-  const groups: Group[] = [];
-  const suggested = visible.filter((m) => m.suggested_tier === tier);
-  if (suggested.length > 0) {
-    groups.push({ key: "suggested", title: `Suggested for ${sentenceCase(tier)}`,
-      crossProvider: true, rows: rowsOf("suggested", suggested) });
-  }
-  for (const { provider, display_name } of providers) {
-    if (!connected.has(provider)) continue;
-    const rows = rowsOf(provider, visible.filter((m) => m.provider === provider));
-    if (rows.length === 0) continue;
-    groups.push({ key: provider, title: display_name, crossProvider: false, rows });
-  }
-  return groups;
-}
+const isBound = (row: Row, provider: string | null, id: string | null): boolean =>
+  row.model.provider === provider && row.model.model_id === id;
 
 export interface ModelPickerProps {
   open: boolean;
@@ -163,38 +77,51 @@ function PickerPanel(props: ModelPickerProps) {
   const uid = useId();
   const listId = `${uid}-list`;
   const inputRef = useRef<HTMLInputElement | null>(null);
-  const panelRef = useRef<HTMLDivElement | null>(null);
+  const wrapperRef = useRef<HTMLDivElement | null>(null);
+  // The shared trap, not a private copy: it carries the fixed focusable
+  // selector, document-order resolution for a focused non-stop, the visibility
+  // filter, and the capture → isolate → focus / release → restore ordering that
+  // `use-focus-trap.ts` documents as load-bearing. `isolate` is the WRAPPER so
+  // the backdrop stays clickable while everything outside goes `inert` — which
+  // is what earns the `aria-modal` below rather than merely asserting it.
+  const panelRef = useFocusTrap<HTMLDivElement>({ isolate: wrapperRef });
   const [query, setQuery] = useState("");
-  const [active, setActive] = useState(0);
 
-  const connected = useMemo(
-    () => new Set(providerStatuses.filter((s) => s.configured).map((s) => s.provider)),
-    [providerStatuses],
-  );
-  const terms = useMemo(() => query.toLowerCase().split(/\s+/).filter(Boolean), [query]);
+  const connected = useMemo(() => connectedProviders(providerStatuses), [providerStatuses]);
+  const terms = useMemo(() => queryTerms(query), [query]);
   const groups = useMemo(
     () => buildGroups(uid, models, providers, connected, tier, terms),
     [uid, models, providers, connected, tier, terms],
   );
   const rows = useMemo(() => groups.flatMap((g) => g.rows), [groups]);
+  // The index each group's first row occupies in `rows`, so a row can be handed
+  // its own position instead of scanning for it on every `mousemove`.
+  const offsets = useMemo(
+    () => groups.map((_, i) => groups.slice(0, i).reduce((n, g) => n + g.rows.length, 0)),
+    [groups],
+  );
+
+  // Opens ON the bound model, not at the top: reopening a bound tier should put
+  // the cursor where the check already is. Declared after the memos on purpose
+  // — a lazy initialiser may read them, and this way the first cursor is
+  // computed once from the unfiltered list rather than fixed up in an effect.
+  const [active, setActive] = useState(() => {
+    const bound = rows.findIndex((r) => isBound(r, selectedProvider, selectedModelId));
+    return bound < 0 ? 0 : bound;
+  });
 
   // CLAMPED during render, never corrected in an effect: a filter that shrinks
   // the list must not schedule a second pass to fix the cursor it broke.
   const activeIndex = rows.length === 0 ? -1 : Math.min(active, rows.length - 1);
   const activeId = activeIndex >= 0 ? rows[activeIndex].id : undefined;
-  const unconnected = providers.filter((p) => !connected.has(p.provider)).length;
+  const notConnected = unconnectedLabel(providers, connected);
   const tierName = sentenceCase(tier);
 
-  // Focus in on mount, and back to the invoking Model control on close.
-  // Restored HERE, not by the parent: `onClose` fires for Escape, a backdrop
-  // click and a selection alike, so every tier card would else re-derive which
-  // control opened us. Capture must read `activeElement` before we move focus.
+  // The trap focuses the panel; this puts the caret in the search field. Runs
+  // second because `useFocusTrap` was called first, and a component's effects
+  // fire in the order their hooks ran.
   useEffect(() => {
-    const previous = document.activeElement;
-    const restore =
-      previous instanceof HTMLElement && previous !== document.body ? previous : null;
     inputRef.current?.focus();
-    return () => restore?.focus();
   }, []);
 
   // Keep the cursor visible past the fold. jsdom has no `scrollIntoView`.
@@ -208,55 +135,79 @@ function PickerPanel(props: ModelPickerProps) {
     onClose();
   };
 
-  // Our own trap: `paused` RELEASES the keyboard rather than handing it over,
-  // so an overlay that claims the lease must ship one.
-  const trapTab = (event: React.KeyboardEvent) => {
-    const panel = panelRef.current;
-    if (!panel) return;
-    const items = Array.from(panel.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR));
-    if (items.length === 0) return;
-    const current = document.activeElement;
-    const index = current instanceof HTMLElement ? items.indexOf(current) : -1;
-    if (event.shiftKey && index <= 0) {
-      event.preventDefault();
-      items[items.length - 1].focus();
-    } else if (!event.shiftKey && index === items.length - 1) {
-      event.preventDefault();
-      items[0].focus();
-    }
-  };
-
-  const onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
-    if (event.key === "Escape") {
-      // Load-bearing: the shell closes the WHOLE dialog on an unhandled Esc.
-      event.preventDefault();
-      onClose();
-    } else if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-      event.preventDefault();
-      if (rows.length === 0) return;
-      const step = event.key === "ArrowDown" ? 1 : -1;
-      setActive((rows.length + activeIndex + step) % rows.length);
-    } else if (event.key === "Enter") {
-      event.preventDefault();
-      if (activeIndex >= 0) choose(rows[activeIndex].model);
-    } else if (event.key === "Tab") {
-      trapTab(event);
-    }
-  };
+  /**
+   * Keys are read at the DOCUMENT, in the CAPTURE phase. Both halves are load-bearing.
+   *
+   * At the document, because a React handler on the panel only fires while
+   * focus is inside the React root: one click on a group header, on whitespace
+   * or on the scrollbar blurs the input to `<body>`, and from there Escape
+   * never reached this handler, never called `preventDefault()`, and
+   * `settings-modal.tsx` — which closes on any Escape it sees unhandled — tore
+   * down the whole dialog and every unsaved binding edit.
+   *
+   * In the capture phase, because the shell's own Escape listener is also on
+   * `document` and was registered FIRST (it mounts with the dialog, we mount
+   * later). Same node, same phase means registration order, so a bubble-phase
+   * listener here would run after the shell had already closed everything.
+   */
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      // Arrow keys and Enter belong to the LIST, and only the input is in the
+      // list. Unscoped, Enter on the footer button suppressed its activation
+      // and rebound the tier to whatever row the cursor sat on instead.
+      const inList = event.target === inputRef.current;
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onClose();
+      } else if (inList && (event.key === "ArrowDown" || event.key === "ArrowUp")) {
+        event.preventDefault();
+        if (rows.length === 0) return;
+        const step = event.key === "ArrowDown" ? 1 : -1;
+        setActive((rows.length + activeIndex + step) % rows.length);
+      } else if (inList && event.key === "Enter") {
+        event.preventDefault();
+        if (activeIndex >= 0) {
+          onSelect(rows[activeIndex].model);
+          onClose();
+        }
+      }
+      // Tab is the shared trap's, on its own document listener.
+    };
+    // Re-registered whenever the list or cursor moves rather than reading them
+    // through refs — a ref written during render is a render side effect, and
+    // add/removeEventListener is cheaper than the bug that buys.
+    document.addEventListener("keydown", onKeyDown, true);
+    return () => document.removeEventListener("keydown", onKeyDown, true);
+  }, [rows, activeIndex, onSelect, onClose]);
 
   return (
-    <div className="fixed inset-0 z-[60]">
-      <div className="absolute inset-0 bg-surface-0/55" onClick={onClose} />
+    <div ref={wrapperRef} className="fixed inset-0 z-[60]">
+      {/* Inside the isolate root, so it is never a marked sibling — an `inert`
+          backdrop swallows its own onClick and click-outside dies silently. */}
+      <div
+        data-testid="model-picker-backdrop"
+        className="absolute inset-0 bg-surface-0/55"
+        onClick={onClose}
+      />
       <div
         ref={panelRef}
+        tabIndex={-1}
         role="dialog"
         aria-modal="true"
         aria-label={`Choose a model for the ${tierName} tier`}
-        onKeyDown={onKeyDown}
+        // Keep the caret in the search field. A mousedown on a header, on
+        // whitespace or on the scrollbar otherwise blurs to `<body>` and the
+        // list stops answering ↑/↓ and ↵ until something is refocused.
+        onMouseDown={(event) => {
+          const target = event.target;
+          if (target instanceof HTMLElement && !target.closest("input,button")) {
+            event.preventDefault();
+          }
+        }}
         className={
           "absolute inset-0 flex flex-col overflow-hidden bg-surface-1 border border-b-strong " +
-          "shadow-[0_24px_60px_rgba(0,0,0,.55)] sm:inset-auto sm:left-1/2 sm:top-[78px] " +
-          "sm:h-auto sm:w-[560px] sm:-translate-x-1/2 sm:rounded-[14px]"
+          "shadow-[0_24px_60px_rgba(0,0,0,.55)] outline-none sm:inset-auto sm:left-1/2 " +
+          "sm:top-[78px] sm:h-auto sm:w-[560px] sm:-translate-x-1/2 sm:rounded-[14px]"
         }
       >
         <div className="flex shrink-0 items-center gap-[11px] border-b border-b-secondary px-4 py-[14px]">
@@ -282,38 +233,40 @@ function PickerPanel(props: ModelPickerProps) {
           <span className="shrink-0 text-[11px] text-t-muted">{tierName}</span>
           <Kbd>esc</Kbd>
         </div>
+        {rows.length === 0 && (
+          // Outside the listbox: it is neither an option nor a group, and a
+          // listbox whose only child is prose announces as a broken list.
+          <p role="status" className="px-4 py-[18px] text-[13px] text-t-muted">
+            No models match.
+          </p>
+        )}
         <div
           id={listId}
           role="listbox"
           aria-label={`Models for ${tierName}`}
           className="min-h-0 flex-1 overflow-y-auto sm:max-h-[474px] sm:flex-none"
         >
-          {rows.length === 0 && (
-            <p className="px-4 py-[18px] text-[13px] text-t-muted">No models match.</p>
-          )}
-          {groups.map((group) => (
+          {groups.map((group, groupIndex) => (
             <div key={group.key} role="group" aria-label={group.title}>
               <div className="flex items-center gap-2 px-4 pb-[6px] pt-[11px]">
-                <span className="text-[10px] uppercase tracking-[.08em] text-t-muted">
+                <span className="text-[10px] font-medium uppercase tracking-[.08em] text-t-muted">
                   {group.title}
                 </span>
                 <span aria-hidden="true" className="h-px flex-1 bg-b-secondary" />
-                <span className="text-[11px] text-t-muted">
+                <span className="text-[11px] tabular-nums text-t-muted">
                   {group.rows.length} {group.rows.length === 1 ? "model" : "models"}
                 </span>
               </div>
-              {group.rows.map((row) => (
+              {group.rows.map((row, rowIndex) => (
                 <ModelRow
                   key={row.id}
                   row={row}
+                  index={offsets[groupIndex] + rowIndex}
                   showProvider={group.crossProvider}
-                  selected={
-                    row.model.provider === selectedProvider &&
-                    row.model.model_id === selectedModelId
-                  }
+                  selected={isBound(row, selectedProvider, selectedModelId)}
                   active={row.id === activeId}
-                  onChoose={() => choose(row.model)}
-                  onHover={() => setActive(rows.findIndex((r) => r.id === row.id))}
+                  onChoose={choose}
+                  onHover={setActive}
                 />
               ))}
             </div>
@@ -325,20 +278,12 @@ function PickerPanel(props: ModelPickerProps) {
             <Kbd>↵</Kbd> <span>select</span>
           </div>
           <div className="ml-auto flex items-center gap-[10px]">
-            {unconnected > 0 && (
-              <span className="text-right text-[11.5px] text-t-secondary">
-                {unconnected} {unconnected === 1 ? "provider" : "providers"} not connected
+            {notConnected && (
+              <span className="text-right text-[11.5px] tabular-nums text-t-secondary">
+                {notConnected}
               </span>
             )}
-            <button
-              type="button"
-              onClick={onBrowseProviders}
-              className={
-                "h-[44px] shrink-0 rounded-[var(--radius-md)] bg-j-primary px-[12px] " +
-                "text-[13px] font-medium text-j-primary-fg transition-colors " +
-                "hover:bg-j-primary-hover cursor-pointer sm:h-[30px]"
-              }
-            >
+            <button type="button" onClick={onBrowseProviders} className={btn({ size: "sm", variant: "primary" })}>
               Browse all providers
             </button>
           </div>
@@ -350,16 +295,19 @@ function PickerPanel(props: ModelPickerProps) {
 
 interface ModelRowProps {
   row: Row;
+  /** This row's position in the flattened list — handed down rather than
+   *  re-derived, because `onMouseMove` fires on every pixel of travel. */
+  index: number;
   showProvider: boolean;
   /** `selected` is the BOUND model — check glyph and 2px rule. `active` is the
    *  keyboard cursor, reported through `aria-activedescendant`, not selection. */
   selected: boolean;
   active: boolean;
-  onChoose: () => void;
-  onHover: () => void;
+  onChoose: (model: CatalogModel) => void;
+  onHover: (index: number) => void;
 }
 
-function ModelRow({ row, showProvider, selected, active, onChoose, onHover }: ModelRowProps) {
+function ModelRow({ row, index, showProvider, selected, active, onChoose, onHover }: ModelRowProps) {
   const { model } = row;
   // 1M+ context is the ONE place colour marks a value rather than a state.
   const wide = model.context_window >= 1_000_000;
@@ -372,9 +320,12 @@ function ModelRow({ row, showProvider, selected, active, onChoose, onHover }: Mo
       id={row.id}
       role="option"
       aria-selected={selected}
-      onClick={onChoose}
-      onMouseMove={onHover}
-      className={`flex cursor-pointer items-center gap-3 py-[9px] pr-4 text-[13.5px] ${fill} ${edge}`}
+      onClick={() => onChoose(model)}
+      onMouseMove={() => onHover(index)}
+      // §9.9 fixes the row at `9px` vertical, which is a 36px target — under
+      // §9.10's 44px minimum for the one act this whole surface exists for.
+      // Padded to 44px below `sm` only; the desktop row is §9.9's to the pixel.
+      className={`flex cursor-pointer items-center gap-3 py-[12px] pr-4 text-[13.5px] sm:py-[9px] ${fill} ${edge}`}
     >
       {selected ? (
         <CheckIcon size={13} className="text-j-primary" />
