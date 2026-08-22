@@ -867,7 +867,7 @@ The modal behind dims with `bg-surface-0/55`. On mobile the palette is a full sh
 | Search row | padding `14px 16px`, `gap-[11px]`, `border-b border-b-secondary`; 15px glyph; 15px `t-muted` placeholder "Search models by name, provider, context or price"; right: active tier name (11px `t-muted`) and an `esc` `kbd` |
 | Results | `max-height: 474px`, scrolls |
 | Group header | `grouphdr`: 10px uppercase `t-muted`, padding `11px 16px 6px`, `flex gap-2`, trailing 1px hairline, optional right-aligned "N models" (11px, sentence case) |
-| Row (`mrow`) | `flex items-center gap-3`, padding `9px 16px`, 13.5px |
+| Row (`mrow`) | `flex items-center gap-3`, padding `9px 16px` desktop / **`12px 16px` below `sm`**, 13.5px |
 | Row — selected | `bg-j-primary-soft`, **2px left border** `j-primary`, `padding-left: 14px`, leading 13px check glyph in `j-primary`, name at weight 500 |
 | Row — unselected | `padding-left: 16px` plus a 13px leading spacer, so names align with the selected row |
 
@@ -881,9 +881,20 @@ Sections in order: **Suggested for {tier}** (from `suggested_tier`), then one gr
 connected provider in catalog order.
 
 **Footer:** `border-t border-b-secondary`, `bg-surface-2/60`, padding `9px 16px`. Left:
-`↑` `↓` kbd "navigate", `↵` kbd "select". Right: "N providers not connected" (11.5px
-`t-secondary`) and a `Browse all providers` primary `sm` button switching to the
-Providers tab.
+`↑` `↓` kbd "navigate", `↵` kbd "select". Right: **"N providers not connected: X, Y"** —
+naming up to two, then `+N more` (11.5px `t-secondary`) — and a `Browse all providers`
+primary `sm` button switching to the Providers tab.
+
+> **Amended during implementation.** This section originally read "N providers not
+> connected" with no names, and gave the row a flat `9px 16px`. Both were corrected against
+> other sections of this same spec rather than against taste:
+> - **Naming** serves §4.7's own stated purpose — unconnected providers are "surfaced, not
+>   filtered out of existence … the prerequisite is invisible until it fails". A bare count
+>   still leaves the founder unable to learn *which* model they are missing.
+> - **12px rows below `sm`** follow §9.10, whose mobile table is uniformly 44px targets.
+>   Choosing a model is the single act this surface exists for; a 36px target for it on a
+>   phone is not a case where "§9.10 lists controls, not rows" should win. Desktop keeps
+>   §9.9's 9px to the pixel.
 
 Keyboard: `↑`/`↓` move, `↵` selects, `Esc` closes without changing the binding, typing
 filters. `role="listbox"` with `aria-activedescendant` on the input (**A3**).
