@@ -61,6 +61,12 @@ const BEDROCK = catalogProvider("bedrock", [
   field({ key: "secret_access_key", label: "Secret Key", kind: "secret", required: true }),
 ]);
 
+const AZURE = catalogProvider("azure", [
+  field({ key: "endpoint", label: "Endpoint", kind: "url", required: true }),
+  field({ key: "deployment", label: "Deployment", kind: "text", required: false }),
+  field({ key: "api_key", label: "API Key", kind: "secret", required: true }),
+]);
+
 test("a keyless provider renders exactly its declared field and no password input", () => {
   const { container } = render(
     <ProviderCredentialForm provider={OLLAMA} status={null} busy={false} onSubmit={vi.fn()} />,
@@ -330,7 +336,10 @@ test("buildCredentialFields splits top-level keys from extra_config", () => {
   ).toEqual({ extra_config: { region: "us-east-1", access_key_id: "AKIA1" } });
 });
 
-test("buildCredentialFields omits a blank secret and nulls a blank base_url", () => {
+test("buildCredentialFields omits a blank secret and nulls a blank non-secret", () => {
+  // The server merges extra_config per key, so the two blanks must differ: a
+  // secret was rendered empty (blank = keep), a non-secret was PRE-FILLED
+  // (blank = the founder cleared it). Omitting the latter left it unclearable.
   expect(
     buildCredentialFields(ANTHROPIC.credential_fields, { api_key: "", base_url: "" }),
   ).toEqual({ base_url: null });
@@ -340,7 +349,31 @@ test("buildCredentialFields omits a blank secret and nulls a blank base_url", ()
       access_key_id: "",
       secret_access_key: "",
     }),
-  ).toEqual({});
+  ).toEqual({ extra_config: { region: null, access_key_id: null } });
+});
+
+test("blanking an optional pre-filled extra field clears it while a blank secret is kept", async () => {
+  const onSubmit = vi.fn().mockResolvedValue(undefined);
+  render(
+    <ProviderCredentialForm
+      provider={AZURE}
+      status={providerStatus({
+        provider: "azure",
+        configured: true,
+        source: "workspace",
+        extra_config_public: { endpoint: "https://x.openai.azure.com", deployment: "gpt4o" },
+      })}
+      busy={false}
+      onSubmit={onSubmit}
+    />,
+  );
+  await userEvent.clear(screen.getByLabelText("Deployment"));
+  await userEvent.click(screen.getByRole("button", { name: "Save & test" }));
+
+  // The secret is omitted (kept); the emptied public field is an explicit null.
+  expect(onSubmit.mock.calls[0][0]).toEqual({
+    extra_config: { endpoint: "https://x.openai.azure.com", deployment: null },
+  });
 });
 
 test("buildCredentialFields trims values", () => {

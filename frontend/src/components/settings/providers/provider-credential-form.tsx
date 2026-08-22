@@ -91,9 +91,15 @@ function deriveKey(provider: CatalogProvider, status: ProviderStatus | null): st
 /**
  * Fold the typed values into the request body. Exactly two field keys are
  * top-level — `api_key` and `base_url`; EVERY other declared field is a member
- * of `extra_config`. A blank secret is omitted entirely rather than sent as `""`
- * or `null`, which is what makes "leave blank to keep" true at the wire level —
- * the server merges `extra_config` per key, so an omitted key is retained.
+ * of `extra_config`.
+ *
+ * Blank means two different things, and the split is by `kind`, because the
+ * server merges `extra_config` per key (omitted keeps, explicit null deletes):
+ *   * a blank SECRET is omitted — it was rendered empty because its value can
+ *     never be read back, so blank is "keep the stored one", not "clear it";
+ *   * a blank non-secret is an explicit `null` — it was PRE-FILLED, so the
+ *     founder emptying it is a deliberate clear. Omitting it instead would make
+ *     the field unclearable. This is exactly what `base_url` already does.
  *
  * Values are trimmed. No provider's key, region, endpoint or deployment name may
  * carry surrounding whitespace, and trimming kills the commonest paste failure
@@ -114,8 +120,10 @@ export function buildCredentialFields(
       if (value) apiKey = value;
     } else if (field.key === "base_url") {
       baseUrl = value || null;
-    } else if (value) {
-      extra[field.key] = value;
+    } else if (field.kind === "secret") {
+      if (value) extra[field.key] = value;
+    } else {
+      extra[field.key] = value || null;
     }
   }
 
