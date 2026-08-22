@@ -8,7 +8,8 @@ attacker-controllable content (an email body, a Slack message). Feeding that str
 `permission_gate` PREPARE a confirmable write rather than block it. One click then stages —
 or in `auto` outright runs — an external write derived from text an attacker influenced.
 
-The structured `capability` and `action_input` are already carried on `SuggestedActionRef`.
+The structured `capability` and `action_input` are already carried on `SuggestedAction`
+(`src/services/relevance_assessor.py`).
 These tests pin that they are what executes, and that the prose never reaches the runtime.
 """
 

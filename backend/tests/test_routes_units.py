@@ -1,8 +1,8 @@
 """The unit feed route returns typed Units and nothing else.
 
-The old GET /v1/workspace/surfaces returned WorkspaceSurfacePush, whose
-`preview` and `detail_config` are typed `Any` — so nothing on the wire had a
-shape. A Unit is a frozen Pydantic model all the way down.
+The old GET /v1/workspace/surfaces returned a push model whose `preview` and
+`detail_config` were typed `Any` — so nothing on the wire had a shape. A Unit
+is a frozen Pydantic model all the way down.
 """
 
 from datetime import datetime, timezone

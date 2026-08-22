@@ -9,28 +9,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
-
-# The surface-kind taxonomy, inlined now that the component-tree module it used to
-# live beside is gone. It is wire vocabulary for rows already on disk, nothing more.
-SurfaceKind = Literal[
-    # System-managed (detail API exposed)
-    "run",  # unified execution run surface (replaces execution/plan/approval trio)
-    "summary",  # lightweight completion card emitted when a run finishes
-    "briefing",
-    "alert",
-    "recommendation",
-    "proactive_insight",
-    # The standing review queue for actions prepared on turns with no human present —
-    # the ONLY place a prepared action can be acted on.
-    "prepared_work",
-    # Agent-managed (inline children, no detail API)
-    "message",  # Presenter-authored rich response promoted to workspace feed
-    # Legacy kinds retained for rows already on disk. Nothing produces `plan` any
-    # more; `approval` is demoted-to-inline but its detail tabs are still used.
-    "plan",
-    "approval",
-]
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class AgentEnvelope(BaseModel):
@@ -237,7 +216,7 @@ class PolicyDecision(BaseModel):
     rejected_count: int = 0
 
 
-# ── Realtime / A2UI contracts ────────────────────────────────────
+# ── Realtime contracts ───────────────────────────────────────────
 
 
 class RealtimeEventPayload(BaseModel):
@@ -251,110 +230,6 @@ class RealtimeEventPayload(BaseModel):
     payload: dict[str, Any] = Field(default_factory=dict)
     metadata: dict[str, Any] = Field(default_factory=dict)
     created_at: str = ""
-
-
-class WorkspaceSurfacePush(BaseModel):
-    """Full surface push payload sent via WebSocket / Redis Pub/Sub.
-
-    Two-layer model: ``preview`` drives the workspace grid card,
-    ``detail_config`` tells the frontend which tabs to show in the
-    detail modal and where to fetch each tab's content.
-
-    The old ``children`` + ``WorkspaceSurfaceMetadata`` shape is removed —
-    grid cards render from preview data, not component trees.
-    """
-
-    model_config = ConfigDict(extra="ignore", frozen=True)
-
-    type: Literal["surface"] = "surface"
-    id: str
-    kind: SurfaceKind
-    preview: Any  # untyped on the wire; this model is a legacy response shell
-    detail_config: Any | None = None  # same
-    decision: str | None = None
-    source_run_id: str | None = None
-    response_preview: str | None = None
-    created_at: str = ""
-    ttl_hours: int = 24
-    # Merged from REST-only path
-    trust_context: dict[str, str] | None = None
-    insight_data: dict | None = None
-    phase: str | None = None
-    steps: list[dict] | None = None
-    current_step: str | None = None
-    progress: str | None = None
-    approval: dict | None = None
-    results: dict | None = None
-    surface_data: dict | None = None
-
-
-class SuggestedActionRef(BaseModel):
-    """Reference to a suggested action stored in the surface payload."""
-
-    model_config = ConfigDict(extra="ignore", frozen=True)
-
-    description: str
-    capability: str
-    action_input: dict[str, Any] = Field(default_factory=dict)
-    action_preview: str = ""
-
-
-class InsightSurfaceData(BaseModel):
-    """Data payload for proactive_insight surfaces, stored in UISurface.payload."""
-
-    model_config = ConfigDict(extra="ignore", frozen=True)
-
-    signal_source: str
-    signal_category: str = ""
-    signal_summary: str
-    relevance_score: float = 0.0
-    relevance_reasoning: str = ""
-    related_goals: list[str] = Field(default_factory=list)
-    suggested_actions: list[SuggestedActionRef] = Field(default_factory=list)
-    dismiss_available: bool = True
-    # Human-readable observation evidence, e.g. "42 days observed" / "4 recurrences".
-    # Rendered under the insight headline so the user sees why it surfaced.
-    evidence: str | None = None
-
-
-class SurfaceSpec(BaseModel):
-    """Surface specification produced by the Presenter agent.
-
-    The Presenter decides IF a surface should be created, what KIND it is,
-    and what PREVIEW data to show. Parsed from the Presenter's JSON output.
-    """
-
-    model_config = ConfigDict(extra="ignore", frozen=True)
-
-    should_surface: bool = False
-    kind: SurfaceKind
-    title: str
-    subtitle: str | None = None
-    status: (
-        Literal[
-            "pending",
-            "running",
-            "completed",
-            "failed",
-            "awaiting_approval",
-            "cancelled",
-            "proposal",
-        ]
-        | None
-    ) = None
-    priority: Literal["low", "medium", "high", "critical"] | None = None
-    metrics: list[dict] = Field(default_factory=list)
-    tags: list[str] = Field(default_factory=list)
-
-    @field_validator("title")
-    @classmethod
-    def _cap_title(cls, v: str) -> str:
-        return v[:80]
-
-    @field_validator("subtitle")
-    @classmethod
-    def _cap_subtitle(cls, v: str | None) -> str | None:
-        return v[:120] if v else None
 
 
 # ── Execution surface update contracts ────────────────────────────
@@ -464,11 +339,22 @@ class ResultSummary(BaseModel):
 
 
 class SurfaceUpdate(BaseModel):
-    """Live execution progress pushed to workspace surfaces.
+    """Live execution state for one autonomous run.
 
-    Published to Redis channel muldro:a2ui:{user_id} with
-    type='surface_update'. The frontend applies incremental
-    updates to the matching surface_id.
+    NOT a view-layer contract. This is the AUTONOMOUS path's phase machine —
+    emitted from graph_executor / dag_runner / trust_gate via
+    execution_surface_emitter, and never by the deep chat path, which emits no
+    phases at all. ``frontend/src/app/history/page.tsx`` renders it as the live
+    rows of the run history, so deleting this model would break /history.
+
+    Published to Redis channel muldro:a2ui:{user_id} with type='surface_update';
+    the frontend merges each frame into the run it names.
+
+    ``surface_id`` keeps its name even though it carries the RUN id (see
+    execution_surface_emitter's ``run_meta = {"run_id": surface_id}``). The name
+    is wire vocabulary the backend publishes and the frontend reads under; a
+    rename on one side alone would leave the two disagreeing about the same
+    message.
     """
 
     model_config = ConfigDict(extra="ignore", frozen=True)

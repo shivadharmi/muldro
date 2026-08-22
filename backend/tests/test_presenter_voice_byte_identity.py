@@ -10,8 +10,8 @@ PRESENTER_VOICE (the extraction was required to change zero bytes). It was **re-
 in Step-9 P1** when the dead surface-kinds (``checklist, comparison, timeline, table,
 activity``) and dead component-types (``DataGrid``, ``StatusIndicator``, ``Column``) were
 pruned from PRESENTER_VOICE in lockstep with their deletion from the A2UI schema — the
-prompt was still advertising kinds that ``SurfaceSpec.kind`` (a strict ``SurfaceKind``
-Literal) now rejects, which silently dropped chat-path workspace surfaces. The hash no
+prompt was still advertising kinds that the then-strict surface-kind Literal now rejects,
+which silently dropped chat-path workspace surfaces. The hash no
 longer asserts historical byte-neutrality; it pins the *current* pruned content forward.
 A companion ``test_presenter_voice_has_no_dead_schema_tokens`` gave that prune teeth, until
 the sixth re-baseline below removed the prose it searched.
@@ -26,8 +26,8 @@ directions. ``message`` — the kind defined for Presenter-authored content, whi
 promotion path at the time — was never offered in the kinds table, so the model was never
 told its own default existed; it was added. And the "do not use" list forbade only
 ``approval`` and ``proactive_insight``, leaving ``run``, ``prepared_work`` and the legacy
-``plan`` emittable, since ``SurfaceSpec.kind`` validates against the whole Literal and forbids
-nothing the prompt does not; all three were added. ``prepared_work`` in particular, because
+``plan`` emittable, since the surface-kind field validated against the whole Literal and
+forbade nothing the prompt did not; all three were added. ``prepared_work`` in particular, because
 settled decision D2 makes that review queue the ONLY place an action staged with no human
 present can be acted on — an agent-authored second one would split it. The companion
 ``test_surface_kind_guidance`` parsed the table rows and the bullet list as structure and

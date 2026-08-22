@@ -1,9 +1,9 @@
 """The view layer's read surface — one endpoint, one typed object.
 
-`GET /v1/workspace/surfaces` returned `WorkspaceSurfacePush`, whose `preview`
-and `detail_config` are annotated `Any`, so nothing crossing the wire had a
-shape a client could rely on. A `Unit` is frozen and typed all the way down,
-and it is the ONLY object in the view layer (spec §2.2).
+`GET /v1/workspace/surfaces` returned a push model whose `preview` and
+`detail_config` were annotated `Any`, so nothing crossing the wire had a shape
+a client could rely on. A `Unit` is frozen and typed all the way down, and it
+is the ONLY object the view layer puts on the wire.
 """
 
 import logging
