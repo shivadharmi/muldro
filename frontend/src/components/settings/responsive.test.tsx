@@ -21,9 +21,11 @@
  */
 
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { expect, test, vi } from "vitest";
 
 import type { CatalogProvider, ProviderStatus } from "@/lib/types";
+import { AgentOverrides } from "./model/agent-overrides";
 import { ProviderCredentialForm } from "./providers/provider-credential-form";
 import { ProviderRow } from "./providers/provider-row";
 import { RemoveConfirmation } from "./providers/remove-confirmation";
@@ -91,6 +93,91 @@ test(`at ${MOBILE_WIDTH}px every control in the binding grid is a 44px touch tar
   for (const control of grid.querySelectorAll("button, input, select")) {
     expectSmClass(control, "h-[36px]", "the desktop control height (§9.3)");
   }
+});
+
+/** The card itself — `TierCard`'s root, and the only `<section>` `renderCard`
+ *  mounts. */
+function tierCard(container: HTMLElement): HTMLElement {
+  const card = container.querySelector<HTMLElement>("section");
+  expect(card, "renderCard mounted no card").not.toBeNull();
+  return card as HTMLElement;
+}
+
+test(`at ${MOBILE_WIDTH}px the tier card is padded 14/16/12, not 13/20/11`, () => {
+  const card = tierCard(renderCard().container);
+
+  // The horizontal half is the one that costs something. The shell's body
+  // gutter drops to 16px below `sm`, so a card that kept `px-[20px]` there
+  // would sit its controls 36px from a 390px screen edge — a tenth of the
+  // grid's width spent on inset, at the width that has least to spare.
+  expectBaseClass(card, "px-[16px]", "the tier card's mobile gutter");
+  expectSmClass(card, "px-[20px]", "the tier card's desktop gutter");
+  expectBaseClass(card, "pt-[14px]", "the tier card's mobile top padding");
+  expectSmClass(card, "pt-[13px]", "the tier card's desktop top padding");
+  expectBaseClass(card, "pb-[12px]", "the tier card's mobile bottom padding");
+  expectSmClass(card, "pb-[11px]", "the tier card's desktop bottom padding");
+});
+
+test(`at ${MOBILE_WIDTH}px the meta row's line-height opens up, and only below \`sm\``, () => {
+  // The row the card ends on: context · price · thinking style. It is the only
+  // `border-t` inside the card, which is also what makes it the meta row —
+  // §9.6 SUBSTITUTES its contents rather than adding a second rule.
+  const meta =
+    tierCard(renderCard().container).querySelector<HTMLElement>(".border-t");
+  expect(meta, "the card rendered no meta row").not.toBeNull();
+  const el = meta as HTMLElement;
+
+  // At 390px those three facts do not fit on one line, so the row's spans
+  // compress and their text wraps INSIDE each span — at the desktop
+  // line-height two wrapped lines of 11.5px text read as one smudge.
+  expectBaseClass(el, "leading-[1.6]", "the meta row's mobile line-height");
+
+  // `inherit` and not a literal: the row carried NO line-height before this
+  // pass, so any other value would silently restyle the desktop rendering
+  // while claiming to be a mobile-only override.
+  expectSmClass(el, "leading-[inherit]", "the meta row deferring at `sm`");
+});
+
+test(`at ${MOBILE_WIDTH}px the override card is padded like the tier card`, async () => {
+  // The two sit in ONE stack, so a 20px inset here against a 16px one there
+  // steps the left edge in and out down the column. Asserted against the same
+  // literals rather than against `tierCard()`'s classes: comparing the two
+  // components to each other would let them drift from §9.10 together while
+  // still agreeing, which is the one failure this cannot afford to miss.
+  render(
+    <AgentOverrides
+      agents={[{ name: "planner", display_name: "Planner", tier: "reasoning" }]}
+      overrides={[
+        {
+          scope_type: "agent",
+          scope_key: "planner",
+          provider: "anthropic",
+          model_id: "claude-opus-4-5",
+          effort: "high",
+          max_tokens: 8192,
+          temperature: null,
+        },
+      ]}
+      tiers={[]}
+      models={[]}
+      providers={[]}
+      dirty={() => false}
+      rejection={() => undefined}
+      onAdd={vi.fn()}
+      onChange={vi.fn()}
+      onRemove={vi.fn()}
+      onOpenPicker={vi.fn()}
+    />,
+  );
+  // Collapsed by default — the override is the exception, not the default view.
+  await userEvent.click(screen.getByRole("button", { name: /per-agent overrides/i }));
+
+  const card = screen.getByRole("region", { name: "Planner" });
+  expectBaseClass(card, "px-[16px]", "the override card's mobile gutter");
+  expectSmClass(card, "px-[20px]", "the override card's desktop gutter");
+  expectBaseClass(card, "pt-[14px]", "the override card's mobile top padding");
+  expectBaseClass(card, "pb-[12px]", "the override card's mobile bottom padding");
+  expectSmClass(card, "pb-[13px]", "the override card's desktop bottom padding");
 });
 
 test(`at ${MOBILE_WIDTH}px the tier card's own actions are 44px touch targets`, () => {

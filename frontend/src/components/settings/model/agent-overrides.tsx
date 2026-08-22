@@ -182,13 +182,20 @@ export function AgentOverrides({
                 <section
                   key={override.scope_key}
                   aria-labelledby={headingId}
-                  // The same mobile gutter as `tier-card.tsx`, for the same
-                  // reason: these two cards sit in one stack, and a 20px inset
-                  // here against a 16px one there would step the left edge
-                  // in and out down the column on a 390px screen.
+                  // §9.10's tier-card padding, whole: these two cards sit in
+                  // one stack, so on a 390px screen a 20px inset here against
+                  // a 16px one there would step the left edge in and out down
+                  // the column. The BOTTOM is taken for the same reason even
+                  // though the stepped-edge argument is horizontal only —
+                  // adjacent cards with a 1px difference in trailing space is
+                  // not a distinction either card is trying to draw, and
+                  // leaving one of the three unqualified reads as an oversight
+                  // rather than as a decision. `sm:` restores this card's own
+                  // 13px above the breakpoint, where it always had it.
                   className={
                     "bg-surface-1 border border-b-secondary rounded-[var(--radius-lg)] " +
-                    "pt-[14px] sm:pt-[13px] px-[16px] sm:px-[20px] pb-[13px]"
+                    "pt-[14px] sm:pt-[13px] px-[16px] sm:px-[20px] " +
+                    "pb-[12px] sm:pb-[13px]"
                   }
                 >
                   <div className="flex items-center justify-between gap-3 mb-[11px]">

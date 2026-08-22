@@ -8,16 +8,20 @@
  * against that failure mode: every colour utility the bar renders is resolved
  * against `globals.css`, so a token that does not exist fails the suite instead
  * of silently rendering transparent.
+ *
+ * That mechanism now lives in `../design-tokens.ts` and covers every settings
+ * component from `../design-tokens.test.ts`. This call is the RENDERED half of
+ * it — proof that the classes which actually reached the DOM resolve, which a
+ * source scan cannot claim.
  */
-
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { test, expect, vi } from "vitest";
 
+import { tokensIn } from "../design-tokens";
 import { SaveBar } from "./save-bar";
+import { classesOf } from "../responsive-fixtures";
 
 function renderBar(changed: string[] = [], saving = false) {
   const onSave = vi.fn();
@@ -101,17 +105,24 @@ test("the two actions report to their own handlers", async () => {
 
 test("§9.7's geometry is on the section itself, not on a wrapper", () => {
   renderBar(["Reasoning"]);
-  const className = bar().getAttribute("class") ?? "";
+  // Split into TOKENS, not searched as substrings.
+  //
+  // Both halves of §9.10's breakpoint pairs have to be named — the mobile fill
+  // and the desktop one, the mobile gutter and the desktop one — and against a
+  // raw class string `toContain("bg-surface-2")` is satisfied by
+  // `sm:bg-surface-2/50`, so the mobile assertion would pass with the mobile
+  // class deleted. A trailing space works around that and depends on
+  // `bg-surface-2` never becoming the last token in the concatenation, which is
+  // one reordering away from being false. Comparing tokens has no such edge:
+  // `sm:bg-surface-2/50` is simply a different string.
+  const classes = classesOf(bar());
 
   // The separator, the fill and the padding are the three things that make it
-  // read as a footer rather than as the last card in the list. Two of the three
-  // are breakpoint-split by §9.10, and the mobile half is asserted alongside the
-  // desktop one — an unqualified `bg-surface-2/50` would still be "contained" by
-  // `sm:bg-surface-2/50`, so the pairs are named in full.
+  // read as a footer rather than as the last card in the list.
   for (const utility of [
     "border-t",
     "border-b-secondary",
-    "bg-surface-2 ",
+    "bg-surface-2",
     "sm:bg-surface-2/50",
     "px-[16px]",
     "sm:px-[24px]",
@@ -122,42 +133,19 @@ test("§9.7's geometry is on the section itself, not on a wrapper", () => {
     "items-center",
     "gap-3",
   ]) {
-    expect(className).toContain(utility);
+    expect(classes, `the save bar is missing \`${utility}\``).toContain(utility);
   }
   // It has to survive the scroll, or it is not a save bar.
-  expect(className).toContain("sticky");
-  expect(className).toContain("bottom-0");
+  expect(classes).toContain("sticky");
+  expect(classes).toContain("bottom-0");
 });
-
-/** Tailwind resolves `bg-x` from `--color-x`; a utility naming an undefined
- *  token generates no rule at all. Variant prefixes (`hover:`, `sm:`) are
- *  stripped so a hover colour is checked too. */
-function colourTokensIn(root: Element): string[] {
-  const skip = new Set(["transparent", "t", "b", "l", "r", "x", "y"]);
-  const tokens = new Set<string>();
-  for (const el of [root, ...Array.from(root.querySelectorAll("*"))]) {
-    for (const raw of (el.getAttribute("class") ?? "").split(/\s+/)) {
-      const utility = raw.split(":").pop() ?? "";
-      const match = /^(?:bg|text|border)-([a-z][a-z0-9-]*?)(?:\/\d+)?$/.exec(
-        utility,
-      );
-      if (match && !skip.has(match[1])) tokens.add(match[1]);
-    }
-  }
-  return Array.from(tokens);
-}
 
 test("every colour token the bar renders is defined in globals.css", () => {
   renderBar(["Reasoning"]);
-  const css = readFileSync(join(process.cwd(), "src/app/globals.css"), "utf8");
 
-  const tokens = colourTokensIn(bar());
+  const { tokens, undefinedTokens } = tokensIn(bar());
   // A guard that found nothing to check is not a guard.
   expect(tokens).toContain("j-primary");
   expect(tokens).toContain("surface-2");
-
-  const undefinedTokens = tokens.filter(
-    (token) => !css.includes(`--color-${token}:`),
-  );
   expect(undefinedTokens).toEqual([]);
 });

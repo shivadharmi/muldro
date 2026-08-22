@@ -30,6 +30,9 @@ export const DESKTOP_WIDTH = 1024;
 /** §9.10's touch-target floor, and the WCAG 2.5.8 minimum it comes from. */
 export const TOUCH_TARGET_PX = 44;
 
+/** One `[…]` arbitrary-value segment. Global, because a class may hold two. */
+const ARBITRARY_VALUE = /\[[^\]]*\]/g;
+
 export function classesOf(el: Element): string[] {
   return (el.getAttribute("class") ?? "").split(/\s+/).filter(Boolean);
 }
@@ -72,6 +75,19 @@ export function expectSmClass(el: Element, cls: string, what: string): void {
  * rows carry a counted suffix and must be allowed to wrap rather than clip.
  * Both satisfy the touch target; neither is satisfied by a `sm:`-prefixed copy,
  * which is exactly the mistake this catches.
+ *
+ * **Scope: a DECLARED height, and nothing else.** This reads the class list; it
+ * computes no box, because in jsdom there is none to compute. A control that
+ * reaches the floor through PADDING plus its line box therefore fails here
+ * while being perfectly correct — `model/model-picker.tsx`'s rows are the live
+ * example: `py-[12px] sm:py-[9px]` around a ~19px line is ~43px, which §9.9's
+ * amendment routes through §9.10 deliberately, because a row holding a model
+ * name that may wrap has to be free to grow past 44px rather than clip at it.
+ *
+ * So: do NOT widen a sweep over such a component and read the failure as a
+ * defect, and do NOT "fix" one by adding `h-[44px]` to a row that has to grow.
+ * Assert its padding pair directly instead — the metric is the same, the
+ * mechanism is not, and only the mechanism is visible from here.
  */
 export function expectTouchTarget(el: Element, what: string): void {
   const classes = classesOf(el);
@@ -111,14 +127,30 @@ export function trackCount(utility: string): number {
   return numeric ? Number(numeric[1]) : 0;
 }
 
+/**
+ * Is this class unprefixed, i.e. does it apply below `sm`?
+ *
+ * A bare `!cls.includes(":")` is the obvious test and the wrong one: Tailwind's
+ * arbitrary values can carry a colon of their own — `bg-[url(https://…)]`, or
+ * `grid-cols-[repeat(2,minmax(0,1fr))]` after some future edit — and such a
+ * class would be misread as carrying a variant and silently skipped. Nothing on
+ * this surface hits it today; the bracketed segments are stripped first so that
+ * a later one cannot make a passing assertion quietly stop looking at anything.
+ */
+export function isBaseUtility(cls: string): boolean {
+  const withoutArbitrary = cls.replace(ARBITRARY_VALUE, "");
+  return !withoutArbitrary.includes(":");
+}
+
 /** The grid's track count at one breakpoint. `0` when the breakpoint declares
  *  no `grid-cols-…` at all, which every caller asserts against. */
 export function columnsAt(grid: Element, breakpoint: "base" | "sm"): number {
-  const prefix = breakpoint === "sm" ? "sm:" : "";
   for (const cls of classesOf(grid)) {
-    const bare = breakpoint === "sm" ? cls.slice(prefix.length) : cls;
-    const prefixed = breakpoint === "sm" ? cls.startsWith(prefix) : !cls.includes(":");
-    if (prefixed && bare.startsWith("grid-cols-")) return trackCount(bare);
+    const atBreakpoint =
+      breakpoint === "sm" ? cls.startsWith("sm:") : isBaseUtility(cls);
+    if (!atBreakpoint) continue;
+    const bare = breakpoint === "sm" ? cls.slice("sm:".length) : cls;
+    if (bare.startsWith("grid-cols-")) return trackCount(bare);
   }
   return 0;
 }
