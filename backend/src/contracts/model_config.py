@@ -68,8 +68,25 @@ class ProviderStatus(BaseModel):
     catalogued: bool = True
 
 
+class ConfigWarning(BaseModel):
+    """A binding that will not resolve to a runnable model.
+
+    Computed from the same ModelResolver.resolve_credential call the runtime makes,
+    so this and reality cannot drift. The message differs by scope because the
+    consequence does: a tier has no fallback and fails outright, while an agent
+    override degrades to its tier binding.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+    scope_type: BindingScope
+    scope_key: str
+    code: Literal["provider_not_configured"]
+    message: str
+
+
 class ModelConfigResponse(BaseModel):
     model_config = ConfigDict(extra="ignore")
     tiers: list[ModelBindingDTO]
     agent_overrides: list[ModelBindingDTO]
     providers: list[ProviderStatus]
+    warnings: list[ConfigWarning] = Field(default_factory=list)

@@ -922,12 +922,19 @@ def test_provider_status_exposes_base_url_but_never_a_secret(monkeypatch):
     Sets a throwaway master key before app startup: create_app()'s §4.3 guard
     (src/api/app.py) fails loud if ANY provider_credentials row in the DB has a
     non-null api_key_encrypted while MULDRO_CONFIG_ENCRYPTION_KEY is unset -- and
-    this test seeds exactly such a row before the app boots. Nothing in the
-    GET /v1/model-config path decrypts it; the key only satisfies that startup
-    check. The row is deleted in `finally` so it can't trip the same guard for
-    any test that creates an app afterwards.
+    this test seeds exactly such a row before the app boots. GET /v1/model-config
+    now also computes `warnings` (Task 7), which calls ModelResolver.resolve_credential
+    -- the same call the runtime makes -- for every tier/agent binding, and that
+    decrypts a stored credential rather than merely reading its `status`. So the
+    seeded ciphertext must actually decrypt under this key, not just be present:
+    a real Fernet key is used for both the settings override and the ciphertext.
+    The row is deleted in `finally` so it can't trip the guard for any test that
+    creates an app afterwards.
     """
-    monkeypatch.setattr(get_settings(), "config_encryption_key", "test-master-key")
+    from cryptography.fernet import Fernet
+
+    fernet_key = Fernet.generate_key()
+    monkeypatch.setattr(get_settings(), "config_encryption_key", fernet_key.decode())
     factory, ws = _ws_factory()
     app = None
 
@@ -937,7 +944,7 @@ def test_provider_status_exposes_base_url_but_never_a_secret(monkeypatch):
                 ProviderCredential(
                     workspace_id=ws,
                     provider="anthropic",
-                    api_key_encrypted="ciphertext",
+                    api_key_encrypted=Fernet(fernet_key).encrypt(b"sk-decoy").decode(),
                     base_url="https://proxy.internal/v1",
                     extra_config={"api_key": "leaked-if-echoed", "region": "eu-west-1"},
                     status="valid",
@@ -1298,3 +1305,206 @@ def test_creating_a_credential_still_requires_a_key_for_keyed_providers(monkeypa
         if app is not None:
             app.dependency_overrides.clear()
         _delete_ws_credentials(factory, ws)
+
+
+@pytest.mark.skipif(not _db_reachable(), reason="Postgres not reachable")
+def test_warning_appears_when_a_credential_is_revoked_after_binding(monkeypatch):
+    """The path save-time validation cannot see: the binding was valid when saved."""
+    _use_test_key(monkeypatch)
+    # Deleting the stored credential only reads as "unconfigured" when there is no env
+    # fallback behind it. `resolve_credential` consults settings last, so a developer with
+    # MULDRO_OPENAI_API_KEY set would see the provider stay configured after the delete.
+    monkeypatch.setattr(get_settings(), "openai_api_key", "", raising=False)
+    factory, ws = _ws_factory()
+    app = None
+
+    try:
+        app = _ws_app(factory, ws)
+        with TestClient(app) as c:
+            c.put("/v1/providers/openai/credentials", json={"api_key": "sk-x"})
+            put = c.put(
+                "/v1/model-config",
+                json={
+                    "tiers": [
+                        {
+                            "scope_type": "tier",
+                            "scope_key": "fast",
+                            "provider": "openai",
+                            "model_id": "gpt-5-mini",
+                            "effort": "low",
+                            "max_tokens": 4096,
+                        }
+                    ],
+                    "agent_overrides": [],
+                },
+            )
+            assert put.status_code == 200, put.text
+            assert put.json()["warnings"] == []
+
+            c.delete("/v1/providers/openai/credentials")
+
+            body = c.get("/v1/model-config").json()
+            warning = next(w for w in body["warnings"] if w["scope_key"] == "fast")
+            assert warning["scope_type"] == "tier"
+            assert warning["code"] == "provider_not_configured"
+            assert "no tier fallback" in warning["message"]
+    finally:
+        if app is not None:
+            app.dependency_overrides.clear()
+        _delete_ws_credentials(factory, ws)
+
+
+@pytest.mark.skipif(not _db_reachable(), reason="Postgres not reachable")
+def test_agent_override_warning_says_it_degrades(monkeypatch):
+    """An agent override DOES fall back to its tier binding (model_resolver.py:70),
+    so its warning must not claim the same consequence a tier's does."""
+    _use_test_key(monkeypatch)
+    # Deleting the stored credential only reads as "unconfigured" when there is no env
+    # fallback behind it. `resolve_credential` consults settings last, so a developer with
+    # MULDRO_OPENAI_API_KEY set would see the provider stay configured after the delete.
+    monkeypatch.setattr(get_settings(), "openai_api_key", "", raising=False)
+    factory, ws = _ws_factory()
+    app = None
+
+    try:
+        app = _ws_app(factory, ws)
+        with TestClient(app) as c:
+            c.put("/v1/providers/openai/credentials", json={"api_key": "sk-x"})
+            c.put(
+                "/v1/model-config",
+                json={
+                    "tiers": [],
+                    "agent_overrides": [
+                        {
+                            "scope_type": "agent",
+                            "scope_key": "planner",
+                            "provider": "openai",
+                            "model_id": "gpt-5",
+                            "effort": "high",
+                            "max_tokens": 8192,
+                        }
+                    ],
+                },
+            )
+            c.delete("/v1/providers/openai/credentials")
+
+            body = c.get("/v1/model-config").json()
+            warning = next(w for w in body["warnings"] if w["scope_key"] == "planner")
+            assert warning["scope_type"] == "agent"
+            assert "fall back to its tier binding" in warning["message"]
+    finally:
+        if app is not None:
+            app.dependency_overrides.clear()
+        _delete_ws_credentials(factory, ws)
+
+
+@pytest.mark.skipif(not _db_reachable(), reason="Postgres not reachable")
+def test_deployment_default_binding_warns_without_passing_through_put_config(monkeypatch):
+    """The seed path. A NULL-workspace binding is created at startup and never goes
+    near put_config, so bind-time validation can never see it.
+
+    This test writes a NULL-workspace row, which is shared across the whole
+    deployment -- it drops the row before and after itself so a failed run cannot
+    poison the dev DB. ModelConfigRegistry.seed_defaults() has typically already
+    populated a real NULL-workspace "reasoning" row (the unique index is on
+    (scope_type, scope_key) alone, not provider -- see uq_model_binding_default in
+    src/models/model_binding.py), so any pre-existing row is saved and restored
+    rather than merely deleted.
+    """
+    # Same trap as the other two warning tests: `resolve_credential` consults the
+    # env fallback last, and this worktree's .env has MULDRO_OPENAI_API_KEY set --
+    # without clearing it the seeded binding would still resolve and produce no
+    # warning.
+    monkeypatch.setattr(get_settings(), "openai_api_key", "", raising=False)
+    factory, ws = _ws_factory()
+
+    async def _existing_default():
+        from sqlalchemy import select
+
+        async with factory() as db:
+            row = (
+                (
+                    await db.execute(
+                        select(ModelBinding).where(
+                            ModelBinding.workspace_id.is_(None),
+                            ModelBinding.scope_type == "tier",
+                            ModelBinding.scope_key == "reasoning",
+                        )
+                    )
+                )
+                .scalars()
+                .first()
+            )
+            if row is None:
+                return None
+            return {
+                "provider": row.provider,
+                "model_id": row.model_id,
+                "effort": row.effort,
+                "max_tokens": row.max_tokens,
+                "temperature": row.temperature,
+            }
+
+    async def _drop_default_binding():
+        async with factory() as db:
+            await db.execute(
+                delete(ModelBinding).where(
+                    ModelBinding.workspace_id.is_(None),
+                    ModelBinding.scope_type == "tier",
+                    ModelBinding.scope_key == "reasoning",
+                )
+            )
+            await db.commit()
+
+    async def _seed_default_binding():
+        async with factory() as db:
+            db.add(
+                ModelBinding(
+                    workspace_id=None,
+                    scope_type="tier",
+                    scope_key="reasoning",
+                    provider="openai",
+                    model_id="gpt-5",
+                    effort="high",
+                    max_tokens=8192,
+                    enabled=True,
+                )
+            )
+            await db.commit()
+
+    async def _restore_default_binding(saved: dict) -> None:
+        async with factory() as db:
+            db.add(
+                ModelBinding(
+                    workspace_id=None,
+                    scope_type="tier",
+                    scope_key="reasoning",
+                    provider=saved["provider"],
+                    model_id=saved["model_id"],
+                    effort=saved["effort"],
+                    max_tokens=saved["max_tokens"],
+                    temperature=saved["temperature"],
+                    enabled=True,
+                )
+            )
+            await db.commit()
+
+    saved = asyncio.run(_existing_default())
+    asyncio.run(_drop_default_binding())
+    app = None
+
+    try:
+        asyncio.run(_seed_default_binding())
+        app = _ws_app(factory, ws)
+        with TestClient(app) as c:
+            body = c.get("/v1/model-config").json()
+            assert any(
+                w["scope_key"] == "reasoning" and w["code"] == "provider_not_configured"
+                for w in body["warnings"]
+            )
+    finally:
+        if app is not None:
+            app.dependency_overrides.clear()
+        asyncio.run(_drop_default_binding())
+        if saved is not None:
+            asyncio.run(_restore_default_binding(saved))

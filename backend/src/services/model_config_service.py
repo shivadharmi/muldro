@@ -19,10 +19,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.config.model_catalog import MODEL_CATALOG
 from src.config.provider_catalog import public_field_keys
 from src.config.settings import get_settings
-from src.contracts.model_config import Effort, ModelBindingDTO, ModelConfigResponse, ProviderStatus
+from src.contracts.model_config import (
+    ConfigWarning,
+    Effort,
+    ModelBindingDTO,
+    ModelConfigResponse,
+    ProviderStatus,
+)
 from src.models.model_binding import ModelBinding
 from src.models.provider_credential import ProviderCredential
-from src.services.model_resolver import _ENV_KEY_ATTR
+from src.services.model_resolver import _ENV_KEY_ATTR, KEYLESS_PROVIDERS, ModelResolver
 
 logger = logging.getLogger(__name__)
 
@@ -150,12 +156,59 @@ class ModelConfigService:
         ]
 
         providers = await self._provider_statuses(workspace_id)
+        warnings = await self.unconfigured_bindings(workspace_id, tiers, agent_overrides)
 
         return ModelConfigResponse(
             tiers=tiers,
             agent_overrides=agent_overrides,
             providers=providers,
+            warnings=warnings,
         )
+
+    async def unconfigured_bindings(
+        self,
+        workspace_id: str,
+        tiers: list[ModelBindingDTO],
+        agent_overrides: list[ModelBindingDTO],
+    ) -> list[ConfigWarning]:
+        """Bindings whose provider resolves no usable credential.
+
+        Mirrors ModelResolver._build_resolved's condition exactly -- an api_key, or a
+        keyless provider -- so a warning is shown if and only if the runtime would
+        fail. Credential lookups are memoised per provider: a workspace with three
+        tiers on one provider does one lookup, not three.
+        """
+        resolver = ModelResolver(self._db)
+        usable: dict[str, bool] = {}
+        out: list[ConfigWarning] = []
+
+        for b in [*tiers, *agent_overrides]:
+            ok = usable.get(b.provider)
+            if ok is None:
+                api_key, _ = await resolver.resolve_credential(b.provider, workspace_id)
+                ok = api_key is not None or b.provider in KEYLESS_PROVIDERS
+                usable[b.provider] = ok
+            if ok:
+                continue
+            if b.scope_type == "tier":
+                message = (
+                    f"{b.provider} is not connected. There is no tier fallback — every "
+                    f"agent on {b.scope_key} will fail until you connect it."
+                )
+            else:
+                message = (
+                    f"{b.provider} is not connected. The {b.scope_key} override will "
+                    f"fall back to its tier binding until you connect it."
+                )
+            out.append(
+                ConfigWarning(
+                    scope_type=b.scope_type,
+                    scope_key=b.scope_key,
+                    code="provider_not_configured",
+                    message=message,
+                )
+            )
+        return out
 
     async def _load_bindings(self, workspace_id) -> list[ModelBinding]:
         stmt = select(ModelBinding).where(
