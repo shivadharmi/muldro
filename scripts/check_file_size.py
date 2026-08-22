@@ -39,14 +39,6 @@ GRANDFATHERED: dict[str, int] = {
     # grows it further; recorded here rather than split, matching every other
     # pre-existing oversized file's treatment.
     "frontend/src/lib/types.ts": 590,
-    # Already 588 lines at HEAD (over the 400 cap already, omitted from this
-    # list by the same oversight). The Model tab's mechanical adaptation to
-    # scope_type/scope_key bindings and the flat catalog.models list grows it
-    # a little further; recorded here rather than split -- the tab's actual
-    # redesign is a later phase. Moved into tabs/ with the shell decomposition;
-    # settings-modal.tsx left this list at the same time, split into a shell
-    # (<400) plus settings-rail.tsx and per-tab owners.
-    "frontend/src/components/settings/tabs/model-tab.tsx": 610,
     "frontend/src/components/chat/chat-panel.tsx": 678,
     "frontend/src/components/history/run-detail-modal.tsx": 543,
     "frontend/src/app/settings/page.tsx": 522,
