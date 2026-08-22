@@ -90,7 +90,7 @@ class ScheduleDispatchMixin:
         elif action == "heartbeat":
             factory = get_session_factory()
             async with factory() as hb_db:
-                hb = HeartbeatService(self._settings, hb_db, notifier=self._resolve_notifier(hb_db))
+                hb = HeartbeatService(self._settings, hb_db)
                 await hb.run(sched.user_id)
                 await hb_db.commit()
         elif action == "check_slos":

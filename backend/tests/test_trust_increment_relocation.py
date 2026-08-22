@@ -273,18 +273,21 @@ async def test_approve_click_does_not_increment_trust_but_records_decision_type(
                     user_id=user_id,
                     workspace_id=workspace_id,
                     execution_id="",
-                    approval_type="tool:send_email",
+                    approval_type="step:email.send",
                     title="Send email",
                     risk_level="high",
                     status="pending",
                 )
             )
-            # Seed the TrustState the OLD click WOULD have incremented (the "tool:" prefix
-            # is stripped to "send_email"); its count staying put is the tightest proof.
+            # Seed the TrustState the OLD click WOULD have incremented; its count staying
+            # put is the tightest proof. The type must name a REAL capability for that
+            # proof to hold: with `tool:send_email` the relocation could be reverted
+            # wholesale and this still passed, because a tool name resolves to no
+            # capability and so increments nothing either way.
             db.add(
                 TrustState(
                     workspace_id=workspace_id,
-                    capability="send_email",
+                    capability="email.send",
                     risk_level="high",
                     approved_count=5,
                     rejected_count=0,
@@ -312,7 +315,7 @@ async def test_approve_click_does_not_increment_trust_but_records_decision_type(
                 await db.execute(
                     select(TrustState).where(
                         TrustState.workspace_id == workspace_id,
-                        TrustState.capability == "send_email",
+                        TrustState.capability == "email.send",
                         TrustState.risk_level == "high",
                     )
                 )
@@ -338,7 +341,11 @@ async def test_reject_click_still_increments_at_click():
                     user_id=user_id,
                     workspace_id=workspace_id,
                     execution_id="",
-                    approval_type="tool:send_email",
+                    # `step:email.send`, not `tool:send_email`: a rejection is evidence
+                    # about a CAPABILITY, and `send_email` is a tool name no catalogue
+                    # contains. Recording against it created a phantom TrustState row and
+                    # applied a cooldown to authority that does not exist.
+                    approval_type="step:email.send",
                     title="Send email",
                     risk_level="high",
                     status="pending",
@@ -347,7 +354,7 @@ async def test_reject_click_still_increments_at_click():
             db.add(
                 TrustState(
                     workspace_id=workspace_id,
-                    capability="send_email",
+                    capability="email.send",
                     risk_level="high",
                     approved_count=0,
                     rejected_count=0,
@@ -375,7 +382,7 @@ async def test_reject_click_still_increments_at_click():
                 await db.execute(
                     select(TrustState).where(
                         TrustState.workspace_id == workspace_id,
-                        TrustState.capability == "send_email",
+                        TrustState.capability == "email.send",
                         TrustState.risk_level == "high",
                     )
                 )

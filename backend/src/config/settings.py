@@ -210,11 +210,6 @@ class Settings(BaseSettings):
     # False the deep path builds the full eager pack (byte-identical to legacy).
     deep_context_jit: bool = False  # MULDRO_DEEP_CONTEXT_JIT
 
-    # Single-lead cutover: how long a PREPARED action stays actionable in the review queue
-    # before it expires. Longer than approval_service's 24h default because prepared work is
-    # reviewed on the founder's schedule, not the turn's.
-    prepared_action_ttl_days: int = 7  # MULDRO_PREPARED_ACTION_TTL_DAYS
-
     # Step 10D P2.5c: drop the Planner from the chat single-lead path. When True a chat turn
     # skips classify_intent + fast-path + Planner + plan record + resolve_plan_routing entirely
     # and builds ONE lead from the connector-derived scope (resolve_connector_scope). Off by
