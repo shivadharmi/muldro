@@ -1099,3 +1099,148 @@ def test_credential_for_uncatalogued_provider_is_still_visible(monkeypatch):
                 await db.commit()
 
         asyncio.run(_cleanup())
+
+
+def _delete_ws_credentials(factory, ws: str):
+    """Delete every ProviderCredential row this test's workspace owns.
+
+    Rows encrypted under a per-test random Fernet key (see `_use_test_key`) can never
+    be decrypted once the test ends, and create_app()'s unscoped master-key guard
+    (src/api/app.py) 500s at boot for the WHOLE suite if any encrypted row survives
+    while MULDRO_CONFIG_ENCRYPTION_KEY is unset -- so this cleanup is not optional
+    hygiene, it is what keeps later tests bootable.
+    """
+
+    async def _cleanup():
+        async with factory() as db:
+            await db.execute(
+                delete(ProviderCredential).where(ProviderCredential.workspace_id == ws)
+            )
+            await db.commit()
+
+    asyncio.run(_cleanup())
+
+
+@pytest.mark.skipif(not _db_reachable(), reason="Postgres not reachable")
+def test_rotating_a_key_preserves_base_url_and_extra_config(monkeypatch):
+    """B1, the highest-value guard in this phase. The client sends only the field it
+    changed; the server must not null the fields it did not receive."""
+    _use_test_key(monkeypatch)
+    factory, ws = _ws_factory()
+    app = None
+
+    try:
+        app = _ws_app(factory, ws)
+        with TestClient(app) as c:
+            first = c.put(
+                "/v1/providers/anthropic/credentials",
+                json={
+                    "api_key": "sk-original",
+                    "base_url": "https://proxy.internal/v1",
+                    "extra_config": {"org": "acme"},
+                },
+            )
+            assert first.status_code == 200, first.text
+
+            rotate = c.put("/v1/providers/anthropic/credentials", json={"api_key": "sk-rotated"})
+            assert rotate.status_code == 200, rotate.text
+
+            body = c.get("/v1/model-config").json()
+            anthropic = next(p for p in body["providers"] if p["provider"] == "anthropic")
+            assert anthropic["base_url"] == "https://proxy.internal/v1"
+            assert "org" in anthropic["extra_config_secret_keys"]
+    finally:
+        if app is not None:
+            app.dependency_overrides.clear()
+        _delete_ws_credentials(factory, ws)
+
+
+@pytest.mark.skipif(not _db_reachable(), reason="Postgres not reachable")
+def test_explicit_null_clears_base_url(monkeypatch):
+    """Omitted means 'leave alone'; explicit null means 'clear'."""
+    _use_test_key(monkeypatch)
+    factory, ws = _ws_factory()
+    app = None
+
+    try:
+        app = _ws_app(factory, ws)
+        with TestClient(app) as c:
+            c.put(
+                "/v1/providers/anthropic/credentials",
+                json={"api_key": "sk-x", "base_url": "https://proxy.internal/v1"},
+            )
+            c.put("/v1/providers/anthropic/credentials", json={"base_url": None})
+
+            body = c.get("/v1/model-config").json()
+            anthropic = next(p for p in body["providers"] if p["provider"] == "anthropic")
+            assert anthropic["base_url"] is None
+    finally:
+        if app is not None:
+            app.dependency_overrides.clear()
+        _delete_ws_credentials(factory, ws)
+
+
+@pytest.mark.skipif(not _db_reachable(), reason="Postgres not reachable")
+def test_editing_base_url_alone_does_not_require_the_key(monkeypatch):
+    """Once a credential exists, api_key is required only to CREATE one."""
+    _use_test_key(monkeypatch)
+    factory, ws = _ws_factory()
+    app = None
+
+    try:
+        app = _ws_app(factory, ws)
+        with TestClient(app) as c:
+            c.put("/v1/providers/anthropic/credentials", json={"api_key": "sk-x"})
+            r = c.put(
+                "/v1/providers/anthropic/credentials",
+                json={"base_url": "https://new.proxy/v1"},
+            )
+            assert r.status_code == 200, r.text
+    finally:
+        if app is not None:
+            app.dependency_overrides.clear()
+        _delete_ws_credentials(factory, ws)
+
+
+@pytest.mark.skipif(not _db_reachable(), reason="Postgres not reachable")
+def test_ollama_stays_configured_after_a_keyless_write(monkeypatch):
+    """base_url IS ollama's credential. Wiping it on save unconfigured the provider."""
+    _use_test_key(monkeypatch)
+    factory, ws = _ws_factory()
+    app = None
+
+    try:
+        app = _ws_app(factory, ws)
+        with TestClient(app) as c:
+            c.put(
+                "/v1/providers/ollama/credentials",
+                json={"base_url": "http://localhost:11434"},
+            )
+            c.put("/v1/providers/ollama/credentials", json={"extra_config": {"keep_alive": "5m"}})
+
+            body = c.get("/v1/model-config").json()
+            ollama = next(p for p in body["providers"] if p["provider"] == "ollama")
+            assert ollama["configured"] is True
+            assert ollama["base_url"] == "http://localhost:11434"
+    finally:
+        if app is not None:
+            app.dependency_overrides.clear()
+        _delete_ws_credentials(factory, ws)
+
+
+@pytest.mark.skipif(not _db_reachable(), reason="Postgres not reachable")
+def test_creating_a_credential_still_requires_a_key_for_keyed_providers(monkeypatch):
+    _use_test_key(monkeypatch)
+    factory, ws = _ws_factory()
+    app = None
+
+    try:
+        app = _ws_app(factory, ws)
+        with TestClient(app) as c:
+            r = c.put("/v1/providers/openai/credentials", json={"base_url": "https://x/v1"})
+            assert r.status_code == 400
+            assert "api_key is required" in r.text
+    finally:
+        if app is not None:
+            app.dependency_overrides.clear()
+        _delete_ws_credentials(factory, ws)

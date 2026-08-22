@@ -206,39 +206,58 @@ async def put_provider_credential(
     workspace_id: str = Depends(get_current_workspace_id),
     db: AsyncSession = Depends(get_session),
 ):
+    """Partial update. An OMITTED field is left untouched; an explicit null clears it.
+
+    Assigning every field unconditionally meant a client that sent only the key it was
+    rotating silently nulled base_url and extra_config -- and for ollama, whose
+    base_url IS the credential, that unconfigured the provider outright (B1).
+    """
     _require_known_provider(provider)
-    if not body.api_key and provider not in KEYLESS_PROVIDERS:
-        raise HTTPException(status_code=400, detail=f"api_key is required for provider {provider}")
-    # Keyless providers (ollama) store no ciphertext — only the base_url configures them.
-    encrypted = secret_crypto.encrypt_secret(body.api_key) if body.api_key else None
 
     stmt = select(ProviderCredential).where(
         ProviderCredential.workspace_id == workspace_id,
         ProviderCredential.provider == provider,
     )
     existing = (await db.execute(stmt)).scalars().first()
+
+    # api_key is required to CREATE a keyed provider's credential, not to edit one:
+    # editing a base URL must not force the founder to retype a secret they cannot see.
+    if existing is None and not body.api_key and provider not in KEYLESS_PROVIDERS:
+        raise HTTPException(status_code=400, detail=f"api_key is required for provider {provider}")
+
+    fields = body.model_dump(exclude_unset=True)
+
     if existing is not None:
-        existing.api_key_encrypted = encrypted
-        existing.base_url = body.base_url
-        existing.extra_config = body.extra_config
+        if "api_key" in fields:
+            existing.api_key_encrypted = (
+                secret_crypto.encrypt_secret(fields["api_key"]) if fields["api_key"] else None
+            )
+        if "base_url" in fields:
+            existing.base_url = fields["base_url"]
+        if "extra_config" in fields:
+            existing.extra_config = fields["extra_config"]
         existing.status = "untested"
         existing.enabled = True
     else:
+        api_key = fields.get("api_key")
         db.add(
             ProviderCredential(
                 workspace_id=workspace_id,
                 provider=provider,
-                api_key_encrypted=encrypted,
-                base_url=body.base_url,
-                extra_config=body.extra_config,
+                # Keyless providers (ollama) store no ciphertext -- only base_url configures them.
+                api_key_encrypted=secret_crypto.encrypt_secret(api_key) if api_key else None,
+                base_url=fields.get("base_url"),
+                extra_config=fields.get("extra_config"),
                 status="untested",
                 enabled=True,
             )
         )
+
     await db.commit()
     # Never echo the key — only the write-only status envelope. The row we just wrote
     # is this workspace's own, so it is the deletable source by construction.
-    return ProviderStatus(provider=provider, configured=True, status="untested", source="workspace")
+    statuses = await ModelConfigService(db).provider_statuses(workspace_id)
+    return next(s for s in statuses if s.provider == provider)
 
 
 @router.delete("/v1/providers/{provider}/credentials", response_model=ProviderStatus)
