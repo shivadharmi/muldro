@@ -498,11 +498,33 @@ export interface PlanOutput {
 // ── Model Configuration ──────────────────────────────────────────
 
 export interface CatalogModel {
+  provider: string;
   model_id: string;
   display_name: string;
   thinking_style: string;
   accepts_temperature: boolean;
   suggested_tier: string;
+  context_window: number;
+  input_cost_per_1k: number;
+  output_cost_per_1k: number;
+  supports_prompt_cache: boolean;
+}
+
+export interface CredentialFieldSpec {
+  key: string;
+  label: string;
+  kind: "secret" | "text" | "url";
+  required: boolean;
+  placeholder: string | null;
+}
+
+export interface CatalogProvider {
+  provider: string;
+  display_name: string;
+  auth_kind: "api_key" | "keyless_base_url" | "aws_sigv4" | "azure_deployment";
+  credential_fields: CredentialFieldSpec[];
+  model_count: number;
+  docs_url: string | null;
 }
 
 export interface AgentInfo {
@@ -512,17 +534,30 @@ export interface AgentInfo {
 }
 
 export interface ModelCatalog {
-  providers: Record<string, CatalogModel[]>;
+  providers: CatalogProvider[];
+  models: CatalogModel[];
   agents: AgentInfo[];
 }
 
-export interface TierBinding {
-  tier: string;
+/** One model binding. `scope_key` is a tier name ("balanced") or an agent name. */
+export interface ModelBinding {
+  scope_type: "tier" | "agent";
+  scope_key: string;
   provider: string;
   model_id: string;
-  effort: string;
+  effort: "none" | "low" | "medium" | "high";
   max_tokens: number;
   temperature: number | null;
+}
+
+export interface ConfigWarning {
+  scope_type: "tier" | "agent";
+  scope_key: string;
+  /** The provider that could not be resolved. Lets a client group warnings by
+   *  provider, and lets a revoke report only the bindings IT broke. */
+  provider: string;
+  code: "provider_not_configured";
+  message: string;
 }
 
 export interface ProviderStatus {
@@ -530,13 +565,26 @@ export interface ProviderStatus {
   configured: boolean;
   status: string;
   // Where the credential comes from. `configured` is true for three different
-  // sources but only "workspace" is deletable through the credentials API —
-  // DELETE removes this workspace's own row and nothing else.
+  // sources but only "workspace" is deletable through the credentials API.
   source: "workspace" | "default" | "env" | "none";
+  base_url: string | null;
+  // Values for DECLARED non-secret fields only. Secret values are never returned.
+  extra_config_public: Record<string, string>;
+  extra_config_secret_keys: string[];
+  /** False when a credential row survives for a provider the catalog no longer
+   *  lists. Such a provider has no entry in ModelCatalog.providers, so it has no
+   *  display name or credential schema to render — show the slug and offer Remove. */
+  catalogued: boolean;
 }
 
 export interface ModelConfig {
-  tiers: TierBinding[];
-  agent_overrides: TierBinding[];
+  tiers: ModelBinding[];
+  agent_overrides: ModelBinding[];
   providers: ProviderStatus[];
+  warnings: ConfigWarning[];
+}
+
+export interface CredentialDeleteResult {
+  status: ProviderStatus;
+  orphaned_bindings: ConfigWarning[];
 }
