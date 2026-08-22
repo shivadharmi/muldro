@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.config import secret_crypto
 from src.config.model_catalog import MODEL_CATALOG
-from src.config.provider_catalog import public_field_keys
+from src.config.provider_catalog import get_provider_spec, public_field_keys
 from src.config.settings import get_settings
 from src.contracts.model_config import (
     ConfigWarning,
@@ -69,6 +69,65 @@ def _split_extra_config(provider: str, extra: dict | None) -> tuple[dict[str, st
         public[k] = str(v)
     hidden = sorted(k for k in extra if k not in allowed)
     return public, hidden
+
+
+def unknown_extra_keys(provider: str, submitted: dict[str, object] | None) -> list[str]:
+    """Submitted extra_config keys this provider does not DECLARE.
+
+    The write-side twin of ``_split_extra_config``'s fail-closed read rule, and it
+    exists because the merge below is accumulative: under the old wholesale replace
+    the map arrived complete every time, so an undeclared key could not build up.
+    Under a merge, anything ever written stays forever -- unbounded JSONB growth for
+    a key that can never be displayed, and, worse, a key that COLLIDES with a
+    top-level field (``extra_config.base_url`` on a provider that declares
+    ``base_url``) would be echoed back as public and contradict the real one.
+
+    Rejecting a WRITE cannot destroy a stored value, precisely because omission now
+    means keep -- so this stays safe if the catalog ever drops a field that rows
+    still carry.
+    """
+    if not submitted:
+        return []
+    spec = get_provider_spec(provider)
+    # api_key and base_url are top-level columns, never members of the map.
+    declared = {f.key for f in spec.credential_fields} - {"api_key", "base_url"} if spec else set()
+    return sorted(k for k in submitted if k not in declared)
+
+
+def merge_extra_config(
+    stored: dict[str, object] | None, submitted: dict[str, object] | None
+) -> dict[str, object] | None:
+    """Per-key merge of extra_config, mirroring the top-level partial-update rule.
+
+    Lives beside ``_split_extra_config`` on purpose: that decides what is RETURNED,
+    this decides what is STORED, and the two must agree about what a key means. Split
+    across the api/service boundary, a change to one had no structural reason to
+    visit the other.
+
+    ``extra_config`` holds SECRETS as well as public fields, and a secret's value is
+    never returned to a client. So a client editing a public field alongside a stored
+    secret has no way to resend that secret -- it can only omit it. Replacing the
+    whole map therefore destroyed the secret, while the credential form's
+    "configured -- leave blank to keep" hint promised the opposite. That is B1 one
+    level down.
+
+    Three-valued, exactly like base_url:
+      * key omitted from ``submitted``        -> keep the stored value
+      * key present with an explicit ``None`` -> delete that key
+      * key present with a value              -> set it
+
+    ``submitted is None`` is the top-level explicit null and still clears the map;
+    a merge that empties it collapses to ``None`` so the column stays tidy.
+    """
+    if submitted is None:
+        return None
+    merged: dict[str, object] = dict(stored or {})
+    for key, value in submitted.items():
+        if value is None:
+            merged.pop(key, None)
+        else:
+            merged[key] = value
+    return merged or None
 
 
 class ModelConfigService:

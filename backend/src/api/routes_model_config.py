@@ -22,7 +22,11 @@ from src.contracts.model_config import (
 from src.llm.model_factory import build_langchain_model
 from src.models.provider_credential import ProviderCredential
 from src.orchestrator.agents import AGENT_MODEL_TIERS
-from src.services.model_config_service import ModelConfigService
+from src.services.model_config_service import (
+    ModelConfigService,
+    merge_extra_config,
+    unknown_extra_keys,
+)
 from src.services.model_resolver import KEYLESS_PROVIDERS, ModelResolver, ResolvedModel
 
 router = APIRouter()
@@ -197,36 +201,7 @@ class CredentialBody(BaseModel):
     # Optional: local providers like ollama authenticate with a base_url alone (no key).
     api_key: str | None = None
     base_url: str | None = None
-    extra_config: dict | None = None
-
-
-def merge_extra_config(stored: dict | None, submitted: dict | None) -> dict | None:
-    """Per-key merge of extra_config, mirroring the top-level partial-update rule.
-
-    ``extra_config`` holds SECRETS as well as public fields (``_split_extra_config``
-    splits one stored dict by declared kind), and a secret's value is never returned
-    to a client. So a client editing a public field alongside a stored secret has no
-    way to resend that secret -- it can only omit it. Replacing the whole map
-    therefore destroyed the secret, while the form's "configured -- leave blank to
-    keep" hint promised the opposite. That is B1 one level down.
-
-    Three-valued, exactly like base_url:
-      * key omitted from ``submitted``      -> keep the stored value
-      * key present with an explicit ``None`` -> delete that key
-      * key present with a value             -> set it
-
-    ``submitted is None`` is the top-level explicit null and still clears the map;
-    a merge that empties it collapses to ``None`` so the column stays tidy.
-    """
-    if submitted is None:
-        return None
-    merged = dict(stored or {})
-    for key, value in submitted.items():
-        if value is None:
-            merged.pop(key, None)
-        else:
-            merged[key] = value
-    return merged or None
+    extra_config: dict[str, object] | None = None
 
 
 class TestResult(BaseModel):
@@ -289,23 +264,39 @@ async def put_provider_credential(
 
     fields = body.model_dump(exclude_unset=True)
 
+    # Validated BEFORE any merge. A merge is accumulative, so an undeclared key
+    # written once would live in the JSONB forever, invisible and undeletable
+    # through the form -- and a key shadowing a top-level field would be echoed
+    # back as public alongside the real one.
+    unknown = unknown_extra_keys(provider, fields.get("extra_config"))
+    if unknown:
+        raise HTTPException(
+            status_code=400, detail=f"unknown credential fields for {provider}: {unknown}"
+        )
+
     if existing is not None:
+        # Only a REAL write invalidates a prior verification -- `status` renders in
+        # the Providers tab, so downgrading a `valid` provider to `untested` for a
+        # request that changed nothing is a visible lie. A merge makes that check
+        # non-trivial one level down: PUT {"extra_config": {}} carries a field but
+        # writes nothing, so presence in `fields` is no longer proof of a change.
+        wrote = False
         if "api_key" in fields:
             existing.api_key_encrypted = (
                 secret_crypto.encrypt_secret(fields["api_key"]) if fields["api_key"] else None
             )
+            wrote = True
         if "base_url" in fields:
             existing.base_url = fields["base_url"]
+            wrote = True
         if "extra_config" in fields:
             # Merge, never replace: an omitted key is "leave it alone", which is the
             # only way a client can keep a secret it is never allowed to read back.
-            existing.extra_config = merge_extra_config(
-                existing.extra_config, fields["extra_config"]
-            )
-        if fields:
-            # Only a real write invalidates a prior verification. An empty body changes
-            # nothing, so it must not downgrade a `valid` provider to `untested` --
-            # `status` renders in the Providers tab.
+            merged = merge_extra_config(existing.extra_config, fields["extra_config"])
+            if merged != existing.extra_config:
+                existing.extra_config = merged
+                wrote = True
+        if wrote:
             existing.status = "untested"
             existing.enabled = True
     else:
@@ -341,8 +332,16 @@ async def delete_provider_credential(
     """Revoke this workspace's credential, and report what the revoke broke.
 
     Never blocks: a credential the founder cannot revoke is a security problem.
+
+    Deliberately NOT guarded by ``_require_known_provider``. ``catalogued`` is derived
+    as ``provider in MODEL_CATALOG``, which is the same condition that guard rejects on
+    -- so guarding here meant ``catalogued=False`` implied "undeletable", biconditionally.
+    A stray row (a provider dropped from the catalog, or one whose key no longer
+    decrypts) is shown precisely SO it can be removed, and Remove is the only action its
+    row offers; a guard turned that into a button that could never work. PUT and /test
+    keep the guard because they index MODEL_CATALOG afterwards; this handler indexes
+    nothing, it only filters ProviderCredential by (workspace_id, provider).
     """
-    _require_known_provider(provider)
     stmt = select(ProviderCredential).where(
         ProviderCredential.workspace_id == workspace_id,
         ProviderCredential.provider == provider,

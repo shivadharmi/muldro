@@ -9,6 +9,8 @@ being duplicated or forcing the two test modules to import each other).
 
 import asyncio
 import contextlib
+from dataclasses import replace
+from types import MappingProxyType
 from unittest.mock import MagicMock
 
 from fastapi.testclient import TestClient
@@ -24,6 +26,7 @@ from src.api.deps import (
     get_current_workspace_id,
     get_session,
 )
+from src.config import provider_catalog as pc
 from src.config.settings import get_settings
 from src.models.model_binding import ModelBinding
 from src.models.provider_credential import ProviderCredential
@@ -228,3 +231,30 @@ async def pinned_deployment_defaults_async(factory, bindings=DEFAULT_TIER_BINDIN
         yield
     finally:
         await _install_deployment_defaults(factory, original)
+
+
+def _declare_extra_fields(monkeypatch):
+    """Declare extra_config fields on two catalogued providers, for this test only.
+
+    No shipped provider declares one yet -- Bedrock and Azure are the whole reason the
+    credential form is schema-driven and neither has landed -- but extra_config is
+    storable today, and an UNDECLARED key is now rejected on write. So a test that
+    exercises the map has to declare the schema it exercises, rather than relying on
+    the server accepting anything.
+    """
+
+    def _extended(provider: str, *extra: pc.CredentialField) -> pc.ProviderSpec:
+        base = pc.PROVIDER_CATALOG[provider]
+        return replace(base, credential_fields=base.credential_fields + extra)
+
+    patched = dict(pc.PROVIDER_CATALOG)
+    patched["anthropic"] = _extended(
+        "anthropic",
+        pc.CredentialField("org", "Organisation", "secret", False),
+        pc.CredentialField("region", "Region", "text", False),
+        pc.CredentialField("secret_access_key", "Secret access key", "secret", False),
+    )
+    patched["ollama"] = _extended(
+        "ollama", pc.CredentialField("keep_alive", "Keep alive", "text", False)
+    )
+    monkeypatch.setattr(pc, "PROVIDER_CATALOG", MappingProxyType(patched))

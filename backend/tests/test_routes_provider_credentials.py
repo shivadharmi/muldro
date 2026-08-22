@@ -5,17 +5,17 @@ from unittest.mock import MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import delete, select
+from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
-from src.api.routes_model_config import merge_extra_config
 from src.config.settings import get_settings
 from src.models.model_binding import ModelBinding
 from src.models.provider_credential import ProviderCredential
 from tests.helpers.model_config import (
     _cred_app,
     _db_reachable,
+    _declare_extra_fields,
     _delete_ws_credentials,
     _seed_ws,
     _use_test_key,
@@ -301,6 +301,7 @@ def test_rotating_a_key_preserves_base_url_and_extra_config(monkeypatch):
     """B1, the highest-value guard in this phase. The client sends only the field it
     changed; the server must not null the fields it did not receive."""
     _use_test_key(monkeypatch)
+    _declare_extra_fields(monkeypatch)
     factory, ws = _ws_factory()
     app = None
 
@@ -435,6 +436,7 @@ def test_editing_base_url_alone_does_not_require_the_key(monkeypatch):
 def test_ollama_stays_configured_after_a_keyless_write(monkeypatch):
     """base_url IS ollama's credential. Wiping it on save unconfigured the provider."""
     _use_test_key(monkeypatch)
+    _declare_extra_fields(monkeypatch)
     factory, ws = _ws_factory()
     app = None
 
@@ -597,95 +599,50 @@ def test_delete_reports_only_what_this_revoke_broke(monkeypatch):
         _delete_ws_credentials(factory, ws)
 
 
-def test_merge_extra_config_is_three_valued():
-    """The pure rule behind the extra_config merge, pinned without a database.
-
-    extra_config carries SECRETS whose values a client can never read back, so the
-    only thing a client can do with one is OMIT it. Omission must therefore mean
-    "keep", or the form's "leave blank to keep" hint is a lie.
-    """
-    stored = {"region": "us-east-1", "secret_access_key": "shhh"}
-
-    # Omitted key -> kept. The founder edited the region and could not resend the
-    # secret; the secret survives.
-    assert merge_extra_config(stored, {"region": "eu-west-1"}) == {
-        "region": "eu-west-1",
-        "secret_access_key": "shhh",
-    }
-    # Explicit null -> that key alone is deleted.
-    assert merge_extra_config(stored, {"secret_access_key": None}) == {"region": "us-east-1"}
-    # A new key joins the stored ones.
-    assert merge_extra_config(stored, {"deployment": "gpt4o"})["deployment"] == "gpt4o"
-    # Top-level explicit null still clears the whole map.
-    assert merge_extra_config(stored, None) is None
-    # Nothing stored yet: a null-valued key is dropped, not written as a JSON null.
-    assert merge_extra_config(None, {"region": None}) is None
-    assert merge_extra_config(None, {"region": "us-east-1"}) == {"region": "us-east-1"}
-    # The stored dict is never mutated in place.
-    assert stored == {"region": "us-east-1", "secret_access_key": "shhh"}
-
-
-def _stored_extra_config(factory, ws: str, provider: str):
-    async def _read():
-        async with factory() as db:
-            rows = await db.execute(
-                select(ProviderCredential).where(
-                    ProviderCredential.workspace_id == ws,
-                    ProviderCredential.provider == provider,
-                )
-            )
-            row = rows.scalars().first()
-            return None if row is None else row.extra_config
-
-    return asyncio.run(_read())
-
-
 @pytest.mark.skipif(not _db_reachable(), reason="Postgres not reachable")
-def test_editing_a_public_extra_field_preserves_a_stored_extra_secret(monkeypatch):
-    """B1 one level down, end to end.
+def test_an_uncatalogued_stray_credential_is_deletable(monkeypatch):
+    """Visible is not the same as removable, and only removable is any use.
 
-    A Bedrock-shaped credential keeps its secret INSIDE extra_config. The client
-    pre-fills the public fields, renders the secret blank ("configured -- leave blank
-    to keep") and omits it on save. Replacing the map wholesale destroyed it,
-    unrecoverably, against what the form had just promised.
+    `catalogued` is `provider in MODEL_CATALOG` -- the exact condition
+    `_require_known_provider` rejects on -- so guarding DELETE with it made
+    `catalogued=False` mean "undeletable", biconditionally. A stray is surfaced
+    precisely so it CAN be revoked, and Remove is the only action its row offers.
     """
     _use_test_key(monkeypatch)
     factory, ws = _ws_factory()
     app = None
 
+    async def _seed_stray():
+        async with factory() as db:
+            db.add(
+                ProviderCredential(
+                    workspace_id=ws,
+                    provider="retired_vendor",
+                    api_key_encrypted=None,
+                    status="unconfigured",
+                    enabled=True,
+                )
+            )
+            await db.commit()
+
     try:
+        asyncio.run(_seed_stray())
         app = _ws_app(factory, ws)
         with TestClient(app) as c:
-            first = c.put(
-                "/v1/providers/anthropic/credentials",
-                json={
-                    "api_key": "sk-original",
-                    "extra_config": {"region": "us-east-1", "secret_access_key": "shhh"},
-                },
-            )
-            assert first.status_code == 200, first.text
+            listed = c.get("/v1/model-config").json()["providers"]
+            stray = next(p for p in listed if p["provider"] == "retired_vendor")
+            assert stray["catalogued"] is False
 
-            # Only the region is edited; the secret is omitted, not resent.
-            edit = c.put(
-                "/v1/providers/anthropic/credentials",
-                json={"extra_config": {"region": "eu-west-1"}},
-            )
-            assert edit.status_code == 200, edit.text
-            assert _stored_extra_config(factory, ws, "anthropic") == {
-                "region": "eu-west-1",
-                "secret_access_key": "shhh",
-            }
+            # A write to a stray is still refused -- PUT and /test index MODEL_CATALOG.
+            assert c.put("/v1/providers/retired_vendor/credentials", json={}).status_code == 400
+            assert c.post("/v1/providers/retired_vendor/test").status_code == 400
 
-            # An explicit null deletes one key without touching the rest.
-            drop = c.put(
-                "/v1/providers/anthropic/credentials",
-                json={"extra_config": {"secret_access_key": None}},
-            )
-            assert drop.status_code == 200, drop.text
-            assert _stored_extra_config(factory, ws, "anthropic") == {"region": "eu-west-1"}
+            gone = c.delete("/v1/providers/retired_vendor/credentials")
+            assert gone.status_code == 200, gone.text
+            assert gone.json()["status"]["configured"] is False
 
-            # The secret value is never echoed on the way out; only its key name is public.
-            assert "shhh" not in first.text + edit.text + drop.text
+            after = c.get("/v1/model-config").json()["providers"]
+            assert not any(p["provider"] == "retired_vendor" for p in after)
     finally:
         if app is not None:
             app.dependency_overrides.clear()

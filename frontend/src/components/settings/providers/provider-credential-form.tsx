@@ -2,8 +2,13 @@
 
 import { useCallback, useState } from "react";
 
-import type { CatalogProvider, CredentialFieldSpec, ProviderStatus } from "@/lib/types";
+import type { CatalogProvider, ProviderStatus } from "@/lib/types";
 import type { CredentialFields } from "../hooks/use-provider-credentials";
+import {
+  buildCredentialFields,
+  hasMissingRequired,
+  isSecretStored,
+} from "./credential-body";
 
 const CTL_CLASS =
   "w-full h-[44px] sm:h-[36px] text-[15px] sm:text-[14px] px-[12px] sm:px-[10px] " +
@@ -45,17 +50,6 @@ function LockIcon() {
   );
 }
 
-/** Whether the server already holds a value for this SECRET field. `api_key` is
- *  reported by `configured` (it is the credential itself); every other secret is
- *  listed by key in `extra_config_secret_keys`. */
-function isSecretStored(key: string, status: ProviderStatus | null): boolean {
-  if (!status) return false;
-  return (
-    status.extra_config_secret_keys.includes(key) ||
-    (key === "api_key" && status.configured)
-  );
-}
-
 /** The value a non-secret field starts at. The server deliberately returns these
  *  so the form round-trips them instead of clearing what was not retyped. */
 function storedValue(key: string, status: ProviderStatus | null): string {
@@ -78,75 +72,25 @@ function initialValues(
   );
 }
 
-/** Identity of the state currently held. The loaded-ness of `status` is part of it
- *  because a `status` that arrives AFTER first mount must still be folded in: this
- *  form always sends the fields it declares, so a stale empty pre-fill is not a
- *  no-op, it is a silent clear of a value the founder never touched. A status
- *  REPLACED by a later one (a refetch after save) deliberately does not re-derive,
- *  which is what stops a background refresh wiping half-typed input. */
+/** Identity of the state currently held. Beyond the provider, it folds in whether a
+ *  `status` has arrived and whether that status is CONFIGURED, because both of those
+ *  transitions invalidate the pre-fill:
+ *
+ *  * `null → status` — a status arriving after first mount. This form always sends
+ *    the fields it declares, so a stale empty pre-fill is not a no-op, it is a silent
+ *    clear of a value the founder never touched.
+ *  * `configured → cleared` — a revoke. The API emits a ProviderStatus for EVERY
+ *    catalogued provider whether or not a row exists, so a revoke is `object → object`
+ *    (`configured` flips, `base_url` goes null), never `object → null`. Without
+ *    `configured` in the key the inputs would keep showing the revoked endpoint and
+ *    the next Save would write it straight back.
+ *
+ *  A status merely REPLACED by a later one of the same configured-ness (the refetch
+ *  after a save) still does not re-derive, which is what stops a background refresh
+ *  wiping half-typed input. */
 function deriveKey(provider: CatalogProvider, status: ProviderStatus | null): string {
-  return `${provider.provider}:${status ? "loaded" : "empty"}`;
-}
-
-/**
- * Fold the typed values into the request body. Exactly two field keys are
- * top-level — `api_key` and `base_url`; EVERY other declared field is a member
- * of `extra_config`.
- *
- * Blank means two different things, and the split is by `kind`, because the
- * server merges `extra_config` per key (omitted keeps, explicit null deletes):
- *   * a blank SECRET is omitted — it was rendered empty because its value can
- *     never be read back, so blank is "keep the stored one", not "clear it";
- *   * a blank non-secret is an explicit `null` — it was PRE-FILLED, so the
- *     founder emptying it is a deliberate clear. Omitting it instead would make
- *     the field unclearable. This is exactly what `base_url` already does.
- *
- * Values are trimmed. No provider's key, region, endpoint or deployment name may
- * carry surrounding whitespace, and trimming kills the commonest paste failure
- * (a trailing newline off a terminal or a docs page) before it becomes an opaque
- * provider auth error.
- */
-export function buildCredentialFields(
-  fields: readonly CredentialFieldSpec[],
-  values: Record<string, string>,
-): CredentialFields {
-  let apiKey: string | undefined;
-  let baseUrl: string | null | undefined;
-  const extra: Record<string, unknown> = {};
-
-  for (const field of fields) {
-    const value = (values[field.key] ?? "").trim();
-    if (field.key === "api_key") {
-      if (value) apiKey = value;
-    } else if (field.key === "base_url") {
-      baseUrl = value || null;
-    } else if (field.kind === "secret") {
-      if (value) extra[field.key] = value;
-    } else {
-      extra[field.key] = value || null;
-    }
-  }
-
-  return {
-    ...(apiKey === undefined ? {} : { api_key: apiKey }),
-    ...(baseUrl === undefined ? {} : { base_url: baseUrl }),
-    ...(Object.keys(extra).length > 0 ? { extra_config: extra } : {}),
-  };
-}
-
-/** A required secret that is already stored may legitimately be blank — blank
- *  means "keep the stored one". Every other required field must carry a value. */
-function hasMissingRequired(
-  fields: readonly CredentialFieldSpec[],
-  values: Record<string, string>,
-  status: ProviderStatus | null,
-): boolean {
-  return fields.some(
-    (field) =>
-      field.required &&
-      !(values[field.key] ?? "").trim() &&
-      !(field.kind === "secret" && isSecretStored(field.key, status)),
-  );
+  const phase = status ? (status.configured ? "configured" : "clear") : "empty";
+  return `${provider.provider}:${phase}`;
 }
 
 export interface ProviderCredentialFormProps {
@@ -229,9 +173,11 @@ export function ProviderCredentialForm({
   );
 
   return (
-    // noValidate: this form owns its own required-check (see hasMissingRequired),
-    // and browser constraint bubbles would contradict a Save button that is
-    // already disabled for exactly the same reason.
+    // noValidate pre-empts browser constraint validation. No input carries a
+    // constraint attribute today (no `required`, and `inputMode="url"` is not
+    // `type="url"`), so nothing is being suppressed yet — it is here so that adding
+    // one later cannot produce a validation bubble contradicting a Save button
+    // already disabled for the same reason. This form owns its own required-check.
     <form noValidate onSubmit={handleSubmit} className="px-[20px] pb-[15px]">
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-[12px] mb-[11px]">
         {fields.map((field) => {
