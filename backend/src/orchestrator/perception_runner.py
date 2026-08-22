@@ -279,11 +279,45 @@ class PerceptionRunner:
                 db_factory=self._db_factory,
             )
 
+            # NEW means newly INGESTED, not merely fetched. Connectors re-fetch
+            # an overlap window on purpose (clock-skew insurance), so a steady
+            # poll normally returns rows that are all already stored;
+            # `ingest_raw_events` drops those from its summaries because they
+            # are not new observations.
+            #
+            # Without this branch the cycle carried on with an EMPTY summary
+            # list under a header that still counted the fetched rows — so the
+            # assessor and the Planner were handed "Polled gmail: 2 new
+            # event(s)." and nothing else, and reasoned about a count they
+            # could not see. They said so, in the briefing items they wrote:
+            # "Without knowing sender, subject, or context, they may be
+            # important". Every poll produced another one, plus a goal invented
+            # about the same invisible events, at two model calls a time.
+            #
+            # The units above are still published: those are built from the
+            # events themselves and are correct whether or not this poll was
+            # the one that first stored them.
+            if not event_summaries:
+                logger.info(
+                    "perception_no_new_observations",
+                    extra={"source": source, "fetched": len(raw_events)},
+                )
+                return {
+                    "status": "completed",
+                    "source": source,
+                    "events": 0,
+                    "fetched": len(raw_events),
+                }
+
             # Fetch full thread context for reply emails
             thread_contexts = await _fetch_thread_contexts(raw_events, user_id, workspace_id)
 
-            observer_summary = f"Polled {source}: {len(raw_events)} new event(s).\n" + "\n".join(
-                f"- {s}" for s in event_summaries[:20]
+            # Count what is actually listed below. The header used to report
+            # `len(raw_events)` over a list holding only the newly-ingested
+            # ones, so it disagreed with itself whenever anything deduped.
+            observer_summary = (
+                f"Polled {source}: {len(event_summaries)} new event(s).\n"
+                + "\n".join(f"- {s}" for s in event_summaries[:20])
             )
             if thread_contexts:
                 observer_summary += "\n\n--- Thread Context (full conversation) ---"
