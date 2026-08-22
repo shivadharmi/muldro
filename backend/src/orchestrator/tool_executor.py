@@ -152,16 +152,16 @@ def _validate_tool_input(tool_name: str, tool_input: dict) -> str | None:
 def _internal_tool_context_args() -> dict[str, frozenset[str]]:
     """Map each internal tool name → the contextual args its impl actually accepts.
 
-    Built once by introspecting the FastMCP impl functions in the intelligence
-    and communication servers. Injection is signature-aware: a tool only receives
-    a contextual arg (user_id / workspace_id) if its implementation declares it.
-    This is what lets push_ui_update (user_id only, no workspace_id) work without
-    re-breaking validation, and removes any per-server special-casing.
+    Built once by introspecting the FastMCP impl functions in the internal servers.
+    Injection is signature-aware: a tool only receives a contextual arg (user_id /
+    workspace_id) if its implementation declares it. A tool that takes only one of
+    the two therefore works without re-breaking validation, and no server needs a
+    special case.
     """
-    from src.tools import communication_server, intelligence_server
+    from src.tools import intelligence_server
 
     mapping: dict[str, frozenset[str]] = {}
-    for module in (intelligence_server, communication_server):
+    for module in (intelligence_server,):
         for name, obj in vars(module).items():
             if not inspect.iscoroutinefunction(obj):
                 continue
@@ -411,11 +411,9 @@ class ToolExecutor:
     ) -> dict:
         """Call an internal tool via in-process FastMCP Client (MCP protocol).
 
-        The composed server mounts tools under namespaced prefixes:
-        - intelligence tools: "intelligence_" prefix
-        - communication tools: "communication_" prefix
-        We map flat tool names (e.g. "search", "push_ui_update") to namespaced names
-        (e.g. "intelligence_search", "communication_push_ui_update").
+        The composed server mounts tools under namespaced prefixes — intelligence
+        tools carry the "intelligence_" prefix. We map flat tool names (e.g. "search")
+        to namespaced names (e.g. "intelligence_search").
         """
         from fastmcp import Client
 
@@ -533,9 +531,9 @@ class ToolExecutor:
                 case ToolBackend.INTERNAL_MCP:
                     # Inject contextual args (user_id / workspace_id) signature-aware:
                     # each internal tool receives only the contextual args its impl
-                    # actually declares. Intelligence tools take both; communication's
-                    # push_ui_update takes user_id but not workspace_id. The LLM-facing
-                    # schemas omit these fields, so the dispatcher supplies them here.
+                    # actually declares, so a tool taking only one of the two is not
+                    # handed the other. The LLM-facing schemas omit these fields, so
+                    # the dispatcher supplies them here.
                     enriched_input = _enrich_internal_input(
                         tool_name, tool_input, user_id, workspace_id
                     )

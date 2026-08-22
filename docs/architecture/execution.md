@@ -179,8 +179,8 @@ Step action request
     │
     └── ToolRegistry.get_tool(name) → match backend:
         │
-        ├── internal_mcp → In-process FastMCP (intelligence + communication servers)
-        │   Tools: search, ingest_event, push_ui_update, etc.
+        ├── internal_mcp → In-process FastMCP (intelligence server)
+        │   Tools: search, ingest_event, store_memory, etc.
         │
         ├── external_mcp → MCP Bridge (external servers)
         │   Google Workspace, GitHub, Slack, Notion,

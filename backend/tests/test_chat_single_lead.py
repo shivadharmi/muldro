@@ -382,9 +382,9 @@ _FENCED_REPLY = """Here you go.
 
 
 async def test_a_legacy_fenced_surface_block_logs_a_deprecation_warning(caplog):
-    """The fenced ```json:surface``` path is deprecated in favour of the typed
-    `render_surface` tool, but it is kept for one release because a model may still emit
-    the old shape. A silent fallback is one nobody can decide to remove, so it must log.
+    """The fenced ```json:surface``` path is deprecated — nothing asks the model for one
+    any more — but it is kept because a model may still emit the old shape from habit. A
+    silent fallback is one nobody can decide to remove, so it must log.
 
     Deliberately drives the REAL `extract_surface_spec` over a real fenced block rather
     than a mocked spec — a warning that only fires for a MagicMock proves nothing about

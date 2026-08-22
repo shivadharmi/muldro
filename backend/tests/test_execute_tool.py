@@ -144,65 +144,81 @@ class TestContextualArgInjection:
     """Signature-aware contextual-arg injection for internal MCP tools.
 
     Injection is driven by each tool impl's declared parameters, not the server
-    name. push_ui_update (communication server) declares user_id but NOT
-    workspace_id, so it must receive user_id and must NOT receive workspace_id.
+    name: a tool receives a contextual arg only if its implementation declares it.
     """
 
     @pytest.mark.asyncio
-    async def test_push_ui_update_gets_injected_user_id(self):
-        """Regression: push_ui_update must receive injected user_id (was missing → error)."""
-        tool = _make_tool_record("internal_mcp", server="communication")
+    async def test_a_tool_declaring_both_gets_both_injected(self):
+        """Regression: a missing injected user_id used to surface as a tool error."""
+        tool = _make_tool_record("internal_mcp", server="intelligence")
 
         mock_db = AsyncMock()
         mock_registry = AsyncMock()
         mock_registry.get_tool = AsyncMock(return_value=tool)
 
         te = _make_tool_executor(mock_db)
-        te.call_internal_tool = AsyncMock(return_value={"status": "published"})
+        te.call_internal_tool = AsyncMock(return_value={"results": []})
 
         with patch("src.services.tool_registry.ToolRegistry", return_value=mock_registry):
             await te.execute_tool(
-                tool_name="push_ui_update",
-                tool_input={"surface_id": "daily_brief", "payload": "{}"},
+                tool_name="search",
+                tool_input={"query": "muldro"},
                 user_id=TEST_USER_ID,
                 workspace_id=TEST_WORKSPACE_ID,
             )
 
             te.call_internal_tool.assert_called_once()
             sent = _sent_input(te.call_internal_tool.call_args)
-            assert sent.get("user_id") == TEST_USER_ID, (
-                f"push_ui_update must receive injected user_id: {sent}"
+            assert sent.get("user_id") == TEST_USER_ID, f"search must receive user_id: {sent}"
+            assert sent.get("workspace_id") == TEST_WORKSPACE_ID, (
+                f"search must receive workspace_id: {sent}"
             )
 
     @pytest.mark.asyncio
-    async def test_push_ui_update_does_not_get_workspace_id(self):
-        """push_ui_update impl has no workspace_id param — injecting it would re-break it."""
-        tool = _make_tool_record("internal_mcp", server="communication")
+    async def test_an_arg_the_impl_does_not_declare_is_not_injected(self):
+        """The negative half: injecting an undeclared arg is a TypeError at the impl.
+
+        Driven through a substituted signature map rather than whichever shipped tool
+        happens to declare one arg today, because the property belongs to the injector
+        and must hold no matter what the catalog looks like.
+        """
+        tool = _make_tool_record("internal_mcp", server="intelligence")
 
         mock_db = AsyncMock()
         mock_registry = AsyncMock()
         mock_registry.get_tool = AsyncMock(return_value=tool)
 
         te = _make_tool_executor(mock_db)
-        te.call_internal_tool = AsyncMock(return_value={"status": "published"})
+        te.call_internal_tool = AsyncMock(return_value={"status": "ok"})
 
-        with patch("src.services.tool_registry.ToolRegistry", return_value=mock_registry):
+        with (
+            patch("src.services.tool_registry.ToolRegistry", return_value=mock_registry),
+            patch(
+                "src.orchestrator.tool_executor._internal_tool_context_args",
+                return_value={"user_id_only_tool": frozenset({"user_id"})},
+            ),
+        ):
             await te.execute_tool(
-                tool_name="push_ui_update",
-                tool_input={"surface_id": "daily_brief", "payload": "{}"},
+                tool_name="user_id_only_tool",
+                tool_input={"thing": "x"},
                 user_id=TEST_USER_ID,
                 workspace_id=TEST_WORKSPACE_ID,
             )
 
             sent = _sent_input(te.call_internal_tool.call_args)
+            assert sent.get("user_id") == TEST_USER_ID
             assert "workspace_id" not in sent, (
-                f"push_ui_update impl has no workspace_id param — must not be injected: {sent}"
+                f"the impl declares no workspace_id — it must not be injected: {sent}"
             )
 
     def test_context_arg_map_reflects_impl_signatures(self):
-        """The introspected map matches the actual impl signatures."""
+        """The introspected map matches the actual impl signatures.
+
+        ``active_plans_resource`` declares only workspace_id, so this also proves the
+        map is really introspected rather than returning both args for everything.
+        """
         from src.orchestrator.tool_executor import _internal_tool_context_args
 
         mapping = _internal_tool_context_args()
-        assert mapping["push_ui_update"] == frozenset({"user_id"})
+        assert mapping["active_plans_resource"] == frozenset({"workspace_id"})
         assert mapping["search"] == frozenset({"user_id", "workspace_id"})

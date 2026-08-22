@@ -6,12 +6,11 @@ transport is a publisher and a client handler; the socket itself changes
 nothing.
 
 The message carries `key` at the TOP LEVEL as well as inside the unit. The
-client guards on an identity field before dispatching — and the reason that
-matters is spec §1: `render_surface` emitted `surface_id` where the hook
-expected `id`, so `use-muldro-ws.ts`'s `msg.surface?.id` guard silently
-dropped every surface it ever sent, while the tool returned
-`{"status": "published"}`. A publisher that does not state its own identity
-field where the client reads it is one rename from being invisible again.
+client guards on an identity field before dispatching, and the previous
+publisher named that field differently from the field the hook read — so the
+guard silently dropped every message it ever sent while the publisher reported
+success. A publisher that does not state its own identity field where the
+client reads it is one rename from being invisible again.
 """
 
 from __future__ import annotations

@@ -1,9 +1,8 @@
 """A tool that RETURNS an error keeps the turn alive — and keeps the reply already written.
 
 ``ToolExecutor.execute_tool`` RETURNS ``{"error": ..., "error_code":
-"invalid_tool_args"}`` for an internal tool whose arguments fail a Pydantic parse — most
-often ``render_surface``, the tool the chat lead uses to draw a workspace card. That is only
-safe if a rejected tool call costs the lead its CARD and not its PROSE.
+"invalid_tool_args"}`` for an internal tool whose arguments fail a Pydantic parse. That is
+only safe if a rejected tool call costs the lead its TOOL RESULT and not its PROSE.
 
 The dangerous shape is a lead that emits text and a tool call in the SAME assistant message
 (both Anthropic and OpenAI allow this): it has already committed to a reply before the tool
@@ -54,26 +53,26 @@ from src.orchestrator.chat_single_lead import _NO_REPLY_TEXT, _ChatSingleLeadMix
 from src.orchestrator.core_events import Presentation, RunFailed
 
 MODEL_ID = "claude-sonnet-4-6"
-TOOL_NAME = "render_surface"
+TOOL_NAME = "store_memory"
 
 # The prose the lead has ALREADY committed to when the tool call goes out, and the prose it
 # writes after seeing the rejection. Both must survive into the final reply.
 COMMITTED_PROSE = "Here is the comparison you asked for."
-CORRECTIVE_PROSE = " I could not draw the card, so here it is as plain text instead."
+CORRECTIVE_PROSE = " I could not save that, so here it is as plain text instead."
 
 # What ToolExecutor returns for a failed argument parse. Shaped exactly like
 # ToolExecutor's own rendering (_render_validation_error) so the assertion below is about the
 # real payload the model would have to read.
 INVALID_ARGS_ERROR = {
     "error": (
-        f"Invalid argument(s) for '{TOOL_NAME}': sections.0.type: "
-        "Input tag 'bogus' found using 'type' does not match any of the expected tags. "
+        f"Invalid argument(s) for '{TOOL_NAME}': ttl_days: "
+        "Input should be greater than or equal to 0. "
         "Fix the arguments and call the tool again."
     ),
     "error_code": "invalid_tool_args",
 }
 
-BOGUS_ARGS = {"title": "Comparison", "sections": [{"type": "bogus"}]}
+BOGUS_ARGS = {"text": "Comparison", "ttl_days": -1}
 
 
 # ---------------------------------------------------------------------------
@@ -332,7 +331,7 @@ class _LeadHarness(_ChatSingleLeadMixin):
 
 
 async def test_returned_tool_error_keeps_the_committed_reply() -> None:
-    """A RETURNED tool error blocks the card, not the reply."""
+    """A RETURNED tool error blocks the tool result, not the reply."""
     frames = await _stream_turn(
         tool_name=TOOL_NAME, execute_tool=_returns_invalid_args, thread_id="t_returned"
     )

@@ -16,11 +16,7 @@ from unittest.mock import AsyncMock, patch
 
 from src.contracts import PlanStep
 from src.orchestrator.agents import SubAgent, ThinkingConfig
-from src.orchestrator.lead_builder import (
-    PRESENTATION_FLOOR,
-    build_chat_lead,
-    derive_lead_scope,
-)
+from src.orchestrator.lead_builder import build_chat_lead, derive_lead_scope
 from src.orchestrator.prompts import LEAD_PROMPT
 
 # A perceiver whose read scope is small + entirely read-only.
@@ -90,7 +86,7 @@ async def test_read_only_plan_scope_has_no_write_capability():
     # `knowledge.search` to the curated recall capabilities.
     from src.orchestrator.lead_builder import KNOWLEDGE_RECALL_CAPABILITIES
 
-    assert scope == _PERCEIVER_SCOPE | set(KNOWLEDGE_RECALL_CAPABILITIES) | PRESENTATION_FLOOR
+    assert scope == _PERCEIVER_SCOPE | set(KNOWLEDGE_RECALL_CAPABILITIES)
     # Teeth: a read-only plan must never grant a write capability.
     assert "email.send" not in scope
     assert "calendar.create" not in scope
@@ -103,21 +99,21 @@ async def test_write_plan_scope_grants_only_that_write():
 
     scope = await derive_lead_scope(steps, resolver, _agents())
 
-    assert scope == {"email.send", "email.search", "email.list"} | PRESENTATION_FLOOR
+    assert scope == {"email.send", "email.search", "email.list"}
     # Teeth: the lead gets only THIS plan's write, never an unrelated executor write.
     assert "calendar.create" not in scope
 
 
-# --- derive_lead_scope: respond/reason-only plan -> nothing beyond the floor -----------
-async def test_respond_reason_only_plan_adds_nothing_beyond_the_floor():
-    # These steps contribute NO plan authority. What remains is PRESENTATION_FLOOR, which is
-    # not plan-derived: the lead is the reply producer on every turn, so it can always render.
+# --- derive_lead_scope: respond/reason-only plan -> no authority at all ----------------
+async def test_respond_reason_only_plan_grants_no_authority():
+    # These steps contribute NO plan authority, and there is no floor beneath them: a plan
+    # that only speaks gets a lead that can only speak.
     steps = [_step("system.respond"), _step("reason"), _step("respond"), _step("none")]
     resolver = _resolver({})  # must never be consulted for these
 
     scope = await derive_lead_scope(steps, resolver, _agents())
 
-    assert scope == set(PRESENTATION_FLOOR)
+    assert scope == set()
     resolver.capabilities_for_step.assert_not_called()
 
 
@@ -129,7 +125,7 @@ async def test_user_actor_step_contributes_no_authority():
 
     scope = await derive_lead_scope(steps, resolver, _agents())
 
-    assert scope == set(PRESENTATION_FLOOR)
+    assert scope == set()
     resolver.capabilities_for_step.assert_not_called()
 
 
@@ -140,7 +136,7 @@ async def test_perceive_step_scope_equals_perceiver_scope():
 
     scope = await derive_lead_scope(steps, resolver, _agents())
 
-    assert scope == _PERCEIVER_SCOPE | PRESENTATION_FLOOR
+    assert scope == _PERCEIVER_SCOPE
     resolver.capabilities_for_step.assert_not_called()
 
 
@@ -151,7 +147,7 @@ async def test_perceive_step_fail_closed_when_no_perceiver():
 
     scope = await derive_lead_scope(steps, resolver, agents={})
 
-    assert scope == set(PRESENTATION_FLOOR)
+    assert scope == set()
 
 
 # --- build_chat_lead: SubAgent shape (default + cheap_mode) ----------------------------
@@ -183,7 +179,7 @@ async def test_build_chat_lead_produces_lead_agent():
     assert lead.max_tokens == 4096
     assert lead.temperature == 0.3
     assert lead.thinking == ThinkingConfig(enabled=True, budget_tokens=4096)
-    assert lead.capability_scope == {"email.send", "email.search"} | PRESENTATION_FLOOR
+    assert lead.capability_scope == {"email.send", "email.search"}
 
 
 async def test_build_chat_lead_cheap_mode_keeps_balanced_and_thinking():
@@ -208,7 +204,7 @@ async def test_build_chat_lead_cheap_mode_keeps_balanced_and_thinking():
     assert lead.prompt is LEAD_PROMPT
     assert lead.model_tier == "balanced"  # already balanced — cheap mode leaves it
     assert lead.thinking.budget_tokens == 4096  # thinking passed through (halving dropped)
-    assert lead.capability_scope == {"email.send"} | PRESENTATION_FLOOR
+    assert lead.capability_scope == {"email.send"}
 
 
 # --- A3: knowledge.* must grant REAL authority, not zero -------------------------------
@@ -245,13 +241,12 @@ async def test_knowledge_search_scope_can_actually_recall():
 async def test_knowledge_scopes_stay_least_authority():
     """Teeth: the curated scopes must not become the blunt `internal.*` family sweep.
 
-    `capabilities_for_step("internal.search")` returns all 23 non-approval `internal.*`
-    capabilities — including `internal.push_ui`, `internal.update_execution` and
+    `capabilities_for_step("internal.search")` returns every non-approval `internal.*`
+    capability — including `internal.ingest_event`, `internal.update_execution` and
     `internal.report_verdict`. A chat lead answering "what do you know about X" has no
     business with any of them.
     """
     over_broad = {
-        "internal.push_ui",
         "internal.update_execution",
         "internal.update_entity",
         "internal.ingest_event",

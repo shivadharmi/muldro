@@ -61,9 +61,9 @@ async def test_the_frame_is_a_type_unit_message():
 
 
 async def test_the_message_carries_the_frames_key_at_the_top_level():
-    """The WS hook guards on an identity field before dispatching, exactly as
-    it guards `msg.surface?.id`. render_surface emitted `surface_id` where the
-    hook expected `id` and was silently dropped for months — spec §1."""
+    """The WS hook guards on an identity field before dispatching. The previous
+    publisher named that field differently from the field the hook read, so every
+    message it sent was silently dropped while the publisher reported success."""
     bus = _Bus()
     await publish_units(bus, [_unit()], user_id="usr_1")
     msg = json.loads(bus.published[0][1])

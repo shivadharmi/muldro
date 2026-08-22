@@ -35,12 +35,12 @@ def _request(name: str, call_id: str = "tc1") -> ToolCallRequest:
     )
 
 
-def _invalid_args_message(call_id: str = "tc1", *, name: str = "render_surface") -> ToolMessage:
+def _invalid_args_message(call_id: str = "tc1", *, name: str = "store_memory") -> ToolMessage:
     """The exact shape muldro_tool_dispatcher produces for a rejected-args result."""
     return ToolMessage(
         content=json.dumps(
             {
-                "error": "Invalid argument(s) for 'render_surface': subtitle: too long.",
+                "error": "Invalid argument(s) for 'store_memory': ttl_days: must be >= 0.",
                 "error_code": "invalid_tool_args",
             }
         ),
@@ -50,7 +50,7 @@ def _invalid_args_message(call_id: str = "tc1", *, name: str = "render_surface")
     )
 
 
-def _ok_message(call_id: str = "tc1", *, name: str = "render_surface") -> ToolMessage:
+def _ok_message(call_id: str = "tc1", *, name: str = "store_memory") -> ToolMessage:
     return ToolMessage(
         content=json.dumps({"ok": True}), tool_call_id=call_id, name=name, status="success"
     )
@@ -79,7 +79,7 @@ async def test_invalid_args_failures_below_the_cap_are_dispatched():
     mw = make_repair_cap_middleware()
 
     for _ in range(MAX_ATTEMPTS):
-        result = await mw.awrap_tool_call(_request("render_surface"), handler)
+        result = await mw.awrap_tool_call(_request("store_memory"), handler)
         assert result.status == "error"
 
     assert handler.await_count == MAX_ATTEMPTS
@@ -96,11 +96,11 @@ async def test_call_after_max_attempts_does_not_dispatch():
     mw = make_repair_cap_middleware()
 
     for _ in range(MAX_ATTEMPTS):
-        await mw.awrap_tool_call(_request("render_surface"), handler)
+        await mw.awrap_tool_call(_request("store_memory"), handler)
 
     handler.reset_mock()
     handler.side_effect = AssertionError("capped call must not dispatch")
-    result = await mw.awrap_tool_call(_request("render_surface", "tc_capped"), handler)
+    result = await mw.awrap_tool_call(_request("store_memory", "tc_capped"), handler)
 
     handler.assert_not_awaited()
     assert isinstance(result, ToolMessage)
@@ -113,14 +113,14 @@ async def test_capped_message_names_the_tool_and_steers_to_chat():
     handler = _handler(*(_invalid_args_message() for _ in range(MAX_ATTEMPTS)))
     mw = make_repair_cap_middleware()
     for _ in range(MAX_ATTEMPTS):
-        await mw.awrap_tool_call(_request("render_surface"), handler)
+        await mw.awrap_tool_call(_request("store_memory"), handler)
 
     handler.side_effect = AssertionError("capped call must not dispatch")
-    result = await mw.awrap_tool_call(_request("render_surface", "tc_capped"), handler)
+    result = await mw.awrap_tool_call(_request("store_memory", "tc_capped"), handler)
 
     payload = json.loads(result.content)
     text = payload["error"]
-    assert "render_surface" in text
+    assert "store_memory" in text
     assert str(MAX_ATTEMPTS) in text
     assert "chat" in text.lower()
     assert payload["error_code"] == "repair_cap_exceeded"
@@ -132,11 +132,11 @@ async def test_capped_message_names_the_tool_and_steers_to_chat():
 
 
 async def test_cap_is_keyed_per_tool_name():
-    """Capping render_surface must not cap an unrelated tool in the same turn."""
+    """Capping store_memory must not cap an unrelated tool in the same turn."""
     handler = _handler(*(_invalid_args_message() for _ in range(MAX_ATTEMPTS)))
     mw = make_repair_cap_middleware()
     for _ in range(MAX_ATTEMPTS):
-        await mw.awrap_tool_call(_request("render_surface"), handler)
+        await mw.awrap_tool_call(_request("store_memory"), handler)
 
     handler.reset_mock()
     handler.side_effect = [_ok_message("tc_other", name="search_memories")]
@@ -162,7 +162,7 @@ async def test_successful_call_resets_the_failure_count():
 
     total = (MAX_ATTEMPTS - 1) + 1 + MAX_ATTEMPTS
     for _ in range(total):
-        await mw.awrap_tool_call(_request("render_surface"), handler)
+        await mw.awrap_tool_call(_request("store_memory"), handler)
 
     # Every one of those was dispatched — the success in the middle wiped the tally.
     assert handler.await_count == total
@@ -170,7 +170,7 @@ async def test_successful_call_resets_the_failure_count():
     # And only now, MAX_ATTEMPTS failures after the reset, is the tool capped.
     handler.reset_mock()
     handler.side_effect = AssertionError("capped call must not dispatch")
-    result = await mw.awrap_tool_call(_request("render_surface", "tc_capped"), handler)
+    result = await mw.awrap_tool_call(_request("store_memory", "tc_capped"), handler)
     handler.assert_not_awaited()
     assert json.loads(result.content)["error_code"] == "repair_cap_exceeded"
 
@@ -185,7 +185,7 @@ async def test_unrelated_tool_errors_do_not_count_toward_the_cap():
     unrelated = ToolMessage(
         content=json.dumps({"error": "Token expired", "error_code": "auth_required"}),
         tool_call_id="tc1",
-        name="render_surface",
+        name="store_memory",
         status="error",
     )
     prose = ToolMessage(content="just prose", tool_call_id="tc1", status="error")
@@ -194,14 +194,14 @@ async def test_unrelated_tool_errors_do_not_count_toward_the_cap():
     handler = _handler(*(unrelated for _ in range(MAX_ATTEMPTS)), prose, _invalid_args_message())
 
     for _ in range(MAX_ATTEMPTS + 2):
-        await mw.awrap_tool_call(_request("render_surface"), handler)
+        await mw.awrap_tool_call(_request("store_memory"), handler)
 
     assert handler.await_count == MAX_ATTEMPTS + 2
 
     # Only ONE invalid_tool_args failure was recorded, so the tool is still callable.
     handler.reset_mock()
     handler.side_effect = [_ok_message()]
-    result = await mw.awrap_tool_call(_request("render_surface"), handler)
+    result = await mw.awrap_tool_call(_request("store_memory"), handler)
     handler.assert_awaited_once()
     assert result.status == "success"
 

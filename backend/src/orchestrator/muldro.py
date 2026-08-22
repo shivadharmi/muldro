@@ -543,8 +543,8 @@ class MuldroOrchestrator:
             # Per-day idempotency, CHECK-BEFORE-GENERATE: if a briefing row
             # already exists for today, an earlier run already generated AND
             # delivered it. Short-circuit HERE — before get_briefing, the
-            # Presenter LLM reformat, and the Presenter agent's own
-            # push_ui_update (which ships the surface to the UI). Checking AFTER
+            # Presenter LLM reformat, and the Presenter agent's own delivery of
+            # the briefing to the user. Checking AFTER
             # generation (the old bug) only suppressed the secondary notify/push;
             # the user still saw the briefing regenerated and re-pushed every
             # tick. The (user_id, briefing_date) row is the idempotency key.

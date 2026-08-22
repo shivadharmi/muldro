@@ -97,10 +97,10 @@ async def test_scheduled_briefing_second_run_skips_generation_entirely():
     """A re-fire must short-circuit BEFORE get_briefing + the Presenter agent.
 
     The duplicate-briefing bug was that the "already delivered" guard ran AFTER
-    get_briefing (the tool) and the Presenter agent — and the Presenter agent's
-    own push_ui_update had already shipped the surface to the UI before the guard
-    fired. The guard must check-before-generate: when today's briefing exists, no
-    get_briefing call, no Presenter LLM reformat, no push.
+    get_briefing (the tool) and the Presenter agent — so the Presenter agent had
+    already delivered the briefing to the user before the guard fired. The guard
+    must check-before-generate: when today's briefing exists, no get_briefing call,
+    no Presenter LLM reformat, no push.
     """
     notifier = MagicMock()
     notifier.notify = AsyncMock()

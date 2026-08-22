@@ -89,26 +89,8 @@ class TestCallInternalToolServerPrefix:
         )
 
     @pytest.mark.asyncio
-    async def test_server_prefix_from_registry(self, orchestrator):
-        """server_prefix is required and used to namespace tool names."""
-        mock_result = MagicMock()
-        mock_result.is_error = False
-        mock_result.structured_content = {"result": {"status": "ok"}}
-
-        mock_client = AsyncMock()
-        mock_client.call_tool = AsyncMock(return_value=mock_result)
-        orchestrator._tool_executor._internal_client = mock_client
-
-        await orchestrator._tool_executor.call_internal_tool(
-            "push_ui_update", {"surface_id": "daily_brief"}, server_prefix="communication"
-        )
-        mock_client.call_tool.assert_called_once_with(
-            "communication_push_ui_update", {"surface_id": "daily_brief"}
-        )
-
-    @pytest.mark.asyncio
     async def test_server_prefix_intelligence(self, orchestrator):
-        """server_prefix='intelligence' builds intelligence_search."""
+        """server_prefix is required and namespaces the flat tool name."""
         mock_result = MagicMock()
         mock_result.is_error = False
         mock_result.structured_content = {"result": {"status": "ok"}}

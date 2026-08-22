@@ -63,9 +63,9 @@ class TestCatalogToolsHaveCapabilities:
             assert seed.capability, f"External seed '{seed.name}' has no capability"
 
     def test_catalog_has_expected_tools(self):
-        """push_ui_update and web_search should be in the catalog."""
+        """store_memory and web_search should be in the catalog."""
         internal_names = {t.name for t in INTERNAL_TOOLS}
         external_names = {s.name for s in EXTERNAL_TOOL_SEEDS}
         all_names = internal_names | external_names
-        assert "push_ui_update" in all_names
+        assert "store_memory" in all_names
         assert "web_search" in all_names

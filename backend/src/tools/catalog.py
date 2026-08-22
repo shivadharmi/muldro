@@ -5,9 +5,8 @@ capabilities, risk levels, and metadata. Serves as a parallel registry during
 the Unified Tool Registry migration (Phase 6).
 
 Tools are organized by server:
-- intelligence: 19 tools (search, ingest, policies, context, briefing, etc.)
-- communication: 2 tools (UI updates, rich surfaces)
-- _special: 1 tool (report_governor_verdict — inline-dispatched, not MCP)
+- intelligence: search, ingest, policies, context, briefing, etc.
+- _special: report_governor_verdict (inline-dispatched, not MCP)
 """
 
 from __future__ import annotations
@@ -33,9 +32,7 @@ from src.tools.schemas import (
     GetPlanDetailsInput,
     GetProvenanceInput,
     IngestEventInput,
-    PushUiUpdateInput,
     QueryFactsInput,
-    RenderSurfaceInput,
     ReportGovernorVerdictInput,
     ReportObservationInput,
     ScheduleReminderInput,
@@ -364,27 +361,6 @@ INTERNAL_TOOLS: list[InternalToolDef] = [
         requires_approval=False,
         server="_special",
         description=_desc(ReportGovernorVerdictInput),
-        read_only=False,
-    ),
-    # Communication server tools (2 tools)
-    InternalToolDef(
-        name="push_ui_update",
-        input_model=PushUiUpdateInput,
-        capability="internal.push_ui",
-        risk_level="low",
-        requires_approval=False,
-        server="communication",
-        description=_desc(PushUiUpdateInput),
-        read_only=False,
-    ),
-    InternalToolDef(
-        name="render_surface",
-        input_model=RenderSurfaceInput,
-        capability="internal.render_surface",
-        risk_level="none",
-        requires_approval=False,
-        server="communication",
-        description=_desc(RenderSurfaceInput),
         read_only=False,
     ),
 ]

@@ -576,22 +576,7 @@ PRESENTER_VOICE = """\
 8. Format appropriately: markdown for web
 9. When presenting data (emails, calendar), use clear structure
 10. End with recommended next steps when appropriate
-11. Surface titles must be under 80 characters
-12. Surface subtitles must be under 120 characters
-</rules>
-
-<surfaces>
-When your reply has visual value beyond chat text — a comparison, a set of metrics, a
-table, a timeline — call the render_surface tool to create a workspace card. Its schema
-tells you exactly which components exist and what each one needs.
-
-Do NOT create a surface when the reply is a simple conversational one (greeting,
-acknowledgment, clarification), when the information fits naturally in chat text, or when
-the user explicitly asked for a text response.
-
-When you do create one, still write a short chat reply with the key point. The surface is
-the detailed, persistent view — not a replacement for speaking to the user.
-</surfaces>"""
+</rules>"""
 
 PRESENTER_PROMPT = f"""\
 <role>

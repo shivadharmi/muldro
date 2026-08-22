@@ -1,6 +1,6 @@
 """PRESENTER_PROMPT content pin.
 
-``PRESENTER_VOICE`` (the reusable formatting + surface-emission fragment) is extracted
+``PRESENTER_VOICE`` (the reusable formatting fragment) is extracted
 from ``PRESENTER_PROMPT`` so the deep runtime can append it as an inline-format
 augmentation. This golden-hash test pins the exact bytes of ``PRESENTER_PROMPT`` so
 unintended edits to the prompt are caught.
@@ -53,14 +53,17 @@ shape rather than only asserting the prose was edited.
 It was re-baselined a sixth time when the whole ``<surface_generation>`` block was deleted.
 The A2UI taxonomy it recited — the kinds table, the ```json:surface``` and
 ```json:surface_data``` worked examples, the component list with each type's required
-properties, and the list-of-dict rules — now lives in the ``render_surface`` tool's input
-schema, where a provider can enforce it instead of a model having to remember it. What
-replaced it is the ``<surfaces>`` block, which carries only WHEN to surface: judgement a
-schema cannot express. The companion assertions moved with the content — the kind rules to
-``test_surface_kind_guidance`` (now asserting against ``RenderSurfaceInput.kind``'s Literal
-rather than parsing a markdown table), and the dead-schema-token guard was deleted outright,
-because the prompt no longer names a single kind or component type for a drift to
+properties, and the list-of-dict rules — moved out of prose and into a typed tool input
+schema, where a provider could enforce it instead of a model having to remember it. What
+replaced it was a short ``<surfaces>`` block carrying only WHEN to surface: judgement a
+schema cannot express. The dead-schema-token guard was deleted outright at the same time,
+because the prompt no longer named a single kind or component type for a drift to
 re-introduce.
+
+It was re-baselined a seventh time when model-authored UI was removed entirely. There is no
+longer a tool for the model to draw a card with, so the ``<surfaces>`` block and the two
+surface title/subtitle length rules had nothing left to govern and were deleted. What
+remains is the voice alone: how to speak, not what to draw.
 
 To re-baseline intentionally, recompute with:
     uv run python -c "from src.orchestrator.prompts import PRESENTER_PROMPT; \\
@@ -75,10 +78,11 @@ from src.orchestrator.prompts import PRESENTER_PROMPT, PRESENTER_VOICE
 # again for the Muldro product rebrand (name substitution only), again for the surface-kind
 # guidance correction (`message` offered; `run`/`prepared_work`/`plan` forbidden), again
 # for the positional Table.rows shape (`{"cells": [...]}` replacing rows keyed by column key),
-# again for EntityCard.attributes becoming a list of `{"key", "value"}` pairs, and again for
-# the deletion of `<surface_generation>` — the taxonomy moved out of prose and into the
-# `render_surface` tool schema, leaving only the WHEN-to-surface judgement behind.
-_PRESENTER_PROMPT_GOLDEN_SHA256 = "15dde7dd812c77adbda06ffdaafa1ff9775282a5aa30f3c0681e7bd854ece575"
+# again for EntityCard.attributes becoming a list of `{"key", "value"}` pairs, again for the
+# deletion of `<surface_generation>`, and again for the removal of model-authored UI — with
+# no tool left to draw a card, the `<surfaces>` block and its two length rules governed
+# nothing and were deleted.
+_PRESENTER_PROMPT_GOLDEN_SHA256 = "6ecd297907da9bf15d162178a95d403434ab1e7665e906ce9fd79049f8c9a7cd"
 
 
 def test_presenter_prompt_matches_golden_hash():
@@ -93,10 +97,10 @@ def test_presenter_prompt_matches_golden_hash():
 
 def test_presenter_voice_is_substring_of_presenter_prompt():
     """The extracted fragment must be the exact contiguous block still embedded in
-    PRESENTER_PROMPT (rules + when-to-surface guidance)."""
+    PRESENTER_PROMPT (the formatting rules)."""
     assert PRESENTER_VOICE in PRESENTER_PROMPT
     # The fragment is the reusable voice, NOT the Presenter-specific role or examples.
     assert PRESENTER_VOICE.startswith("<rules>")
-    assert PRESENTER_VOICE.endswith("</surfaces>")
+    assert PRESENTER_VOICE.endswith("</rules>")
     assert "<role>" not in PRESENTER_VOICE
     assert "<examples>" not in PRESENTER_VOICE
