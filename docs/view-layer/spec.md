@@ -151,9 +151,24 @@ answer is not to cut it.
   | `run` | 120 chars | short — the steps carry the detail |
   | `record` | 120 chars | short |
 
-- **Overrun is a validation failure**, returned to the model through the existing typed-generation repair
-  loop (`deep_runtime/middleware/repair_cap.py`, capped at 3) — the same mechanism that already rejects
-  bad tool arguments. Not a truncation, not a prompt request.
+- **Overrun is a validation failure** — not a truncation, not a prompt request. `validate_body(body,
+  kind)` raises `BodyBudgetError` whose message is written *for a model to read*: it names the budget
+  and says to rewrite paragraph one as a self-contained claim. That message is the repair prompt.
+
+  **There is no existing loop to reuse.** An earlier revision of this section pointed at
+  `deep_runtime/middleware/repair_cap.py` as "the same mechanism that already rejects bad tool
+  arguments" — and that description is exactly why it cannot serve. `repair_cap` is a LangGraph
+  middleware wrapping the *tool dispatcher*; it counts failed **tool calls**. A body is prose from a
+  text completion and never passes through it. The generation-repair loop is **its own small piece of
+  work**, mirroring `repair_cap`'s cap of 3 rather than reusing its code.
+
+- **The body is a stored row, not a derived value.** Invariant 1 says a view is a pure function of a
+  domain row and no view reads a cache — and a body costs a model call, so it cannot be recomputed on
+  every feed refresh. Therefore the body must *be* a row. The `Unit` is then a pure projection of two
+  row sets: the frame and quotes from `normalized_events`, and the body from its own row. Regeneration
+  is a structural check, not a timer: when `frame.event_count` changes, a new message arrived and the
+  stored body no longer describes the thing. **Whether that row is `Finding` (§9 — which already
+  carries `claim`, `body`, `sources`, `as_of`, `stale_after`) or a separate one is open (§13.6).**
 - **The Glance renders inline markdown only** — emphasis and code spans. No headings, lists, tables or
   fences (they destroy a 320px grid cell regardless of length), and **no links**: a link inside a body
   reopens injection through a different door. The model names a source; the frame links it.
@@ -440,9 +455,13 @@ class Finding(Base, TimestampMixin):
     finding_id: str          # fnd_<ULID>
     workspace_id: str
     user_id: str
-    claim: str               # the body's lede — model-authored
-    body: str                # full markdown
-    sources: list[dict]      # non-empty; a claim with no derivation is not renderable
+    # NO `claim` COLUMN. An earlier revision had `claim: str  # the body's lede`,
+    # which invariant 7 forbids: "the lede is paragraph 1 of `body` — not a separate
+    # field." A stored claim is a second projection of one string, free to drift from
+    # the body it summarises. That is defect 3 from §1 — the same sentence at two
+    # lengths — reintroduced as a schema column. The lede is `lede_of(body)`.
+    body: str                # full markdown; paragraph 1 IS the claim
+    sources: list[dict]      # non-empty; a body with no derivation is not renderable
     derivation: dict         # which tools, which arguments, which rows — enough to recompute
     as_of: datetime
     stale_after: datetime
@@ -556,22 +575,34 @@ replacement.
 Ordered by dependency. Each step lands complete with its duplicate removed in the same commit — a second
 parallel path is how this was arrived at.
 
-| # | Step | Gate |
-|---|---|---|
-| 1 | `Frame` from `NormalizedEvent`; github keys on the PR | property test: same event → same key; three duplicate cards become one that updates |
-| 2 | `body` as one markdown field; headline plain text; `quotes` band | fuzz: no adversarial subject yields a headline the validator would refuse, and none raises |
-| 3 | Glance renderer; delete the 19 slots and the private token maps | every card of a kind is the same shape; `kindStyle()` is the only definition |
-| 4 | List-ranker over derived features | `rank()` unit-tested against ordering cases; no external prose in its inputs |
-| 5 | Full view, Conversation archetype | covers gmail, slack and github discussions — three of five sources in one renderer |
-| 6 | Change, Event, Document archetypes | a PR renders both of its archetypes |
-| 7 | `Finding` with derivation | a stale finding re-derives on view rather than rendering stale |
-| 8 | `group_key` correlation | ships with a reversible-merge affordance or it does not ship |
+| # | Step | Gate | State |
+|---|---|---|---|
+| 1 | `Frame` from `NormalizedEvent`; github keys on the PR | property test: same event → same key; three duplicate cards become one that updates | **landed** |
+| 2a | The body **contract** — one markdown field, headline plain text, `quotes` band | fuzz: no adversarial subject yields a headline the validator would refuse, and none raises | **landed** |
+| 2b | The body **generator** — who writes it, the repair loop, the row it lands in (§2.3) | a body that overruns its budget is rewritten, not truncated; a card's prose survives a restart | **not built** |
+| 3 | Glance renderer; delete the 19 slots and the private token maps | every card of a kind is the same shape; `kindStyle()` is the only definition | **landed** |
+| 3b | **Transport** — a `Unit` reaches the screen over REST and WebSocket | the workspace renders a real `Unit`, not a surface adapted by `unitFromSurface` | **not built** |
+| 3c | **Cutover and deletion** — §11 executed, both halves | `grep` finds no `A2UISurface`, no `surface_pusher`, no `components/a2ui/`; nothing renders an adapted surface | **not built** |
+| 4 | List-ranker over derived features | `rank()` unit-tested against ordering cases; no external prose in its inputs | **built, unwired** |
+| 5 | Full view, Conversation archetype | covers gmail, slack and github discussions — three of five sources in one renderer | not built |
+| 6 | Change, Event, Document archetypes | a PR renders both of its archetypes | not built |
+| 7 | `Finding` with derivation | a stale finding re-derives on view rather than rendering stale | not built |
+| 8 | `group_key` correlation | ships with a reversible-merge affordance or it does not ship | not built |
 
-**Steps 1–3 are the screenshot.** Nothing there needs the ranker, the archetypes or the correlation layer
-to stop being broken.
+**Steps 2b, 3b and 3c were missing from an earlier revision of this table, and that omission
+propagated.** The order went "Glance renderer" → "ranker" with no step for *how a Unit reaches the
+screen* and none for *who writes its prose* — so a plan written against it built the contract, the
+identity and the renderer, and left the product unable to display anything. A build order that names
+only the contracts will produce exactly that: a correct, complete, unreachable system. **A step that
+says "and it is now the only path" belongs beside every step that says "build the new one."**
 
-Step 2 is not reorderable: everything downstream assumes values arrive with an origin, and retrofitting
-provenance is how the current system got here.
+**Steps 1–3c are the screenshot.** Nothing there needs the ranker, the archetypes or the correlation
+layer to stop being broken — but 3b and 3c are what make 1–3 visible, and until they land the founder
+still sees the old cards.
+
+Two orderings are forced. **2a before 2b**: everything downstream assumes values arrive with an origin,
+and retrofitting provenance is how the current system got here — the containment must exist before the
+thing it contains. **3b before 3c**: the old path is deleted when the new one replaces it, never before.
 
 ---
 
@@ -587,6 +618,26 @@ provenance is how the current system got here.
 4. **Exploration budget for engagement promotion** (§6.2). Deferred until there is engagement history at
    all.
 5. **Feed pagination.** A ranked union needs a cursor. Straightforward, unspecified here.
+6. **Where a body is stored** (§2.3). It must be a row rather than a derived value — invariant 1 plus
+   the cost of a model call force that much. What is open is *which* row: `Finding` (§9) already carries
+   `claim`, `body`, `sources`, `as_of` and `stale_after`, and a perception unit's body wants all five.
+   **Settled: two rows.** A perception body lands in `unit_bodies` (`workspace_id`, `frame_key`,
+   `body`, `event_ids`, `as_of`); a chat answer stays a `Finding`. They look alike once `claim` is
+   struck, but they diverge on the two fields that carry the design. A `Finding`'s `derivation` names
+   which tools to re-run — **empty for a perception body, whose derivation is its events.** And a
+   `Finding` goes stale on a **timer** (`stale_after`), while a perception body goes stale
+   **structurally**: `frame.event_count` changed, so a new message arrived and the prose no longer
+   describes the thing. Lifetimes differ too — findings never expire, a body is superseded by the next
+   message. §8.1's *"both paths, one shape"* is a claim about the `Unit`, not about where its body is
+   kept.
+7. **What the body generator reads.** It must read external text — a model cannot summarise an email it
+   has not seen, and no containment trick avoids that. So this is the one place untrusted text
+   legitimately enters a model's context, and the design's answer is to bound the blast radius rather
+   than prevent the read: the model authors one field, that field is budget-validated, and it renders
+   inline-only with no links. **What is open is whether it reads `unit.quotes`** — which inherits
+   `VERBATIM_TEXT_FIELD`'s fail-closed per-source map, but is capped at `MAX_QUOTES` and drops
+   unattributed messages — **or a wider per-source read.** The first keeps one verbatim map in the
+   codebase; the second sees more of the thread.
 
 ---
 
