@@ -26,8 +26,8 @@ from src.llm.utility import complete_text_with_usage
 # `src/services`. The alternative - returning usage up to the caller - would put
 # cost accounting in three call sites instead of one.
 from src.orchestrator.budget import record_token_span
-from src.view.body import LEDE_BUDGETS, validate_body
-from src.view.body_prompt import BODY_SYSTEM_PROMPT, build_body_request
+from src.view.body import LEDE_BUDGETS, BodyBudgetError, validate_body
+from src.view.body_prompt import BODY_SYSTEM_PROMPT, build_body_request, build_repair_request
 from src.view.contracts import Frame, Quote
 
 logger = logging.getLogger(__name__)
@@ -38,6 +38,12 @@ BODY_MAX_TOKENS = 700
 # names the overrun), but a fully deterministic decode is one more way for
 # three attempts to produce the same too-long paragraph three times.
 BODY_TEMPERATURE = 0.4
+
+# Mirrors the deep runtime's repair cap of 3 rather than reusing its code:
+# that middleware wraps the TOOL DISPATCHER and counts failed tool calls, and
+# a body is prose from a text completion that never passes through it. Same
+# number, different mechanism, on purpose.
+MAX_BODY_ATTEMPTS = 3
 
 
 class BodyUnavailable(RuntimeError):  # noqa: N818 - names the outcome, not an error mode
@@ -52,12 +58,26 @@ class BodyUnavailable(RuntimeError):  # noqa: N818 - names the outcome, not an e
 async def generate_body(frame: Frame, quotes: Sequence[Quote], *, workspace_id: str) -> str:
     """Return validated markdown for one Unit, or "" when the model gave up.
 
-    Raises `BodyUnavailable` on a transient failure. See the class docstring
-    for why the two are not the same outcome.
+    Generate -> `validate_body` -> on `BodyBudgetError`, feed the error's own
+    message back and retry, capped at MAX_BODY_ATTEMPTS. The overrun is a
+    validation failure, NEVER a truncation: cutting the lede would make the
+    Glance a character-count prefix of the Full instead of a semantic one, and
+    those two can then disagree about what the card claims.
+
+    TWO FAILURES, TWO TREATMENTS:
+
+      * every attempt overran  -> return "". Deterministic for THIS event set:
+        the caller persists the empty body, so the give-up costs three calls
+        once rather than three calls per poll forever. A card with no prose is
+        strictly better than no card - the frame still carries the headline,
+        the source, the count, the timestamps, the quotes and the affordances.
+      * the call raised, or every attempt was blank -> raise BodyUnavailable.
+        Transient; nothing is persisted and the next poll retries.
     """
     if frame.kind not in LEDE_BUDGETS:
-        # `validate_body` would raise "unknown frame kind", which is NOT
-        # something a model can repair - it would burn three calls to produce
+        # Both downstream paths would fail on an unknown kind - `build_body_request`
+        # with a bare KeyError, `validate_body` with "unknown frame kind" - and
+        # neither is something a model can repair, so three calls would buy
         # nothing. Fail here, before spending anything.
         logger.error(
             "view_body_unknown_kind kind=%s key=%s",
@@ -68,10 +88,39 @@ async def generate_body(frame: Frame, quotes: Sequence[Quote], *, workspace_id: 
         return ""
 
     request = build_body_request(frame, quotes)
-    text, _usage = await _complete(request, workspace_id=workspace_id)
-    if not text:
-        raise BodyUnavailable(f"empty completion for {frame.key}")
-    return validate_body(text, frame.kind)
+    previous_body = ""
+    reason = ""
+    blanks = 0
+
+    for attempt in range(1, MAX_BODY_ATTEMPTS + 1):
+        user = request if attempt == 1 else build_repair_request(request, previous_body, reason)
+        text, _usage = await _complete(user, workspace_id=workspace_id)
+        if not text:
+            blanks += 1
+            previous_body, reason = "", "your previous attempt was empty."
+            continue
+        try:
+            return validate_body(text, frame.kind)
+        except BodyBudgetError as exc:
+            previous_body, reason = text, str(exc)
+            logger.info(
+                "view_body_repair key=%s attempt=%d reason=%s",
+                frame.key,
+                attempt,
+                exc,
+                extra={"frame_key": frame.key, "attempt": attempt},
+            )
+
+    if blanks == MAX_BODY_ATTEMPTS:
+        raise BodyUnavailable(f"the model returned no text in {MAX_BODY_ATTEMPTS} attempts")
+
+    logger.warning(
+        "view_body_budget_exhausted key=%s kind=%s",
+        frame.key,
+        frame.kind,
+        extra={"frame_key": frame.key, "kind": frame.kind},
+    )
+    return ""
 
 
 async def _complete(user: str, *, workspace_id: str) -> tuple[str, object]:
