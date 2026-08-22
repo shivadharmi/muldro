@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useCallback, useEffect } from "react";
-import type { ApprovalContext } from "@/lib/a2ui-types";
+import type { ApprovalContext } from "@/lib/types/execution";
 import { useWsActionStore } from "@/stores/ws-action-store";
 import { riskLevelColor, riskLevelTextColor, trustLevelColor } from "@/lib/design-tokens";
 import { Modal } from "@/components/ui/modal";

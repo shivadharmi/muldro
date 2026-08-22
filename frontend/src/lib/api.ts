@@ -531,12 +531,12 @@ interface WorkspaceSurfaceResponse {
   source_run_id?: string | null;
   response_preview?: string | null;
   created_at?: string | null;
-  phase?: import("@/lib/a2ui-types").ExecutionPhase;
-  steps?: import("@/lib/a2ui-types").StepState[];
+  phase?: import("@/lib/types/execution").ExecutionPhase;
+  steps?: import("@/lib/types/execution").StepState[];
   current_step?: string | null;
   progress?: string;
-  approval?: import("@/lib/a2ui-types").ApprovalContext | null;
-  results?: import("@/lib/a2ui-types").ResultSummary | null;
+  approval?: import("@/lib/types/execution").ApprovalContext | null;
+  results?: import("@/lib/types/execution").ResultSummary | null;
   surface_data?: import("@/lib/a2ui-types").SurfaceDataPayload | null;
   trust_context?: Record<string, string> | null;
 }

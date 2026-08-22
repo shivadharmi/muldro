@@ -2,7 +2,7 @@ import { render, screen } from "@testing-library/react";
 import { test, expect } from "vitest";
 import { RunRow } from "./run-row";
 import type { HistoryItem, HistoryApprovalContext } from "@/stores/history-store";
-import type { ApprovalContext } from "@/lib/a2ui-types";
+import type { ApprovalContext } from "@/lib/types/execution";
 
 function richApproval(partial: Partial<ApprovalContext> = {}): ApprovalContext {
   return {

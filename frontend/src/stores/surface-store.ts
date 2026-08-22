@@ -3,7 +3,7 @@
 import { create } from "zustand";
 
 import type { DetailConfig, InsightData, SurfaceDataPayload, SurfacePreview } from "@/lib/a2ui-types";
-import type { ExecutionPhase, StepState, ApprovalContext, ResultSummary, SurfaceUpdate } from "@/lib/a2ui-types";
+import type { ExecutionPhase, StepState, ApprovalContext, ResultSummary, SurfaceUpdate } from "@/lib/types/execution";
 import type { SurfaceKind } from "@/lib/types/surfaces";
 
 export interface WorkspaceSurface {

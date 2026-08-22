@@ -1,8 +1,8 @@
 "use client";
 
 import type { A2UIComponent } from "@/lib/a2ui-types";
-import type { ExecutionPhase, StepState, ApprovalContext, ResultSummary } from "@/lib/a2ui-types";
-import { isStepDone } from "@/lib/a2ui-types";
+import type { ExecutionPhase, StepState, ApprovalContext, ResultSummary } from "@/lib/types/execution";
+import { isStepDone } from "@/lib/types/execution";
 import { phaseTextColor } from "@/lib/design-tokens";
 import { StepList } from "@/components/execution/step-list";
 import { InlineApprovalCard } from "@/components/execution/inline-approval";

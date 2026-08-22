@@ -12,7 +12,7 @@ import { ChatTodos } from "./chat-todos";
 import { todosFromToolCall, type Todo } from "@/lib/todos";
 import { StepList } from "@/components/execution/step-list";
 import { InlineApprovalCard } from "@/components/execution/inline-approval";
-import type { ApprovalContext, StepState } from "@/lib/a2ui-types";
+import type { ApprovalContext, StepState } from "@/lib/types/execution";
 
 interface ChatMessage {
   id: string;

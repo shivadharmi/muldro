@@ -1,6 +1,6 @@
 import { test, expect } from "vitest";
 import { stepStatusIcon } from "@/components/execution/step-presentation";
-import { isStepDone } from "@/lib/a2ui-types";
+import { isStepDone } from "@/lib/types/execution";
 
 test("completed_unverified renders the sent-but-unconfirmed icon", () => {
   expect(stepStatusIcon("completed_unverified").icon).toBe("✓?");

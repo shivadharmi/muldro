@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useMemo } from "react";
-import { type StepState, isStepDone } from "@/lib/a2ui-types";
+import { type StepState, isStepDone } from "@/lib/types/execution";
 import { statusTextColor } from "@/lib/design-tokens";
 import { stepStatusIcon, formatDuration } from "@/components/execution/step-presentation";
 

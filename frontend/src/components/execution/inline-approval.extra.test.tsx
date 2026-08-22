@@ -1,7 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import { test, expect } from "vitest";
 import { InlineApprovalCard } from "@/components/execution/inline-approval";
-import type { ApprovalContext } from "@/lib/a2ui-types";
+import type { ApprovalContext } from "@/lib/types/execution";
 
 // B12 / P3.2: ONE InlineApprovalCard, fed by the SAME rich `ApprovalContext` from
 // BOTH the live-WS path (trust_gate → SurfaceUpdate.approval) AND the persisted/REST

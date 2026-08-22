@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ActionResult, MuldroMessage, SurfaceUpdate, WorkspaceSurfacePush } from "@/lib/a2ui-types";
+import type { WorkspaceSurfacePush } from "@/lib/a2ui-types";
+import type { ActionResult, MuldroMessage, SurfaceUpdate } from "@/lib/types/execution";
 import { parseWsError, type ParsedApiError } from "@/lib/api-error";
 import { getStoredToken } from "@/lib/auth";
 import type { Unit } from "@/lib/types/unit";

@@ -1,6 +1,6 @@
 import { test, expect, beforeEach } from "vitest";
 import { useSurfaceStore, type WorkspaceSurface } from "./surface-store";
-import type { StepState, SurfaceUpdate } from "@/lib/a2ui-types";
+import type { StepState, SurfaceUpdate } from "@/lib/types/execution";
 
 function baseSurface(): WorkspaceSurface {
   return {
