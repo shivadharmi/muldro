@@ -5,7 +5,13 @@ import { MarkdownRenderer } from "@/components/muldro/markdown-renderer";
 import { SourceIcon } from "@/components/integrations/source-icon";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { TimeAgo } from "@/components/ui/time-ago";
-import { KIND_LABELS, FRAME_STATUS_LABELS, kindStyle, frameStatusColor } from "@/lib/design-tokens";
+import {
+  KIND_LABELS,
+  FRAME_STATUS_LABELS,
+  kindStyle,
+  frameStatusColor,
+  eventCountLabel,
+} from "@/lib/design-tokens";
 import type { Unit } from "@/lib/types/unit";
 
 interface Props {
@@ -38,6 +44,7 @@ interface Props {
 export function UnitDetail({ unit, open, onClose, onAct, children }: Props) {
   if (!open || !unit) return null;
   const { frame, body, quotes } = unit;
+  const countLabel = eventCountLabel(frame.entity_type, frame.event_count);
   const kindTone = kindStyle(frame.kind);
 
   return (
@@ -87,10 +94,12 @@ export function UnitDetail({ unit, open, onClose, onAct, children }: Props) {
               <span>{frame.entity_type}</span>
             </>
           )}
-          <span aria-hidden="true">·</span>
-          <span>
-            {frame.event_count} {frame.event_count === 1 ? "message" : "messages"}
-          </span>
+          {countLabel && (
+            <>
+              <span aria-hidden="true">·</span>
+              <span>{countLabel}</span>
+            </>
+          )}
         </p>
 
         {/* layer 1 (partial) — the thing itself, verbatim and attributed.

@@ -6,7 +6,13 @@ import { Lede } from "./lede";
 import { SourceIcon } from "@/components/integrations/source-icon";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { TimeAgo } from "@/components/ui/time-ago";
-import { KIND_LABELS, FRAME_STATUS_LABELS, kindStyle, frameStatusColor } from "@/lib/design-tokens";
+import {
+  KIND_LABELS,
+  FRAME_STATUS_LABELS,
+  kindStyle,
+  frameStatusColor,
+  eventCountLabel,
+} from "@/lib/design-tokens";
 
 interface Props {
   unit: Unit;
@@ -16,31 +22,6 @@ interface Props {
 }
 
 const MAX_AFFORDANCES = 3;
-
-/**
- * What the events of a unit are called. A meeting is not a message, and the
- * fallback has to survive an entity type nobody has mapped yet, so it is a
- * noun that is true of anything a connector can group.
- */
-const EVENT_NOUN: Record<string, string> = {
-  email_thread: "messages",
-  meeting: "events",
-  issue: "updates",
-  pull_request: "updates",
-  channel: "messages",
-  page: "revisions",
-};
-
-const DEFAULT_EVENT_NOUN = "updates";
-
-/**
- * A count of one says nothing the card does not already show, and it is
- * where the wrong noun was on display.
- */
-function eventCountLabel(entityType: string, count: number): string | null {
-  if (count <= 1) return null;
-  return `${count} ${EVENT_NOUN[entityType] ?? DEFAULT_EVENT_NOUN}`;
-}
 
 /**
  * The Glance. Six slots, always in this order, none of them optional except

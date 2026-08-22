@@ -126,6 +126,40 @@ describe("UnitDetail", () => {
     expect(screen.queryByText(/No detail tabs available/)).toBeNull();
   });
 
+  it("never calls a meeting a message", () => {
+    // The same defect the card had, one file over: both are projections of one
+    // frame, and each owned a private copy of the noun until it moved into
+    // design-tokens. A calendar unit read "1 message".
+    render(
+      <UnitDetail
+        unit={unit({
+          frame: {
+            ...unit().frame,
+            source: "calendar",
+            entity_type: "meeting",
+            event_count: 1,
+          },
+        })}
+        open
+        onClose={() => {}}
+      />
+    );
+    const context = screen.getByTestId("unit-detail-context");
+    expect(context).toHaveTextContent("meeting");
+    expect(context.textContent).not.toMatch(/message/);
+  });
+
+  it("omits the count entirely for a single-event unit", () => {
+    render(
+      <UnitDetail
+        unit={unit({ frame: { ...unit().frame, event_count: 1 } })}
+        open
+        onClose={() => {}}
+      />
+    );
+    expect(screen.getByTestId("unit-detail-context").textContent).not.toMatch(/\b1\b/);
+  });
+
   it("states plainly that the reasoning has not been written yet", () => {
     // Honest absence beats a blank pane. Removed once the body generator lands.
     render(<UnitDetail unit={unit()} open onClose={() => {}} />);
