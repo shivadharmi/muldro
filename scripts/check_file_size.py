@@ -31,12 +31,6 @@ GRANDFATHERED: dict[str, int] = {
     "frontend/src/components/chat/chat-panel.tsx": 678,
     "frontend/src/components/history/run-detail-modal.tsx": 543,
     "frontend/src/app/settings/page.tsx": 522,
-    # Grandfathered 2026-08-22: this pre-commit hook was only just installed into this
-    # worktree -- the file predates enforcement, having grown past the cap across many
-    # prior commits with the hook never in the loop. The model-settings-redesign task
-    # plan explicitly forbids splitting or reorganising this file, so it is grandfathered
-    # like the rest rather than exempted from the standard.
-    "backend/tests/test_routes_model_config.py": 1811,
 }
 GRANDFATHER_SLACK = 40  # small headroom so unrelated edits don't hard-block
 
