@@ -542,6 +542,17 @@ export function fetchWorkspaceSurfaces(): Promise<{ surfaces: WorkspaceSurfaceRe
   return api("/workspace/surfaces");
 }
 
+export function fetchWorkspaceUnits(): Promise<{
+  units: import("@/lib/types/unit").Unit[];
+  count: number;
+}> {
+  return api("/workspace/units");
+}
+
+export function dismissUnit(frameKey: string): Promise<{ status: string }> {
+  return post("/workspace/units/dismiss", { frame_key: frameKey });
+}
+
 export function fetchSurfaceDetail(
   surfaceId: string,
   tabId: string

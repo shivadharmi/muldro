@@ -59,3 +59,14 @@ export interface Unit {
   body: string;
   quotes: Quote[];
 }
+
+/**
+ * The live WebSocket frame. `key` is repeated at the top level so the client
+ * can guard on identity before dispatching — see backend `view/publish.py`
+ * for why that guard exists and what it cost when a publisher got it wrong.
+ */
+export interface UnitPush {
+  type: "unit";
+  key: string;
+  unit: Unit;
+}
