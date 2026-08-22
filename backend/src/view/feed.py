@@ -17,6 +17,7 @@ from collections.abc import Sequence
 from datetime import datetime
 from typing import Any
 
+from src.view.body_fill import attach_stored_bodies
 from src.view.contracts import Unit
 from src.view.domain_units import (
     briefing_units,
@@ -89,6 +90,10 @@ async def assemble_feed(
     if health is not None:
         units.append(health)
     units.extend(perception)
+
+    # The prose is written by the poll and stored; the feed reads it back. A
+    # feed read never generates - see `attach_stored_bodies`.
+    units = await attach_stored_bodies(units, db=db, workspace_id=workspace_id)
 
     try:
         features = await build_features(

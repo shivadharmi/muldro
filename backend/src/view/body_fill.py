@@ -121,3 +121,45 @@ async def fill_bodies(
         filled.append(_with_body(unit, body))
 
     return filled
+
+
+async def attach_stored_bodies(
+    units: Sequence[Unit],
+    *,
+    db: AsyncSession,
+    workspace_id: str,
+) -> list[Unit]:
+    """Give the feed's units the prose already written for them. Never raises.
+
+    The read-only half of `fill_bodies`, and the reason it exists separately:
+    a feed read must NEVER generate. Generation is a model call per unit, and
+    a page refresh is not a reason to spend one — the poll owns that cost.
+    Without this the prose lived only in the push frame, so a body reached the
+    screen and was replaced by an empty one the next time the feed was read.
+
+    Only an EMPTY body is filled. A unit whose builder already wrote prose owns
+    it — the briefing carries its own text — and a stored row keyed on the same
+    thing must not overwrite what the row itself said.
+
+    A stale body is shown rather than withheld. `is_current` is deliberately
+    not consulted: prose written over an earlier message is still true of that
+    message, and the frame's own count and timestamps carry what has changed
+    since. The next poll regenerates it. Blanking it here would trade a slightly
+    old sentence for no sentence at all.
+    """
+    pending = [u for u in units if not u.body]
+    if not pending:
+        return list(units)
+    try:
+        rows = await load_bodies(
+            db, workspace_id=workspace_id, frame_keys=[u.frame.key for u in pending]
+        )
+    except Exception as exc:  # noqa: BLE001 - prose is worth less than the feed
+        logger.warning("view_body_load_failed workspace=%s error=%s", workspace_id, exc)
+        return list(units)
+
+    out: list[Unit] = []
+    for unit in units:
+        row = rows.get(unit.frame.key) if not unit.body else None
+        out.append(_with_body(unit, row.body) if row is not None and row.body else unit)
+    return out

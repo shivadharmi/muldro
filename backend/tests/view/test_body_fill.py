@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from src.view.body_fill import fill_bodies
+from src.view.body_fill import attach_stored_bodies, fill_bodies
 from src.view.body_generator import BodyUnavailable
 from src.view.contracts import Frame, Unit
 
@@ -307,3 +307,98 @@ async def test_no_units_makes_no_call_and_no_query():
         assert await fill_bodies([], db=MagicMock(), workspace_id="ws_1", ids_by_key={}) == []
     assert load.await_count == 0
     assert generate.await_count == 0
+
+
+class TestAttachStoredBodies:
+    """The feed READS prose; it never generates it.
+
+    Every test here also asserts `generate_body` was not called, because the
+    whole point of a separate read path is that a page refresh costs nothing.
+    """
+
+    async def test_stored_body_reaches_an_empty_unit(self):
+        rows = {"gmail:email_thread:t_1": _row(body="stored prose")}
+        with (
+            patch("src.view.body_fill.load_bodies", AsyncMock(return_value=rows)),
+            patch("src.view.body_fill.generate_body", AsyncMock()) as gen,
+        ):
+            out = await attach_stored_bodies([_unit()], db=MagicMock(), workspace_id="ws_1")
+        assert out[0].body == "stored prose"
+        gen.assert_not_awaited()
+
+    async def test_a_unit_with_its_own_body_is_never_overwritten(self):
+        """The briefing writes its own text; a stored row must not replace it.
+
+        An EMPTY unit sits alongside it on purpose: with only the body-carrying
+        unit in the list the early return fires and the loop's guard is never
+        reached, so the test would pass with the guard removed.
+        """
+        own = Unit(frame=_unit("t_1").frame, body="the briefing's own words")
+        empty = _unit("t_2")
+        rows = {
+            "gmail:email_thread:t_1": _row(body="stored prose"),
+            "gmail:email_thread:t_2": _row(body="prose for the empty one"),
+        }
+        with (
+            patch("src.view.body_fill.load_bodies", AsyncMock(return_value=rows)),
+            patch("src.view.body_fill.generate_body", AsyncMock()),
+        ):
+            out = await attach_stored_bodies([own, empty], db=MagicMock(), workspace_id="ws_1")
+        assert out[0].body == "the briefing's own words"
+        assert out[1].body == "prose for the empty one"
+
+    async def test_a_body_carrying_unit_alone_costs_no_query(self):
+        own = Unit(frame=_unit().frame, body="the briefing's own words")
+        with patch("src.view.body_fill.load_bodies", AsyncMock()) as load:
+            out = await attach_stored_bodies([own], db=MagicMock(), workspace_id="ws_1")
+        assert out[0].body == "the briefing's own words"
+        load.assert_not_awaited()
+
+    async def test_a_unit_with_no_stored_row_keeps_its_empty_body(self):
+        with (
+            patch("src.view.body_fill.load_bodies", AsyncMock(return_value={})),
+            patch("src.view.body_fill.generate_body", AsyncMock()) as gen,
+        ):
+            out = await attach_stored_bodies([_unit()], db=MagicMock(), workspace_id="ws_1")
+        assert out[0].body == ""
+        gen.assert_not_awaited()
+
+    async def test_a_stale_body_is_shown_rather_than_blanked(self):
+        """`is_current` is deliberately not consulted on the read path."""
+        rows = {"gmail:email_thread:t_1": _row(body="prose about message one", event_ids=("e1",))}
+        unit = _unit(count=2)  # a second message has since arrived
+        with (
+            patch("src.view.body_fill.load_bodies", AsyncMock(return_value=rows)),
+            patch("src.view.body_fill.generate_body", AsyncMock()) as gen,
+        ):
+            out = await attach_stored_bodies([unit], db=MagicMock(), workspace_id="ws_1")
+        assert out[0].body == "prose about message one"
+        gen.assert_not_awaited()
+
+    async def test_an_empty_stored_body_leaves_the_unit_empty(self):
+        """The repair cap's give-up is persisted as "" and must not be 'filled'."""
+        rows = {"gmail:email_thread:t_1": _row(body="")}
+        with patch("src.view.body_fill.load_bodies", AsyncMock(return_value=rows)):
+            out = await attach_stored_bodies([_unit()], db=MagicMock(), workspace_id="ws_1")
+        assert out[0].body == ""
+
+    async def test_a_read_failure_costs_the_prose_and_not_the_feed(self):
+        with patch(
+            "src.view.body_fill.load_bodies", AsyncMock(side_effect=RuntimeError("db down"))
+        ):
+            out = await attach_stored_bodies([_unit()], db=MagicMock(), workspace_id="ws_1")
+        assert len(out) == 1
+        assert out[0].body == ""
+
+    async def test_no_units_means_no_query(self):
+        with patch("src.view.body_fill.load_bodies", AsyncMock()) as load:
+            assert await attach_stored_bodies([], db=MagicMock(), workspace_id="ws_1") == []
+        load.assert_not_awaited()
+
+    async def test_order_is_preserved(self):
+        units = [_unit("t_1"), _unit("t_2"), _unit("t_3")]
+        rows = {"gmail:email_thread:t_2": _row(body="only the middle one")}
+        with patch("src.view.body_fill.load_bodies", AsyncMock(return_value=rows)):
+            out = await attach_stored_bodies(units, db=MagicMock(), workspace_id="ws_1")
+        assert [u.frame.key for u in out] == [u.frame.key for u in units]
+        assert [u.body for u in out] == ["", "only the middle one", ""]
