@@ -1,13 +1,8 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { test, expect, vi, beforeEach } from "vitest";
 
-import type {
-  CatalogModel,
-  ModelCatalog,
-  ModelConfig,
-  ProviderStatus,
-} from "@/lib/types";
+import type { ModelConfig } from "@/lib/types";
 
 const { addToast } = vi.hoisted(() => ({ addToast: vi.fn() }));
 
@@ -23,148 +18,18 @@ vi.mock("@/lib/api", () => ({
 
 import { fetchModelCatalog, fetchModelConfig, saveModelConfig } from "@/lib/api";
 import { useSettingsModalStore } from "@/stores/settings-modal-store";
-import { ModelConfigProvider } from "../model-config-context";
-import { ModelTab } from "./model-tab";
-
-function model(over: Partial<CatalogModel>): CatalogModel {
-  return {
-    provider: "anthropic",
-    model_id: "claude-opus-4-5",
-    display_name: "Claude Opus 4.5",
-    thinking_style: "anthropic_adaptive",
-    accepts_temperature: true,
-    suggested_tier: "reasoning",
-    context_window: 200000,
-    input_cost_per_1k: 0.005,
-    output_cost_per_1k: 0.025,
-    supports_prompt_cache: true,
-    ...over,
-  };
-}
-
-const catalog: ModelCatalog = {
-  providers: [
-    {
-      provider: "anthropic",
-      display_name: "Anthropic",
-      auth_kind: "api_key",
-      credential_fields: [],
-      model_count: 3,
-      docs_url: null,
-    },
-    {
-      provider: "groq",
-      display_name: "Groq",
-      auth_kind: "api_key",
-      credential_fields: [],
-      model_count: 1,
-      docs_url: null,
-    },
-  ],
-  models: [
-    model({}),
-    model({
-      model_id: "claude-sonnet-4-6",
-      display_name: "Claude Sonnet 4.6",
-      suggested_tier: "balanced",
-    }),
-    model({
-      model_id: "claude-haiku-4-5",
-      display_name: "Claude Haiku 4.5",
-      suggested_tier: "fast",
-    }),
-    model({
-      provider: "groq",
-      model_id: "llama-3.3-70b",
-      display_name: "Llama 3.3 70B",
-      thinking_style: "none",
-      suggested_tier: "fast",
-      context_window: 128000,
-      input_cost_per_1k: 0.00059,
-      output_cost_per_1k: 0.00079,
-    }),
-  ],
-  agents: [
-    { name: "planner", display_name: "Planner", tier: "reasoning" },
-    { name: "presenter", display_name: "Presenter", tier: "balanced" },
-    { name: "persona", display_name: "Persona", tier: "fast" },
-  ],
-};
-
-function tier(scopeKey: string, modelId: string) {
-  return {
-    scope_type: "tier" as const,
-    scope_key: scopeKey,
-    provider: "anthropic",
-    model_id: modelId,
-    effort: "medium" as const,
-    max_tokens: 4096,
-    temperature: null,
-  };
-}
-
-function status(provider: string): ProviderStatus {
-  return {
-    provider,
-    configured: true,
-    status: "valid",
-    source: "workspace",
-    base_url: null,
-    extra_config_public: {},
-    extra_config_secret_keys: [],
-    catalogued: true,
-  };
-}
-
-const config: ModelConfig = {
-  tiers: [
-    tier("reasoning", "claude-opus-4-5"),
-    tier("balanced", "claude-sonnet-4-6"),
-    tier("fast", "claude-haiku-4-5"),
-  ],
-  agent_overrides: [],
-  providers: [status("anthropic"), status("groq")],
-  warnings: [],
-};
-
-/** The server echoes what it was sent — the hook rebases onto the RESPONSE, so
- *  a fixed reply would silently undo whatever the test just changed. */
-function echoServer() {
-  vi.mocked(saveModelConfig).mockImplementation(async (body) => ({
-    ...config,
-    tiers: body.tiers,
-    agent_overrides: body.agent_overrides,
-  }));
-}
-
-async function renderTab(withConfig: ModelConfig = config) {
-  vi.mocked(fetchModelCatalog).mockResolvedValue(catalog);
-  vi.mocked(fetchModelConfig).mockResolvedValue(withConfig);
-  const view = render(
-    <ModelConfigProvider>
-      <ModelTab />
-    </ModelConfigProvider>,
-  );
-  await waitFor(() => expect(card("Reasoning")).toBeInTheDocument());
-  return view;
-}
-
-const card = (name: string) => screen.getByRole("region", { name });
-const saveBar = () =>
-  screen.getByRole("region", { name: /save model configuration/i });
-const saveButton = () => screen.getByRole("button", { name: /^save changes$/i });
-
-/** Dirty one tier by nudging its Max tokens — the one control every model
- *  supports, so no test depends on a model's thinking style. */
-async function nudge(tierName: string) {
-  await userEvent.type(within(card(tierName)).getByLabelText("Max tokens"), "0");
-}
-
-async function openOverrides() {
-  await userEvent.click(
-    screen.getByRole("button", { name: /per-agent overrides/i }),
-  );
-}
+import {
+  card,
+  catalog,
+  config,
+  echoServer,
+  mountTab,
+  nudge,
+  openOverrides,
+  renderTab,
+  saveButton,
+  tier,
+} from "./model-tab-fixtures";
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -174,8 +39,7 @@ beforeEach(() => {
 /** Fast bound to Groq, which resolves no credential — the state §9.6 renders as
  *  a consequence and offers `Connect Groq` for. The binding has to name the
  *  warned provider or `TierCard` ignores the warning as already answered. */
-const warnedConfig: ModelConfig = {
-  ...config,
+const warnedConfig: ModelConfig = config({
   tiers: [
     tier("reasoning", "claude-opus-4-5"),
     tier("balanced", "claude-sonnet-4-6"),
@@ -190,7 +54,7 @@ const warnedConfig: ModelConfig = {
       message: "Groq is not connected.",
     },
   ],
-};
+});
 
 // The slug alone would land the founder on a list of providers with nothing
 // said about which one they came for — the defect this wiring closes.
@@ -218,21 +82,6 @@ test("Browse all providers switches tab and names no provider", async () => {
   const state = useSettingsModalStore.getState();
   expect(state.activeTab).toBe("providers");
   expect(state.pendingProvider).toBeNull();
-});
-
-test("F3: Save is inert until something changes, and counts what did", async () => {
-  await renderTab();
-
-  expect(within(saveBar()).getByText("No changes")).toBeInTheDocument();
-  expect(saveButton()).toBeDisabled();
-  expect(screen.getByRole("button", { name: /^discard$/i })).toBeDisabled();
-
-  await nudge("Balanced");
-  expect(saveButton()).toBeEnabled();
-  expect(within(saveBar()).getByText(/1 unsaved change\b/)).toBeInTheDocument();
-
-  await nudge("Fast");
-  expect(within(saveBar()).getByText(/2 unsaved changes/)).toBeInTheDocument();
 });
 
 test("F2: one save affordance, and it persists tiers AND overrides together", async () => {
@@ -323,32 +172,6 @@ test("a 422 lands on the refused card, not in a toast", async () => {
   ).not.toBeInTheDocument();
 });
 
-test("the save bar names the changed tiers, not just their number", async () => {
-  await renderTab();
-  await nudge("Fast");
-  await nudge("Reasoning");
-
-  // §9.6 substitutes a warned card's meta row, so the per-card "Changed — not
-  // saved" marker cannot be relied on. The names live here instead.
-  const bar = within(saveBar()).getByText(/2 unsaved changes/);
-  expect(bar).toHaveTextContent("Reasoning");
-  expect(bar).toHaveTextContent("Fast");
-  expect(bar).not.toHaveTextContent("Balanced");
-});
-
-test("Discard restores the saved values and empties the count", async () => {
-  await renderTab();
-  const maxTokens = within(card("Balanced")).getByLabelText("Max tokens");
-
-  await nudge("Balanced");
-  expect(maxTokens).toHaveValue(40960);
-
-  await userEvent.click(screen.getByRole("button", { name: /^discard$/i }));
-  expect(maxTokens).toHaveValue(4096);
-  expect(within(saveBar()).getByText("No changes")).toBeInTheDocument();
-  expect(saveButton()).toBeDisabled();
-});
-
 test("an override can be added and removed, and the add flow cannot overwrite one", async () => {
   echoServer();
   await renderTab();
@@ -384,4 +207,26 @@ test("an override can be added and removed, and the add flow cannot overwrite on
   expect(
     within(select).getByRole("option", { name: "Planner" }),
   ).toBeInTheDocument();
+});
+
+test("a failed load says so and offers a retry, never 'no tiers'", async () => {
+  // `config === null` and `tiers.length === 0` are indistinguishable from the
+  // tier list alone, so one message would report a fetch failure as a fact
+  // about the workspace — a founder would go looking for missing tiers.
+  vi.mocked(fetchModelCatalog).mockResolvedValue(catalog());
+  vi.mocked(fetchModelConfig).mockRejectedValue(new Error("network"));
+  mountTab();
+
+  await waitFor(() =>
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      /could not load the model configuration/i,
+    ),
+  );
+  expect(screen.queryByText(/no tiers are configured/i)).toBeNull();
+  expect(screen.getByRole("button", { name: /^retry$/i })).toBeInTheDocument();
+
+  // The hook's guard resets on failure, so the retry is a real second request.
+  vi.mocked(fetchModelConfig).mockResolvedValue(config());
+  await userEvent.click(screen.getByRole("button", { name: /^retry$/i }));
+  await waitFor(() => expect(card("Reasoning")).toBeInTheDocument());
 });

@@ -6,6 +6,7 @@ import { useToast } from "@/components/ui/toast";
 import { errorToMessage } from "@/lib/api-error";
 import type { CatalogModel, ModelBinding } from "@/lib/types";
 import { useSettingsModalStore } from "@/stores/settings-modal-store";
+import { btn } from "../controls";
 import { bindingKey } from "../hooks/use-model-config";
 import { extractBindRejections } from "../hooks/use-bind-rejections";
 import { useModelConfigContext } from "../model-config-context";
@@ -38,16 +39,24 @@ function tierRank(scopeKey: string): number {
   return index < 0 ? TIER_ORDER.length : index;
 }
 
-/** The scope a `dirtyKeys` entry names. Split on the FIRST colon only, since
- *  `bindingKey` joins with one and an agent name is free text. */
+/**
+ * The scope a `dirtyKeys` entry names.
+ *
+ * Split on the FIRST colon only, since `bindingKey` joins with one and an agent
+ * name is free text. A key with NO colon is not one `bindingKey` produced, so
+ * it is read as a bare tier name rather than by index arithmetic: `indexOf`
+ * returns `-1` there, and `slice(0, -1)`/`slice(0)` would silently drop the
+ * last character and then hand back the whole key as the scope key — a wrong
+ * label rather than an obvious one.
+ */
 function parseScope(key: string): {
   scopeType: ModelBinding["scope_type"];
   scopeKey: string;
 } {
   const sep = key.indexOf(":");
-  const head = key.slice(0, sep);
+  if (sep < 0) return { scopeType: "tier", scopeKey: key };
   return {
-    scopeType: head === "agent" ? "agent" : "tier",
+    scopeType: key.slice(0, sep) === "agent" ? "agent" : "tier",
     scopeKey: key.slice(sep + 1),
   };
 }
@@ -249,9 +258,29 @@ export function ModelTab() {
   return (
     <>
       {/* `-mb-[18px] sm:-mb-5` cancels the shell's bottom padding so the save
-          bar can sit flush against the panel's lower edge. */}
+          bar can sit flush against the panel's lower edge. It is a MIRROR of
+          `settings-modal.tsx`'s `py-[18px] sm:py-5`: if the shell's padding
+          changes, this value and `save-bar.tsx`'s `-mx-4 sm:-mx-6` must change
+          with it, and nothing but this comment says so. */}
       <div className="flex-1 min-h-0 flex flex-col gap-[18px] -mb-[18px] sm:-mb-5">
-        {tiers.length === 0 ? (
+        {/* An empty tier list and a FAILED load are different facts, and only
+            `config` tells them apart: `tiers` is empty in both cases, so one
+            message would report a fetch failure as a truth about the workspace.
+            The retry is the tab's own mount effect, re-armed by the failure. */}
+        {config === null ? (
+          <div className="flex items-center gap-3">
+            <p role="alert" className="text-[12.5px] text-t-muted">
+              Could not load the model configuration.
+            </p>
+            <button
+              type="button"
+              onClick={() => void retryLoad()}
+              className={btn({ size: "sm" })}
+            >
+              Retry
+            </button>
+          </div>
+        ) : tiers.length === 0 ? (
           <p className="text-[12.5px] text-t-muted">
             No tiers are configured for this workspace.
           </p>

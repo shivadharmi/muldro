@@ -51,6 +51,13 @@ export function SaveBar({
       // container, so this is as far outside the scrolling content as a tab can
       // put itself without reaching into `settings-modal.tsx`. The negative
       // inline margins bleed it to the panel edges through the shell's padding.
+      //
+      // ⚠️ `-mx-4 sm:-mx-6` MIRRORS `settings-modal.tsx`'s `px-4 sm:px-6`, and
+      // `model-tab.tsx`'s `-mb-[18px] sm:-mb-5` mirrors its `py-[18px] sm:py-5`.
+      // If the shell's padding changes, both must change with it — the shell
+      // has no note pointing here, so this comment is the only link, and the
+      // symptom of a silent drift is a bar inset from the panel edge rather
+      // than anything that fails a test.
       className={
         "sticky bottom-0 z-10 -mx-4 sm:-mx-6 mt-auto " +
         "border-t border-b-secondary bg-surface-2/50 backdrop-blur-sm " +
