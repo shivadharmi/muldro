@@ -25,10 +25,9 @@ from src.orchestrator.budget import BudgetTracker
 from src.orchestrator.connector_poller import ConnectorPoller
 from src.orchestrator.event_publisher import EventPublisher
 from src.orchestrator.intent_classifier import extract_plan
+from src.orchestrator.perception_units import publish_perception_units
 from src.orchestrator.plan_store import PlanStore
 from src.orchestrator.tracing import TraceManager
-from src.view.perception import units_from_events
-from src.view.publish import publish_units
 
 logger = logging.getLogger(__name__)
 
@@ -271,45 +270,9 @@ class PerceptionRunner:
                 cursor_type=cursor_type,
             )
 
-            # One Unit per THING, not one signal per poll cycle — and now the
-            # Units are PUBLISHED rather than counted. `events` vs `units` is
-            # still the diagnostic: three polls of one thread read
-            # `events=3 units=1`.
-            #
-            # These are pre-ingest RawEvents, so `frame.importance` is 0.0 and
-            # nothing here ranks. The REST feed (`GET /v1/workspace/units`)
-            # re-derives every Unit from the stored rows and ranks THERE; this
-            # push exists so a card appears without waiting for a poll of the
-            # frontend's own.
-            #
-            # `ensure_event_bus()`, not the `event_bus` property: the property
-            # is lazily initialised and is None until something has awaited the
-            # accessor, so on the first poll after a restart the push would be
-            # a silent no-op.
-            #
-            # Wrapped because this is a live poll: a bug in the view layer must
-            # not take down perception for a whole source.
-            try:
-                units = units_from_events(raw_events)
-                await publish_units(await self._events.ensure_event_bus(), units, user_id=user_id)
-                logger.info(
-                    "perception_units_published source=%s events=%d units=%d",
-                    source,
-                    len(raw_events),
-                    len(units),
-                    extra={
-                        "source": source,
-                        "events": len(raw_events),
-                        "units": len(units),
-                    },
-                )
-            except Exception as unit_error:  # noqa: BLE001 - never costs the poll
-                logger.warning(
-                    "perception_units_failed source=%s error=%s",
-                    source,
-                    unit_error,
-                    extra={"source": source, "error": str(unit_error)},
-                )
+            await publish_perception_units(
+                raw_events, source=source, user_id=user_id, events=self._events
+            )
 
             # Fetch full thread context for reply emails
             thread_contexts = await _fetch_thread_contexts(raw_events, user_id, workspace_id)
