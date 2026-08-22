@@ -115,19 +115,6 @@ def _make_executor(settings, db, *, context_builder=None, redis=None):
     return GraphExecutor(settings, db, context_builder=context_builder, redis=redis)
 
 
-async def _render_plan_context_from(pack_dict: dict):
-    """Drive the ACTUAL plan-context detail-tab builder with a given persisted pack dict."""
-    from src.services.surface_detail_builders import plan as plan_mod
-
-    surface = SimpleNamespace(surface_id="run_x", payload={}, workspace_id="ws", user_id="u")
-    db = AsyncMock()
-    rr = MagicMock()
-    rr.scalar_one_or_none.return_value = SimpleNamespace(run_id="run_x")
-    db.execute = AsyncMock(return_value=rr)
-    with patch.object(plan_mod, "_load_context_pack", AsyncMock(return_value=pack_dict)):
-        return await plan_mod.build_plan_context(db, surface)
-
-
 # ══════════════ TEST 1 — flag ON → slim + render-safe (persisting) ═══════════
 
 
@@ -147,11 +134,12 @@ async def test_store_populate_steps_forwards_jit_true_and_persists_entities():
     assert "memories" not in captured["pack"]
 
 
-async def test_slim_pack_renders_non_empty_entities_section():
-    """The slim pack produced by the REAL ``build(jit=True)`` (via ``_fetch_core_entities``)
-    renders a NON-EMPTY entities section in ``plan.py::build_plan_context`` — the render
-    contract survives JIT. Uses a mock-DB ContextBuilder so ``_fetch_core_entities`` runs for
-    real (this is what the negative control mutates)."""
+async def test_slim_pack_from_the_real_builder_carries_entities():
+    """The slim pack produced by the REAL ``build(jit=True)`` still carries entities.
+
+    The sibling test above drives a spy builder, so it never runs ``_fetch_core_entities``.
+    This one uses a mock-DB ``ContextBuilder`` so that path executes for real — it is the
+    only place a JIT build that silently stopped populating entities would be caught."""
     ent = SimpleNamespace(
         entity_id="e1",
         canonical_name="Acme",
@@ -168,12 +156,7 @@ async def test_slim_pack_renders_non_empty_entities_section():
     cb = ContextBuilder(db=db)  # memory_service None → core prefs = []
 
     pack = await cb.build(TEST_USER_ID, "q", workspace_id=TEST_WORKSPACE_ID, jit=True)
-    assert pack.entities, "build(jit=True) must populate entities (render-read key)"
-
-    resp = await _render_plan_context_from(pack.model_dump())
-    ent_sections = [s for s in resp.sections if s.id == "entities"]
-    assert ent_sections, f"expected a non-empty entities section, got {resp.sections!r}"
-    assert ent_sections[0].children
+    assert pack.entities, "build(jit=True) must populate entities"
 
 
 async def test_graph_executor_populate_gate_on_passes_jit_true():

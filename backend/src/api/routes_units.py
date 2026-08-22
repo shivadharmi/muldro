@@ -118,8 +118,9 @@ async def dismiss_unit(
     )
     event = result.scalars().first()
     if event is None:
-        # Deliberately does not distinguish "not yours" from "not found" —
-        # kept from `_verify_ephemeral_ownership` (spec §11, Kept, re-homed).
+        # Deliberately does not distinguish "not yours" from "not found": a
+        # caller who can tell the two apart can probe for the existence of
+        # another workspace's events one key at a time.
         raise HTTPException(status_code=404, detail="Unit not found.")
 
     await EngagementService(db, workspace_id).record_engagement(

@@ -4,8 +4,7 @@ Each unit is a pure function producing a validated ``A2UIComponent`` fragment
 with a semantically meaningful purpose (header, step list, approval card, etc).
 Surfaces compose from these units; every call site that builds a surface should
 use these helpers rather than hand-rolling component trees, to keep rendering
-consistent across ``SurfaceService``, ``surface_detail_builders``, and
-``GraphExecutor`` emissions.
+consistent across ``SurfaceService`` and ``GraphExecutor`` emissions.
 
 Design rules:
     * Each unit returns a single ``A2UIComponent`` (typically a ``Card``) so it

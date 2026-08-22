@@ -145,8 +145,8 @@ async def test_a_malformed_key_is_a_400(monkeypatch):
 
 
 async def test_an_unknown_key_is_a_404_and_records_nothing(monkeypatch):
-    """Refusing to distinguish 'not yours' from 'not found' is kept from
-    _verify_ephemeral_ownership (spec §11, Kept)."""
+    """A caller who can tell 'not yours' from 'not found' can probe for the existence
+    of another workspace's events one key at a time, so both answer 404."""
     eng = _Engagement()
     monkeypatch.setattr("src.api.routes_units.EngagementService", lambda db, ws: eng)
     with pytest.raises(HTTPException) as exc:

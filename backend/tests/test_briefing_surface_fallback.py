@@ -1,13 +1,8 @@
-"""Tests for briefing surface fallback resolution + empty-state copy (Phase 4, D4).
+"""Briefing surface fallback resolution.
 
-Covers two related defects:
-  * SurfaceService._build_briefing_surface must fall back to the most recent
-    briefing when today's hasn't been generated, so the grid card and detail
-    tabs agree on the same briefing_id.
-  * Briefing detail builders must resolve a briefing even when the opened
-    surface is a persisted Presenter surface (id ``surf_...``) carrying no
-    briefing_id, falling back to the user's most recent briefing instead of
-    printing the confusing "No linked briefing found."
+``SurfaceService._build_briefing_surface`` must fall back to the most recent briefing
+when today's hasn't been generated, so the card points at a briefing_id that resolves
+rather than at a day with nothing behind it.
 """
 
 from datetime import date, datetime, timezone
@@ -16,11 +11,6 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from src.services.surface_builder import SurfaceService
-from src.services.surface_detail_builders.briefing import (
-    _NO_BRIEFING_YET,
-    build_briefing_actions,
-    build_briefing_priorities,
-)
 
 
 def _mock_briefing(
@@ -37,17 +27,6 @@ def _mock_briefing(
     b.recommended_actions = [{"title": "Review PR", "description": "before merge"}]
     b.created_at = datetime.now(timezone.utc)
     return b
-
-
-def _persisted_surface(surface_id="surf_abc", user_id="usr_01", workspace_id="ws_01"):
-    """A persisted Presenter briefing surface with NO briefing_id in payload."""
-    s = MagicMock()
-    s.surface_id = surface_id
-    s.surface_type = "briefing"
-    s.payload = {}
-    s.user_id = user_id
-    s.workspace_id = workspace_id
-    return s
 
 
 class TestBuildBriefingSurfaceFallback:
@@ -121,62 +100,3 @@ class TestBuildBriefingSurfaceFallback:
 
         surface = await service._build_briefing_surface("usr_01")
         assert surface is None
-
-
-class TestBriefingDetailFallback:
-    @pytest.mark.asyncio
-    async def test_priorities_resolves_via_recent_when_no_id(self):
-        """Persisted surf_ surface with no briefing_id resolves most-recent."""
-        db = AsyncMock()
-        briefing = _mock_briefing()
-        result = MagicMock()
-        result.scalar_one_or_none.return_value = briefing
-        db.execute = AsyncMock(return_value=result)
-
-        resp = await build_briefing_priorities(db, _persisted_surface())
-        assert resp.tab_id == "priorities"
-        # Rendered actual priority content, not an empty state.
-        flat = [c.id for sec in resp.sections for c in sec.children]
-        assert any("pri_" in cid for cid in flat)
-
-    @pytest.mark.asyncio
-    async def test_actions_resolves_via_recent_when_no_id(self):
-        db = AsyncMock()
-        briefing = _mock_briefing()
-        result = MagicMock()
-        result.scalar_one_or_none.return_value = briefing
-        db.execute = AsyncMock(return_value=result)
-
-        resp = await build_briefing_actions(db, _persisted_surface())
-        assert resp.tab_id == "actions"
-        flat = [c.id for sec in resp.sections for c in sec.children]
-        assert any("act_" in cid for cid in flat)
-
-    @pytest.mark.asyncio
-    async def test_empty_state_copy_when_no_briefing(self):
-        """No briefing anywhere → friendly copy, not 'No linked briefing found.'"""
-        db = AsyncMock()
-        result = MagicMock()
-        result.scalar_one_or_none.return_value = None
-        db.execute = AsyncMock(return_value=result)
-
-        resp = await build_briefing_priorities(db, _persisted_surface())
-        msgs = [c.properties.get("text", "") for sec in resp.sections for c in sec.children]
-        assert any(_NO_BRIEFING_YET == m for m in msgs)
-        assert all("No linked briefing found." not in m for m in msgs)
-
-    @pytest.mark.asyncio
-    async def test_missing_id_target_says_not_found(self):
-        """An explicit briefing_id that points at a deleted briefing → 'Briefing not found.'"""
-        db = AsyncMock()
-        result = MagicMock()
-        result.scalar_one_or_none.return_value = None
-        db.execute = AsyncMock(return_value=result)
-
-        surface = MagicMock()
-        surface.surface_id = "briefing_gone"
-        surface.payload = {}
-
-        resp = await build_briefing_priorities(db, surface)
-        msgs = [c.properties.get("text", "") for sec in resp.sections for c in sec.children]
-        assert any("Briefing not found." == m for m in msgs)

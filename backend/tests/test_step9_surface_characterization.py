@@ -14,10 +14,6 @@ Nothing here asserts desired end-state — every assertion snapshots what the co
 does right now. They all PASS on write.
 """
 
-from unittest.mock import AsyncMock, patch
-
-from src.services.surface_detail_builders.briefing import build_briefing_priorities
-from src.services.surface_detail_builders.insight import build_insight_signal
 from src.ui import renderer as r
 from src.ui.contracts import ComponentType
 
@@ -149,60 +145,3 @@ def test_markdown_builder_emits_new_markdown_type_with_content():
     assert comp.type == "Markdown"
     assert comp.properties["content"] == "# H\n- a\n- b"
     assert "Markdown" in {ct.value for ct in ComponentType}
-
-
-async def test_build_insight_signal_emits_badge_markdown_metric_markdown():
-    """P2 rewire: build_insight_signal routes prose bodies through Markdown.
-
-    The signal tab is Badge (source), Markdown (signal_summary), Metric
-    (relevance), Markdown (relevance_reasoning). Both prose bodies become
-    Markdown so paragraph/list structure survives; the short source badge and
-    the relevance metric stay as-is. Reads only surface.payload (no DB), so db
-    is unused.
-    """
-
-    class _FakeSurface:
-        payload = {
-            "insight_data": {
-                "signal_source": "gmail",
-                "signal_summary": "New investor email requesting the deck",
-                "relevance_score": 0.92,
-                "relevance_reasoning": "Matches the active fundraising goal",
-            }
-        }
-
-    resp = await build_insight_signal(None, _FakeSurface())
-    children = resp.sections[0].children
-    types = [c.type for c in children]
-
-    assert types == ["Badge", "Markdown", "Metric", "Markdown"]
-    assert set(types) <= LIVE_COMPONENT_TYPES
-
-
-async def test_build_briefing_priorities_emits_text_markdown_and_divider():
-    """P2 rewire: build_briefing_priorities routes the `why` prose through Markdown.
-
-    Each priority emits a Text (title) + a Markdown (why); a Divider is inserted
-    between consecutive priorities. The short title stays Text — only the prose
-    `why` body becomes Markdown. Patch _resolve_briefing to avoid a DB round-trip.
-    """
-
-    class _FakeBriefing:
-        top_priorities = [
-            {"title": "Ship the investor deck", "why": "Investor is waiting"},
-            {"title": "Reply to Jane", "why": "Time-sensitive intro"},
-        ]
-
-    with patch(
-        "src.services.surface_detail_builders.briefing._resolve_briefing",
-        new=AsyncMock(return_value=(_FakeBriefing(), True)),
-    ):
-        resp = await build_briefing_priorities(None, object())
-
-    children = resp.sections[0].children
-    types = [c.type for c in children]
-
-    # priority 0: title(Text) + why(Markdown) + divider(Divider); priority 1: title + why
-    assert types == ["Text", "Markdown", "Divider", "Text", "Markdown"]
-    assert set(types) == {"Text", "Markdown", "Divider"}
-    assert set(types) <= LIVE_COMPONENT_TYPES
