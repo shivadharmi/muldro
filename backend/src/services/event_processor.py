@@ -785,7 +785,7 @@ class EventProcessor:
         hits Haiku. ``workspace_id`` attributes the triage token span."""
         from src.services.triage import TriageService
 
-        triage_results = await TriageService().triage_batch(events, user_id, workspace_id)
+        triage_results = await TriageService(self._db).triage_batch(events, user_id, workspace_id)
         out: list[dict] = []
         for raw, tr in zip(events, triage_results):
             out.append(
