@@ -43,13 +43,10 @@ GRANDFATHERED: dict[str, int] = {
     # list by the same oversight). The Model tab's mechanical adaptation to
     # scope_type/scope_key bindings and the flat catalog.models list grows it
     # a little further; recorded here rather than split -- the tab's actual
-    # redesign is a later phase.
-    "frontend/src/components/settings/model-tab.tsx": 610,
-    # Already 529 lines at HEAD (over the 400 cap already, same oversight).
-    # The handler adaptation to ModelBinding + saveProviderCredential +
-    # CredentialDeleteResult grows it a little further; recorded here rather
-    # than split -- the modal's actual redesign is a later phase.
-    "frontend/src/components/settings/settings-modal.tsx": 538,
+    # redesign is a later phase. Moved into tabs/ with the shell decomposition;
+    # settings-modal.tsx left this list at the same time, split into a shell
+    # (<400) plus settings-rail.tsx and per-tab owners.
+    "frontend/src/components/settings/tabs/model-tab.tsx": 610,
     "frontend/src/components/chat/chat-panel.tsx": 678,
     "frontend/src/components/history/run-detail-modal.tsx": 543,
     "frontend/src/app/settings/page.tsx": 522,

@@ -2,7 +2,14 @@
 
 import { create } from "zustand";
 
-export type SettingsTab = "account" | "preferences" | "policy" | "budget" | "trust" | "model";
+export type SettingsTab =
+  | "account"
+  | "preferences"
+  | "policy"
+  | "budget"
+  | "trust"
+  | "model"
+  | "providers";
 
 interface SettingsModalState {
   open: boolean;

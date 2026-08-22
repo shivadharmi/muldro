@@ -1,34 +1,17 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Card, CardBody } from "@/components/ui/card";
+import { useToast } from "@/components/ui/toast";
+import { errorToMessage } from "@/lib/api-error";
 import type {
   CatalogModel,
   ModelCatalog,
-  ModelConfig,
   ModelBinding,
   ProviderStatus,
 } from "@/lib/types";
-
-interface ModelTabProps {
-  open: boolean;
-  loading: boolean;
-  catalog: ModelCatalog | null;
-  config: ModelConfig | null;
-  onLoad: () => void;
-  onSaveConfig?: (body: {
-    tiers: ModelBinding[];
-    agent_overrides: ModelBinding[];
-  }) => void;
-  onSaveProviderKey?: (
-    provider: string,
-    fields: { api_key?: string; base_url?: string | null },
-  ) => void;
-  onTestProvider?: (provider: string) => void;
-  onDeleteProvider?: (provider: string) => void;
-  savingConfig?: boolean;
-  providerBusy?: string | null;
-}
+import { useModelConfigContext } from "../model-config-context";
+import type { CredentialFields } from "../hooks/use-provider-credentials";
 
 const TIER_ORDER = ["reasoning", "balanced", "fast"];
 const EFFORT_OPTIONS = ["none", "low", "medium", "high"];
@@ -205,12 +188,9 @@ interface ProviderRowProps {
   provider: string;
   status: ProviderStatus | undefined;
   busy: boolean;
-  onSaveKey?: (
-    provider: string,
-    fields: { api_key?: string; base_url?: string | null },
-  ) => void;
-  onTest?: (provider: string) => void;
-  onDelete?: (provider: string) => void;
+  onSaveKey: (provider: string, fields: CredentialFields) => void;
+  onTest: (provider: string) => void;
+  onDelete: (provider: string) => void;
 }
 
 /** Write-only credential row: the key input is never pre-filled. */
@@ -288,7 +268,7 @@ function ProviderRow({
                 busy || (provider !== "ollama" && !status?.configured && !apiKey)
               }
               onClick={() =>
-                onSaveKey?.(provider, {
+                onSaveKey(provider, {
                   ...(apiKey ? { api_key: apiKey } : {}),
                   ...(baseUrl !== (status?.base_url ?? "")
                     ? { base_url: baseUrl || null }
@@ -302,7 +282,7 @@ function ProviderRow({
             <button
               type="button"
               disabled={busy}
-              onClick={() => onTest?.(provider)}
+              onClick={() => onTest(provider)}
               className={GHOST_BTN_CLASS}
             >
               Test
@@ -311,7 +291,7 @@ function ProviderRow({
                 credential this workspace owns: DELETE removes the workspace row and
                 nothing else, so offering it for a deployment-default row or an
                 env-backed key is a button that appears to work and changes nothing. */}
-            {status?.source === "workspace" && onDelete && (
+            {status?.source === "workspace" && (
               <button
                 type="button"
                 disabled={busy}
@@ -328,38 +308,20 @@ function ProviderRow({
   );
 }
 
-export function ModelTab({
-  loading,
-  catalog,
-  config,
-  onLoad,
-  onSaveConfig,
-  onSaveProviderKey,
-  onTestProvider,
-  onDeleteProvider,
-  savingConfig,
-  providerBusy,
-}: ModelTabProps) {
-  const [tiers, setTiers] = useState<ModelBinding[]>(config?.tiers ?? []);
-  const [agentOverrides, setAgentOverrides] = useState<ModelBinding[]>(
-    config?.agent_overrides ?? [],
-  );
+export function ModelTab() {
+  const { addToast } = useToast();
+  const { models, credentials } = useModelConfigContext();
+  const { catalog, config, draft, loading, saving: savingConfig } = models;
+  const { load, updateBinding, upsertBinding, removeBinding, save } = models;
+
+  const tiers = draft.tiers;
+  const agentOverrides = draft.agent_overrides;
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [addAgent, setAddAgent] = useState("");
 
-  // Re-seed editable local state whenever a fresh config prop arrives. This is
-  // React's "adjust state during render" pattern (keyed on the config
-  // reference) — no setState in an effect, no side effect during render.
-  const [seededConfig, setSeededConfig] = useState(config);
-  if (config !== seededConfig) {
-    setSeededConfig(config);
-    setTiers(config?.tiers ?? []);
-    setAgentOverrides(config?.agent_overrides ?? []);
-  }
-
   useEffect(() => {
-    onLoad();
-  }, [onLoad]);
+    load().catch((err) => addToast(errorToMessage(err), "error"));
+  }, [load, addToast]);
 
   const configuredProviders = useMemo(
     () =>
@@ -390,15 +352,14 @@ export function ModelTab({
     [tiers],
   );
 
-  const updateTier = (next: ModelBinding) => {
-    setTiers((prev) => prev.map((t) => (keyOf(t) === keyOf(next) ? next : t)));
-  };
-
-  const updateOverride = (next: ModelBinding) => {
-    setAgentOverrides((prev) =>
-      prev.map((t) => (keyOf(t) === keyOf(next) ? next : t)),
-    );
-  };
+  // Both lists patch the same draft; the binding carries its own scope, so one
+  // handler serves tiers and overrides alike.
+  const changeBinding = useCallback(
+    (next: ModelBinding) => {
+      updateBinding(next.scope_type, next.scope_key, next);
+    },
+    [updateBinding],
+  );
 
   // Agents that don't yet have an override — the candidates for the add selector.
   const overriddenAgents = useMemo(
@@ -426,16 +387,52 @@ export function ModelTab({
           max_tokens: 4096,
           temperature: null,
         };
-    setAgentOverrides((prev) => [...prev, seed]);
+    // `availableAgents` already excludes every agent that has an override, so
+    // the upsert here can only ever be an append.
+    upsertBinding(seed);
     setAddAgent("");
   };
 
-  const removeOverride = (agentName: string) => {
-    setAgentOverrides((prev) => prev.filter((o) => o.scope_key !== agentName));
+  const handleSave = async () => {
+    try {
+      await save();
+      addToast("Model configuration saved", "success");
+    } catch (err) {
+      addToast(errorToMessage(err), "error");
+    }
   };
 
-  const handleSave = () => {
-    onSaveConfig?.({ tiers, agent_overrides: agentOverrides });
+  const handleSaveKey = async (provider: string, fields: CredentialFields) => {
+    try {
+      await credentials.save(provider, fields);
+      addToast(`${provider} credentials saved`, "success");
+    } catch (err) {
+      addToast(errorToMessage(err), "error");
+    }
+  };
+
+  const handleTest = async (provider: string) => {
+    try {
+      const result = await credentials.test(provider);
+      addToast(`${provider} test: ${result.status}`, "success");
+    } catch (err) {
+      addToast(errorToMessage(err), "error");
+    }
+  };
+
+  const handleDelete = async (provider: string) => {
+    try {
+      const result = await credentials.remove(provider);
+      // A revoke can orphan bindings that depended on this credential — surface
+      // that consequence instead of reporting a plain success.
+      if (result.orphaned_bindings.length > 0) {
+        addToast(result.orphaned_bindings[0].message, "error");
+      } else {
+        addToast(`${provider} credentials removed`, "success");
+      }
+    } catch (err) {
+      addToast(errorToMessage(err), "error");
+    }
   };
 
   if (loading) {
@@ -473,10 +470,10 @@ export function ModelTab({
                 key={provider}
                 provider={provider}
                 status={statusByProvider.get(provider)}
-                busy={providerBusy === provider}
-                onSaveKey={onSaveProviderKey}
-                onTest={onTestProvider}
-                onDelete={onDeleteProvider}
+                busy={credentials.isBusy(provider)}
+                onSaveKey={handleSaveKey}
+                onTest={handleTest}
+                onDelete={handleDelete}
               />
             ))}
           </div>
@@ -504,7 +501,7 @@ export function ModelTab({
                     binding={tier}
                     catalog={catalog}
                     configuredProviders={configuredProviders}
-                    onChange={updateTier}
+                    onChange={changeBinding}
                   />
                 ))}
                 <div className="flex justify-end pt-1">
@@ -581,8 +578,8 @@ export function ModelTab({
                         binding={ov}
                         catalog={catalog}
                         configuredProviders={configuredProviders}
-                        onChange={updateOverride}
-                        onRemove={() => removeOverride(ov.scope_key)}
+                        onChange={changeBinding}
+                        onRemove={() => removeBinding("agent", ov.scope_key)}
                       />
                     ))}
                   </div>
