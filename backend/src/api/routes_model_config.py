@@ -13,7 +13,12 @@ from src.api.deps import get_current_workspace_id, get_session
 from src.config import secret_crypto
 from src.config.model_catalog import MODEL_CATALOG, get_model_spec
 from src.config.provider_catalog import PROVIDER_CATALOG, AuthKind, FieldKind
-from src.contracts.model_config import ModelBindingDTO, ModelConfigResponse, ProviderStatus
+from src.contracts.model_config import (
+    ConfigWarning,
+    ModelBindingDTO,
+    ModelConfigResponse,
+    ProviderStatus,
+)
 from src.llm.model_factory import build_langchain_model
 from src.models.provider_credential import ProviderCredential
 from src.orchestrator.agents import AGENT_MODEL_TIERS
@@ -201,6 +206,14 @@ class TestResult(BaseModel):
     detail: str | None = None
 
 
+class CredentialDeleteResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    status: ProviderStatus
+    # Bindings this revoke just broke. Reported AFTER the delete, so it describes the
+    # state that now exists rather than one predicted before the write.
+    orphaned_bindings: list[ConfigWarning] = []
+
+
 def _require_known_provider(provider: str) -> None:
     if provider not in MODEL_CATALOG:
         raise HTTPException(status_code=400, detail=f"unknown provider {provider}")
@@ -280,12 +293,16 @@ async def put_provider_credential(
     return next(s for s in statuses if s.provider == provider)
 
 
-@router.delete("/v1/providers/{provider}/credentials", response_model=ProviderStatus)
+@router.delete("/v1/providers/{provider}/credentials", response_model=CredentialDeleteResponse)
 async def delete_provider_credential(
     provider: str,
     workspace_id: str = Depends(get_current_workspace_id),
     db: AsyncSession = Depends(get_session),
 ):
+    """Revoke this workspace's credential, and report what the revoke broke.
+
+    Never blocks: a credential the founder cannot revoke is a security problem.
+    """
     _require_known_provider(provider)
     stmt = select(ProviderCredential).where(
         ProviderCredential.workspace_id == workspace_id,
@@ -295,14 +312,20 @@ async def delete_provider_credential(
     if existing is not None:
         await db.delete(existing)
         await db.commit()
+
+    service = ModelConfigService(db)
     # Report the state that ACTUALLY remains, not an assumed "unconfigured". Deleting
     # the workspace row can leave the provider still configured via the NULL-workspace
     # default row or the env fallback key — claiming otherwise made the UI show a
     # provider as removed until the next refetch flipped it back.
-    statuses = await ModelConfigService(db).provider_statuses(workspace_id)
-    return next(
-        (s for s in statuses if s.provider == provider),
+    config = await service.get_config_response(workspace_id)
+    status = next(
+        (s for s in config.providers if s.provider == provider),
         ProviderStatus(provider=provider, configured=False, status="unconfigured", source="none"),
+    )
+    return CredentialDeleteResponse(
+        status=status,
+        orphaned_bindings=[w for w in config.warnings if w.code == "provider_not_configured"],
     )
 
 

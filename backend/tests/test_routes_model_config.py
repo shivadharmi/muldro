@@ -393,8 +393,8 @@ def test_delete_credential_unconfigures(monkeypatch):
             deleted = c.delete("/v1/providers/openai/credentials")
             assert deleted.status_code == 200, deleted.text
             dbody = deleted.json()
-            assert dbody["configured"] is False
-            assert dbody["status"] == "unconfigured"
+            assert dbody["status"]["configured"] is False
+            assert dbody["status"]["status"] == "unconfigured"
 
             got = c.get("/v1/model-config")
             prov = {p["provider"]: p for p in got.json()["providers"]}
@@ -404,7 +404,7 @@ def test_delete_credential_unconfigures(monkeypatch):
             # Deleting an already-absent credential is a no-op success.
             again = c.delete("/v1/providers/openai/credentials")
             assert again.status_code == 200, again.text
-            assert again.json()["configured"] is False
+            assert again.json()["status"]["configured"] is False
     finally:
         _cred_cleanup(engine, factory, ws)
 
@@ -1687,3 +1687,51 @@ def test_keyless_provider_survives_bind_validation():
     finally:
         if app is not None:
             app.dependency_overrides.clear()
+
+
+@pytest.mark.skipif(not _db_reachable(), reason="Postgres not reachable")
+def test_delete_credential_reports_what_it_breaks_and_still_deletes(monkeypatch):
+    """Inform, do not block: a credential the founder cannot revoke is a security
+    problem, not a safety feature."""
+    _use_test_key(monkeypatch)
+    # Deleting the stored credential only reads as "unconfigured" when there is no env
+    # fallback behind it. `resolve_credential` consults settings last, so a developer with
+    # MULDRO_OPENAI_API_KEY set would see the provider stay configured after the delete.
+    monkeypatch.setattr(get_settings(), "openai_api_key", "", raising=False)
+    factory, ws = _ws_factory()
+    app = None
+
+    try:
+        app = _ws_app(factory, ws)
+        with TestClient(app) as c:
+            c.put("/v1/providers/openai/credentials", json={"api_key": "sk-x"})
+            c.put(
+                "/v1/model-config",
+                json={
+                    "tiers": [
+                        {
+                            "scope_type": "tier",
+                            "scope_key": "fast",
+                            "provider": "openai",
+                            "model_id": "gpt-5-mini",
+                            "effort": "low",
+                            "max_tokens": 4096,
+                        }
+                    ],
+                    "agent_overrides": [],
+                },
+            )
+
+            r = c.delete("/v1/providers/openai/credentials")
+            assert r.status_code == 200, r.text
+            body = r.json()
+
+            assert body["status"]["provider"] == "openai"
+            assert body["status"]["configured"] is False
+            orphaned = body["orphaned_bindings"]
+            assert [w["scope_key"] for w in orphaned] == ["fast"]
+            assert orphaned[0]["code"] == "provider_not_configured"
+    finally:
+        if app is not None:
+            app.dependency_overrides.clear()
+        _delete_ws_credentials(factory, ws)
