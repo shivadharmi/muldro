@@ -32,7 +32,7 @@ this draft** — three of the seven features are not what they appear to be.
 | `thread` → message count | `NormalizedEvent`, indexed on `(user_id, source, entity_id)` | **usable.** A count of rows muldro wrote. |
 | `thread` → **whether you replied** | — | **NOT AVAILABLE.** No sent-mail ingestion exists; the gmail connector emits only `email_received`, and there is no `email_sent` event type anywhere. Needs the 12-month sent-mail bootstrap from the perception-autonomy design. Model it as `bool \| None` and let `None` mean *not knowable yet* — never `False`, which would silently read as "you ignored them". |
 | `deadline` → **typed date, extracted at ingestion** | `NormalizedEvent.importance_signals["contains_deadline"]` | **NOT WHAT IT CLAIMS.** What exists is a **boolean an LLM asserted** while reading the attacker's subject and body (`event_processor.py`'s scoring prompt), not a typed date. §6's own argument — *"an attacker can lie about when; they cannot inject an instruction"* — only holds for a real parsed date. Today this field is the instruction channel. **Do not wire it.** A typed extractor is prerequisite work. |
-| `goals` → which goals this matches | — | **NOT AVAILABLE.** No `Goal` model, no `memory_type="goal"` in use, no `entity_type="goal"` in use, despite `Entity`'s type comment listing `goal`. Nothing to match against. |
+| `goals` → which goals this matches | `Memory` rows with `memory_type="goal"`; `ContextBuilder._fetch_core_goals` reads them; `Memory.entity_ids` is an `ARRAY(String)` | **usable, via the graph — not via text.** Goals exist (an earlier revision of this draft said otherwise and was wrong). **Match by joining `Memory.entity_ids` against the counterparty's `entity_id`, never by embedding the subject and vector-searching goals** — the latter hands an attacker a promotion channel, since a crafted subject that resembles your goals would raise its own rank. A graph join is unforgeable: an attacker cannot make your goal memory reference them. |
 | `affordance` → is there an unresolved decision | `Frame.affordances` | **usable but empty.** Code-authored by construction; perception populates none yet (the capability→affordance mapping is a later plan). Wire the field, expect `False`. |
 
 ### Fields that must never enter, and why they look safe
@@ -56,6 +56,42 @@ can only use against themselves is safe to read.
 
 `TriageResult.origin` already records `"rules" | "llm" | "default"`. **That flag is the
 provenance marker this design needs** — take the category only when `origin == "rules"`.
+
+---
+
+## 1a. Provenance is per-connector — a feature is not one question, it is five
+
+Every derived feature has to be answered **per source**, because the five connectors expose
+different structure. A deadline has three possible provenances, and they are not equally
+trustworthy:
+
+1. **A structured provider field** — a typed value the provider's API returns, never prose.
+   No extraction, so no parser to feed and nothing to inject. **Strictly the best.**
+2. **Deterministic extraction from verbatim prose** — a parser, no model. Bounded and
+   checkable, per §6. Acceptable.
+3. **A model's assertion about prose** — rejected. This is `contains_deadline` today.
+
+Applied to what each connector actually emits:
+
+| source | is `summary` verbatim? | structured deadline | where a deadline must come from |
+|---|---|---|---|
+| **calendar** | no — composed (`"{title} from {start} to {end} with {attendees}"`) | **yes** — `start_time`, already parsed into `occurred_at` | **the structured field. Never extract.** The meeting's start *is* the deadline; running a text parser over composed prose here would be strictly worse than the typed value sitting beside it. |
+| **gmail** | yes — the message snippet | no | deterministic extraction |
+| **slack** | yes — the message text | no | deterministic extraction |
+| **github** | no — composed (`"{reason}: {title} in {repo}"`) | **not captured.** `milestone.due_on` and project dates exist in the API; the connector fetches neither | nothing today — needs a connector change, not a ranker one |
+| **notion** | no — composed (`"Notion page: {title}"`) | **not captured.** Notion date properties exist; the connector stores only `page_id`, `url`, `last_edited_time` | nothing today — needs a connector change |
+
+**This is the same shape as the quote band's `VERBATIM_TEXT_FIELD` map** (`view/perception.py`),
+which exists because "which field holds verbatim external text" is also a per-source question
+with a fail-closed answer. Deadline sourcing should follow that pattern rather than invent a
+second per-source table: an explicit map, an unlisted source yields nothing, and a comment
+recording what each unlisted source has instead.
+
+**The general rule, which outlives the deadline case:** before wiring any feature, ask of each
+connector *"is this a value the provider computed, a value a human wrote, or a value a model
+inferred?"* Only the first two may enter, and the first is always preferred where it exists.
+Adding a sixth connector means answering that question five more times — once per feature — and
+the fail-closed default means forgetting to answer it costs a signal rather than opening a hole.
 
 ---
 
@@ -193,14 +229,21 @@ mechanical.
 
 ## 5. Prerequisites, in dependency order
 
-1. **A typed deadline extractor.** Replaces the LLM's `contains_deadline` boolean with a parsed
-   date. This is the single highest-value unblock: it is the feature §6 leans on hardest, and
-   today it is an instruction channel wearing a typed name.
-2. **Sent-mail ingestion.** Unblocks `you_replied`, the strongest available relationship signal.
-   The 12-month bootstrap is already designed.
-3. **A goal store.** Unblocks `matched_goal_ids`.
-4. **Affordances populated from perception.** Unblocks `has_unresolved_affordance`.
+1. **A typed deadline extractor** — *built with this draft.* Replaces the LLM's
+   `contains_deadline` boolean with a date parsed **deterministically**, no model in the loop at
+   all. It is the feature §6 leans on hardest, and it was the last instruction channel wearing a
+   typed name.
+2. **Goal matching by graph join** — *built with this draft.* `Memory.entity_ids` ∩ the
+   counterparty's entity. Text-similarity matching is rejected on injection grounds, above.
+3. **Sent-mail ingestion.** Unblocks `you_replied`, the strongest relationship signal available.
+   **Deliberately not built here, and not because it is hard:** ingesting the founder's own
+   outbound mail changes *what perception sees*. Those events would flow into triage,
+   scoring, the Planner and the notifier, so it is a product decision with side effects well
+   outside the view layer — not a ranker change. The 12-month bootstrap is already designed.
+   `users.email` exists, so the comparison is trivial once the data does.
+4. **Affordances populated from perception.** Unblocks `has_unresolved_affordance`. Needs the
+   capability→affordance mapping, which is spec step 4.
 
-**None of these block shipping `rank()`.** The deterministic baseline over counterparty,
-thread-length, recency and engagement is buildable today, and every reserved field is already
-typed to accept its prerequisite without a signature change.
+**Neither remaining item blocks `rank()`.** Both reserved fields are typed to accept their
+prerequisite without a signature change, and both are `None`/empty rather than a defaulted
+value that would read as a fact.
