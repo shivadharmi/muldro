@@ -34,12 +34,13 @@ def _unit(key="gmail:email_thread:t1") -> Unit:
 
 
 def test_the_response_carries_typed_units():
-    resp = UnitFeedResponse(units=[_unit()], count=1)
+    # `fold_after == count` means nothing folds — the honest value for one unit.
+    resp = UnitFeedResponse(units=[_unit()], count=1, fold_after=1)
     assert resp.units[0].frame.headline == "Sarah Chen - Series A term sheet"
 
 
 def test_the_response_serializes_the_frame_verbatim():
-    dumped = UnitFeedResponse(units=[_unit()], count=1).model_dump(mode="json")
+    dumped = UnitFeedResponse(units=[_unit()], count=1, fold_after=1).model_dump(mode="json")
     frame = dumped["units"][0]["frame"]
     assert frame["key"] == "gmail:email_thread:t1"
     assert frame["event_count"] == 1
