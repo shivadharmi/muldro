@@ -9,6 +9,7 @@ import type {
   ConfigWarning,
   ModelBinding,
 } from "@/lib/types";
+import { btn } from "../controls";
 import { WarningIcon } from "../icons";
 import { BindingFields, type BindingPatch } from "./binding-fields";
 
@@ -18,16 +19,9 @@ const AGENT_CHIP =
   "inline-flex items-center h-[19px] px-[7px] rounded-[5px] text-[11px] " +
   "font-normal whitespace-nowrap shrink-0 bg-surface-3 text-t-tertiary";
 
-/** §9.3 `md` ghost button, MINUS its colour — see `provider-row.tsx` for why a
- *  colour utility appended to another one does not reliably win the cascade. */
-const MD_GHOST_BTN =
-  "inline-flex items-center justify-center h-[44px] sm:h-[32px] px-[12px] " +
-  "shrink-0 text-[13px] font-medium rounded-[var(--radius-md)] bg-transparent " +
-  "border cursor-pointer disabled:opacity-45 disabled:cursor-default";
-
-/** §9.6's warning action. Amber at rest, not on hover: a hover-only colour is
- *  inside `@media (hover: hover)` and never renders on a phone at all. */
-const CONNECT_BTN = `${MD_GHOST_BTN} border-j-warning/40 text-j-warning hover:bg-j-warning-soft`;
+/** §9.6's warning action. Composed once, at module scope, because `btn()`
+ *  returns a pure function of its arguments and nothing here varies per render. */
+const CONNECT_BTN = btn({ size: "md", variant: "warning" });
 
 /**
  * `ModelSpec.thinking_style`, said out loud.
@@ -40,8 +34,11 @@ const CONNECT_BTN = `${MD_GHOST_BTN} border-j-warning/40 text-j-warning hover:bg
 const THINKING_STYLES: Record<string, { label: string; adjective: string }> = {
   anthropic_adaptive: { label: "Adaptive thinking", adjective: "Adaptive-thinking" },
   anthropic_legacy: { label: "Budgeted thinking", adjective: "Budgeted-thinking" },
-  openai_effort: { label: "Reasoning effort", adjective: "Reasoning-effort" },
-  gemini: { label: "Provider thinking", adjective: "Provider-thinking" },
+  openai_effort: { label: "Reasoning effort", adjective: "Reasoning" },
+  // Not "Provider thinking": this label RENDERS today, on both Gemini models,
+  // and naming the internal enum rather than the provider tells the founder
+  // nothing about the model they just picked.
+  gemini: { label: "Gemini thinking", adjective: "Gemini-thinking" },
   none: { label: "No thinking", adjective: "Non-thinking" },
 };
 
@@ -100,13 +97,18 @@ export interface TierCardProps {
   /** Whole-card disable, e.g. mid-save. */
   disabled?: boolean;
   /**
-   * A server-computed `warnings` entry (§4.4): the bound provider resolves no
-   * credential, so every agent on this tier fails at run time.
+   * The server-computed `warnings` entry FOR THIS BINDING (§4.4): the bound
+   * provider resolves no credential, so every agent on this tier fails at run
+   * time. It is stale the moment the draft is rebound elsewhere, and the card
+   * ignores it once `warning.provider` and `binding.provider` disagree — see
+   * `standing` below. Passing another scope's warning shows nothing.
    */
   warning?: ConfigWarning;
   /**
    * A 422 the server returned while SAVING this binding (§4.4). Rendered on the
    * card, never as a toast — the founder has to see which binding was refused.
+   * Unlike a warning it describes an attempt, not a live state: nothing is
+   * failing, because the refused binding never became the running one.
    */
   rejection?: ConfigWarning;
   onChange: (patch: BindingPatch) => void;
@@ -130,10 +132,12 @@ export interface TierCardProps {
  * every agent on it. So the copy names the agents' fate and the card never uses
  * language that implies something else picks up the slack.
  *
- * **A rejection outranks a warning.** They occupy the same slot because they are
- * the same sentence about the same binding, but a rejection describes the save
- * the founder just attempted, while a warning describes a condition that has
- * been true since some earlier revoke. Showing the older fact on top of a fresh
+ * **A rejection outranks a warning, and does not say the same thing.** They
+ * share one slot because they are one card's worth of bad news, but they
+ * describe opposite states: a warning means a live binding is broken and the
+ * agents on this tier are failing now; a rejection means the save was refused,
+ * so the previously saved binding is still running and nothing is failing.
+ * A rejection is also the newer fact — showing the older one on top of a fresh
  * refusal would answer a question nobody asked.
  */
 export function TierCard({
@@ -152,9 +156,21 @@ export function TierCard({
 }: TierCardProps) {
   const uid = useId();
   const headingId = `${uid}-tier`;
+  const consequenceId = `${uid}-consequence`;
 
-  // Rejection first — see the class docblock.
-  const notice = rejection ?? warning;
+  /**
+   * A warning names the provider that failed to resolve. Once the draft names a
+   * DIFFERENT provider, that warning is about a binding that no longer exists —
+   * the founder has already done what the card asked, by rebinding rather than
+   * by connecting. The next save either succeeds or comes back as a rejection
+   * naming the new provider. Without this check the card would render an amber
+   * "Claude Haiku · Anthropic" above a **Connect Groq** button.
+   *
+   * A rejection needs no such check: it describes the binding just attempted,
+   * whose provider IS `binding.provider`.
+   */
+  const standing = warning?.provider === binding.provider ? warning : undefined;
+  const notice = rejection ?? standing;
   const warned = notice !== undefined;
 
   const tierName = tierLabel(binding.scope_key);
@@ -182,16 +198,35 @@ export function TierCard({
       notice.provider)
     : "";
 
-  // The server's sentence when it sent one. The local fallback says the same
-  // thing — and, like the server's, it must never suggest a fallback exists.
+  /**
+   * The server's sentence when it sent one; otherwise ours.
+   *
+   * Two fallbacks, not one, because the two notices describe OPPOSITE states of
+   * the world. A warning means a live binding is broken, so every agent on this
+   * tier really is failing. A rejection is a 422 — the save was REFUSED, so the
+   * previously saved binding is still what runs and nothing is failing at all.
+   * One shared sentence would tell a founder whose rebind was rejected that
+   * their agents are down. That is the same defect as promising a fallback,
+   * pointed the other way: the card's one job is to not invent a consequence.
+   *
+   * `.trim() ||` rather than `??`: a server that sends `""` must not render an
+   * empty amber row.
+   */
   const consequence =
-    notice?.message?.trim() ||
-    `${noticeProviderName} is not connected. There is no tier fallback — ` +
-      `every agent on ${tierName} will fail until you connect it.`;
+    notice?.message.trim() ||
+    (rejection
+      ? `${noticeProviderName} is not connected, so ${tierName} was not saved. ` +
+        `Connect it first — there is no tier fallback.`
+      : `${noticeProviderName} is not connected. There is no tier fallback — ` +
+        `every agent on ${tierName} will fail until you connect it.`);
 
   return (
     <section
       aria-labelledby={headingId}
+      // The consequence is part of what this card IS, not only an announcement.
+      // A live region can miss its moment; a description cannot — whoever
+      // reaches the card afterwards still hears why it is amber.
+      aria-describedby={notice ? consequenceId : undefined}
       className={
         "bg-surface-1 border rounded-[var(--radius-lg)] pt-[13px] px-[20px] pb-[11px] " +
         (warned ? "border-j-warning/35" : "border-b-secondary")
@@ -251,7 +286,14 @@ export function TierCard({
         {notice ? (
           <>
             <WarningIcon size={14} className="text-j-warning" />
+            {/* Keyed so a warning becoming a rejection REMOUNTS this node.
+                A screen reader registers a live region when it is inserted;
+                flipping `role="alert"` onto a node already in the DOM is the
+                documented unreliable case — and warning→rejection (a revoked
+                provider, a save, a 422) is the likeliest sequence there is. */}
             <p
+              key={rejection ? "rejection" : "warning"}
+              id={consequenceId}
               role={rejection ? "alert" : undefined}
               className="flex-1 min-w-0 text-[12px] text-j-warning"
             >

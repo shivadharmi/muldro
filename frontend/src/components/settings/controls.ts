@@ -73,3 +73,78 @@ export function ctl({ off, dirty, warning, extra }: CtlOptions = {}): string {
   const ring = dirty ? ` ${RING_DIRTY}` : "";
   return `${CTL_BASE} ${CTL_ENABLED} ${border}${ring}${extra ? ` ${extra}` : ""}`;
 }
+
+// ── Buttons (§9.3) ─────────────────────────────────────────────────────────
+
+/** Geometry and type shared by every settings button. Colour lives in the
+ *  variant, for the reason `ctl` gives above: two colour utilities in one class
+ *  attribute have equal specificity, so which one wins is decided by Tailwind's
+ *  output order rather than by the call site. `provider-row.tsx` documents the
+ *  same trap — appending `text-j-error` after `text-t-secondary` renders grey. */
+const BTN_BASE =
+  "inline-flex items-center justify-center shrink-0 text-[13px] " +
+  "rounded-[var(--radius-md)] transition-colors cursor-pointer " +
+  "disabled:opacity-45 disabled:cursor-default";
+
+/** §9.3's two heights, and its mobile row. Padding-x differs by size AND by
+ *  family (13/12 at `md`, 12/11 at `sm`, 18/16 below the `sm` breakpoint), so
+ *  the two are selected together rather than composed from separate tables. */
+const BTN_SIZE = {
+  md: {
+    primary: "h-[44px] sm:h-[32px] px-[18px] sm:px-[13px]",
+    ghost: "h-[44px] sm:h-[32px] px-[16px] sm:px-[12px]",
+  },
+  sm: {
+    primary: "h-[44px] sm:h-[30px] px-[18px] sm:px-[12px]",
+    ghost: "h-[44px] sm:h-[30px] px-[16px] sm:px-[11px]",
+  },
+} as const;
+
+/**
+ * The full colour statement per variant — never a fragment to append to.
+ *
+ * Ghost is 400; only primary is 500 (§9.3). The existing hand-rolled copies all
+ * carry `font-medium` on their ghosts; migrating them to this function is the
+ * point, and it will correct that weight.
+ *
+ * A tinted ghost is a VARIANT, not a colour argument, so a caller cannot hand
+ * in a class that loses the cascade to the one already there.
+ */
+const BTN_VARIANT = {
+  primary:
+    "font-medium border border-transparent bg-j-primary text-j-primary-fg " +
+    "hover:bg-j-primary-hover",
+  ghost:
+    "font-normal bg-transparent border border-b-primary text-t-secondary " +
+    "hover:bg-surface-2",
+  /** `Remove` — error-coloured AT REST, not on hover: a hover-only danger colour
+   *  sits inside `@media (hover: hover)` and never renders on a phone at all. */
+  danger:
+    "font-normal bg-transparent border border-b-primary text-j-error " +
+    "hover:bg-surface-2",
+  /** §9.6's `Connect {provider}` on a warned tier card. */
+  warning:
+    "font-normal bg-transparent border border-j-warning/40 text-j-warning " +
+    "hover:bg-j-warning-soft",
+} as const;
+
+export interface BtnOptions {
+  /** §9.3: `md` for card-level and save-bar actions, `sm` inside dense rows. */
+  size?: keyof typeof BTN_SIZE;
+  variant?: keyof typeof BTN_VARIANT;
+  /** Per-button additions — layout, `w-full`, `tabular-nums`. Never colour. */
+  extra?: string;
+}
+
+/** Compose one button's classes. The counterpart to `ctl()`, and for the same
+ *  reason: these metrics were already restated in three files before a fourth
+ *  copy could be written. */
+export function btn({
+  size = "md",
+  variant = "ghost",
+  extra,
+}: BtnOptions = {}): string {
+  const family = variant === "primary" ? "primary" : "ghost";
+  const geometry = BTN_SIZE[size][family];
+  return `${BTN_BASE} ${geometry} ${BTN_VARIANT[variant]}${extra ? ` ${extra}` : ""}`;
+}
