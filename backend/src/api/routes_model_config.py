@@ -10,9 +10,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.deps import get_current_workspace_id, get_session
-from src.config import secret_crypto
+from src.config import provider_catalog, secret_crypto
 from src.config.model_catalog import MODEL_CATALOG, get_model_spec
-from src.config.provider_catalog import PROVIDER_CATALOG, AuthKind, FieldKind
+from src.config.provider_catalog import AuthKind, FieldKind
 from src.contracts.model_config import (
     ConfigWarning,
     ModelBindingDTO,
@@ -25,7 +25,7 @@ from src.orchestrator.agents import AGENT_MODEL_TIERS
 from src.services.model_config_service import (
     ModelConfigService,
     merge_extra_config,
-    unknown_extra_keys,
+    rejected_extra_keys,
 )
 from src.services.model_resolver import KEYLESS_PROVIDERS, ModelResolver, ResolvedModel
 
@@ -109,7 +109,7 @@ async def get_model_catalog(workspace_id: str = Depends(get_current_workspace_id
                 model_count=len(MODEL_CATALOG.get(name, [])),
                 docs_url=spec.docs_url,
             )
-            for name, spec in PROVIDER_CATALOG.items()
+            for name, spec in provider_catalog.PROVIDER_CATALOG.items()
         ],
         models=[
             CatalogModel(
@@ -218,6 +218,27 @@ class CredentialDeleteResponse(BaseModel):
     orphaned_bindings: list[ConfigWarning] = []
 
 
+# The 400 detail is echoed to the client AND logged, so it is sized for a human
+# reading a typo, not for a caller that submitted a thousand keys. Without these caps
+# a body of long junk keys produced a multi-megabyte error response and log line --
+# the request's own payload reflected back, amplified.
+_MAX_REPORTED_KEYS = 5
+_MAX_REPORTED_KEY_LEN = 64
+
+
+def _describe_rejected(rejected: dict[str, str]) -> str:
+    """One short, bounded sentence naming why a credential write was refused."""
+
+    def _clip(key: str) -> str:
+        return key if len(key) <= _MAX_REPORTED_KEY_LEN else key[: _MAX_REPORTED_KEY_LEN - 1] + "…"
+
+    items = list(rejected.items())
+    shown = [f"{_clip(k)} ({why})" for k, why in items[:_MAX_REPORTED_KEYS]]
+    if len(items) > _MAX_REPORTED_KEYS:
+        shown.append(f"and {len(items) - _MAX_REPORTED_KEYS} more")
+    return ", ".join(shown)
+
+
 def _require_known_provider(provider: str) -> None:
     if provider not in MODEL_CATALOG:
         raise HTTPException(status_code=400, detail=f"unknown provider {provider}")
@@ -257,22 +278,23 @@ async def put_provider_credential(
     )
     existing = (await db.execute(stmt)).scalars().first()
 
+    fields = body.model_dump(exclude_unset=True)
+
+    # Validated BEFORE any merge, and before the missing-api_key check below: a
+    # malformed field is a STRUCTURAL error the client cannot guess, whereas the
+    # missing key is one it can. Reporting the guessable one first means fixing it
+    # only surfaces a second 400.
+    rejected = rejected_extra_keys(provider, fields.get("extra_config"))
+    if rejected:
+        raise HTTPException(
+            status_code=400,
+            detail=f"rejected credential fields for {provider}: {_describe_rejected(rejected)}",
+        )
+
     # api_key is required to CREATE a keyed provider's credential, not to edit one:
     # editing a base URL must not force the founder to retype a secret they cannot see.
     if existing is None and not body.api_key and provider not in KEYLESS_PROVIDERS:
         raise HTTPException(status_code=400, detail=f"api_key is required for provider {provider}")
-
-    fields = body.model_dump(exclude_unset=True)
-
-    # Validated BEFORE any merge. A merge is accumulative, so an undeclared key
-    # written once would live in the JSONB forever, invisible and undeletable
-    # through the form -- and a key shadowing a top-level field would be echoed
-    # back as public alongside the real one.
-    unknown = unknown_extra_keys(provider, fields.get("extra_config"))
-    if unknown:
-        raise HTTPException(
-            status_code=400, detail=f"unknown credential fields for {provider}: {unknown}"
-        )
 
     if existing is not None:
         # Only a REAL write invalidates a prior verification -- `status` renders in
@@ -293,7 +315,10 @@ async def put_provider_credential(
             # Merge, never replace: an omitted key is "leave it alone", which is the
             # only way a client can keep a secret it is never allowed to read back.
             merged = merge_extra_config(existing.extra_config, fields["extra_config"])
-            if merged != existing.extra_config:
+            # `or None` on the stored side because the merge collapses an emptied map
+            # to None: a row seeded with {} (reachable only by direct DB insert) would
+            # otherwise read as changed by a write that touched nothing.
+            if merged != (existing.extra_config or None):
                 existing.extra_config = merged
                 wrote = True
         if wrote:

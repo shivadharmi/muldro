@@ -2,8 +2,7 @@
 
 import { useCallback, useState } from "react";
 
-import type { CatalogProvider, ProviderStatus } from "@/lib/types";
-import type { CredentialFields } from "../hooks/use-provider-credentials";
+import type { CatalogProvider, CredentialFields, ProviderStatus } from "@/lib/types";
 import {
   buildCredentialFields,
   hasMissingRequired,

@@ -71,27 +71,53 @@ def _split_extra_config(provider: str, extra: dict | None) -> tuple[dict[str, st
     return public, hidden
 
 
-def unknown_extra_keys(provider: str, submitted: dict[str, object] | None) -> list[str]:
-    """Submitted extra_config keys this provider does not DECLARE.
+# A declared extra_config value is a short scalar: a region, an endpoint, a
+# deployment name, an account id. Nothing legitimate approaches this. The cap is what
+# bounds the BYTES axis -- the key-count axis is already bounded by the declared set,
+# but per-key merge keeps whatever is written forever, and a blob stored under a
+# SECRET key cannot be cleared through the form at all (the form never sends an
+# explicit null for a secret, because blank there means "keep").
+MAX_EXTRA_VALUE_LEN = 2048
+
+
+def rejected_extra_keys(provider: str, submitted: dict[str, object] | None) -> dict[str, str]:
+    """Submitted extra_config keys that must not be written, mapped to why.
 
     The write-side twin of ``_split_extra_config``'s fail-closed read rule, and it
-    exists because the merge below is accumulative: under the old wholesale replace
-    the map arrived complete every time, so an undeclared key could not build up.
-    Under a merge, anything ever written stays forever -- unbounded JSONB growth for
-    a key that can never be displayed, and, worse, a key that COLLIDES with a
-    top-level field (``extra_config.base_url`` on a provider that declares
-    ``base_url``) would be echoed back as public and contradict the real one.
+    checks the same two things that rule checks -- the key is DECLARED, and the value
+    is a short scalar -- so the two halves cannot drift. Validating names alone let
+    the write side accept what the read side refuses: a nested value stored happily
+    under a declared key, then dropped with a log warning on the way out, leaving the
+    founder a blank field forever and a 200 that claimed otherwise.
+
+    It exists at all because the merge below is accumulative. Under the old wholesale
+    replace the map arrived complete every time, so junk could not build up; under a
+    merge, anything ever written stays. And a key that COLLIDES with a top-level field
+    (``extra_config.base_url`` on a provider that declares ``base_url``) would be
+    echoed back as public and contradict the real one.
 
     Rejecting a WRITE cannot destroy a stored value, precisely because omission now
     means keep -- so this stays safe if the catalog ever drops a field that rows
     still carry.
     """
     if not submitted:
-        return []
+        return {}
     spec = get_provider_spec(provider)
     # api_key and base_url are top-level columns, never members of the map.
     declared = {f.key for f in spec.credential_fields} - {"api_key", "base_url"} if spec else set()
-    return sorted(k for k in submitted if k not in declared)
+
+    rejected: dict[str, str] = {}
+    for key in sorted(submitted):
+        value = submitted[key]
+        if key not in declared:
+            rejected[key] = "not a declared field"
+        elif value is None:
+            continue  # an explicit null is the delete verb, not a value
+        elif not isinstance(value, str | int | float | bool):
+            rejected[key] = "not a scalar"
+        elif isinstance(value, str) and len(value) > MAX_EXTRA_VALUE_LEN:
+            rejected[key] = f"longer than {MAX_EXTRA_VALUE_LEN} characters"
+    return rejected
 
 
 def merge_extra_config(

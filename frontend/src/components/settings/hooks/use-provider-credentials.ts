@@ -8,17 +8,15 @@ import {
 } from "@/lib/api";
 import type {
   CredentialDeleteResult,
+  CredentialFields,
   ModelConfig,
   ProviderStatus,
 } from "@/lib/types";
 
-/** Partial credential update. `JSON.stringify` drops `undefined`, which is what
- *  makes omission expressible — pass `null` to clear a field deliberately. */
-export interface CredentialFields {
-  api_key?: string;
-  base_url?: string | null;
-  extra_config?: Record<string, unknown> | null;
-}
+// Re-exported because it is the shape this hook's `save` takes, and several
+// callers already reach for it here. It is DEFINED in lib/types beside the rest of
+// the credential contract — a wire format must not depend on a hooks module.
+export type { CredentialFields };
 
 export interface UseProviderCredentialsResult {
   /** Every provider with a mutation in flight. Overlapping mutations each keep

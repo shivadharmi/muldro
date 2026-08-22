@@ -560,6 +560,17 @@ export interface ConfigWarning {
   message: string;
 }
 
+/** Partial credential update — the body of a provider credential save.
+ *  `JSON.stringify` drops `undefined`, which is what makes omission expressible:
+ *  an omitted key means "leave the stored value alone" (that is how a client keeps
+ *  a secret it can never read back), and an explicit `null` clears it. The server
+ *  merges `extra_config` per key under the same three-valued rule. */
+export interface CredentialFields {
+  api_key?: string;
+  base_url?: string | null;
+  extra_config?: Record<string, unknown> | null;
+}
+
 export interface ProviderStatus {
   provider: string;
   configured: boolean;

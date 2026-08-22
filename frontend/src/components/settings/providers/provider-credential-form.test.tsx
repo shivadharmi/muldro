@@ -4,8 +4,12 @@ import { test, expect, vi } from "vitest";
 import type { Mock } from "vitest";
 
 import { ProviderCredentialForm } from "./provider-credential-form";
-import type { CatalogProvider, CredentialFieldSpec, ProviderStatus } from "@/lib/types";
-import type { CredentialFields } from "../hooks/use-provider-credentials";
+import type {
+  CatalogProvider,
+  CredentialFields,
+  CredentialFieldSpec,
+  ProviderStatus,
+} from "@/lib/types";
 
 function field(over: Partial<CredentialFieldSpec> & { key: string }): CredentialFieldSpec {
   return { label: over.key, kind: "text", required: false, placeholder: null, ...over };

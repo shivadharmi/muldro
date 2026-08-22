@@ -1,5 +1,8 @@
-import type { CredentialFieldSpec, ProviderStatus } from "@/lib/types";
-import type { CredentialFields } from "../hooks/use-provider-credentials";
+import type {
+  CredentialFields,
+  CredentialFieldSpec,
+  ProviderStatus,
+} from "@/lib/types";
 
 /**
  * The wire format of a credential save, and the rules that decide it.

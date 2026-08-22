@@ -335,6 +335,11 @@ def test_rotating_a_key_preserves_base_url_and_extra_config(monkeypatch):
 def test_empty_credential_body_does_not_reset_status(monkeypatch):
     """A no-op write must not invalidate a verification.
 
+    Sibling: ``test_provider_extra_config.py`` pins the same rule one level down,
+    where a merge makes "changed nothing" non-trivial to detect. This one covers the
+    outer case (no fields at all); that one covers an extra_config that merges to
+    what is already stored. Both must hold; neither implies the other.
+
     The handler only ever writes status="untested" itself, so a prior "valid" state
     has to be seeded directly in the DB. PUT {} carries no fields at all -- it changes
     nothing -- and must leave that verification alone rather than downgrading it.
