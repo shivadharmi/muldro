@@ -15,6 +15,7 @@ from src.api.routes_connections import router as connections_router
 from src.api.routes_conversations import router as conversations_router
 from src.api.routes_events import router as events_router
 from src.api.routes_feedback import router as feedback_router
+from src.api.routes_filter_rules import router as filter_rules_router
 from src.api.routes_graph import router as graph_router
 from src.api.routes_health import router as health_router
 from src.api.routes_history import router as history_router
@@ -542,8 +543,10 @@ def create_app() -> FastAPI:
     # Runtime projections
     app.include_router(runtime_router, tags=["runtime"])
 
-    # Insight surfaces (dismiss + execute)
     app.include_router(workspace_settings_router, tags=["workspace-settings"])
+
+    # The founder's confirmed filters: list and revoke.
+    app.include_router(filter_rules_router, tags=["filter-rules"])
 
     return app
 

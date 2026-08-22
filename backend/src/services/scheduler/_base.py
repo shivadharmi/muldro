@@ -128,6 +128,11 @@ class SchedulerBase:
         # 4b. Persona batch — every 10th tick (~5 min)
         await self._run_subtick("persona_batch", self._tick_persona_batch())
 
+        # 4b-ii. Filter proposals — every 120th tick (~1 hour). Evidence is a
+        # fortnight of triage verdicts and moves slowly; the proposal itself is
+        # throttled to one open card per workspace.
+        await self._run_subtick("filter_proposals", self._tick_filter_proposals(factory))
+
         # 4c. Memory consolidation — once daily at ~2 AM UTC
         from datetime import datetime
 
