@@ -1,11 +1,12 @@
 """OAuth routes: provider listing, authorize-URL generation, and the
 callback that exchanges codes for tokens and provisions integrations.
 
-Serves the providers Muldro still authenticates natively (slack/notion/
-atlassian). ``google`` and ``github`` were retired here when they moved behind
-the OpenConnector gateway: that gateway owns their OAuth clients and stores
-their credentials, so both hit the "Unknown provider" 400 and are connected
-through ``routes_integrations`` instead.
+Serves the providers Muldro authenticates natively (github/notion/atlassian).
+``google`` was retired here when it moved behind the OpenConnector gateway: that
+gateway owns its OAuth client and stores its credentials, so it hits the
+"Unknown provider" 400 and is connected through ``routes_integrations`` instead.
+``github`` is a split case — its MCP actions run on the gateway credential,
+while the token minted here backs only the native notifications poll.
 
 Extracted from routes_auth.py (decomposition, 2026-06-20)."""
 
@@ -172,10 +173,15 @@ async def oauth_authorize(
 ):
     """Generate OAuth authorization URL for a provider.
 
-    ``google`` and ``github`` are deliberately absent: both are served by the
-    OpenConnector gateway, which owns their OAuth clients. Minting a Muldro-side
-    credential for them would produce a token nothing reads, so they fall
-    through to the "Unknown provider" 400 below.
+    ``google`` is deliberately absent: it is served entirely by the OpenConnector
+    gateway, which owns its OAuth client. Minting a Muldro-side credential for it
+    would produce a token nothing reads, so it falls through to the "Unknown
+    provider" 400 below.
+
+    ``github`` is here for ONE job — the notifications poll. Its MCP actions keep
+    running on the gateway credential; the token minted here is read only by
+    ``GitHubConnector``, which the gateway catalog cannot replace because it
+    exposes no notifications action.
     """
     if provider == "notion":
         client_id = settings.notion_oauth_client_id
@@ -190,6 +196,28 @@ async def oauth_authorize(
         }
         url = f"https://api.notion.com/v1/oauth/authorize?{urlencode(params)}"
         return OAuthUrlResponse(url=url, provider="notion")
+
+    elif provider == "github":
+        client_id = settings.github_oauth_client_id
+        if not client_id:
+            raise HTTPException(status_code=400, detail="GitHub OAuth not configured")
+        # ``notifications`` is the scope that grants read access to the
+        # /notifications API this connector polls; ``read:user`` identifies the
+        # account the notifications belong to. Notifications originating in
+        # PRIVATE repositories additionally require the broad ``repo`` scope, and
+        # we deliberately do not request it: ``repo`` carries write access to
+        # every repository the founder can reach, which is far more authority
+        # than a perception source may hold. Missing private-repo notifications
+        # is the accepted cost.
+        default_scopes = "notifications read:user"
+        params = {
+            "client_id": client_id,
+            "redirect_uri": settings.github_oauth_redirect_uri,
+            "scope": scopes or default_scopes,
+            "state": user_id,
+        }
+        url = f"https://github.com/login/oauth/authorize?{urlencode(params)}"
+        return OAuthUrlResponse(url=url, provider="github")
 
     elif provider == "atlassian":
         client_id = settings.atlassian_oauth_client_id
@@ -318,6 +346,83 @@ async def oauth_callback(
         await _ensure_integration(db_factory, user_id, "notion", workspace_id=workspace_id)
         logger.info("Notion integration linked for %s", user_id)
         background_tasks.add_task(_trigger_initial_observation, user_id, ["notion"], workspace_id)
+
+    elif provider == "github":
+        client_id = settings.github_oauth_client_id
+        client_secret = settings.github_oauth_client_secret
+        if not client_id or not client_secret:
+            return _error_redirect(settings, "GitHub OAuth not configured")
+
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                "https://github.com/login/oauth/access_token",
+                data={
+                    "client_id": client_id,
+                    "client_secret": client_secret,
+                    "code": code,
+                    "redirect_uri": settings.github_oauth_redirect_uri,
+                },
+                # Without this header GitHub answers form-encoded
+                # (``access_token=gho_...&scope=...``), not JSON, and ``.json()``
+                # raises. This is the single most common way this flow breaks.
+                headers={"Accept": "application/json"},
+                timeout=15,
+            )
+            if resp.status_code != 200:
+                logger.error(
+                    "GitHub token exchange failed (status=%d): %s",
+                    resp.status_code,
+                    resp.text[:200],
+                )
+                return _error_redirect(settings, "Failed to exchange GitHub authorization code")
+            token_data = resp.json()
+
+        # GitHub reports a rejected exchange as HTTP 200 with an ``error`` key
+        # (bad_verification_code, incorrect_client_credentials, ...). Checking
+        # only the status would store ``token_data["access_token"]`` -> KeyError,
+        # or worse a None token that looks connected.
+        if token_data.get("error"):
+            logger.error(
+                "GitHub token exchange rejected: %s (%s)",
+                token_data.get("error"),
+                token_data.get("error_description", ""),
+            )
+            return _error_redirect(settings, f"GitHub token exchange failed: {token_data['error']}")
+        access_token = token_data.get("access_token")
+        if not access_token:
+            return _error_redirect(settings, "GitHub returned no access token")
+
+        db_factory = get_session_factory()
+        from src.api.deps import resolve_workspace_id
+
+        async with db_factory() as _db:
+            workspace_id = await resolve_workspace_id(_db, user_id)
+
+        oauth_mgr = OAuthManager(
+            db_factory,
+            encryption_key=settings.oauth_encryption_key,
+            settings=settings,
+        )
+        # An OAuth App token does not expire and carries no refresh token, so
+        # both are None by design — a future reader must not read that as a bug
+        # and go looking for the missing half of the response. (GitHub *Apps*
+        # issue expiring user-to-server tokens; this is the OAuth *App* flow.)
+        await oauth_mgr.store_token(
+            user_id=user_id,
+            provider="github",
+            access_token=access_token,
+            refresh_token=None,
+            expires_at=None,
+            scopes=token_data.get("scope", "").split(",") if token_data.get("scope") else None,
+            workspace_id=workspace_id,
+        )
+        # server_name matches seed_installations.py ("github"). This reactivates
+        # the existing installation and enables the observe_github schedule; it
+        # does not change the installation's gateway transport or auth provider,
+        # which still serve the github.* MCP actions.
+        await _ensure_integration(db_factory, user_id, "github", workspace_id=workspace_id)
+        logger.info("GitHub integration linked for %s", user_id)
+        background_tasks.add_task(_trigger_initial_observation, user_id, ["github"], workspace_id)
 
     elif provider == "atlassian":
         client_id = settings.atlassian_oauth_client_id
@@ -515,8 +620,10 @@ async def oauth_callback(
     try:
         from src.connectors.mcp_bridge import refresh_server_auth
 
-        # Map provider to MCP server names that use it. google/github are absent:
-        # they authenticate through the OpenConnector gateway, never here.
+        # Map provider to MCP server names that use it. google and github are
+        # absent: their MCP servers authenticate through the OpenConnector
+        # gateway's platform JWT. GitHub's native token is for the notifications
+        # poll only and its MCP session must not be re-keyed to it.
         _provider_servers = {
             "slack": ["slack"],
             "notion": ["notion"],
@@ -534,7 +641,8 @@ async def oauth_callback(
 
     # Auto-resume: clear any needs-reauth state for this provider — un-pause its
     # perception sources and re-queue runs parked in awaiting_reauth. Runs for
-    # every natively-authenticated provider (slack/notion/atlassian), best-effort.
+    # every natively-authenticated provider (github/slack/notion/atlassian),
+    # best-effort.
     background_tasks.add_task(
         _resume_after_reauth,
         db_factory,

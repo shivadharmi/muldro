@@ -316,13 +316,15 @@ async def test_confirm_enables_schedules_for_the_providers_perception_sources():
         await engine.dispose()
 
 
-async def test_confirm_enables_the_github_schedule_from_its_declared_source():
-    """github declares perception_sources=("github",), so confirming it enables that schedule.
+async def test_confirm_github_actions_does_not_enable_the_notifications_poll():
+    """Connecting github's gateway ACTIONS must not turn on its perception poll.
 
-    It was previously declared empty, which routed the "github" perception source
-    through the retired-OAuth branch where ``no_token`` is a PERMANENT reauth
-    reason -- pausing the row unrecoverably. This asserts the declaration is wired
-    all the way through, not just present in the registry.
+    github holds two credentials with two jobs: the gateway connection confirmed
+    here backs the github.* MCP actions, while the notifications poll runs on a
+    native OAuth token minted by ``/v1/auth/github/authorize``. That callback
+    enables ``observe_github``. Enabling it from here instead would schedule a
+    poll against a token this flow never obtained -- every tick failing on
+    ``no_token``, which is a PERMANENT reauth reason.
     """
     from src.services.schedule_seeder import seed_default_schedules
 
@@ -346,8 +348,8 @@ async def test_confirm_enables_the_github_schedule_from_its_declared_source():
 
         assert active is True
         enabled = await _schedule_names_enabled(factory, _SCHED_WS)
-        assert enabled.get("observe_github") is True
-        # Confirming github must not enable another provider's source.
+        assert not enabled.get("observe_github")
+        # ... nor, of course, any other provider's source.
         assert not enabled.get("observe_gmail")
         assert not enabled.get("observe_calendar")
     finally:
@@ -358,9 +360,8 @@ async def test_confirm_enables_the_github_schedule_from_its_declared_source():
 async def test_confirm_enables_nothing_for_a_provider_the_registry_does_not_know():
     """Fail-closed: an unregistered provider activates but enables no schedule.
 
-    Every registered provider now declares a perception source, so the
-    "no source" case is only reachable off-registry -- and it must not fall back
-    to enabling something.
+    A provider that declares no perception source must not fall back to enabling
+    something -- reachable off-registry, and for github, which declares none.
     """
     from src.services.schedule_seeder import seed_default_schedules
 

@@ -12,11 +12,15 @@ from tests.conftest import TEST_USER_ID
 class TestOAuthConnectRoutes:
     """The native OAuth connect routes, and what they no longer serve.
 
-    ``google`` and ``github`` moved behind the OpenConnector gateway, which owns
-    their OAuth clients. Their native authorize/callback branches were deleted,
-    so both now fall through to the shared "Unknown provider" 400 — even when
-    Muldro-side client credentials happen to be configured. Minting a token
-    nothing reads was the failure mode this closes.
+    ``google`` moved behind the OpenConnector gateway, which owns its OAuth
+    client. Its native authorize/callback branches were deleted, so it falls
+    through to the shared "Unknown provider" 400 — even when Muldro-side client
+    credentials happen to be configured. Minting a token nothing reads was the
+    failure mode this closes.
+
+    ``github`` is the exception that proves the rule: its native route came back
+    precisely because something DOES read that token — ``GitHubConnector``
+    polling /notifications, which no gateway action can replace.
     """
 
     def _client(self):
@@ -51,21 +55,23 @@ class TestOAuthConnectRoutes:
             app.dependency_overrides.pop(get_settings, None)
             self._cleanup()
 
-    def test_github_authorize_is_retired(self):
+    def test_github_authorize_serves_the_notifications_token(self):
+        """github is NOT retired here — the poll needs a token only this mints."""
         from src.config.settings import get_settings
         from tests.conftest import make_mock_settings
 
         mock_settings = make_mock_settings(
             github_oauth_client_id="gh_client_id",
             github_oauth_client_secret="gh_secret",
+            github_oauth_redirect_uri="http://localhost:8000/v1/auth/github/callback",
             backend_token="",
         )
         app.dependency_overrides[get_settings] = lambda: mock_settings
         client = self._client()
         try:
             resp = client.get("/v1/auth/oauth/github/authorize")
-            assert resp.status_code == 400
-            assert "gh_client_id" not in resp.text
+            assert resp.status_code == 200
+            assert "gh_client_id" in resp.json()["url"]
         finally:
             app.dependency_overrides.pop(get_settings, None)
             self._cleanup()

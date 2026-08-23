@@ -1,12 +1,17 @@
 """Native OAuth + transport retirement for the gateway-migrated providers.
 
-``google-workspace`` and ``github`` are served entirely by the OpenConnector
-gateway (see ``src.integrations.gateway_actions``): credentials live inside
+``google-workspace`` and ``github`` are served by the OpenConnector gateway (see
+``src.integrations.gateway_actions``): their MCP credentials live inside
 OpenConnector and the MCP traffic goes through the ToolHive vMCP. The native
-OAuth registrations, the native connect routes and the ``gmail_via_gateway``
-feature flag that used to select between the two paths are therefore dead —
-and, worse, misleading (a stale third "is this gateway-backed?" signal already
-dead-ended the connect UI in an HTTP 400).
+transport, and the ``gmail_via_gateway`` feature flag that used to select
+between the two paths, are therefore dead — and, worse, misleading (a stale
+third "is this gateway-backed?" signal already dead-ended the connect UI in an
+HTTP 400).
+
+The native CONNECT ROUTE retirement is google-only. github got one back, for a
+single job the gateway catalog cannot do: minting the token
+``GitHubConnector`` polls /notifications with. Its MCP actions are unaffected —
+see ``tests/test_routes_auth_github_oauth.py``.
 
 These tests pin the retirement: the machinery must stay gone, and unmigrated
 providers must stay untouched.
@@ -45,7 +50,7 @@ def test_provider_map_has_no_server_entry_for_migrated_providers():
     assert _PROVIDER_SERVERS["slack"] == ["slack"]
 
 
-@pytest.mark.parametrize("provider", ["google", "github"])
+@pytest.mark.parametrize("provider", ["google"])
 async def test_oauth_authorize_rejects_migrated_providers(provider):
     """The native connect route must 400 rather than mint credentials nothing reads."""
     from src.api.routes_auth_oauth import oauth_authorize
@@ -57,7 +62,7 @@ async def test_oauth_authorize_rejects_migrated_providers(provider):
     assert exc.value.detail == f"Unknown provider: {provider}"
 
 
-@pytest.mark.parametrize("provider", ["google", "github"])
+@pytest.mark.parametrize("provider", ["google"])
 async def test_oauth_callback_rejects_migrated_providers(provider):
     from fastapi import BackgroundTasks
 

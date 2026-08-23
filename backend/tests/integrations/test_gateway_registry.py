@@ -156,9 +156,10 @@ def test_perception_sources_resolve_by_membership_across_the_vocabulary_gap():
     assert gateway_provider_for_source("calendar") == "googlecalendar"
     # Not a source name — the provider id itself must not resolve as one.
     assert gateway_provider_for_source("googlecalendar") is None
-    # github's source name happens to equal its provider id -- no gap to cross.
-    assert gateway_provider_for_source("github") == "github"
-    # Non-gateway sources stay on the OAuth path.
+    # Non-gateway sources stay on the OAuth path -- github among them: its MCP
+    # ACTIONS are gateway-served, but the notifications poll the "github" source
+    # names runs on a native OAuth token, so the source must not resolve here.
+    assert gateway_provider_for_source("github") is None
     assert gateway_provider_for_source("slack") is None
 
 
@@ -170,10 +171,14 @@ def test_every_retired_provider_declares_its_perception_source():
     is paused unrecoverably -- ``_tick_reauth_recovery`` can only re-ask
     OAuthManager, which will never answer ok. Declared sources are merely
     SKIPPED while unconnected, so they self-heal.
+
+    That reasoning binds a provider whose OAuth really is retired. github is not
+    one: ``/v1/auth/github/authorize`` mints a token OAuthManager can answer with,
+    so its source is deliberately undeclared and polled natively.
     """
-    assert perception_sources_for_provider("github") == ("github",)
     assert perception_sources_for_provider("gmail") == ("gmail",)
     assert perception_sources_for_provider("googlecalendar") == ("calendar",)
+    assert perception_sources_for_provider("github") == ()
 
 
 def test_perception_sources_for_provider_round_trips():

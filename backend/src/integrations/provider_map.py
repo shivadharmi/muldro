@@ -26,12 +26,16 @@ from __future__ import annotations
 # OAuth provider -> the perception sources it backs. Providers absent from this
 # map back a single source whose name equals the provider (identity).
 #
-# EMPTY IS CORRECT, NOT AN OVERSIGHT. This map only has to name a provider that
-# fans out to SEVERAL sources; every one-source provider is served by the
-# identity fallback below. The only such entry was ``google -> [gmail,
-# calendar]``, retired when those sources moved behind the OpenConnector
-# gateway. Both readers of this map are now native-only paths that gmail and
-# calendar can no longer reach:
+# ``github`` is listed even though it is identity-shaped, because being listed is
+# what makes the pause/resume path SEE it. The GitHub notifications poll runs on
+# a native OAuth token again (``GitHubConnector`` against /notifications), so a
+# revoked token must be able to pause the source and a reconnect must resume it.
+# GitHub's gateway credential is a separate thing serving the github.* MCP
+# actions; it never reaches this map.
+#
+# The one entry this map used to carry was ``google -> [gmail, calendar]``,
+# retired when those sources moved behind the OpenConnector gateway. Both
+# readers are native-only paths that gmail and calendar can no longer reach:
 #
 # * ``provider_for_source`` — called by ``connector_poller`` and
 #   ``perception_tick`` AFTER ``gateway_provider_for_source`` has already
@@ -47,12 +51,15 @@ from __future__ import annotations
 #   either. That branch ORDER is pinned executably by
 #   ``tests/integrations/test_session_pool_auth.py::
 #   test_platform_jwt_branch_returns_a_bearer_without_raising_reauth`` — if it
-#   goes red, restore the entry below before doing anything else.
+#   goes red, that ordering has changed and the github MCP server would start
+#   raising reauth against this entry; fix the order, not this map.
 #
-# Re-add an entry here the moment a native OAuth provider backs more than one
-# perception source — without it that provider's extra sources are invisible to
-# the pause/resume path.
-_PROVIDER_SOURCES: dict[str, list[str]] = {}
+# Add an entry the moment a native OAuth provider backs a perception source
+# whose name differs from it, or backs more than one — without it those sources
+# are invisible to the pause/resume path.
+_PROVIDER_SOURCES: dict[str, list[str]] = {
+    "github": ["github"],
+}
 
 # OAuth provider -> the MCP server names it powers. Providers absent from this
 # map run a single server whose name equals the provider (identity). ``google``
