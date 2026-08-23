@@ -5,6 +5,7 @@ If any fail, downstream tests should be skipped.
 """
 
 import subprocess
+from pathlib import Path
 
 import asyncpg
 import httpx
@@ -12,6 +13,9 @@ import pytest
 import redis.asyncio as aioredis
 
 pytestmark = [pytest.mark.e2e, pytest.mark.asyncio(loop_scope="session")]
+
+# tests/e2e/test_01_infra.py -> tests/e2e -> tests -> backend
+BACKEND_DIR = Path(__file__).resolve().parents[2]
 
 # Connection parameters — match docker-compose defaults
 PG_DSN = "postgresql://muldro:muldro@localhost:5432/muldro"
@@ -37,7 +41,7 @@ class TestPostgres:
             ["alembic", "check"],
             capture_output=True,
             text=True,
-            cwd="/Users/sivasankarreddybogala/work/muldro/backend",
+            cwd=BACKEND_DIR,
             timeout=30,
         )
         # alembic check returns 0 if head matches current
@@ -47,14 +51,14 @@ class TestPostgres:
                 ["alembic", "current"],
                 capture_output=True,
                 text=True,
-                cwd="/Users/sivasankarreddybogala/work/muldro/backend",
+                cwd=BACKEND_DIR,
                 timeout=30,
             )
             heads = subprocess.run(
                 ["alembic", "heads"],
                 capture_output=True,
                 text=True,
-                cwd="/Users/sivasankarreddybogala/work/muldro/backend",
+                cwd=BACKEND_DIR,
                 timeout=30,
             )
             assert current.stdout.strip(), f"No current migration. Output: {current.stderr}"

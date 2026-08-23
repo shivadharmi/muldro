@@ -26,10 +26,11 @@ variable "allowed_ssh_cidr" {
   type        = string
 }
 
+# Deliberately has no default: a default here would point a stranger's
+# `terraform apply` at someone else's Route53 hosted zone.
 variable "domain_name" {
   description = "Route53 hosted zone domain"
   type        = string
-  default     = "brrdcast.in"
 }
 
 variable "subdomain" {
