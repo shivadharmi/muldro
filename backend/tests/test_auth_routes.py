@@ -57,7 +57,15 @@ class TestOAuthConnectRoutes:
             self._cleanup()
 
     def test_github_authorize_serves_the_notifications_token(self):
-        """github is NOT retired here — the poll needs a token only this mints."""
+        """github is NOT retired here — the poll needs a token only this mints.
+
+        `issue_state` is stubbed because the route FAILS CLOSED without a state
+        store: no Redis means no CSRF binding means 503, by design. Left
+        unstubbed this test passed locally (Redis is up in dev) and failed in
+        CI, which is the least useful shape a test can have.
+        """
+        from unittest.mock import AsyncMock, patch
+
         from src.config.settings import get_settings
         from tests.conftest import make_mock_settings
 
@@ -70,9 +78,42 @@ class TestOAuthConnectRoutes:
         app.dependency_overrides[get_settings] = lambda: mock_settings
         client = self._client()
         try:
-            resp = client.get("/v1/auth/oauth/github/authorize")
+            with patch(
+                "src.api.routes_auth_oauth.issue_state", AsyncMock(return_value="st_opaque")
+            ):
+                resp = client.get("/v1/auth/oauth/github/authorize")
             assert resp.status_code == 200
             assert "gh_client_id" in resp.json()["url"]
+        finally:
+            app.dependency_overrides.pop(get_settings, None)
+            self._cleanup()
+
+    def test_authorize_fails_closed_without_a_state_store(self):
+        """No CSRF binding, no authorization — never an unbound state.
+
+        The fallback this refuses would restore the original vulnerability
+        exactly, in a window nobody can see.
+        """
+        from unittest.mock import AsyncMock, patch
+
+        from src.config.settings import get_settings
+        from tests.conftest import make_mock_settings
+
+        mock_settings = make_mock_settings(
+            github_oauth_client_id="gh_client_id",
+            github_oauth_client_secret="gh_secret",
+            backend_token="",
+        )
+        app.dependency_overrides[get_settings] = lambda: mock_settings
+        client = self._client()
+        try:
+            with patch(
+                "src.api.routes_auth_oauth.issue_state",
+                AsyncMock(side_effect=RuntimeError("no redis")),
+            ):
+                resp = client.get("/v1/auth/oauth/github/authorize")
+            assert resp.status_code == 503
+            assert "gh_client_id" not in resp.text
         finally:
             app.dependency_overrides.pop(get_settings, None)
             self._cleanup()
