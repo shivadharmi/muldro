@@ -16,6 +16,34 @@ from src.models.integration_installation import IntegrationInstallation
 logger = logging.getLogger(__name__)
 
 
+def resolve_env_credentials(env_template: dict | None) -> dict[str, str]:
+    """Return the declared env-var credentials that are actually populated.
+
+    A stdio installation authenticates by having its ``env_template`` names
+    resolved out of the process environment and handed to the child process.
+    That makes "is this installation credentialed?" and "what will we launch it
+    with?" the SAME question, so both callers read this one answer:
+    ``_resolve_env`` builds the launch env from it, and ``integration_status``
+    decides ``configured``/``connected`` from whether it is empty.
+
+    Answering the status question separately is how the two drifted before: the
+    status side asserted a connection nothing had checked, and the launch side
+    started a process with no token. An empty return means neither can proceed.
+
+    The declared names are ALTERNATIVES, not a conjunction — Slack, for
+    instance, declares both a user and a bot token and needs either — so a
+    caller tests emptiness of the result, never equality with the template.
+    """
+    if not env_template:
+        return {}
+    resolved: dict[str, str] = {}
+    for key in env_template:
+        value = os.environ.get(key, "")
+        if value:
+            resolved[key] = value
+    return resolved
+
+
 class IntegrationControlPlane:
     """Manages integration installations for a workspace."""
 
@@ -166,14 +194,7 @@ class IntegrationControlPlane:
 
     def _resolve_env(self, env_template: dict | None) -> dict[str, str]:
         """Resolve env var template against current process environment."""
-        if not env_template:
-            return {}
-        resolved: dict[str, str] = {}
-        for key, desc_or_default in env_template.items():
-            value = os.environ.get(key, "")
-            if value:
-                resolved[key] = value
-        return resolved
+        return resolve_env_credentials(env_template)
 
     # ── Health check ─────────────────────────────────────────────────
 

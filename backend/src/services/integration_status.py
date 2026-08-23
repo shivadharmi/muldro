@@ -7,8 +7,16 @@ the briefing can distinguish "connected but quiet" from "not connected".
 The logic joins `IntegrationControlPlane.list_installations()` (the catalog of
 installed MCP servers for a workspace) with `OAuthManager` token status (whether
 a usable OAuth token exists for the user). OAuth-backed integrations are only
-"connected" when both the provider is configured AND a valid token is present;
-local/token integrations are treated as connected when installed.
+"connected" when both the provider is configured AND a valid token is present.
+
+Every category answers from a credential it actually looked at. A `token`
+installation is credentialed only when one of the env vars its `env_template`
+declares is populated in the process environment — the same dict the control
+plane would launch its stdio process with. Only a `local` installation
+(``auth_provider is None``) is connected by virtue of being installed, because
+it has no credential to hold. The optimistic default this replaced reported a
+connection for every uncovered category, which the UI could not tell apart from
+a check that passed.
 
 Gateway-backed installations are the exception: their credential lives inside
 OpenConnector, not in `OAuthManager`, so consulting the token store would report
@@ -24,6 +32,7 @@ from dataclasses import dataclass, field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.integrations.control_plane import resolve_env_credentials
 from src.integrations.gateway_actions import capabilities_for_server, providers_for_server
 from src.integrations.provider_map import native_perception_for_provider, provider_for_server
 from src.models.connection_map import DEFAULT_ACCOUNT_ALIAS, ConnectionMap
@@ -332,6 +341,13 @@ async def get_integration_statuses(
                 # success the founder would only discover was false when no
                 # notification ever arrived.
                 connected = connected and native_connected
+        elif category == "token":
+            # Credentialed iff a declared env var is populated. Read from the
+            # control plane's resolver so this answer and the launch env are
+            # the same fact; an installation declaring no env vars at all has
+            # no way to authenticate and is reported unconfigured.
+            configured = bool(resolve_env_credentials(inst.env_template))
+            connected = configured
         elif category == "oauth":
             oauth_name = provider_for_server(auth_provider)
             client_id_attr = _PROVIDER_CLIENT_ID_ATTR.get(oauth_name, "")
