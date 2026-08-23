@@ -101,7 +101,11 @@ export default function WorkspacePage() {
   const approvalCount = units.filter((u) => u.frame.status === "needs_you").length;
   // First-load state: onboarding (no source yet), gathering (source connected,
   // briefing pending), or active (briefing exists). See resolveFirstRunState.
-  const firstRunState = resolveFirstRunState(sourceCount, Boolean(briefing));
+  const firstRunState = resolveFirstRunState(
+    sourceCount,
+    Boolean(briefing),
+    units.length > 0,
+  );
 
   return (
     <div className="p-4 sm:p-6 space-y-4 animate-fade-in">
