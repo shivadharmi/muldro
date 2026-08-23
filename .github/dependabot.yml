@@ -1,0 +1,140 @@
+version: 2
+
+updates:
+  # ── Backend: Python dependencies (backend/pyproject.toml) ──────────────────
+  - package-ecosystem: "pip"
+    directory: "/backend"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Asia/Kolkata"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+    labels:
+      - "dependencies"
+      - "backend"
+    groups:
+      # One PR per week for everything non-breaking. Majors stay separate so they
+      # get read rather than merged.
+      backend-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+    ignore:
+      # The deep runtime is pinned to Phase-0-confirmed minors with deliberate upper
+      # bounds in pyproject.toml. Majors here are a migration, not a dependency bump.
+      - dependency-name: "langchain"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "langchain-core"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "langgraph"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "langchain-anthropic"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "deepagents"
+        update-types: ["version-update:semver-major"]
+
+  # ── Frontend: npm dependencies (frontend/package.json) ─────────────────────
+  - package-ecosystem: "npm"
+    directory: "/frontend"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Asia/Kolkata"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+    labels:
+      - "dependencies"
+      - "frontend"
+    groups:
+      frontend-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+      # Next/React/types move together; a split PR never builds.
+      react-and-next:
+        patterns:
+          - "next"
+          - "eslint-config-next"
+          - "react"
+          - "react-dom"
+          - "@types/react"
+          - "@types/react-dom"
+
+  # ── GitHub Actions used by .github/workflows ───────────────────────────────
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Asia/Kolkata"
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "ci"
+    labels:
+      - "dependencies"
+      - "ci"
+    groups:
+      actions-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+
+  # ── Base images: backend/Dockerfile ────────────────────────────────────────
+  - package-ecosystem: "docker"
+    directory: "/backend"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Asia/Kolkata"
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+    labels:
+      - "dependencies"
+      - "docker"
+    groups:
+      backend-images-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+
+  # ── Base images: frontend/Dockerfile ───────────────────────────────────────
+  - package-ecosystem: "docker"
+    directory: "/frontend"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Asia/Kolkata"
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+    labels:
+      - "dependencies"
+      - "docker"
+    groups:
+      frontend-images-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"

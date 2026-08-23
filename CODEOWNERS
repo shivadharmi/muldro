@@ -1,0 +1,10 @@
+# Code owners for muldro.
+#
+# Every path is owned by the maintainer, who is automatically requested for review
+# on any pull request. Later matching rules win, so add narrower paths below this
+# line as the project takes on more maintainers.
+#
+# GitHub only enforces this file if it lives at the repo root, in .github/, or in
+# docs/ — keep it at the root.
+
+*   @shivadharmi

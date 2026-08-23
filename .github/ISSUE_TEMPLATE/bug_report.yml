@@ -1,0 +1,141 @@
+name: Bug report
+description: Something in Muldro behaves differently from how it is documented or intended.
+title: "bug: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not use this form for security vulnerabilities. See
+        [SECURITY.md](https://github.com/shivadharmi/muldro/blob/main/SECURITY.md)
+        and report privately through the Security tab.
+
+        Muldro is pre-launch. Confirm the behaviour on current `main` before filing.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: The observed behaviour. Be specific about which surface it happened on.
+      placeholder: |
+        Sent a chat message asking Muldro to draft a reply. The turn ended with no
+        assistant text and the surface stayed on "executing".
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected instead
+      description: What the documented or intended behaviour is, and where you got that from if relevant.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: >
+        Numbered steps from a known starting state. Include the exact commands, the request
+        payload or the chat message. If it is intermittent, say how often it reproduces.
+      placeholder: |
+        1. docker compose up -d
+        2. cd backend && python run.py --worker
+        3. POST /v1/... with body { ... }
+        4. Observe ...
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      description: Where the problem lives, as best you can tell.
+      multiple: true
+      options:
+        - Backend — orchestrator / agents
+        - Backend — deep runtime / middleware / gates
+        - Backend — services (planner, executor, trust, memory, perception)
+        - Backend — API routes / SSE / WebSocket
+        - Backend — tools / MCP bridge / connectors
+        - Backend — database / migrations
+        - Frontend — A2UI surfaces
+        - Frontend — chat
+        - Frontend — other
+        - Infrastructure / docker-compose / Terraform
+        - Docs
+        - Not sure
+    validations:
+      required: true
+
+  - type: input
+    id: commit
+    attributes:
+      label: Commit or branch
+      description: Output of `git rev-parse --short HEAD`, plus the branch name.
+      placeholder: "a1b2c3d on main"
+    validations:
+      required: true
+
+  - type: input
+    id: backend-env
+    attributes:
+      label: Backend environment
+      description: Python version, OS, and how you are running it.
+      placeholder: "Python 3.12.7, macOS 15.3, `python run.py --worker` in a uv venv"
+    validations:
+      required: false
+
+  - type: input
+    id: frontend-env
+    attributes:
+      label: Frontend environment
+      description: Node version and browser, if the bug is visible in the UI.
+      placeholder: "Node 22.11, Chrome 139"
+    validations:
+      required: false
+
+  - type: input
+    id: model-config
+    attributes:
+      label: Model configuration
+      description: >
+        Which provider and models back the reasoning / balanced / fast tiers, if relevant.
+        Never paste an API key.
+      placeholder: "defaults (Anthropic Opus / Sonnet / Haiku)"
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs, traceback, or failing test output
+      description: >
+        Paste the relevant portion, not the whole log. Redact tokens, keys, email addresses and
+        message bodies first.
+      render: text
+    validations:
+      required: false
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: Anything else
+      description: Workarounds you found, when it started, related issues.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: Before submitting
+      options:
+        - label: >
+            I have removed all secrets from everything I pasted above — API keys, OAuth tokens,
+            Fernet keys, session cookies, JWTs, database URLs with passwords, and private message
+            or email contents.
+          required: true
+        - label: I searched existing issues and this is not a duplicate.
+          required: true
+        - label: This is not a security vulnerability. (If it is, close this and use the Security tab.)
+          required: true
