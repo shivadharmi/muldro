@@ -4,7 +4,7 @@
 # production bundle, then serve with `next start`. BACKEND_URL is read at
 # runtime by next.config (rewrites /api/* → the backend), so it is provided by
 # docker-compose, not baked into the image.
-FROM node:20-alpine
+FROM node:26-alpine
 
 WORKDIR /app
 
