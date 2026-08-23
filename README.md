@@ -13,7 +13,7 @@ Muldro continuously observes your data sources (Gmail, Calendar, Slack, GitHub),
 ```mermaid
 graph TB
     subgraph UI["User Interfaces"]
-        WEB[Next.js Frontend<br/>A2UI + Chat + SSE]
+        WEB[Next.js Frontend<br/>Unit feed + Chat + SSE]
     end
 
     subgraph API["API Layer"]
@@ -38,7 +38,7 @@ graph TB
 
     subgraph TOOLS["Tool Layer"]
         CAT[Tool Catalog<br/>catalog.py]
-        INT[Internal FastMCP<br/>2 servers]
+        INT[Internal FastMCP<br/>intelligence server]
         MCP[MCP Bridge<br/>Google · GitHub · Slack<br/>Notion · Atlassian]
     end
 
@@ -98,8 +98,10 @@ Writes are gated at action time — TrustEngine on the autonomous path (graduate
 
 ## Quick Start
 
-The only thing you must provide is an Anthropic API key — that is what the default
-model bindings use; other providers can be configured later from the UI. Everything
+You must provide an Anthropic API key — that is what the default model bindings use;
+other providers can be configured later from the UI. Startup also registers OAuth client
+configs with the OpenConnector gateway and **aborts if the gateway is unconfigured**; to
+run without it, set `MULDRO_SKIP_GATEWAY_VALIDATION=true`. Everything
 else — Postgres, Redis, Qdrant, Neo4j, the backend (API + background worker) and the
 Next.js frontend — comes up together in Docker.
 
@@ -130,14 +132,14 @@ docker compose up -d
 
 # Backend
 cd backend
-uv venv .venv --python 3.13 && source .venv/bin/activate
+uv venv .venv --python 3.12 && source .venv/bin/activate
 uv pip install -e ".[dev]"
 cp .env.example .env          # edit with your keys
 alembic upgrade head
 python run.py --worker        # API + background worker
 
 # Frontend
-cd frontend && npm install && npm run dev
+cd ../frontend && npm install && npm run dev
 ```
 
 ## Deployment
@@ -161,10 +163,10 @@ muldro/
 │   │   ├── orchestrator/   # MuldroOrchestrator, agents, hooks, tracing, budget, intent classifier
 │   │   ├── services/       # Business logic (planner, executor, trust_engine, tri_search, etc.)
 │   │   ├── tools/          # Tool catalog, schemas, validation, FastMCP servers
-│   │   └── ui/             # A2UI renderer + contracts
+│   │   └── view/           # Frame + body view layer
 │   ├── tests/              # pytest (custom asyncio hook in conftest.py)
 │   └── alembic/            # database migrations
-├── frontend/               # Next.js + A2UI renderer + chat panel
+├── frontend/               # Next.js + Unit feed + chat panel
 ├── infra/                  # Terraform (AWS: EC2, VPC, Route53, IAM, SSM)
 ├── docs/architecture/      # Detailed architecture documentation
 └── docker-compose.yml      # Local dev infrastructure
@@ -175,7 +177,7 @@ muldro/
 | Layer | Technology |
 |-------|-----------|
 | Backend | Python 3.12+ / FastAPI |
-| Frontend | Next.js / React / A2UI |
+| Frontend | Next.js 16 / React 19 |
 | Database | PostgreSQL 17 (tsvector FTS) — source of truth |
 | Vector Search | Qdrant 1.17 — semantic similarity (enriched payloads) |
 | Reranking | Local fastembed cross-encoder — ms-marco-MiniLM-L-12-v2 (ONNX, no external API) |
@@ -185,7 +187,7 @@ muldro/
 | AI Models | Provider-configurable tiers (reasoning/balanced/fast) — Anthropic by default; OpenAI, Gemini, local Ollama in the catalog |
 | Embeddings | Local fastembed — BAAI/bge-base-en-v1.5 (768 dim, ONNX, no external API) |
 | Tool Protocol | MCP (Model Context Protocol) via FastMCP |
-| Delivery | Web SSE + A2UI surfaces |
+| Delivery | Web SSE + view units |
 | Infrastructure | AWS (Terraform), Caddy reverse proxy |
 
 ## Key Features
@@ -195,7 +197,7 @@ muldro/
 - **Full cost tracking**: Cache tokens (1.25x write, 0.1x read), thinking tokens, per-agent cost breakdown
 - **Graduated autonomy**: TrustEngine with 4 trust tiers (first_use, learning, trusted, autonomous), composed on chat and batch turns with a per-action `permission_gate` that never consults trust — GraphExecutor DAG steps install no `permission_gate`, so graduation is genuinely silencing there ([`docs/architecture/execution.md`](docs/architecture/execution.md))
 - **Capability-based authority**: a plan's capabilities decide what may run — scoping the chat lead's authority, and selecting the agent per step on the autonomous path (never a decision type)
-- **Live execution surfaces**: Real-time step progress via A2UI during plan execution
+- **Live execution surfaces**: Real-time step progress during plan execution
 - **Prepared work**: a write that needs a human when nobody is present is *staged*, not dropped or forced through — recorded with its redacted payload and the acting agent's capability scope, surfaced in a standing review queue, and confirmed by replaying the exact recorded call
 - **TriSearch**: Parallel Qdrant + Postgres FTS + Neo4j search with local cross-encoder reranking
 - **Knowledge graph**: Neo4j with typed relationship edges, weighted traversal, temporal scoping
@@ -206,4 +208,19 @@ muldro/
 
 ## Status
 
-Unified tool registry; workspace-scoped models; Alembic migrations; lint clean.
+**Pre-1.0 and pre-launch.** The architecture below is real and the tests are green, but there
+are no production users, interfaces are still moving, and the OpenConnector gateway needs a
+deliberate setup pass before most connectors do anything (see [docs/setup.md](docs/setup.md)).
+
+## Contributing
+
+Setup, the commit convention and the test workflow are in [CONTRIBUTING.md](CONTRIBUTING.md);
+the binding engineering rules are in [docs/engineering-standards.md](docs/engineering-standards.md).
+
+To report a security issue, **do not open a public issue** — see [SECURITY.md](SECURITY.md).
+
+## License
+
+Apache-2.0. See [LICENSE](LICENSE). Third-party dependency notices, including the LGPL
+components that ship inside the Docker images, are in
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).

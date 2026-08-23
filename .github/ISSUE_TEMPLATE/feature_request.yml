@@ -1,0 +1,107 @@
+name: Feature request
+description: Describe a problem Muldro should solve. Start with the problem, not the solution.
+title: "feat: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This form asks for the problem first and the solution last, on purpose. A well-stated
+        problem usually has several candidate solutions, and the one you had in mind may not
+        survive contact with the architecture — the problem will.
+
+        Muldro is pre-launch and maintained by one person. Agreeing on the problem in an issue
+        before writing a patch saves both of us the rework.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you hitting
+      description: >
+        Describe the situation where Muldro falls short. Concrete and specific: what you were
+        trying to do, what you had to do instead, what it cost you.
+      placeholder: |
+        Muldro prepares a write when I am away, but I only find out at the next briefing.
+        By the time I review the queue the counterparty has already followed up.
+    validations:
+      required: true
+
+  - type: textarea
+    id: who
+    attributes:
+      label: Who has this problem
+      description: >
+        You specifically, anyone self-hosting, anyone using a particular connector, everyone?
+        How often does it come up — daily, per run, once at setup?
+    validations:
+      required: true
+
+  - type: textarea
+    id: why-now
+    attributes:
+      label: Why now
+      description: >
+        What changed, or what is blocked on this. If it is not blocking anything, say so — that
+        is a legitimate answer and it affects prioritisation, not acceptance.
+    validations:
+      required: true
+
+  - type: textarea
+    id: workaround
+    attributes:
+      label: What you do today instead
+      description: The current workaround, and why it is not good enough.
+    validations:
+      required: false
+
+  - type: textarea
+    id: success
+    attributes:
+      label: How you would know it is solved
+      description: >
+        The observable outcome. Not "add a setting" — rather "the action reaches me within a
+        minute of being prepared, on whichever surface I am actually on."
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      description: Where you think this lands, if you know.
+      multiple: true
+      options:
+        - Perception / connectors
+        - Planning / capability routing
+        - Execution / autonomous runs
+        - Trust, permissions, and prepared work
+        - Memory / world model / search
+        - Tools / MCP
+        - A2UI surfaces and chat UI
+        - Model and provider configuration
+        - Deployment / infrastructure
+        - Developer experience / docs
+        - Not sure
+    validations:
+      required: false
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Solution you have in mind (optional)
+      description: >
+        Only if you have one. Note any architectural constraints you already know it runs into —
+        see `docs/engineering-standards.md` and `docs/architecture/`. A proposal that conflicts
+        with a documented invariant needs to argue against the invariant, not around it.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues and this is not a duplicate.
+          required: true
+        - label: There are no secrets or private message contents in anything I pasted above.
+          required: true

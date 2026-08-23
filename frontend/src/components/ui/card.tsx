@@ -24,20 +24,6 @@ export function Card({
   );
 }
 
-export function CardHeader({
-  children,
-  className = "",
-}: {
-  children: ReactNode;
-  className?: string;
-}) {
-  return (
-    <div className={`px-5 py-3.5 border-b border-b-secondary ${className}`}>
-      {children}
-    </div>
-  );
-}
-
 export function CardBody({
   children,
   className = "",

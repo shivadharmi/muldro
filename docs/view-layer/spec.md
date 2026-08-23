@@ -1,7 +1,7 @@
 # View layer — frame and body
 
-> **Status:** spec, pending founder review. Branch `design/frame-and-body`.
-> **Supersedes:** `docs/a2ui-remediation-plan.md` and the untracked `docs/view-layer-redesign.md` draft.
+> **Status:** implemented and merged (PR #21). This is the authoritative contract for the view layer.
+> **Supersedes:** the A2UI surface system, removed in PR #21.
 > **Design reference:** [`mockup.html`](./mockup.html) — the rendered specimens are normative. Where
 > this document and the mockup disagree about *appearance*, the mockup wins; where they disagree about
 > *contract*, this document wins.
@@ -579,11 +579,11 @@ parallel path is how this was arrived at.
 |---|---|---|---|
 | 1 | `Frame` from `NormalizedEvent`; github keys on the PR | property test: same event → same key; three duplicate cards become one that updates | **landed** |
 | 2a | The body **contract** — one markdown field, headline plain text, `quotes` band | fuzz: no adversarial subject yields a headline the validator would refuse, and none raises | **landed** |
-| 2b | The body **generator** — who writes it, the repair loop, the row it lands in (§2.3) | a body that overruns its budget is rewritten, not truncated; a card's prose survives a restart | **not built** |
+| 2b | The body **generator** — who writes it, the repair loop, the row it lands in (§2.3) | a body that overruns its budget is rewritten, not truncated; a card's prose survives a restart | **landed** |
 | 3 | Glance renderer; delete the 19 slots and the private token maps | every card of a kind is the same shape; `kindStyle()` is the only definition | **landed** |
-| 3b | **Transport** — a `Unit` reaches the screen over REST and WebSocket | the workspace renders a real `Unit`, not a surface adapted by `unitFromSurface` | **not built** |
-| 3c | **Cutover and deletion** — §11 executed, both halves | `grep` finds no `A2UISurface`, no `surface_pusher`, no `components/a2ui/`; nothing renders an adapted surface | **not built** |
-| 4 | List-ranker over derived features | `rank()` unit-tested against ordering cases; no external prose in its inputs | **built, unwired** |
+| 3b | **Transport** — a `Unit` reaches the screen over REST and WebSocket | the workspace renders a real `Unit`, not a surface adapted by `unitFromSurface` | **landed** |
+| 3c | **Cutover and deletion** — §11 executed, both halves | `grep` finds no `A2UISurface`, no `surface_pusher`, no `components/a2ui/`; nothing renders an adapted surface | **landed** |
+| 4 | List-ranker over derived features | `rank()` unit-tested against ordering cases; no external prose in its inputs | **landed** |
 | 5 | Full view, Conversation archetype | covers gmail, slack and github discussions — three of five sources in one renderer | not built |
 | 6 | Change, Event, Document archetypes | a PR renders both of its archetypes | not built |
 | 7 | `Finding` with derivation | a stale finding re-derives on view rather than rendering stale | not built |

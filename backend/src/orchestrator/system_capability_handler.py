@@ -374,14 +374,17 @@ class SystemCapabilityHandler:
                             interaction_id=f"ilog_{ULID()}",
                             user_id=user_id,
                             workspace_id=workspace_id,
-                            interaction_type=cap,
-                            user_message=step.description[:500],
-                            assistant_response=str(result)[:500] if result else "completed",
-                            metadata_={"plan_step": step.step_id, "actor": "system"},
+                            intent=cap[:32],
+                            message_preview=step.description[:500],
+                            response_preview=str(result)[:500] if result else "completed",
+                            plan_summary=f"system step {step.step_id}"[:500],
                         )
                     )
                     await db.commit()
             except Exception:
-                logger.debug("Failed to audit system capability step", exc_info=True)
+                # Audit must never break execution, but it must not fail invisibly
+                # either: a bad column name here is a programming error, and at
+                # debug level it went unnoticed while every row was dropped.
+                logger.warning("Failed to audit system capability step", exc_info=True)
 
         return result

@@ -20,7 +20,9 @@ dist/
 Thumbs.db
 
 # Env
-.env
+.env*
+!.env.example
+!.env.minimal
 *.local
 
 # Build
@@ -43,10 +45,11 @@ references/
 prompts/
 pytest-of-sivasankarreddybogala/
 .playwright-mcp/
-.superpowers/.claude/worktrees/
+.claude/worktrees/
+.superpowers/
 
 # Local Claude Code planning/scratch docs — not tracked
-docs/superpowers/
+**/docs/superpowers/
 
 # git worktrees for isolated feature work
 .worktrees/
@@ -58,3 +61,25 @@ docs/superpowers/
 *.pem
 *.key
 platform-jwt.pub
+
+# Credential-shaped files. None of these matches anything tracked today; they are here so
+# a contributor cannot commit one by accident.
+credentials.json
+token.json
+service-account*.json
+secrets.json
+secrets.yaml
+id_rsa*
+id_ed25519*
+*.p12
+*.pfx
+*.jks
+.npmrc
+.netrc
+.htpasswd
+
+# Local tooling output
+*.log
+coverage.xml
+# Was ignored only by the founder's global git config; a contributor's clone has no such rule.
+**/.claude/settings.local.json

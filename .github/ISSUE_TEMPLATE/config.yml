@@ -1,0 +1,20 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/shivadharmi/muldro/security/advisories/new
+    about: >
+      Never report a vulnerability in a public issue. Use a private GitHub Security Advisory,
+      or email shivadharmi@gmail.com. See SECURITY.md for scope, what to include, and the
+      response timeline.
+  - name: Security policy
+    url: https://github.com/shivadharmi/muldro/blob/main/SECURITY.md
+    about: Supported versions, scope, disclosure process, and Muldro's security model.
+  - name: Contributing guide
+    url: https://github.com/shivadharmi/muldro/blob/main/CONTRIBUTING.md
+    about: Dev environment setup, running tests against a disposable database, lint, commits, PRs.
+  - name: Engineering standards
+    url: https://github.com/shivadharmi/muldro/blob/main/docs/engineering-standards.md
+    about: The binding rules for all contributions. Read before proposing a structural change.
+  - name: Architecture documentation
+    url: https://github.com/shivadharmi/muldro/blob/main/docs/architecture/README.md
+    about: How the system works — core loop, agents, execution engine, data model, tools and MCP.

@@ -8,7 +8,7 @@ root_volume_size = 40
 key_pair_name    = "your-key-pair-name"
 allowed_ssh_cidr = "x.x.x.x/32"  # Your IP address
 
-domain_name = "brrdcast.in"
+domain_name = "example.com"
 subdomain   = "muldro"
 
 github_repo_url = "https://github.com/your-org/muldro.git"

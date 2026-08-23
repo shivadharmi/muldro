@@ -1,6 +1,6 @@
 # ToolHive + OpenConnector Integration — Architecture Assessment
 
-> **Status:** Investigation complete. No production code changed. This document is the assessment of record for connecting Muldro to multiple MCP servers and SaaS applications via **ToolHive** (MCP gateway) + **OpenConnector** (outbound SaaS connection layer), authenticated by Muldro's existing identity provider.
+> **Status:** Investigation complete and **acted on** — the gateway shipped and is now the only connect path for Google Workspace, GitHub, Notion and Jira. This document is the assessment of record for connecting Muldro to multiple MCP servers and SaaS applications via **ToolHive** (MCP gateway) + **OpenConnector** (outbound SaaS connection layer), authenticated by Muldro's existing identity provider.
 >
 > **Research date:** 2026-08-16. All external claims cite primary sources with versions/commits/dates (see §4). All Muldro claims cite `backend/…` paths verified in code.
 

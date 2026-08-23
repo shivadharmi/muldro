@@ -5,12 +5,6 @@ import { create } from "zustand";
 export type PermissionMode = "auto" | "ask" | "bypass";
 export type CommandScope = "general" | "workspace" | "entity" | "document";
 
-interface CommandHistoryEntry {
-  command: string;
-  permissionMode: PermissionMode;
-  timestamp: number;
-}
-
 /** Serializable chat message snapshot for cross-route persistence. */
 export interface ChatSnapshot {
   id: string;
@@ -46,13 +40,9 @@ interface CommandState {
   // Chat message cache — survives navigation
   cachedMessages: ChatSnapshot[];
   setCachedMessages: (msgs: ChatSnapshot[]) => void;
-
-  // Command history (last 20)
-  history: CommandHistoryEntry[];
-  addToHistory: (command: string) => void;
 }
 
-export const useCommandStore = create<CommandState>((set, get) => ({
+export const useCommandStore = create<CommandState>((set) => ({
   conversationId: null,
   setConversationId: (id) => set({ conversationId: id }),
 
@@ -72,13 +62,4 @@ export const useCommandStore = create<CommandState>((set, get) => ({
 
   cachedMessages: [],
   setCachedMessages: (msgs) => set({ cachedMessages: msgs }),
-
-  history: [],
-  addToHistory: (command) =>
-    set({
-      history: [
-        { command, permissionMode: get().permissionMode, timestamp: Date.now() },
-        ...get().history,
-      ].slice(0, 20),
-    }),
 }));

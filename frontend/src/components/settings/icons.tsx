@@ -72,14 +72,6 @@ export function ChevronRightIcon({ size = 14, className }: IconProps) {
   );
 }
 
-export function ChevronLeftIcon({ size = 14, className }: IconProps) {
-  return (
-    <Glyph viewBox="0 0 14 14" strokeWidth={1.7} size={size} className={className}>
-      <path d="M8.5 3L4.5 7l4 4" />
-    </Glyph>
-  );
-}
-
 export function CheckIcon({ size = 14, className }: IconProps) {
   return (
     <Glyph viewBox="0 0 14 14" strokeWidth={1.8} size={size} className={className}>
