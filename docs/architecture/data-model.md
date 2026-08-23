@@ -127,8 +127,6 @@ All data tables include `workspace_id` (`String(64)`, NOT NULL FK to `workspaces
 | Table | PK Prefix | Key Columns | Notes |
 |-------|-----------|-------------|-------|
 | `artifacts` | `art_` | artifact_type, title, mime_type, s3_key, run_id, step_id, task_id, entity_links (ARRAY) | |
-| `browser_sessions` | - | status, url, page_title, run_id, last_action_at | |
-| `browser_actions` | - | session_id (FK), action_type, selector, value, result_status, output_json (JSONB) | |
 
 ### Tools
 
@@ -155,7 +153,6 @@ All data tables include `workspace_id` (`String(64)`, NOT NULL FK to `workspaces
 
 | Table | PK Prefix | Key Columns | Notes |
 |-------|-----------|-------------|-------|
-| `ui_surfaces` | - | user_id, surface_type, state (JSONB), last_active_at | Active UI surface tracking |
 | `oauth_tokens` | - | token_id (PK), user_id, provider, access_token_encrypted, refresh_token_encrypted, expires_at, scopes (ARRAY) | Single OAuth token store (consolidated; the dead `oauth_connections` parent was dropped) |
 | `magic_links` | - | user_id, token_hash, expires_at, used_at | Passwordless auth links |
 
@@ -192,6 +189,15 @@ All data tables include `workspace_id` (`String(64)`, NOT NULL FK to `workspaces
 | `runtime_events` | - | event_type, agent_name, payload (JSONB), created_at | Internal runtime event log |
 
 > **Note:** All data tables listed above include `workspace_id` for multi-tenant isolation unless noted as user-level or system-global.
+
+### Tables added in the view-layer and model-settings work
+
+| Table | Key columns | Notes |
+|---|---|---|
+| `unit_bodies` | frame_key, body, event_ids, as_of | The model-authored markdown body for a Unit. Staleness is structural: `is_current` compares `event_ids`, not a clock |
+| `unit_dismissals` | user_id, frame_key, dismissed_at | Feeds `EngagementService` — penalty at 3+ consecutive, suppression at 5+ |
+| `model_bindings` | workspace_id, tier, provider, model_id, effort | Which model backs a neutral tier; per-workspace overridable |
+| `provider_credentials` | workspace_id, provider, encrypted_key | UI-entered provider keys, Fernet-encrypted. Env vars are the fallback |
 
 ## ID Scheme
 
