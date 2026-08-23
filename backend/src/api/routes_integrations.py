@@ -272,6 +272,10 @@ async def _clear_connection_artifacts(
     from src.config.settings import get_settings
     from src.integrations.gateway_actions import providers_for_server
     from src.integrations.mcp_pool import get_workspace_pool
+    from src.integrations.provider_map import (
+        native_perception_for_provider,
+        provider_for_server,
+    )
     from src.models.connection_map import ConnectionMap
     from src.models.database import get_session_factory
     from src.services.oauth_manager import OAuthManager
@@ -308,10 +312,27 @@ async def _clear_connection_artifacts(
         "google": "google",
         "github": "github",
         "slack": "slack",
-        "notion": "notion",
         "atlassian": "atlassian",
     }
     provider_name = provider_map.get(inst.auth_provider or "")
+
+    # A gateway installation can ALSO hold its own native OAuth token, for a
+    # poll the OpenConnector catalog has no action to serve. Every such
+    # installation declares auth_provider="platform_jwt", which the map above
+    # cannot answer for — so this used to revoke the gateway rows, report
+    # success, and leave the native grant standing. The card then read "Not
+    # connected" while Muldro still held a credential it kept polling with.
+    # Disconnect ends every grant the installation holds, or it is not a
+    # revocation control.
+    #
+    # Asked of the REGISTRY, and specifically of `native_perception_for_provider`
+    # — never `sources_for_provider`, whose identity fallback answers "yes" for
+    # every provider ever named and would try to delete a token for the
+    # gateway-only ones too.
+    if not provider_name and gateway_providers:
+        brand = provider_for_server(inst.server_name)
+        if native_perception_for_provider(brand) is not None:
+            provider_name = brand
 
     if provider_name and settings.oauth_encryption_key:
         db_factory = get_session_factory()
