@@ -43,52 +43,34 @@ class TestSeedInstallations:
         assert "SLACK_MCP_XOXB_TOKEN" in env_keys, "Missing SLACK_MCP_XOXB_TOKEN"
 
 
-class TestNotionToolNames:
-    def test_notion_tools_in_catalog(self):
-        """All Notion MCP tools must have API- prefix in catalog."""
+class TestNotionIsGatewayOnly:
+    """Notion's tool names now come from the registry, not from a stdio server.
+
+    The `API-*` names these tests pinned were the wire names of
+    `@notionhq/notion-mcp-server`, retired with the gateway migration. Asserting
+    they are ABSENT is the half of the old contract still worth keeping: a
+    reappearing `API-*` seed would mean the stdio server was reinstated
+    alongside the gateway, offering agents two names for one action.
+    """
+
+    def test_no_stdio_era_tool_names_remain(self):
         from src.tools.catalog import EXTERNAL_TOOL_SEEDS
 
-        notion_seeds = [s for s in EXTERNAL_TOOL_SEEDS if s.server == "notion"]
-        notion_names = {s.name for s in notion_seeds}
-        expected_api_names = {
-            "API-post-page",
-            "API-patch-page",
-            "API-retrieve-a-page",
-            "API-query-data-source",
-            "API-create-a-comment",
-            "API-patch-block-children",
-        }
-        for name in expected_api_names:
-            assert name in notion_names, f"Missing Notion tool: {name}"
-        wrong_names = {
-            "create-a-page",
-            "update-a-page",
-            "retrieve-a-page",
-            "query-data-source",
-            "create-a-comment",
-            "append-block-children",
-        }
-        present_wrong = wrong_names & notion_names
-        assert not present_wrong, f"Wrong Notion names still present: {present_wrong}"
+        notion_names = {s.name for s in EXTERNAL_TOOL_SEEDS if s.server == "notion"}
+        assert notion_names, "notion offers no tools at all"
+        stale = {n for n in notion_names if n.startswith("API-")}
+        assert not stale, f"stdio-era Notion tool names still seeded: {stale}"
 
-    def test_notion_capability_mappings(self):
-        """Notion tools must have correct capabilities in catalog."""
+    def test_tool_names_are_the_registry_action_names(self):
+        from src.integrations.gateway_actions import PROVIDER_REGISTRY
+        from src.integrations.gateway_naming import action_id_to_tool_name
         from src.tools.catalog import EXTERNAL_TOOL_SEEDS
 
-        seed_by_name = {s.name: s.capability for s in EXTERNAL_TOOL_SEEDS}
-
+        notion_names = {s.name for s in EXTERNAL_TOOL_SEEDS if s.server == "notion"}
         expected = {
-            "API-post-page": "doc.create",
-            "API-patch-page": "doc.update",
-            "API-retrieve-a-page": "doc.get",
-            "API-query-data-source": "doc.query",
-            "API-create-a-comment": "doc.comment",
-            "API-patch-block-children": "doc.append",
+            action_id_to_tool_name(a.action_id) for a in PROVIDER_REGISTRY["notion"].actions
         }
-        for tool_name, expected_cap in expected.items():
-            assert seed_by_name.get(tool_name) == expected_cap, (
-                f"{tool_name} should map to {expected_cap}, got {seed_by_name.get(tool_name)}"
-            )
+        assert notion_names == expected
 
 
 class TestAuthProviderLabels:
@@ -107,9 +89,13 @@ class TestAuthProviderLabels:
             f"GitHub is gateway-routed — auth_provider must be 'platform_jwt', got '{actual}'"
         )
 
-    def test_notion_auth_provider_is_oauth(self):
+    def test_notion_auth_provider_is_platform_jwt(self):
+        # Notion is gateway-routed like GitHub: the Notion OAuth token lives in
+        # OpenConnector, and Muldro authenticates to the adapter with a platform
+        # JWT. It previously declared "notion" and authenticated an npx child
+        # with NOTION_TOKEN out of the environment.
         seed = self._get_seed("notion")
         actual = seed["auth_provider"]
-        assert actual == "notion", (
-            f"Notion uses OAuth flow — auth_provider must be 'notion', got '{actual}'"
+        assert actual == "platform_jwt", (
+            f"Notion is gateway-routed — auth_provider must be 'platform_jwt', got '{actual}'"
         )

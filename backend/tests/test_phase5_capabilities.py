@@ -84,28 +84,29 @@ class TestNewDocCapabilities:
         for cap in new_caps:
             assert cap in CAPABILITY_CATALOG, f"Missing capability: {cap}"
 
-    def test_new_notion_tools_mapped(self):
-        expected = {
-            "API-retrieve-a-page-property": "doc.get_property",
-            "API-retrieve-a-comment": "doc.get_comment",
-            "API-get-block-children": "doc.get_children",
-            "API-retrieve-a-block": "doc.get_block",
-            "API-update-a-block": "doc.update_block",
-            "API-delete-a-block": "doc.delete_block",
-            "API-move-page": "doc.move",
-            "API-retrieve-a-database": "doc.get_database",
-            "API-create-a-data-source": "doc.create_datasource",
-            "API-retrieve-a-data-source": "doc.get_datasource",
-            "API-update-a-data-source": "doc.update_datasource",
-            "API-list-data-source-templates": "doc.list_templates",
-            "API-get-self": "doc.get_self",
-            "API-get-user": "doc.get_user",
-            "API-get-users": "doc.get_users",
-            "API-post-search": "doc.search",
-        }
-        for tool, cap in expected.items():
-            actual = _get_cap(tool)
-            assert actual == cap, f"{tool} should map to {cap}, got {actual}"
+    def test_notion_tools_map_to_doc_capabilities(self):
+        """Notion's curated gateway actions carry real doc.* capabilities.
+
+        This replaced a table of `API-*` names transcribed from the retired
+        `@notionhq/notion-mcp-server` stdio process. Those seeds were deleted
+        with the gateway migration, so every lookup returned None and the test
+        asserted nothing about the tools that actually exist. The names are now
+        derived from the registry rather than restated, which is also what stops
+        this from silently emptying again if the curated set changes.
+        """
+        from src.integrations.gateway_actions import PROVIDER_REGISTRY
+        from src.integrations.gateway_naming import action_id_to_tool_name
+
+        actions = PROVIDER_REGISTRY["notion"].actions
+        assert actions, "the notion provider declares no actions"
+        for action in actions:
+            assert action.capability in CAPABILITY_CATALOG, (
+                f"{action.action_id} declares unknown capability {action.capability}"
+            )
+            tool_name = action_id_to_tool_name(action.action_id)
+            assert _get_cap(tool_name) == action.capability, (
+                f"{tool_name} is not seeded with {action.capability}"
+            )
 
 
 class TestAgentScopeFixes:

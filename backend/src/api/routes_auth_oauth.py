@@ -1,7 +1,7 @@
 """OAuth routes: provider listing, authorize-URL generation, and the
 callback that exchanges codes for tokens and provisions integrations.
 
-Serves the providers Muldro authenticates natively (github/notion/atlassian).
+Serves the providers Muldro authenticates natively (github/atlassian).
 ``google`` was retired here when it moved behind the OpenConnector gateway: that
 gateway owns its OAuth client and stores its credentials, so it hits the
 "Unknown provider" 400 and is connected through ``routes_integrations`` instead.
@@ -173,31 +173,20 @@ async def oauth_authorize(
 ):
     """Generate OAuth authorization URL for a provider.
 
-    ``google`` is deliberately absent: it is served entirely by the OpenConnector
-    gateway, which owns its OAuth client. Minting a Muldro-side credential for it
-    would produce a token nothing reads, so it falls through to the "Unknown
-    provider" 400 below.
+    ``google`` and ``notion`` are deliberately absent: both are served entirely
+    by the OpenConnector gateway, which owns their OAuth client. Minting a
+    Muldro-side credential for either would produce a token nothing reads, so
+    they fall through to the "Unknown provider" 400 below. Their
+    ``*_oauth_client_id``/``_secret`` settings are still required — the startup
+    registrar hands those to OpenConnector — but the authorization itself now
+    runs through ``POST /v1/connections/begin``.
 
     ``github`` is here for ONE job — the notifications poll. Its MCP actions keep
     running on the gateway credential; the token minted here is read only by
     ``GitHubConnector``, which the gateway catalog cannot replace because it
     exposes no notifications action.
     """
-    if provider == "notion":
-        client_id = settings.notion_oauth_client_id
-        if not client_id:
-            raise HTTPException(status_code=400, detail="Notion OAuth not configured")
-        params = {
-            "client_id": client_id,
-            "redirect_uri": settings.notion_oauth_redirect_uri,
-            "response_type": "code",
-            "owner": "user",
-            "state": user_id,
-        }
-        url = f"https://api.notion.com/v1/oauth/authorize?{urlencode(params)}"
-        return OAuthUrlResponse(url=url, provider="notion")
-
-    elif provider == "github":
+    if provider == "github":
         client_id = settings.github_oauth_client_id
         if not client_id:
             raise HTTPException(status_code=400, detail="GitHub OAuth not configured")
@@ -290,64 +279,7 @@ async def oauth_callback(
         return _error_redirect(settings, "Invalid OAuth state: missing user_id")
     user_id = state
 
-    if provider == "notion":
-        client_id = settings.notion_oauth_client_id
-        client_secret = settings.notion_oauth_client_secret
-        if not client_id or not client_secret:
-            return _error_redirect(settings, "Notion OAuth not configured")
-
-        import base64
-
-        basic_auth = base64.b64encode(f"{client_id}:{client_secret}".encode()).decode()
-        async with httpx.AsyncClient() as client:
-            resp = await client.post(
-                "https://api.notion.com/v1/oauth/token",
-                json={
-                    "grant_type": "authorization_code",
-                    "code": code,
-                    "redirect_uri": settings.notion_oauth_redirect_uri,
-                },
-                headers={
-                    "Authorization": f"Basic {basic_auth}",
-                },
-                timeout=15,
-            )
-            if resp.status_code != 200:
-                logger.error(
-                    "Notion token exchange failed (status=%d): %s",
-                    resp.status_code,
-                    resp.text,
-                )
-                return _error_redirect(
-                    settings, f"Notion token exchange failed: {resp.json().get('error', resp.text)}"
-                )
-            token_data = resp.json()
-
-        # Notion tokens don't expire
-        db_factory = get_session_factory()
-        from src.api.deps import resolve_workspace_id
-
-        async with db_factory() as _db:
-            workspace_id = await resolve_workspace_id(_db, user_id)
-
-        oauth_mgr = OAuthManager(
-            db_factory,
-            encryption_key=settings.oauth_encryption_key,
-            settings=settings,
-        )
-        await oauth_mgr.store_token(
-            user_id=user_id,
-            provider="notion",
-            access_token=token_data["access_token"],
-            refresh_token=None,
-            expires_at=None,
-            workspace_id=workspace_id,
-        )
-        await _ensure_integration(db_factory, user_id, "notion", workspace_id=workspace_id)
-        logger.info("Notion integration linked for %s", user_id)
-        background_tasks.add_task(_trigger_initial_observation, user_id, ["notion"], workspace_id)
-
-    elif provider == "github":
+    if provider == "github":
         client_id = settings.github_oauth_client_id
         client_secret = settings.github_oauth_client_secret
         if not client_id or not client_secret:
@@ -626,7 +558,6 @@ async def oauth_callback(
         # poll only and its MCP session must not be re-keyed to it.
         _provider_servers = {
             "slack": ["slack"],
-            "notion": ["notion"],
             "atlassian": ["atlassian"],
         }
         for server_name in _provider_servers.get(provider, []):
@@ -641,7 +572,7 @@ async def oauth_callback(
 
     # Auto-resume: clear any needs-reauth state for this provider — un-pause its
     # perception sources and re-queue runs parked in awaiting_reauth. Runs for
-    # every natively-authenticated provider (github/slack/notion/atlassian),
+    # every natively-authenticated provider (github/slack/atlassian),
     # best-effort.
     background_tasks.add_task(
         _resume_after_reauth,

@@ -34,9 +34,21 @@ def test_http_schemas_not_cleared_on_seed():
     assert "_clear_stale_tool_schemas(db, server_name, workspace_id)" not in src
 
 
+def _stdio_installations() -> list[dict]:
+    """Every seeded installation still launched as a local child process.
+
+    Derived rather than named: a provider that migrates to the gateway loses its
+    `args` entirely, and a hardcoded name list turns that success into a
+    TypeError on `None`. What must stay true is a property of whatever remains
+    stdio, not of any particular brand.
+    """
+    return [i for i in _DEFAULT_INSTALLATIONS if i["transport"] == "stdio" and i.get("args")]
+
+
 def test_npx_servers_are_version_pinned():
-    for name in ("slack", "notion"):
-        inst = _by_name(name)
+    stdio = _stdio_installations()
+    for inst in stdio:
+        name = inst["server_name"]
         pkg = next(
             (a for a in inst["args"] if not a.startswith("-") and "@" in a),
             None,
@@ -49,7 +61,7 @@ def test_npx_servers_are_version_pinned():
 
 
 def test_migrated_installations_declare_platform_jwt():
-    for name in ("google-workspace", "github"):
+    for name in ("google-workspace", "github", "notion"):
         inst = _by_name(name)
         assert inst["auth_provider"] == "platform_jwt"
         assert inst["transport"] == "streamable-http"

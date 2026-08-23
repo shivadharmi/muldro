@@ -21,6 +21,7 @@ from src.integrations.gateway_actions._types import GatewayAction, GatewayProvid
 from src.integrations.gateway_actions.github import GITHUB
 from src.integrations.gateway_actions.gmail import GMAIL
 from src.integrations.gateway_actions.googlecalendar import GOOGLECALENDAR
+from src.integrations.gateway_actions.notion import NOTION
 
 # GatewayAction/GatewayProvider are defined in _types and re-exported here so
 # consumers import the registry and its types from one place.
@@ -39,7 +40,7 @@ __all__ = [
 
 # Registry order is load-bearing: providers_for_server() returns it verbatim, so
 # a server's providers are connected (and their tools listed) in this order.
-_PROVIDERS: tuple[GatewayProvider, ...] = (GMAIL, GOOGLECALENDAR, GITHUB)
+_PROVIDERS: tuple[GatewayProvider, ...] = (GMAIL, GOOGLECALENDAR, GITHUB, NOTION)
 
 PROVIDER_REGISTRY: MappingProxyType[str, GatewayProvider] = MappingProxyType(
     {p.provider_id: p for p in _PROVIDERS}

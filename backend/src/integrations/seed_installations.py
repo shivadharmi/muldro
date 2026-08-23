@@ -88,23 +88,23 @@ _DEFAULT_INSTALLATIONS: list[dict] = [
         ],
     },
     {
+        # Gateway-backed: routed to the OpenConnector adapter (notion provider).
+        # Credentials live in OpenConnector, not OAuthManager. This replaced an
+        # `npx @notionhq/notion-mcp-server` stdio process launched with
+        # NOTION_TOKEN resolved out of the environment — a secret readable in
+        # `ps aux` for the life of the child, which is the exposure the gateway
+        # exists to close. `scopes_granted` is None like every other gateway
+        # installation: the registry already knows which capabilities the
+        # provider exposes, so restating them here could only drift.
         "server_name": "notion",
         "display_name": "Notion",
-        "transport": "stdio",
-        "command": "npx",
-        "args": ["-y", "@notionhq/notion-mcp-server@2.4.0"],
-        "env_template": {
-            "NOTION_TOKEN": "Notion integration token",
-        },
-        "auth_provider": "notion",
-        "scopes_granted": [
-            "doc.create",
-            "doc.update",
-            "doc.get",
-            "doc.search",
-            "doc.comment",
-            "doc.append",
-        ],
+        "transport": "streamable-http",
+        "remote_url": None,
+        "command": None,
+        "args": None,
+        "env_template": {},
+        "auth_provider": "platform_jwt",
+        "scopes_granted": None,
     },
     {
         "server_name": "atlassian",

@@ -12,6 +12,14 @@ Mapping (connector → schedules enabled on authorization):
   calendar       → observe_calendar
   slack          → observe_slack
   github         → observe_github
+  notion         → observe_notion
+
+A connector absent from CONNECTOR_SCHEDULES below is not merely unscheduled: it
+never reaches the PerceptionState upsert at the end of
+``enable_schedules_for_connector`` either, because that function returns as soon
+as it has no schedule name to enable. Notion ran that way for a while — polled
+only because a one-shot initial observation happened to leave a state row
+behind, with nothing that would have recreated it.
 """
 
 import logging
@@ -78,6 +86,16 @@ DEFAULT_SCHEDULES: list[dict] = [
         "priority": "low",
     },
     {
+        "name": "observe_notion",
+        "description": "Poll Notion for recently edited pages every 15 minutes.",
+        "schedule_type": "recurring",
+        "cron_expr": "*/15 * * * *",
+        "action_type": "observe_source",
+        "action_config": {"source": "notion"},
+        "source": "system",
+        "priority": "low",
+    },
+    {
         "name": "memory_consolidation",
         "description": "Consolidate and merge related memories nightly.",
         "schedule_type": "recurring",
@@ -139,6 +157,7 @@ CONNECTOR_SCHEDULES: dict[str, list[str]] = {
     "calendar": ["observe_calendar"],
     "slack": ["observe_slack"],
     "github": ["observe_github"],
+    "notion": ["observe_notion"],
 }
 
 

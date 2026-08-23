@@ -548,9 +548,9 @@ async def test_perception_tick_opens_exactly_one_turn_scope_per_user():
 
     states = [
         _make_state(state_id="pst_a1", user_id="usr_a", source="slack"),
-        _make_state(state_id="pst_a2", user_id="usr_a", source="notion"),
+        _make_state(state_id="pst_a2", user_id="usr_a", source="github"),
         _make_state(state_id="pst_b1", user_id="usr_b", source="slack"),
-        _make_state(state_id="pst_b2", user_id="usr_b", source="notion"),
+        _make_state(state_id="pst_b2", user_id="usr_b", source="github"),
     ]
     harness = _TickHarness(states)
 
@@ -580,9 +580,9 @@ async def test_perception_tick_opens_exactly_one_turn_scope_per_user():
         await scheduler._tick_perception(harness.factory)
 
     assert sorted(cycles) == [
-        ("usr_a", "notion"),
+        ("usr_a", "github"),
         ("usr_a", "slack"),
-        ("usr_b", "notion"),
+        ("usr_b", "github"),
         ("usr_b", "slack"),
     ], f"all four cycles must run, got {sorted(cycles)}"
     assert mock_scope.call_count == 2, (
@@ -650,7 +650,7 @@ async def test_per_user_scopes_do_not_change_total_concurrency():
     states = [
         _make_state(state_id=f"pst_{u}{i}", user_id=f"usr_{u}", source=s)
         for u in ("a", "b", "c")
-        for i, s in enumerate(("slack", "notion"))
+        for i, s in enumerate(("slack", "github"))
     ]
     harness = _TickHarness(states)
 
@@ -696,7 +696,7 @@ async def test_perception_tick_uses_the_real_turn_scope_and_closes_sessions():
 
     states = [
         _make_state(state_id="pst_a1", user_id="usr_a", source="slack"),
-        _make_state(state_id="pst_a2", user_id="usr_a", source="notion"),
+        _make_state(state_id="pst_a2", user_id="usr_a", source="github"),
         _make_state(state_id="pst_b1", user_id="usr_b", source="slack"),
     ]
     harness = _TickHarness(states)

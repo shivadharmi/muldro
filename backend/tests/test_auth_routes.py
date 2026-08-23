@@ -12,11 +12,12 @@ from tests.conftest import TEST_USER_ID
 class TestOAuthConnectRoutes:
     """The native OAuth connect routes, and what they no longer serve.
 
-    ``google`` moved behind the OpenConnector gateway, which owns its OAuth
-    client. Its native authorize/callback branches were deleted, so it falls
-    through to the shared "Unknown provider" 400 — even when Muldro-side client
-    credentials happen to be configured. Minting a token nothing reads was the
-    failure mode this closes.
+    ``google`` and ``notion`` moved behind the OpenConnector gateway, which owns
+    their OAuth client. Their native authorize/callback branches were deleted, so
+    they fall through to the shared "Unknown provider" 400 — even when
+    Muldro-side client credentials happen to be configured, which for notion they
+    still ARE, because the startup registrar needs them. Minting a token nothing
+    reads was the failure mode this closes.
 
     ``github`` is the exception that proves the rule: its native route came back
     precisely because something DOES read that token — ``GitHubConnector``
@@ -97,22 +98,68 @@ class TestOAuthConnectRoutes:
             app.dependency_overrides.pop(get_settings, None)
             self._cleanup()
 
-    def test_unmigrated_provider_still_authorizes(self):
-        """Retirement is scoped: notion keeps its native authorize URL."""
+    def test_notion_native_authorize_is_retired(self):
+        """Notion is gateway-served, so a native authorize URL would mint a dead token.
+
+        Its OAuth client settings are still populated — the startup registrar
+        hands them to OpenConnector — so a route that merely checked for
+        credentials would happily return a URL. Retirement has to be decided by
+        the provider being gateway-backed, not by whether a client_id exists.
+        """
         from src.config.settings import get_settings
         from tests.conftest import make_mock_settings
 
         mock_settings = make_mock_settings(
             notion_oauth_client_id="notion_client_id",
-            notion_oauth_redirect_uri="http://localhost:3000/auth/callback",
+            notion_oauth_client_secret="notion_secret",
             backend_token="",
         )
         app.dependency_overrides[get_settings] = lambda: mock_settings
         client = self._client()
         try:
             resp = client.get("/v1/auth/oauth/notion/authorize")
+            assert resp.status_code == 400
+        finally:
+            app.dependency_overrides.pop(get_settings, None)
+            self._cleanup()
+
+    def test_notion_callback_is_retired(self):
+        from src.config.settings import get_settings
+        from tests.conftest import make_mock_settings
+
+        mock_settings = make_mock_settings(
+            notion_oauth_client_id="notion_client_id",
+            notion_oauth_client_secret="notion_secret",
+            backend_token="",
+        )
+        app.dependency_overrides[get_settings] = lambda: mock_settings
+        try:
+            client = self._client()
+            resp = client.get(
+                f"/v1/auth/oauth/notion/callback?code=test_code&state={TEST_USER_ID}",
+                follow_redirects=False,
+            )
+            assert resp.status_code == 400
+        finally:
+            app.dependency_overrides.pop(get_settings, None)
+            self._cleanup()
+
+    def test_unmigrated_provider_still_authorizes(self):
+        """Retirement is scoped: atlassian keeps its native authorize URL."""
+        from src.config.settings import get_settings
+        from tests.conftest import make_mock_settings
+
+        mock_settings = make_mock_settings(
+            atlassian_oauth_client_id="atlassian_client_id",
+            atlassian_oauth_redirect_uri="http://localhost:3000/auth/callback",
+            backend_token="",
+        )
+        app.dependency_overrides[get_settings] = lambda: mock_settings
+        client = self._client()
+        try:
+            resp = client.get("/v1/auth/oauth/atlassian/authorize")
             assert resp.status_code == 200
-            assert "notion_client_id" in resp.json()["url"]
+            assert "atlassian_client_id" in resp.json()["url"]
         finally:
             app.dependency_overrides.pop(get_settings, None)
             self._cleanup()

@@ -426,9 +426,11 @@ def _ext(
 # low-risk. Tool-granularity risk is more accurate than capability-granularity.
 EXTERNAL_TOOL_SEEDS: list[ExternalToolSeed] = [
     # _ext(name, capability, server, risk, approval, verified)
-    # google-workspace and github are gateway-only (OpenConnector) -- see the
-    # derived block below EXTERNAL_TOOL_SEEDS. Native hand-written seeds for
-    # these two migrated servers are deliberately absent.
+    # google-workspace, github and notion are gateway-only (OpenConnector) --
+    # see the derived block below EXTERNAL_TOOL_SEEDS. Native hand-written seeds
+    # for a migrated server are deliberately absent: leaving them would offer
+    # agents two names for one action, one of them addressing a stdio process
+    # that is no longer installed.
     # slack (8 tools, verified=False)
     _ext("slack_post_message", "messaging.send", "slack", "high", True, False),
     _ext("slack_reply_to_thread", "messaging.reply", "slack", "high", True, False),
@@ -438,29 +440,6 @@ EXTERNAL_TOOL_SEEDS: list[ExternalToolSeed] = [
     _ext("slack_get_users", "messaging.get_users", "slack", "low", False, False),
     _ext("slack_get_user_profile", "messaging.get_profile", "slack", "low", False, False),
     _ext("slack_list_channels", "messaging.list_channels", "slack", "low", False, False),
-    # notion (22 tools, verified=True)
-    _ext("API-post-page", "doc.create", "notion", "medium", True, True),
-    _ext("API-patch-page", "doc.update", "notion", "medium", True, True),
-    _ext("API-retrieve-a-page", "doc.get", "notion", "low", False, True),
-    _ext("API-query-data-source", "doc.query", "notion", "low", False, True),
-    _ext("API-create-a-comment", "doc.comment", "notion", "medium", True, True),
-    _ext("API-patch-block-children", "doc.append", "notion", "medium", True, True),
-    _ext("API-retrieve-a-page-property", "doc.get_property", "notion", "low", False, True),
-    _ext("API-retrieve-a-comment", "doc.get_comment", "notion", "low", False, True),
-    _ext("API-get-block-children", "doc.get_children", "notion", "low", False, True),
-    _ext("API-retrieve-a-block", "doc.get_block", "notion", "low", False, True),
-    _ext("API-update-a-block", "doc.update_block", "notion", "medium", True, True),
-    _ext("API-delete-a-block", "doc.delete_block", "notion", "high", True, True),
-    _ext("API-move-page", "doc.move", "notion", "medium", True, True),
-    _ext("API-retrieve-a-database", "doc.get_database", "notion", "low", False, True),
-    _ext("API-create-a-data-source", "doc.create_datasource", "notion", "medium", True, True),
-    _ext("API-retrieve-a-data-source", "doc.get_datasource", "notion", "low", False, True),
-    _ext("API-update-a-data-source", "doc.update_datasource", "notion", "medium", True, True),
-    _ext("API-list-data-source-templates", "doc.list_templates", "notion", "low", False, True),
-    _ext("API-get-self", "doc.get_self", "notion", "low", False, True),
-    _ext("API-get-user", "doc.get_user", "notion", "low", False, True),
-    _ext("API-get-users", "doc.get_users", "notion", "low", False, True),
-    _ext("API-post-search", "doc.search", "notion", "low", False, True),
     # atlassian (13 tools, verified=False)
     _ext("getJiraIssue", "issue.get", "atlassian", "low", False, False),
     _ext("searchJiraIssuesUsingJql", "issue.search", "atlassian", "low", False, False),

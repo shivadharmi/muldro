@@ -25,6 +25,7 @@ def test_every_gateway_provider_declares_an_oauth_credential_key():
         "gmail": "google",
         "googlecalendar": "google",
         "github": "github",
+        "notion": "notion",
     }
 
 
@@ -114,6 +115,8 @@ def _settings(**overrides) -> Settings:
         google_oauth_client_secret="g-secret",
         github_oauth_client_id="gh-id",
         github_oauth_client_secret="gh-secret",
+        notion_oauth_client_id="n-id",
+        notion_oauth_client_secret="n-secret",
         skip_gateway_validation=False,
     )
     base.update(overrides)
@@ -125,19 +128,29 @@ async def test_registers_every_provider_with_the_right_credentials():
     admin = FakeAdmin()
     registered = await register_gateway_oauth_configs(_settings(), admin=admin)
 
-    assert registered == ["gmail", "googlecalendar", "github"]
+    assert registered == ["gmail", "googlecalendar", "github", "notion"]
     assert admin.calls == [
         ("gmail", "g-id", "g-secret"),
         ("googlecalendar", "g-id", "g-secret"),
         ("github", "gh-id", "gh-secret"),
+        ("notion", "n-id", "n-secret"),
     ]
 
 
 async def test_never_registers_non_gateway_providers():
-    """notion/atlassian have OAuth settings but are not gateway providers."""
+    """atlassian has OAuth settings but is not a gateway provider.
+
+    Notion used to be the second example here and is now a counter-example: it
+    holds the same shape of settings it always did, and registering it became
+    correct the moment it entered PROVIDER_REGISTRY. Having settings is not what
+    makes a provider gateway-backed; being in the registry is.
+    """
     admin = FakeAdmin()
     await register_gateway_oauth_configs(_settings(), admin=admin)
-    assert {service for service, _, _ in admin.calls} == {"gmail", "googlecalendar", "github"}
+    assert "atlassian" not in {service for service, _, _ in admin.calls}
+    assert {service for service, _, _ in admin.calls} == {
+        p.provider_id for p in PROVIDER_REGISTRY.values()
+    }
 
 
 async def test_skip_flag_makes_it_a_no_op():

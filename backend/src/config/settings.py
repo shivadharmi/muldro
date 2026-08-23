@@ -147,11 +147,13 @@ class Settings(BaseSettings):
     github_oauth_client_secret: str = ""
     github_oauth_redirect_uri: str = "http://localhost:8000/v1/auth/github/callback"
 
-    # Notion OAuth
+    # Notion OAuth — the CLIENT credentials the startup registrar hands to
+    # OpenConnector, which then owns the authorization and holds the token. No
+    # redirect_uri: the callback lands on the gateway, not on Muldro. No
+    # notion_token either — the stdio MCP server that read it is retired, and it
+    # was the last place a Notion secret reached a child process's environment.
     notion_oauth_client_id: str = ""
     notion_oauth_client_secret: str = ""
-    notion_oauth_redirect_uri: str = "http://localhost:8000/v1/auth/notion/callback"
-    notion_token: str = ""  # For MCP server (@notionhq/notion-mcp-server)
 
     # Atlassian OAuth (Jira + Confluence via Rovo MCP)
     atlassian_oauth_client_id: str = ""
