@@ -761,8 +761,10 @@ class MuldroOrchestrator:
 
     @staticmethod
     def _extract_perception_policy(planner_text: str):
-        """Facade → PerceptionRunner._extract_perception_policy (staticmethod)."""
-        return PerceptionRunner._extract_perception_policy(planner_text)
+        """Facade → perception_insight.extract_perception_policy."""
+        from src.orchestrator.perception_insight import extract_perception_policy
+
+        return extract_perception_policy(planner_text)
 
     def _build_system_prompt(
         self, agent: SubAgent, context: str = "", capability_summary: str = ""

@@ -45,7 +45,7 @@ GRANDFATHERED: dict[str, int] = {
     "backend/tests/deep_runtime/test_trust_gate.py": 894,
     "backend/tests/test_perception_policy.py": 889,
     "backend/tests/test_foundation_hardening.py": 885,
-    "backend/src/orchestrator/perception_runner.py": 858,
+    "backend/src/orchestrator/perception_runner.py": 844,
     "backend/src/api/routes_approvals.py": 843,
     "backend/src/orchestrator/muldro.py": 828,
     "backend/tests/test_perception.py": 815,

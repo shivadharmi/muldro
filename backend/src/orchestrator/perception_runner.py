@@ -85,57 +85,15 @@ async def _fetch_thread_contexts(
     return contexts
 
 
-# A Planner response that would not parse falls back to `PlanOutput(goal=
-# response_text, ...)` in `extract_plan` — the ENTIRE raw model output, kept
-# as a diagnostic. That is fine internally and it is already logged, but this
-# branch turns a goal into prose the founder reads, and a raw JSON blob
-# arrived as a card whose headline was "{".
-#
-# So the boundary checks the shape rather than trusting the field: an insight
-# is a sentence muldro wrote for a person. Deliberately NOT a JSON parse — a
-# fragment, a code fence or a truncated dump is just as unreadable as valid
-# JSON, and all of them start by announcing themselves.
-_NOT_PROSE_PREFIXES = ("{", "[", "```", '"goal"', "goal:")
-
-# Long enough to be a claim. The fallback dumps hundreds of characters, so this
-# only rejects the other end: a bare token that says nothing.
-_MIN_INSIGHT_CHARS = 12
-
-
-# The one perception "source" that is not a connector: the cross-source
-# synthesis pass, which correlates 2+ sources in a single tick.
-SYNTHESIS_SOURCE = "synthesis"
-
-
-def _publishes_insights(source: str) -> bool:
-    """Whether this cycle may turn a non-actionable plan goal into a finding.
-
-    Only synthesis may. The escape hatch below exists because the synthesis path
-    has no prior relevance-routing step, so a genuine cross-cutting observation
-    would otherwise be discarded silently. A SINGLE-source poll has no
-    cross-cutting anything — and when it finds nothing actionable, the Planner's
-    goal is a restatement of the signal it was handed. That is how the founder's
-    feed came to hold "You have 1 new Gmail event. Without information about
-    sender, subject, or calendar impact, ..." — the model reporting that it
-    knows nothing, rendered as a finding.
-
-    Gating on the path rather than on the prose is deliberate. A blocklist of
-    hedging phrases is a losing game against a model that can rephrase, and it
-    would also reject a real insight that happened to be tentative. The
-    structural fact is that a source with nothing actionable has nothing to say.
-    """
-    return source == SYNTHESIS_SOURCE
-
-
-def _is_publishable_insight(goal: str | None) -> bool:
-    """Whether a plan goal is prose a human should be shown."""
-    text = (goal or "").strip()
-    if len(text) < _MIN_INSIGHT_CHARS:
-        return False
-    if text.startswith(_NOT_PROSE_PREFIXES):
-        return False
-    # A dump that opens with prose and then carries structure is still a dump.
-    return '"steps"' not in text and '"capability"' not in text
+# The insight-publication predicates live in perception_insight.py; imported
+# here rather than re-exported deliberately, so this module has one obvious
+# place to look and the tests that already import them from here keep working.
+from src.orchestrator.perception_insight import (  # noqa: E402
+    SYNTHESIS_SOURCE,
+    _is_publishable_insight,
+    _publishes_insights,
+    extract_perception_policy,
+)
 
 
 class PerceptionRunner:
@@ -657,7 +615,7 @@ class PerceptionRunner:
         from src.contracts import PerceptionDecision
         from src.services.perception_policy import PerceptionPolicyService
 
-        policy = self._extract_perception_policy(planner_text)
+        policy = extract_perception_policy(planner_text)
         if policy is None and event_count > 0:
             # Deterministic fallback: if events were found, check sooner
             policy = PerceptionDecision(
@@ -832,11 +790,39 @@ class PerceptionRunner:
                     source,
                 )
         except Exception:
-            logger.warning(
-                "Failed to create background run for perception plan %s",
+            # The Plan is ALREADY COMMITTED at this point — persist_plan_record
+            # runs in its own transaction — so swallowing this leaves a durable
+            # plan with no run, no approval and no card: invisible work that
+            # cannot be opened or retried, and that only an hourly TTL reaper
+            # eventually relabels "failed" with no reason attached.
+            #
+            # Recording the failure ON the plan is what makes it a fact rather
+            # than an absence. It stays best-effort (a plan already exists; a
+            # second failure must not raise out of a perception cycle) but the
+            # log is ERROR, not WARNING: a plan the founder asked for and never
+            # got is not a routine event.
+            logger.error(
+                "Failed to create background run for perception plan %s — "
+                "marking it failed so it is not silently stalled",
                 plan.plan_id,
                 exc_info=True,
             )
+            try:
+                from sqlalchemy import update as _update
+
+                from src.models.plans import Plan as _Plan
+
+                async with self._db_factory() as db:
+                    await db.execute(
+                        _update(_Plan)
+                        .where(_Plan.plan_id == plan.plan_id, _Plan.status == "created")
+                        .values(status="failed")
+                    )
+                    await db.commit()
+            except Exception:
+                logger.warning(
+                    "Could not mark perception plan %s failed", plan.plan_id, exc_info=True
+                )
 
         return plan
 
@@ -856,28 +842,3 @@ class PerceptionRunner:
                 await db.commit()
         except Exception:
             logger.warning("Failed to bump perception for sources", exc_info=True)
-
-    @staticmethod
-    def _extract_perception_policy(planner_text: str):
-        """Parse a perception_policy JSON block from planner output, if present."""
-        from src.contracts import PerceptionDecision
-
-        if not planner_text or "perception_policy" not in planner_text:
-            return None
-
-        try:
-            # Find the perception_policy JSON — could be embedded in markdown
-            import re
-
-            pattern = r'"perception_policy"\s*:\s*(\{[^}]+\})'
-            match = re.search(pattern, planner_text)
-            if not match:
-                return None
-
-            import json
-
-            raw = json.loads(match.group(1))
-            return PerceptionDecision(**raw)
-        except Exception:
-            logger.debug("Failed to parse perception_policy from planner", exc_info=True)
-            return None
