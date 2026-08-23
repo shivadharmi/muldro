@@ -2,7 +2,7 @@
 
 import { create } from "zustand";
 
-import type { ApprovalContext } from "@/lib/a2ui-types";
+import type { ApprovalContext } from "@/lib/types/execution";
 
 // ── TypeScript interfaces ────────────────────────────────────────
 

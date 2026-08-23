@@ -11,13 +11,23 @@ from typing import Literal
 from src.llm.utility import complete_text_with_usage
 from src.llm_utils import parse_llm_json
 from src.orchestrator.budget import record_token_span
+from src.services.filter_rules import load_sender_rules, matching_rule_id
 
 logger = logging.getLogger(__name__)
 
 Tier = Literal["skip", "light", "full"]
 
 # category → tier. Unknown categories fall through to "full" (recall-preserving).
+# The category a founder-confirmed rule assigns. Named rather than reusing
+# "marketing" so the two stay distinguishable after the fact: one is muldro
+# reading a header, the other is the founder having said so.
+FILTERED_CATEGORY = "filtered"
+
 CATEGORY_TIER: dict[str, Tier] = {
+    # The founder said so. "skip" for the same reason marketing is: there is
+    # nothing to extract from mail they have told us not to look at, and the
+    # whole point of a confirmed rule is that it costs nothing to honour.
+    FILTERED_CATEGORY: "skip",
     "marketing": "skip",
     "newsletter": "skip",
     "social_notification": "skip",
@@ -77,15 +87,25 @@ class TriageResult:
     urgency_score: float
     confidence_score: float
     origin: Literal["rules", "llm", "default"]
+    # Which confirmed rule kept this quiet, when one did. Persisted so that
+    # revoking a rule can find exactly the rows it touched and release them:
+    # without it, a verdict frozen at ingest outlives the rule that caused it
+    # and the mail stays hidden for ever, unexplainably.
+    filtered_by: str | None = None
 
     def to_signals(self) -> dict:
         """Serialize the triage fields for persistence in importance_signals."""
-        return {
+        signals = {
             "category": self.category,
             "tier": self.tier,
             "actionable": self.actionable,
             "triage_origin": self.origin,
         }
+        # Only present when a rule actually fired, so its absence means "no
+        # rule touched this" rather than "a rule whose id we lost".
+        if self.filtered_by:
+            signals["filtered_by"] = self.filtered_by
+        return signals
 
 
 TRIAGE_SYSTEM_PROMPT = """\
@@ -116,7 +136,16 @@ Respond with a JSON array of objects in the SAME ORDER as the events, each:
 
 class TriageService:
     """Classify events into extraction tiers. Rules first, one batched Haiku
-    call for the remainder. Failures fall back to full-tier (recall-preserving)."""
+    call for the remainder. Failures fall back to full-tier (recall-preserving).
+
+    A `db` makes the deterministic pass consult the founder's confirmed filter
+    rules as well as the headers. Optional, and absent it behaves exactly as it
+    did before rules existed — which is what every caller that only wants
+    classification should pass.
+    """
+
+    def __init__(self, db: object | None = None) -> None:
+        self._db = db
 
     def _default(self, origin: Literal["rules", "llm", "default"] = "default") -> TriageResult:
         return TriageResult(
@@ -154,9 +183,22 @@ class TriageService:
         results: list[TriageResult | None] = [None] * len(events)
         remainder: list[tuple[int, object]] = []
 
+        # The founder's own filters, loaded once for the batch. A FOUNDER-
+        # CONFIRMED rule is the strongest rules-origin evidence there is — it
+        # is not a model's judgement about the mail, it is the founder's
+        # standing instruction — so it belongs in this pass and not in the LLM
+        # one. Everything follows from that placement: the Haiku call is
+        # skipped, `actionable=False` means the view layer's fold already hides
+        # it, and the row is still WRITTEN, so the filter stays reversible,
+        # auditable, and visible to entity extraction.
+        sender_rules: dict = {}
+        if self._db is not None and workspace_id:
+            sender_rules = await load_sender_rules(self._db, workspace_id=workspace_id)
+
         # 1. Deterministic pass — high-precision skip signals, no LLM cost.
         for i, raw in enumerate(events):
-            cat = classify_by_rules(raw)
+            rule_id = matching_rule_id(raw, sender_rules)
+            cat = FILTERED_CATEGORY if rule_id else classify_by_rules(raw)
             if cat is not None:
                 results[i] = TriageResult(
                     category=cat,
@@ -166,6 +208,7 @@ class TriageService:
                     urgency_score=0.05,
                     confidence_score=0.9,
                     origin="rules",
+                    filtered_by=rule_id,
                 )
             else:
                 remainder.append((i, raw))

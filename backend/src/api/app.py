@@ -15,10 +15,10 @@ from src.api.routes_connections import router as connections_router
 from src.api.routes_conversations import router as conversations_router
 from src.api.routes_events import router as events_router
 from src.api.routes_feedback import router as feedback_router
+from src.api.routes_filter_rules import router as filter_rules_router
 from src.api.routes_graph import router as graph_router
 from src.api.routes_health import router as health_router
 from src.api.routes_history import router as history_router
-from src.api.routes_insights import router as insights_router
 from src.api.routes_integrations import router as integrations_router
 from src.api.routes_jwks import router as jwks_router
 from src.api.routes_knowledge import router as knowledge_router
@@ -34,11 +34,10 @@ from src.api.routes_realtime import router as realtime_router
 from src.api.routes_runtime import router as runtime_router
 from src.api.routes_search import router as search_router
 from src.api.routes_settings import router as settings_router
-from src.api.routes_surface_detail import router as surface_detail_router
 from src.api.routes_system import router as system_router
 from src.api.routes_traces import router as traces_router
 from src.api.routes_trust import router as trust_router
-from src.api.routes_ui import router as ui_router
+from src.api.routes_units import router as units_router
 from src.api.routes_webhooks import router as webhooks_router
 from src.api.routes_workspace_settings import router as workspace_settings_router
 from src.api.routes_ws import router as ws_router
@@ -485,11 +484,8 @@ def create_app() -> FastAPI:
     # JWKS (no /v1 prefix — well-known endpoints must be root-level)
     app.include_router(jwks_router, tags=["auth"])
 
-    # A2UI surface state REST endpoints
-    app.include_router(ui_router, tags=["ui"])
-
-    # Surface detail modal tabs
-    app.include_router(surface_detail_router, tags=["surface-detail"])
+    # The view layer's typed Unit feed — the single read path for the workspace.
+    app.include_router(units_router, tags=["units"])
 
     # WebSocket for real-time A2UI surface streaming
     app.include_router(ws_router, tags=["websocket"])
@@ -547,9 +543,10 @@ def create_app() -> FastAPI:
     # Runtime projections
     app.include_router(runtime_router, tags=["runtime"])
 
-    # Insight surfaces (dismiss + execute)
-    app.include_router(insights_router, tags=["insights"])
     app.include_router(workspace_settings_router, tags=["workspace-settings"])
+
+    # The founder's confirmed filters: list and revoke.
+    app.include_router(filter_rules_router, tags=["filter-rules"])
 
     return app
 

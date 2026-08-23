@@ -283,6 +283,8 @@ def test_rejected_approval_cancels_execution_and_audits(mock_audit_cls):
     mock_approval.execution_id = "exec_reject_001"
     mock_approval.title = "Approve: Reply to investor"
     mock_approval.summary = "Draft reply about term sheet"
+    # ApprovalResponse.approval_type is required; a MagicMock attribute is not a str.
+    mock_approval.approval_type = "tool:email_send"
     mock_approval.risk_level = "medium"
     mock_approval.expires_at = None
     mock_approval.created_at = datetime(2026, 3, 14, 9, 0, tzinfo=timezone.utc)

@@ -266,15 +266,14 @@ class ReauthService:
         """Send a dedup'd "reconnect" prompt for ``provider``.
 
         Deduped via a Redis SET-NX key (6h TTL): only the first prompt within
-        the window is delivered. Builds an alert A2UI surface and delivers it as
-        a ``critical_alert`` (bypasses rate limits, broadcasts to all surfaces).
+        the window is delivered as a ``critical_alert`` (bypasses rate limits,
+        broadcasts to all surfaces).
         """
         if not await self._claim_notify_slot(user_id, provider):
             logger.debug("reauth notify suppressed by dedup for %s/%s", user_id, provider)
             return
 
         display = _provider_display(provider)
-        surface = self._build_reauth_surface(provider, display)
         await self._notifier.notify(
             user_id,
             "critical_alert",
@@ -284,8 +283,10 @@ class ReauthService:
                 "kind": "reauth",
                 "provider": provider,
                 "reason": reason,
+                # No component tree rides along here. The title, body and
+                # reconnect_url are the whole message; the client renders the
+                # notification itself and never read a server-built card.
                 "reconnect_url": f"/v1/auth/{provider}/start",
-                "surface": surface,
             },
             workspace_id=workspace_id,
         )
@@ -310,37 +311,3 @@ class ReauthService:
             # than to swallow a needed reconnect alert.
             logger.debug("reauth dedup claim failed; notifying anyway", exc_info=True)
             return True
-
-    def _build_reauth_surface(self, provider: str, display: str) -> dict:
-        """Build a minimal alert A2UI surface prompting reconnect."""
-        from src.ui.contracts import A2UISurface
-        from src.ui.renderer import alert, button, card, text
-
-        children = [
-            alert(
-                id="reauth_alert",
-                message=f"Muldro lost access to {display}.",
-                severity="error",
-                title="Reconnect required",
-            ),
-            text(
-                id="reauth_body",
-                text=f"Re-authorize {display} to resume perception and actions.",
-            ),
-            button(
-                id="reauth_reconnect",
-                label=f"Reconnect {display}",
-                variant="primary",
-                action_payload={
-                    "action": "reconnect_integration",
-                    "provider": provider,
-                    "url": f"/v1/auth/{provider}/start",
-                },
-            ),
-        ]
-        surface = A2UISurface(
-            id=f"reauth_{provider}",
-            children=[card(id="reauth_card", children=children)],
-            metadata={"kind": "alert", "title": f"Reconnect {display}", "provider": provider},
-        )
-        return surface.model_dump()

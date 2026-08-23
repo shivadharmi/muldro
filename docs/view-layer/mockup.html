@@ -1,0 +1,2137 @@
+<title>Frame and Body</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400;500&family=Geist:wght@400;500;600&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,600;1,6..72,400&display=swap">
+
+<style>
+  /* ══ Tokens — light is the bare root ══════════════════════════ */
+  :root {
+    --bg:            hsl(220 20% 97%);
+    --s1:            hsl(0 0% 100%);
+    --s2:            hsl(220 16% 96%);
+    --s3:            hsl(220 14% 93%);
+
+    --tx:            hsl(220 30% 12%);
+    --tx-2:          hsl(220 16% 36%);
+    --tx-3:          hsl(220 10% 50%);
+    --tx-4:          hsl(220 8% 62%);
+
+    --bd:            hsl(220 14% 90%);
+    --bd-2:          hsl(220 12% 84%);
+
+    /* The argument's three hues. One meaning each, everywhere. */
+    --code:          hsl(193 88% 38%);
+    --code-soft:     hsl(193 88% 45% / 0.10);
+    --model:         hsl(247 66% 56%);
+    --model-soft:    hsl(247 72% 60% / 0.10);
+    --ext:           hsl(30 92% 38%);
+    --ext-soft:      hsl(35 92% 48% / 0.12);
+
+    --bad:           hsl(351 74% 48%);
+    --bad-soft:      hsl(351 78% 54% / 0.09);
+    --good:          hsl(155 70% 30%);
+
+    --shadow:        0 1px 2px hsl(220 30% 12% / .04), 0 4px 16px hsl(220 30% 12% / .05);
+
+    --measure: 68ch;
+    --r-sm: .375rem;
+    --r-md: .5rem;
+    --r-lg: .75rem;
+
+    --sans: "Geist", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, monospace;
+    --serif: "Newsreader", Georgia, "Times New Roman", serif;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg:          hsl(220 20% 7%);
+      --s1:          hsl(220 18% 10%);
+      --s2:          hsl(220 16% 13%);
+      --s3:          hsl(220 14% 17%);
+
+      --tx:          hsl(220 20% 95%);
+      --tx-2:        hsl(220 12% 72%);
+      --tx-3:        hsl(220 8% 56%);
+      --tx-4:        hsl(220 6% 44%);
+
+      --bd:          hsl(220 16% 18%);
+      --bd-2:        hsl(220 14% 24%);
+
+      --code:        hsl(193 100% 62%);
+      --code-soft:   hsl(193 100% 62% / 0.13);
+      --model:       hsl(247 84% 76%);
+      --model-soft:  hsl(247 80% 72% / 0.14);
+      --ext:         hsl(36 92% 62%);
+      --ext-soft:    hsl(36 90% 60% / 0.14);
+
+      --bad:         hsl(351 90% 70%);
+      --bad-soft:    hsl(351 90% 68% / 0.11);
+      --good:        hsl(155 62% 50%);
+
+      --shadow:      0 1px 2px hsl(0 0% 0% / .3), 0 4px 16px hsl(0 0% 0% / .3);
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --bg:          hsl(220 20% 7%);
+    --s1:          hsl(220 18% 10%);
+    --s2:          hsl(220 16% 13%);
+    --s3:          hsl(220 14% 17%);
+
+    --tx:          hsl(220 20% 95%);
+    --tx-2:        hsl(220 12% 72%);
+    --tx-3:        hsl(220 8% 56%);
+    --tx-4:        hsl(220 6% 44%);
+
+    --bd:          hsl(220 16% 18%);
+    --bd-2:        hsl(220 14% 24%);
+
+    --code:        hsl(193 100% 62%);
+    --code-soft:   hsl(193 100% 62% / 0.13);
+    --model:       hsl(247 84% 76%);
+    --model-soft:  hsl(247 80% 72% / 0.14);
+    --ext:         hsl(36 92% 62%);
+    --ext-soft:    hsl(36 90% 60% / 0.14);
+
+    --bad:         hsl(351 90% 70%);
+    --bad-soft:    hsl(351 90% 68% / 0.11);
+    --good:        hsl(155 62% 50%);
+
+    --shadow:      0 1px 2px hsl(0 0% 0% / .3), 0 4px 16px hsl(0 0% 0% / .3);
+  }
+
+  /* ══ Base ═════════════════════════════════════════════════════ */
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--tx);
+    font-family: var(--sans);
+    font-size: 16px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .page {
+    max-width: 1120px;
+    margin: 0 auto;
+    padding: clamp(2.5rem, 6vw, 5rem) clamp(1.1rem, 4vw, 2.5rem) 7rem;
+    display: flex;
+    flex-direction: column;
+    gap: clamp(3rem, 7vw, 5.5rem);
+  }
+
+  .prose { max-width: var(--measure); display: flex; flex-direction: column; gap: 1.05rem; }
+  .prose > * { margin: 0; }
+
+  p { margin: 0; }
+  a { color: var(--code); text-decoration: underline; text-underline-offset: .18em; }
+  a:focus-visible, button:focus-visible { outline: 2px solid var(--code); outline-offset: 3px; border-radius: 3px; }
+
+  strong { font-weight: 600; color: var(--tx); }
+  em { font-style: italic; }
+
+  code {
+    font-family: var(--mono);
+    font-size: .855em;
+    background: var(--s3);
+    padding: .12em .38em;
+    border-radius: var(--r-sm);
+    color: var(--tx);
+  }
+
+  /* ══ Type scale ═══════════════════════════════════════════════ */
+  h1 {
+    font-family: var(--serif);
+    font-optical-sizing: auto;
+    font-weight: 600;
+    font-size: clamp(2.6rem, 7vw, 4.1rem);
+    line-height: 1.02;
+    letter-spacing: -.022em;
+    text-wrap: balance;
+    margin: 0;
+  }
+
+  h2 {
+    font-family: var(--serif);
+    font-weight: 600;
+    font-size: clamp(1.65rem, 3.4vw, 2.2rem);
+    line-height: 1.14;
+    letter-spacing: -.016em;
+    text-wrap: balance;
+    margin: 0;
+  }
+
+  h3 {
+    font-family: var(--sans);
+    font-weight: 600;
+    font-size: 1.03rem;
+    line-height: 1.35;
+    letter-spacing: -.005em;
+    margin: 0;
+  }
+
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: .688rem;
+    font-weight: 500;
+    letter-spacing: .13em;
+    text-transform: uppercase;
+    color: var(--tx-4);
+  }
+
+  .lede {
+    font-family: var(--serif);
+    font-size: clamp(1.14rem, 2.2vw, 1.4rem);
+    line-height: 1.5;
+    color: var(--tx-2);
+  }
+
+  .note { font-size: .875rem; color: var(--tx-3); line-height: 1.55; }
+
+  /* ══ Section ══════════════════════════════════════════════════ */
+  section { display: flex; flex-direction: column; gap: 1.6rem; }
+  .sec-head { display: flex; flex-direction: column; gap: .5rem; max-width: var(--measure); }
+
+  hr.rule { border: 0; border-top: 1px solid var(--bd); margin: 0; }
+
+  /* ══ Authorship legend ════════════════════════════════════════ */
+  .legend {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+    gap: .75rem;
+  }
+
+  .leg {
+    display: flex;
+    flex-direction: column;
+    gap: .3rem;
+    padding: .85rem 1rem;
+    border-radius: var(--r-md);
+    border: 1px solid var(--bd);
+    background: var(--s1);
+    border-left: 3px solid var(--lc);
+  }
+  .leg-t {
+    font-family: var(--mono);
+    font-size: .688rem;
+    letter-spacing: .11em;
+    text-transform: uppercase;
+    font-weight: 500;
+    color: var(--lc);
+  }
+  .leg-d { font-size: .82rem; color: var(--tx-3); line-height: 1.45; }
+
+  .l-code  { --lc: var(--code); }
+  .l-model { --lc: var(--model); }
+  .l-ext   { --lc: var(--ext); }
+
+  /* ══ Specimens — real muldro chrome ═══════════════════════════ */
+  .specimens {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(330px, 1fr));
+    gap: 1.5rem;
+    align-items: start;
+  }
+
+  .spec { display: flex; flex-direction: column; gap: .7rem; }
+
+  .spec-label {
+    display: flex;
+    align-items: baseline;
+    gap: .5rem;
+    font-family: var(--mono);
+    font-size: .688rem;
+    letter-spacing: .11em;
+    text-transform: uppercase;
+    font-weight: 500;
+  }
+  .spec-label .tag {
+    padding: .1rem .4rem;
+    border-radius: var(--r-sm);
+  }
+  .tag-bad  { background: var(--bad-soft);  color: var(--bad); }
+  .tag-good { background: var(--code-soft); color: var(--code); }
+
+  /* The card itself — mirrors surface-card.tsx geometry */
+  .card {
+    background: var(--s1);
+    border: 1px solid var(--bd);
+    border-radius: var(--r-lg);
+    padding: 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: .625rem;
+    box-shadow: var(--shadow);
+    font-family: var(--sans);
+  }
+
+  .card-hd { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
+
+  .pill {
+    font-size: .625rem;
+    font-weight: 500;
+    padding: .12rem .45rem;
+    border-radius: var(--r-sm);
+    line-height: 1.5;
+  }
+  .p-insight { background: hsl(247 72% 60% / .13); color: var(--model); }
+  .p-prop    { background: transparent; color: var(--tx-2); display: inline-flex; align-items: center; gap: .3rem; }
+  .p-prop::before {
+    content: ""; width: 6px; height: 6px; border-radius: 50%;
+    background: var(--model); display: inline-block;
+  }
+  .p-med     { background: hsl(193 88% 45% / .12); color: var(--code); margin-left: auto; }
+  .p-need    { background: hsl(35 92% 48% / .14); color: var(--ext); }
+
+  .card-title { font-size: .8125rem; font-weight: 500; line-height: 1.35; color: var(--tx); }
+  .card-sub   { font-size: .75rem; color: var(--tx-3); line-height: 1.55; }
+  .card-meta  { font-size: .6875rem; color: var(--tx-4); font-family: var(--mono); }
+
+  .card-btns { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; padding-top: .15rem; }
+  .btn {
+    font-size: .75rem;
+    padding: .35rem .7rem;
+    border-radius: var(--r-md);
+    border: 0;
+    font-family: var(--sans);
+    cursor: default;
+  }
+  .btn-1 { background: var(--code); color: var(--bg); font-weight: 500; }
+  .btn-2 { background: var(--s3); color: var(--tx-2); }
+  .btn-x { background: transparent; color: var(--tx-4); margin-left: auto; }
+
+  .card-tag {
+    font-size: .625rem;
+    padding: .1rem .4rem;
+    border-radius: var(--r-sm);
+    background: hsl(193 88% 45% / .12);
+    color: var(--code);
+    align-self: flex-start;
+  }
+
+  .card-foot {
+    display: flex; justify-content: space-between; align-items: center;
+    padding-top: .5rem; border-top: 1px solid var(--bd);
+    font-size: .625rem; color: var(--tx-4);
+  }
+
+  /* Authorship banding on the proposed card */
+  .band {
+    position: relative;
+    padding-left: .8rem;
+    display: flex; flex-direction: column; gap: .5rem;
+  }
+  .band::before {
+    content: "";
+    position: absolute; left: 0; top: .1rem; bottom: .1rem;
+    width: 2px; border-radius: 2px; background: var(--bc);
+  }
+  .b-code  { --bc: var(--code); }
+  .b-model { --bc: var(--model); }
+  .b-ext   { --bc: var(--ext); }
+
+  .band-tag {
+    font-family: var(--mono);
+    font-size: .594rem;
+    letter-spacing: .11em;
+    text-transform: uppercase;
+    color: var(--bc);
+    font-weight: 500;
+  }
+
+  .quote {
+    background: var(--ext-soft);
+    border-left: 2px solid var(--ext);
+    border-radius: 0 var(--r-sm) var(--r-sm) 0;
+    padding: .5rem .7rem;
+    display: flex; flex-direction: column; gap: .25rem;
+  }
+  .quote-t { font-size: .75rem; color: var(--tx-2); font-style: italic; line-height: 1.5; }
+  .quote-a { font-size: .625rem; color: var(--ext); font-family: var(--mono); }
+
+  /* Annotation list beside a broken specimen */
+  .annos { display: flex; flex-direction: column; gap: .55rem; }
+  .anno {
+    display: grid;
+    grid-template-columns: 1.35rem 1fr;
+    gap: .55rem;
+    font-size: .8125rem;
+    line-height: 1.5;
+    color: var(--tx-2);
+  }
+  .anno .n {
+    font-family: var(--mono);
+    font-size: .625rem;
+    font-weight: 500;
+    color: var(--bad);
+    background: var(--bad-soft);
+    border-radius: var(--r-sm);
+    text-align: center;
+    height: 1.2rem;
+    line-height: 1.2rem;
+  }
+  .anno code { background: var(--s2); font-size: .78em; }
+
+  /* ══ Figures ══════════════════════════════════════════════════ */
+  figure { margin: 0; display: flex; flex-direction: column; gap: .75rem; }
+  figure .wrap {
+    overflow-x: auto;
+    background: var(--s1);
+    border: 1px solid var(--bd);
+    border-radius: var(--r-lg);
+    padding: clamp(1rem, 3vw, 1.9rem);
+  }
+  figure svg { display: block; max-width: 100%; height: auto; margin: 0 auto; color: var(--tx-3); }
+  figcaption { font-size: .8125rem; color: var(--tx-3); line-height: 1.55; max-width: var(--measure); }
+
+  .svg-lab   { font-family: var(--mono); font-size: 11px; letter-spacing: .04em; }
+  .svg-title { font-family: var(--sans); font-size: 12.5px; font-weight: 600; }
+  .svg-body  { font-family: var(--sans); font-size: 11.5px; }
+  .svg-micro { font-family: var(--mono); font-size: 9.5px; letter-spacing: .1em; }
+
+  /* ══ Code blocks ══════════════════════════════════════════════ */
+  .code-block {
+    background: var(--s1);
+    border: 1px solid var(--bd);
+    border-radius: var(--r-md);
+    overflow-x: auto;
+    font-family: var(--mono);
+    font-size: .8125rem;
+    line-height: 1.65;
+  }
+  .code-block .hd {
+    padding: .5rem .9rem;
+    border-bottom: 1px solid var(--bd);
+    background: var(--s2);
+    font-size: .625rem;
+    letter-spacing: .11em;
+    text-transform: uppercase;
+    color: var(--tx-4);
+    position: sticky; left: 0;
+  }
+  .code-block pre { margin: 0; padding: .9rem 1rem; white-space: pre; }
+  .c-code  { color: var(--code); }
+  .c-model { color: var(--model); }
+  .c-ext   { color: var(--ext); }
+  .c-dim   { color: var(--tx-4); }
+  .c-bad   { color: var(--bad); }
+
+  /* ══ Chat specimen ════════════════════════════════════════════ */
+  .chat {
+    background: var(--s1);
+    border: 1px solid var(--bd);
+    border-radius: var(--r-lg);
+    padding: 1.1rem;
+    display: flex; flex-direction: column; gap: 1rem;
+    box-shadow: var(--shadow);
+  }
+  .bubble-user {
+    align-self: flex-end;
+    max-width: 78%;
+    background: var(--code);
+    color: var(--bg);
+    padding: .5rem .8rem;
+    border-radius: var(--r-lg);
+    font-size: .8125rem;
+  }
+  .bubble-ai { display: flex; flex-direction: column; gap: .7rem; font-size: .8125rem; color: var(--tx); line-height: 1.6; }
+
+  table.md {
+    border-collapse: collapse;
+    font-size: .75rem;
+    width: 100%;
+    border: 1px solid var(--bd-2);
+    border-radius: var(--r-sm);
+    overflow: hidden;
+  }
+  table.md th {
+    text-align: left; padding: .35rem .6rem;
+    background: var(--s2);
+    font-size: .625rem; letter-spacing: .07em; text-transform: uppercase;
+    color: var(--tx-3); font-weight: 500;
+  }
+  table.md td { padding: .35rem .6rem; border-top: 1px solid var(--bd); color: var(--tx-2); }
+  table.md td.num { font-variant-numeric: tabular-nums; }
+  .tbl-wrap { overflow-x: auto; }
+
+  /* ══ Forks ════════════════════════════════════════════════════ */
+  .forks { display: flex; flex-direction: column; gap: 0; }
+  .fork {
+    display: grid;
+    grid-template-columns: 8.5rem 1fr;
+    gap: 1.4rem;
+    padding: 1.5rem 0;
+    border-top: 1px solid var(--bd);
+    align-items: start;
+  }
+  .fork:last-child { border-bottom: 1px solid var(--bd); }
+  .fork-side { display: flex; flex-direction: column; gap: .45rem; }
+  .fork-id {
+    font-family: var(--mono);
+    font-size: .688rem; letter-spacing: .11em; text-transform: uppercase;
+    color: var(--tx-4);
+  }
+  .status {
+    font-family: var(--mono);
+    font-size: .625rem; letter-spacing: .08em; text-transform: uppercase;
+    padding: .16rem .45rem; border-radius: var(--r-sm);
+    align-self: flex-start; font-weight: 500;
+  }
+  .st-settled { background: hsl(155 70% 36% / .13); color: var(--good); }
+  .st-open    { background: hsl(35 92% 48% / .14); color: var(--ext); }
+  .fork-body { display: flex; flex-direction: column; gap: .55rem; max-width: 62ch; }
+  .fork-q { font-family: var(--serif); font-size: 1.18rem; font-weight: 600; line-height: 1.3; }
+  .fork-a { font-size: .9375rem; color: var(--tx-2); line-height: 1.6; }
+  .fork-a strong { color: var(--tx); }
+  .fork-why { font-size: .8125rem; color: var(--tx-3); line-height: 1.55; }
+
+  /* ══ Delete list ══════════════════════════════════════════════ */
+  .del { display: flex; flex-direction: column; gap: 0; }
+  .del-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
+    gap: 1.2rem;
+    padding: .7rem 0;
+    border-top: 1px solid var(--bd);
+    align-items: baseline;
+  }
+  .del-row:last-child { border-bottom: 1px solid var(--bd); }
+  .del-what { font-family: var(--mono); font-size: .8125rem; color: var(--tx); overflow-wrap: anywhere; }
+  .del-why  { font-size: .8125rem; color: var(--tx-3); line-height: 1.5; }
+
+  @media (max-width: 620px) {
+    .fork { grid-template-columns: 1fr; gap: .7rem; }
+    .del-row { grid-template-columns: 1fr; gap: .2rem; }
+  }
+
+  /* ══ Connector normalization table ═══════════════════════════ */
+  .conn-wrap { overflow-x: auto; }
+  table.conn {
+    border-collapse: collapse;
+    width: 100%;
+    min-width: 620px;
+    font-size: .8125rem;
+  }
+  table.conn th {
+    text-align: left;
+    padding: .5rem .7rem;
+    font-family: var(--mono);
+    font-size: .625rem;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--tx-4);
+    font-weight: 500;
+    border-bottom: 1px solid var(--bd-2);
+    white-space: nowrap;
+  }
+  table.conn td {
+    padding: .5rem .7rem;
+    border-bottom: 1px solid var(--bd);
+    color: var(--tx-2);
+    vertical-align: baseline;
+  }
+  table.conn td.src { color: var(--tx); font-weight: 500; }
+  table.conn td.mono { font-family: var(--mono); font-size: .92em; }
+  table.conn .key  { color: var(--code); font-weight: 500; }
+  table.conn .risk { color: var(--ext); }
+  table.conn tr.odd td { background: var(--bad-soft); }
+
+  /* ══ Full view specimen ═══════════════════════════════════════ */
+  .full {
+    background: var(--s1);
+    border: 1px solid var(--bd);
+    border-radius: var(--r-lg);
+    box-shadow: var(--shadow);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .layer {
+    display: grid;
+    grid-template-columns: 1.9rem 1fr;
+    gap: .85rem;
+    padding: 1.1rem 1.2rem;
+    border-bottom: 1px solid var(--bd);
+  }
+  .layer:last-child { border-bottom: 0; }
+  .layer-n {
+    font-family: var(--mono);
+    font-size: .625rem;
+    font-weight: 500;
+    height: 1.35rem;
+    line-height: 1.35rem;
+    text-align: center;
+    border-radius: var(--r-sm);
+    color: var(--lnc, var(--tx-4));
+    background: var(--lnb, var(--s3));
+  }
+  .layer-in { display: flex; flex-direction: column; gap: .6rem; min-width: 0; }
+  .layer-t {
+    font-family: var(--mono);
+    font-size: .625rem;
+    letter-spacing: .11em;
+    text-transform: uppercase;
+    color: var(--lnc, var(--tx-4));
+    font-weight: 500;
+  }
+  .ly-code  { --lnc: var(--code);  --lnb: var(--code-soft); }
+  .ly-model { --lnc: var(--model); --lnb: var(--model-soft); }
+  .ly-ext   { --lnc: var(--ext);   --lnb: var(--ext-soft); }
+
+  .full-h { font-size: 1rem; font-weight: 600; color: var(--tx); line-height: 1.35; }
+  .full-p { font-size: .875rem; color: var(--tx-2); line-height: 1.6; }
+
+  /* cross-source join callout — the thing a source link can't give you */
+  .join {
+    display: flex; flex-direction: column; gap: .45rem;
+    border: 1px solid var(--model);
+    background: var(--model-soft);
+    border-radius: var(--r-md);
+    padding: .75rem .85rem;
+  }
+  .join-t {
+    font-family: var(--mono); font-size: .594rem; letter-spacing: .11em;
+    text-transform: uppercase; color: var(--model); font-weight: 500;
+  }
+  .join-p { font-size: .875rem; color: var(--tx); line-height: 1.55; }
+  .join-src { display: flex; flex-wrap: wrap; gap: .35rem; }
+  .chip {
+    font-family: var(--mono); font-size: .625rem;
+    padding: .1rem .4rem; border-radius: var(--r-sm);
+    background: var(--s2); color: var(--tx-3);
+    border: 1px solid var(--bd-2);
+  }
+
+  /* conversation archetype */
+  .msgs { display: flex; flex-direction: column; gap: .6rem; }
+  .msg {
+    border-left: 2px solid var(--ext);
+    background: var(--ext-soft);
+    border-radius: 0 var(--r-sm) var(--r-sm) 0;
+    padding: .55rem .75rem;
+    display: flex; flex-direction: column; gap: .22rem;
+  }
+  .msg.mine { border-left-color: var(--code); background: var(--code-soft); }
+  .msg-hd {
+    display: flex; align-items: baseline; gap: .5rem;
+    font-family: var(--mono); font-size: .625rem; color: var(--ext);
+  }
+  .msg.mine .msg-hd { color: var(--code); }
+  .msg-hd .when { margin-left: auto; color: var(--tx-4); }
+  .msg-b { font-size: .8125rem; color: var(--tx-2); line-height: 1.55; }
+
+  /* archetype strip */
+  .arch {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+    gap: 1rem;
+  }
+  .arch-card {
+    border: 1px solid var(--bd);
+    border-radius: var(--r-md);
+    background: var(--s1);
+    overflow: hidden;
+    display: flex; flex-direction: column;
+  }
+  .arch-hd {
+    padding: .5rem .75rem;
+    background: var(--s2);
+    border-bottom: 1px solid var(--bd);
+    display: flex; align-items: baseline; gap: .5rem;
+  }
+  .arch-name { font-size: .8125rem; font-weight: 600; color: var(--tx); }
+  .arch-src { font-family: var(--mono); font-size: .625rem; color: var(--tx-4); margin-left: auto; }
+  .arch-body { padding: .75rem; display: flex; flex-direction: column; gap: .5rem; }
+
+  .kv { display: flex; gap: .5rem; font-size: .75rem; align-items: baseline; }
+  .kv .k { font-family: var(--mono); font-size: .625rem; color: var(--tx-4); min-width: 4.6rem; }
+  .kv .v { color: var(--tx-2); }
+
+  .diffline {
+    font-family: var(--mono); font-size: .688rem;
+    padding: .1rem .4rem; border-radius: 3px; line-height: 1.5;
+  }
+  .d-add { background: hsl(155 70% 36% / .13); color: var(--good); }
+  .d-del { background: var(--bad-soft); color: var(--bad); }
+
+  .doc-line { height: .45rem; border-radius: 3px; background: var(--s3); }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; }
+  }
+</style>
+
+<div class="page">
+
+  <!-- ═══════════════ HEADER ═══════════════ -->
+  <header class="prose" style="gap:1.4rem">
+    <p class="eyebrow">Muldro · view layer</p>
+    <h1>Frame and&nbsp;body</h1>
+    <p class="lede">
+      Every card muldro shows you today is assembled from nineteen optional slots by
+      whichever producer happened to run. This is the replacement: <strong>code owns the
+      frame, the model writes one markdown body, and text from outside the system never
+      enters either.</strong>
+    </p>
+    <p class="note">
+      What follows is the shape, how it is generated, how it scales across five connectors,
+      and how it renders at both depths — on the autonomous loop and in chat. Specimens use
+      muldro's real palette and type, so they show the actual product, not a mockup of one.
+      All seven design forks are settled.
+    </p>
+  </header>
+
+  <!-- ═══════════════ LEGEND ═══════════════ -->
+  <section>
+    <div class="sec-head">
+      <p class="eyebrow">The only encoding you need</p>
+      <h2>Three authors, three colours</h2>
+      <p class="note">
+        These three hues carry the entire argument. They mean the same thing in every
+        diagram, specimen, and snippet on this page.
+      </p>
+    </div>
+
+    <div class="legend">
+      <div class="leg l-code">
+        <span class="leg-t">Code · frame</span>
+        <span class="leg-d">
+          Identity, kind, status, source, timestamp, importance, buttons. Built from a
+          database row. Deterministic. Never model-authored.
+        </span>
+      </div>
+      <div class="leg l-model">
+        <span class="leg-t">Model · body</span>
+        <span class="leg-d">
+          One markdown field. muldro's own prose, in muldro's own voice — what it thinks
+          and why. The only thing the model writes.
+        </span>
+      </div>
+      <div class="leg l-ext">
+        <span class="leg-t">External · quoted</span>
+        <span class="leg-d">
+          An email subject, a message body, a fetched page. Reaches the screen only as a
+          quote with a name attached. Never a headline, never inside the body.
+        </span>
+      </div>
+    </div>
+  </section>
+
+  <hr class="rule">
+
+  <!-- ═══════════════ TODAY ═══════════════ -->
+  <section>
+    <div class="sec-head">
+      <p class="eyebrow">Where we are</p>
+      <h2>What the card does now</h2>
+      <p class="note">
+        This is one of the cards from your screenshot, rebuilt from the code that produces
+        it. Six defects, all visible at once, all from the same missing boundary.
+      </p>
+    </div>
+
+    <div class="specimens">
+      <div class="spec">
+        <p class="spec-label"><span class="tag tag-bad">Today</span> <span style="color:var(--tx-4)">proactive_insight</span></p>
+        <div class="card">
+          <div class="card-hd">
+            <span class="pill p-insight">Insight</span>
+            <span class="pill p-prop">Proposal</span>
+            <span class="pill p-med">medium</span>
+          </div>
+          <p class="card-title">New activity</p>
+          <p class="card-sub">The user has a new email, which may be relevant to their current context.</p>
+          <p class="card-title" style="padding-top:.3rem">New activity</p>
+          <p class="card-meta">gmail · High relevance</p>
+          <p class="card-sub">The user has a new email, which may be relevant to their current context.</p>
+          <div class="card-btns">
+            <button class="btn btn-1" type="button">Read the new email</button>
+            <button class="btn btn-x" type="button">Dismiss</button>
+          </div>
+          <p class="card-meta">1 new event(s)</p>
+          <span class="card-tag">gmail</span>
+          <div class="card-foot"><span>2m ago</span><span>&rsaquo;</span></div>
+        </div>
+      </div>
+
+      <div class="spec">
+        <p class="spec-label" style="color:var(--tx-4)">What went wrong</p>
+        <div class="annos">
+          <div class="anno"><span class="n">1</span><span>
+            <strong>Title printed twice.</strong> <code>preview.title</code> and
+            <code>insight_data.signal_summary</code> are assigned the same string at
+            <code>surface_pusher.py:463</code>, then rendered by two components that don't
+            know about each other.</span></div>
+          <div class="anno"><span class="n">2</span><span>
+            <strong>Body printed twice, at two lengths.</strong>
+            <code>preview.subtitle</code> is <code>reasoning[:200]</code>;
+            <code>relevance_reasoning</code> is the same sentence untruncated.</span></div>
+          <div class="anno"><span class="n">3</span><span>
+            <strong>"New activity" is a fallback constant.</strong> The email arrived with
+            no usable subject, so <code>_clean_insight_title</code> gave up
+            (<code>surface_pusher.py:79</code>). Three polls, three identical cards.</span></div>
+          <div class="anno"><span class="n">4</span><span>
+            <strong>The button label is model-authored, and so is the capability behind
+            it.</strong> Two independent LLM strings with nothing checking they agree.
+            Identical signals produced "Read the new email", "View new email", and
+            "Mark new email as unread".</span></div>
+          <div class="anno"><span class="n">5</span><span>
+            <strong>"1 new event(s)" is invented evidence.</strong>
+            <code>evidence_count</code> and <code>evidence_unit</code> are fields the model
+            fills in. It echoed pipeline prose back as proof, in system voice.</span></div>
+          <div class="anno"><span class="n">6</span><span>
+            <strong>The chevron opens nothing.</strong> Both insight producers hardcode
+            <code>detail_config=None</code>, though three working tab builders exist.</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="prose">
+      <p>
+        And the part that isn't visible: the headline runs through
+        <code>InlineMarkdown</code> (<code>surface-card.tsx:163</code>), and its source is
+        the raw email subject. An inbound message whose subject reads
+        <code>**URGENT** — [Verify your account](https://phish.example)</code> renders as
+        bold text and a live link <em>in the card's headline, in muldro's own voice</em>,
+        with no sender attached. Not a script injection — a phishing surface wearing
+        muldro's credibility.
+      </p>
+    </div>
+  </section>
+
+  <hr class="rule">
+
+  <!-- ═══════════════ THE SHAPE ═══════════════ -->
+  <section>
+    <div class="sec-head">
+      <p class="eyebrow">The replacement</p>
+      <h2>One shape, three bands</h2>
+      <p class="note">
+        The same signal, under frame and body. Nothing here is a new component type — the
+        difference is entirely about <em>who is allowed to write which part</em>.
+      </p>
+    </div>
+
+    <div class="specimens">
+      <div class="spec">
+        <p class="spec-label"><span class="tag tag-good">Proposed</span> <span style="color:var(--tx-4)">autonomous</span></p>
+        <div class="card">
+
+          <div class="band b-code">
+            <span class="band-tag">Frame</span>
+            <div class="card-hd">
+              <span class="pill p-insight">Proposal</span>
+              <span class="pill p-need">Needs you</span>
+              <span class="card-meta" style="margin-left:auto">2:14pm</span>
+            </div>
+            <p class="card-title">Sarah Chen · Series&nbsp;A term sheet</p>
+            <p class="card-meta">gmail · thread · 3 messages</p>
+          </div>
+
+          <div class="band b-model">
+            <span class="band-tag">Body</span>
+            <p class="card-sub" style="color:var(--tx-2)">
+              Sarah is asking for a decision by Friday. This is the third message in the
+              thread and the first one carrying a deadline — the two before it were
+              logistics.
+            </p>
+          </div>
+
+          <div class="band b-ext">
+            <span class="band-tag">Quoted</span>
+            <div class="quote">
+              <p class="quote-t">"Can you get back to me by Friday? The other LPs are waiting on us."</p>
+              <p class="quote-a">— Sarah Chen &lt;sarah@…&gt;, 2:14pm</p>
+            </div>
+          </div>
+
+          <div class="band b-code">
+            <span class="band-tag">Frame</span>
+            <div class="card-btns">
+              <button class="btn btn-1" type="button">Draft a reply</button>
+              <button class="btn btn-2" type="button">Remind me Thursday</button>
+              <button class="btn btn-x" type="button">Dismiss</button>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      <div class="spec">
+        <p class="spec-label" style="color:var(--tx-4)">Why each defect is now unrepresentable</p>
+        <div class="annos">
+          <div class="anno"><span class="n" style="color:var(--good);background:hsl(155 70% 36% / .13)">1</span><span>
+            <strong>One body string, one renderer.</strong> There is no second projection
+            to disagree with. Defects 1 and 2 have nowhere to live.</span></div>
+          <div class="anno"><span class="n" style="color:var(--good);background:hsl(155 70% 36% / .13)">2</span><span>
+            <strong>The headline is frame, built from the thread row.</strong> It is the
+            counterparty and the subject muldro <em>resolved</em> — not a string the
+            pipeline salvaged. No fallback constant, because there is nothing to fall back
+            from.</span></div>
+          <div class="anno"><span class="n" style="color:var(--good);background:hsl(155 70% 36% / .13)">3</span><span>
+            <strong>Buttons are frame.</strong> Affordances come from the capabilities the
+            thread actually admits, with labels written in code. The model can argue for
+            one in the body; it cannot mint one.</span></div>
+          <div class="anno"><span class="n" style="color:var(--good);background:hsl(155 70% 36% / .13)">4</span><span>
+            <strong>Evidence is the quote.</strong> Real external text, verbatim,
+            attributed to a named human. Not a number the model chose.</span></div>
+          <div class="anno"><span class="n" style="color:var(--good);background:hsl(155 70% 36% / .13)">5</span><span>
+            <strong>The link-injection hole closes as a side effect.</strong> Headlines are
+            plain text. External strings reach the screen only through the amber band,
+            which code renders and attributes.</span></div>
+        </div>
+        <p class="note" style="padding-top:.3rem">
+          The coloured rails are annotation for this page — in the product the bands read
+          as ordinary typography. What survives visually is that <em>every card of a kind
+          is the same shape</em>, because the shape no longer depends on which optional
+          fields happened to be non-null.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <hr class="rule">
+
+  <!-- ═══════════════ GENERATION ═══════════════ -->
+  <section>
+    <div class="sec-head">
+      <p class="eyebrow">How it is generated</p>
+      <h2>Where the email is allowed to go</h2>
+      <p class="note">
+        This is the load-bearing mechanism. The rule is not "don't quote email text in your
+        summary" — that is a prompt instruction, and it is unenforceable because the model
+        has the text in context and no way to prove it didn't use it. The rule is
+        structural: <strong>the body slot never carries external provenance, because
+        external values arrive on a different field that only code renders.</strong>
+      </p>
+    </div>
+
+    <figure>
+      <div class="wrap">
+        <svg viewBox="0 0 900 430" role="img" aria-label="An inbound email feeds the model's body as context and the code-rendered quote verbatim, but is blocked from reaching the frame; the frame is built from the thread row instead.">
+          <defs>
+            <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor"/>
+            </marker>
+            <marker id="ah-model" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" style="fill: var(--model)"/>
+            </marker>
+            <marker id="ah-ext" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" style="fill: var(--ext)"/>
+            </marker>
+            <marker id="ah-code" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" style="fill: var(--code)"/>
+            </marker>
+          </defs>
+
+          <!-- ── Sources ── -->
+          <text x="14" y="20" class="svg-micro" fill="currentColor">SOURCES</text>
+
+          <rect x="14" y="34" width="168" height="70" rx="7"
+                style="fill: var(--ext-soft); stroke: var(--ext)" stroke-width="1.5"/>
+          <text x="28" y="55" class="svg-title" style="fill: var(--ext)">Inbound email</text>
+          <text x="28" y="74" class="svg-body" fill="currentColor">subject, body, sender</text>
+          <text x="28" y="92" class="svg-micro" style="fill: var(--ext)">UNTRUSTED</text>
+
+          <rect x="14" y="290" width="168" height="70" rx="7"
+                style="fill: var(--code-soft); stroke: var(--code)" stroke-width="1.5"/>
+          <text x="28" y="311" class="svg-title" style="fill: var(--code)">Thread row</text>
+          <text x="28" y="330" class="svg-body" fill="currentColor">id, counterparty, state</text>
+          <text x="28" y="348" class="svg-micro" style="fill: var(--code)">MULDRO'S OWN DB</text>
+
+          <!-- ── Lanes ── -->
+          <text x="286" y="20" class="svg-micro" fill="currentColor">AUTHORSHIP</text>
+
+          <!-- frame lane -->
+          <rect x="286" y="290" width="250" height="70" rx="7"
+                style="fill: var(--code-soft); stroke: var(--code)" stroke-width="1.5"/>
+          <text x="302" y="311" class="svg-title" style="fill: var(--code)">Code builds the frame</text>
+          <text x="302" y="330" class="svg-body" fill="currentColor">headline, status, buttons</text>
+          <text x="302" y="348" class="svg-micro" fill="currentColor">PURE FUNCTION OF THE ROW</text>
+
+          <!-- model lane -->
+          <rect x="286" y="34" width="250" height="70" rx="7"
+                style="fill: var(--model-soft); stroke: var(--model)" stroke-width="1.5"/>
+          <text x="302" y="55" class="svg-title" style="fill: var(--model)">Model writes the body</text>
+          <text x="302" y="74" class="svg-body" fill="currentColor">one markdown field</text>
+          <text x="302" y="92" class="svg-micro" fill="currentColor">MULDRO'S VOICE, ABOUT IT</text>
+
+          <!-- quote lane -->
+          <rect x="286" y="162" width="250" height="70" rx="7"
+                style="fill: var(--ext-soft); stroke: var(--ext)" stroke-width="1.5"/>
+          <text x="302" y="183" class="svg-title" style="fill: var(--ext)">Code quotes verbatim</text>
+          <text x="302" y="202" class="svg-body" fill="currentColor">text + attribution</text>
+          <text x="302" y="220" class="svg-micro" fill="currentColor">NEVER REFORMATTED</text>
+
+          <!-- ── Arrows from email ── -->
+          <path d="M 98 34 L 98 20 L 250 20 L 250 62 L 280 62"
+                fill="none" style="stroke: var(--model)" stroke-width="1.6"
+                marker-end="url(#ah-model)"/>
+          <text x="146" y="14" class="svg-lab" style="fill: var(--model)">read as context</text>
+
+          <path d="M 182 82 L 232 82 L 232 190 L 280 190"
+                fill="none" style="stroke: var(--ext)" stroke-width="1.6"
+                marker-end="url(#ah-ext)"/>
+          <text x="188" y="132" class="svg-lab" style="fill: var(--ext)">carried</text>
+          <text x="188" y="147" class="svg-lab" style="fill: var(--ext)">verbatim</text>
+
+          <!-- blocked path to frame -->
+          <path d="M 98 104 L 98 325 L 274 325"
+                fill="none" style="stroke: var(--ext)" stroke-width="1.4"
+                stroke-dasharray="4 4" opacity=".5"/>
+          <g style="stroke: var(--bad)" stroke-width="2.2" stroke-linecap="round">
+            <line x1="150" y1="315" x2="170" y2="335"/>
+            <line x1="170" y1="315" x2="150" y2="335"/>
+          </g>
+          <text x="112" y="311" class="svg-lab" style="fill: var(--bad)">never reaches a frame slot</text>
+
+          <path d="M 182 325 L 274 325" fill="none" style="stroke: var(--code)"
+                stroke-width="1.6" marker-end="url(#ah-code)" opacity="0"/>
+          <path d="M 182 348 L 240 348 L 240 340 L 274 340"
+                fill="none" style="stroke: var(--code)" stroke-width="1.6"
+                marker-end="url(#ah-code)"/>
+
+          <!-- ── Card ── -->
+          <text x="640" y="20" class="svg-micro" fill="currentColor">RENDERED CARD</text>
+
+          <rect x="640" y="34" width="246" height="326" rx="9"
+                fill="none" stroke="currentColor" stroke-width="1.3" opacity=".45"/>
+
+          <rect x="656" y="52" width="214" height="62" rx="5"
+                style="fill: var(--code-soft); stroke: var(--code)" stroke-width="1.2"/>
+          <text x="668" y="70" class="svg-micro" style="fill: var(--code)">FRAME</text>
+          <text x="668" y="90" class="svg-body" fill="currentColor">Sarah Chen · term sheet</text>
+          <text x="668" y="107" class="svg-body" fill="currentColor" opacity=".7">gmail · 3 messages</text>
+
+          <rect x="656" y="126" width="214" height="66" rx="5"
+                style="fill: var(--model-soft); stroke: var(--model)" stroke-width="1.2"/>
+          <text x="668" y="144" class="svg-micro" style="fill: var(--model)">BODY</text>
+          <text x="668" y="164" class="svg-body" fill="currentColor">"Asking for a decision</text>
+          <text x="668" y="181" class="svg-body" fill="currentColor">by Friday…"</text>
+
+          <rect x="656" y="204" width="214" height="66" rx="5"
+                style="fill: var(--ext-soft); stroke: var(--ext)" stroke-width="1.2"/>
+          <text x="668" y="222" class="svg-micro" style="fill: var(--ext)">QUOTED</text>
+          <text x="668" y="242" class="svg-body" fill="currentColor">"Can you get back to</text>
+          <text x="668" y="259" class="svg-body" fill="currentColor">me by Friday?" — Sarah</text>
+
+          <rect x="656" y="282" width="214" height="60" rx="5"
+                style="fill: var(--code-soft); stroke: var(--code)" stroke-width="1.2"/>
+          <text x="668" y="300" class="svg-micro" style="fill: var(--code)">FRAME</text>
+          <text x="668" y="322" class="svg-body" fill="currentColor">[ Draft a reply ] [ Dismiss ]</text>
+
+          <!-- lane → card arrows -->
+          <path d="M 536 62 L 588 62 L 588 80 L 634 80" fill="none"
+                style="stroke: var(--model)" stroke-width="1.5" marker-end="url(#ah-model)"/>
+          <path d="M 536 190 L 570 190 L 570 234 L 634 234" fill="none"
+                style="stroke: var(--ext)" stroke-width="1.5" marker-end="url(#ah-ext)"/>
+          <path d="M 536 320 L 588 320 L 588 310 L 634 310" fill="none"
+                style="stroke: var(--code)" stroke-width="1.5" marker-end="url(#ah-code)"/>
+        </svg>
+      </div>
+      <figcaption>
+        The email reaches the body only as <em>context the model reads</em>, and the quote
+        band only as <em>text code copies and attributes</em>. The dashed path to the frame
+        is the one that exists in today's code — <code>connector_poller.py:355</code> →
+        <code>preview.title</code> — and the one this design severs.
+      </figcaption>
+    </figure>
+
+    <div class="prose">
+      <h3>What the producer actually writes</h3>
+      <p>
+        The model's entire contract becomes one field. Not nineteen slots, not a component
+        tree, not a kind it chooses for itself.
+      </p>
+    </div>
+
+    <div class="code-block">
+      <div class="hd">the object a producer emits</div>
+<pre><span class="c-dim">// built by code from the thread row — the model never sees these as writable</span>
+<span class="c-code">frame</span>: {
+  <span class="c-code">key</span>:        <span class="c-dim">"thread:gh_01J…"</span>   <span class="c-dim">// identity + dedup. Same key = same card.</span>
+  <span class="c-code">kind</span>:       <span class="c-dim">"proposal"</span>         <span class="c-dim">// a closed set, chosen by code</span>
+  <span class="c-code">status</span>:     <span class="c-dim">"needs_you"</span>
+  <span class="c-code">headline</span>:   <span class="c-dim">"Sarah Chen · Series A term sheet"</span>  <span class="c-dim">// plain text, no markdown</span>
+  <span class="c-code">source</span>:     <span class="c-dim">"gmail"</span>
+  <span class="c-code">occurred_at</span>: <span class="c-dim">"2026-08-21T14:14:00Z"</span>
+  <span class="c-code">importance</span>: <span class="c-dim">0.82</span>
+  <span class="c-code">affordances</span>: [<span class="c-dim">draft_reply, snooze, dismiss</span>]  <span class="c-dim">// real capabilities, code-labelled</span>
+}
+
+<span class="c-dim">// the ONE thing the model writes. Markdown. muldro's voice.</span>
+<span class="c-model">body</span>: <span class="c-dim">"Sarah is asking for a decision by Friday. This is the third
+       message in the thread and the first one carrying a deadline."</span>
+
+<span class="c-dim">// external text — copied by code, never interpolated into `body`</span>
+<span class="c-ext">quotes</span>: [{
+  <span class="c-ext">text</span>:  <span class="c-dim">"Can you get back to me by Friday? The other LPs are waiting."</span>
+  <span class="c-ext">who</span>:   <span class="c-dim">"Sarah Chen &lt;sarah@…&gt;"</span>
+  <span class="c-ext">when</span>:  <span class="c-dim">"2026-08-21T14:14:00Z"</span>
+}]</pre>
+    </div>
+
+    <div class="prose">
+      <p class="note">
+        <strong>Why <code>key</code> is the important field.</strong> It is what makes the
+        three "New activity" cards impossible rather than merely unlikely. Today the unit
+        is a poll cycle, so nothing can be the same as anything else. Give the frame a
+        stable identity and a second message on the same thread <em>updates the card</em>
+        instead of minting another.
+      </p>
+    </div>
+
+    <div class="prose">
+      <h3>The body is one field, and the card shows its first paragraph</h3>
+      <p>
+        A body can run long — a research finding, a briefing. It cannot all fit on a card,
+        and the answer is not to cut it. <strong>The first paragraph is the lede: a complete,
+        self-contained claim, written to a budget.</strong> The Glance renders that paragraph;
+        the Full renders the whole document. The Glance is therefore <em>literally a prefix
+        of the Full</em> — a semantic one, not a character count — so the two cannot disagree.
+      </p>
+      <p>
+        The budget belongs to the frame's <code>kind</code>, which means code sets it. The
+        model is told how much room this particular object has and writes to it; it never
+        decides how much room to take. An overrun is rejected and rewritten by the same
+        typed-generation repair loop that already rejects bad tool arguments.
+      </p>
+    </div>
+
+    <div class="conn-wrap">
+      <table class="conn">
+        <thead>
+          <tr><th>Kind</th><th>Lede budget</th><th>Full body</th><th>Why</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="src">proposal</td><td class="mono">~140 chars</td><td class="mono">short</td>
+            <td>One thread, one reason it needs you. Longer means the model is padding.</td>
+          </tr>
+          <tr>
+            <td class="src">finding</td><td class="mono">~180 chars</td><td class="mono">unbounded</td>
+            <td>Research and synthesis are legitimately long.</td>
+          </tr>
+          <tr>
+            <td class="src">briefing</td><td class="mono">~90 chars</td><td class="mono">unbounded</td>
+            <td>Sits in a list of peers; the lede has to scan.</td>
+          </tr>
+          <tr>
+            <td class="src">run</td><td class="mono">~120 chars</td><td class="mono">short</td>
+            <td>What it did. The steps carry the detail.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="prose">
+      <p>
+        The second half of the rule is about <em>shape</em>, not length. Markdown can contain
+        headings, lists, tables and code fences, and any of those rendered into a 320-pixel
+        grid cell destroys the card however short it is. <strong>The Glance renders inline
+        markdown only</strong> — emphasis and code spans. No blocks, and no links: a link in
+        a body would reopen the injection question through a different door, so the model
+        names a source and the frame links it.
+      </p>
+    </div>
+
+    <div class="specimens">
+      <div class="spec">
+        <p class="spec-label"><span class="tag tag-good">Glance</span> <span style="color:var(--tx-4)">paragraph 1 · inline only</span></p>
+        <div class="card">
+          <div class="band b-code">
+            <span class="band-tag">Frame</span>
+            <div class="card-hd">
+              <span class="pill p-insight">Finding</span>
+              <span class="pill p-prop">New</span>
+              <span class="card-meta" style="margin-left:auto">18m ago</span>
+            </div>
+            <p class="card-title">Repository activity · this week</p>
+          </div>
+          <div class="band b-model">
+            <span class="band-tag">Body · lede</span>
+            <p class="card-sub" style="color:var(--tx-2)">
+              Three of your four active repos are effectively idle —
+              <strong style="font-weight:600">muldrov1</strong> is where everything is happening.
+            </p>
+          </div>
+          <div class="band b-code">
+            <span class="band-tag">Frame</span>
+            <div class="card-btns">
+              <button class="btn btn-2" type="button">Open</button>
+              <button class="btn btn-x" type="button">Dismiss</button>
+            </div>
+          </div>
+        </div>
+        <p class="note">
+          No ellipsis and no "read more". A complete sentence plus an open affordance says
+          <em>there is more</em>; a "…" says <em>this was cut</em> — which is a large part of
+          why today's cards feel unfinished.
+        </p>
+      </div>
+
+      <div class="spec">
+        <p class="spec-label"><span class="tag tag-good">Full</span> <span style="color:var(--tx-4)">the whole document · block markdown</span></p>
+        <div class="full">
+          <div class="layer ly-model" style="border-bottom:0">
+            <span class="layer-n">2</span>
+            <div class="layer-in">
+              <span class="layer-t">Body · same field, rendered whole</span>
+              <p class="full-p">
+                Three of your four active repos are effectively idle —
+                <strong>muldrov1</strong> is where everything is happening.
+              </p>
+              <p class="full-h" style="font-size:.875rem;padding-top:.2rem">What moved</p>
+              <p class="full-p">
+                muldrov1 took 63 commits this week, nearly all on the single-lead cutover
+                branch. The other three saw one commit each.
+              </p>
+              <p class="full-h" style="font-size:.875rem;padding-top:.2rem">What's stuck</p>
+              <p class="full-p">
+                The PR on <code>rules</code> has been open eleven days with no review, and
+                nothing else is blocked behind it.
+              </p>
+            </div>
+          </div>
+        </div>
+        <p class="note">
+          The first paragraph is byte-identical to the card's. Everything after it is what
+          the Glance deliberately withheld — headings and all, because here they have room.
+        </p>
+      </div>
+    </div>
+
+    <div class="prose">
+      <p class="note">
+        Two things fall out. <strong>A long body is usually a smell</strong> — a proposal's
+        body answers "why does this thread need you", which is a sentence or three; the
+        budget catches padding. And <strong>a short body cannot produce an empty Full</strong>,
+        because the Full still carries the source content, the derivation and the
+        affordances. "Card shows info, modal shows nothing" has no route back in.
+      </p>
+    </div>
+  </section>
+
+  <hr class="rule">
+
+  <!-- ═══════════════ SCALING ═══════════════ -->
+  <section>
+    <div class="sec-head">
+      <p class="eyebrow">Across connectors</p>
+      <h2>The frame already exists</h2>
+      <p class="note">
+        The obvious worry is that every source needs its own frame. It doesn't — every
+        connector already normalizes to the same shape before perception ever sees it.
+      </p>
+    </div>
+
+    <div class="conn-wrap">
+      <table class="conn">
+        <thead>
+          <tr>
+            <th>Source</th><th>event_type</th><th>entity_type</th>
+            <th>entity_id — the identity</th><th>title</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="src">gmail</td>
+            <td class="mono">email_received</td>
+            <td class="mono">email_thread</td>
+            <td class="mono key">threadId — the thread</td>
+            <td class="risk">subject · untrusted</td>
+          </tr>
+          <tr>
+            <td class="src">slack</td>
+            <td class="mono">message_posted</td>
+            <td class="mono">message_thread</td>
+            <td class="mono key">thread_ts — the thread</td>
+            <td class="risk">#chan: text · untrusted</td>
+          </tr>
+          <tr>
+            <td class="src">calendar</td>
+            <td class="mono">event_created / updated</td>
+            <td class="mono">meeting</td>
+            <td class="mono key">event id — the meeting</td>
+            <td class="risk">summary · untrusted</td>
+          </tr>
+          <tr>
+            <td class="src">notion</td>
+            <td class="mono">page_created / updated</td>
+            <td class="mono">page</td>
+            <td class="mono key">page id — the page</td>
+            <td class="risk">title · untrusted</td>
+          </tr>
+          <tr class="odd">
+            <td class="src">github</td>
+            <td class="mono">pr_updated / issue_updated</td>
+            <td class="mono">pullrequest</td>
+            <td class="mono" style="color:var(--bad)">notification id — an occurrence</td>
+            <td class="risk">[repo] title · untrusted</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="prose">
+      <p>
+        <strong>The frame is not a new thing to build per connector — it is a projection of
+        <code>NormalizedEvent</code>,</strong> which already carries <code>source</code>,
+        <code>entity_type</code>, <code>entity_id</code>, <code>occurred_at</code>,
+        <code>actor_entities</code>, <code>importance_score</code>,
+        <code>urgency_score</code>, <code>correlation_id</code> and
+        <code>idempotency_key</code> — plus an index on
+        <code>(user_id, source, entity_id)</code>. The perception layer then throws it away
+        and rebuilds a worse frame by concatenating rows into prose
+        (<code>perception_runner.py:279</code>).
+      </p>
+      <p>
+        Two things fall out of the table. <strong>Four of five sources already key on a
+        durable thing, not an occurrence</strong> — Fork&nbsp;1's answer is implemented at
+        ingestion and discarded downstream. GitHub is the lone outlier, keying on the
+        notification id, so one PR collecting three review comments mints three identities;
+        its <code>raw_payload["url"]</code> already holds the PR's own URL, so that is a
+        one-line fix rather than an architecture problem.
+      </p>
+      <p>
+        And <strong><code>title</code> is untrusted in all five, uniformly</strong> — so the
+        rule that fixes it is one rule at one boundary, not five. Adding a sixth connector
+        means filling in five fields, not building a card.
+      </p>
+      <p class="note">
+        One more thing the table exposes: github sets
+        <code>actor={"type":"system","name":repo}</code>, attributing the event to the
+        <em>repository</em> and discarding the human who commented. That human is the
+        counterparty the frame's headline needs.
+      </p>
+    </div>
+  </section>
+
+  <hr class="rule">
+
+  <!-- ═══════════════ GLANCE / FULL ═══════════════ -->
+  <section>
+    <div class="sec-head">
+      <p class="eyebrow">Depth</p>
+      <h2>Glance decides whether; Full decides what</h2>
+      <p class="note">
+        A card cannot carry enough to decide on — but the fix is not a fuller card. Nineteen
+        slots is what "put more on the card" already produced. The card's job is triage;
+        the decision happens one level down.
+      </p>
+    </div>
+
+    <div class="prose">
+      <p>
+        <strong>The Glance must be uniform</strong> — you cannot rank things that don't look
+        alike, and ranking is the entire feed. <strong>The Full must be faithful</strong> —
+        an email thread rendered through a generic detail view stops being an email thread.
+        Frame-and-body governs the Glance. The Full is a different contract, and that is not
+        a contradiction: they answer different questions.
+      </p>
+      <h3>Four archetypes, not one per connector</h3>
+      <p>
+        The heterogeneity is smaller than it looks. A Gmail thread, a Slack thread and a
+        GitHub PR discussion are all the same shape — ordered, attributed, timestamped
+        messages. Grouping by the <code>entity_type</code> the connectors already emit gives
+        four archetypes, derived from real content rather than chosen up front, which is
+        exactly why the last catalog had seventeen.
+      </p>
+    </div>
+
+    <figure>
+      <div class="wrap">
+        <svg viewBox="0 0 880 300" role="img" aria-label="Five connector entity types collapse into four rendering archetypes, which share one Full view renderer; a pull request maps to two archetypes at once.">
+          <defs>
+            <marker id="a3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor"/>
+            </marker>
+            <marker id="a3c" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" style="fill: var(--code)"/>
+            </marker>
+          </defs>
+
+          <text x="14" y="18" class="svg-micro" fill="currentColor">ENTITY_TYPE — ALREADY SET BY EACH CONNECTOR</text>
+          <text x="336" y="18" class="svg-micro" fill="currentColor">ARCHETYPE</text>
+          <text x="660" y="18" class="svg-micro" style="fill: var(--code)">ONE FULL RENDERER</text>
+
+          <!-- entity types -->
+          <g class="svg-body" fill="currentColor">
+            <rect x="14" y="36" width="188" height="30" rx="5" fill="none" stroke="currentColor" stroke-width="1.1" opacity=".5"/>
+            <text x="26" y="56">email_thread <tspan opacity=".6">· gmail</tspan></text>
+
+            <rect x="14" y="74" width="188" height="30" rx="5" fill="none" stroke="currentColor" stroke-width="1.1" opacity=".5"/>
+            <text x="26" y="94">message_thread <tspan opacity=".6">· slack</tspan></text>
+
+            <rect x="14" y="112" width="188" height="30" rx="5" style="stroke: var(--ext)" fill="none" stroke-width="1.3"/>
+            <text x="26" y="132">pullrequest <tspan opacity=".6">· github</tspan></text>
+
+            <rect x="14" y="180" width="188" height="30" rx="5" fill="none" stroke="currentColor" stroke-width="1.1" opacity=".5"/>
+            <text x="26" y="200">meeting <tspan opacity=".6">· calendar</tspan></text>
+
+            <rect x="14" y="228" width="188" height="30" rx="5" fill="none" stroke="currentColor" stroke-width="1.1" opacity=".5"/>
+            <text x="26" y="248">page <tspan opacity=".6">· notion</tspan></text>
+          </g>
+
+          <!-- archetypes -->
+          <g class="svg-title">
+            <rect x="336" y="60" width="176" height="34" rx="6" style="fill: var(--code-soft); stroke: var(--code)" stroke-width="1.3"/>
+            <text x="352" y="82" style="fill: var(--code)">Conversation</text>
+
+            <rect x="336" y="110" width="176" height="34" rx="6" style="fill: var(--code-soft); stroke: var(--code)" stroke-width="1.3"/>
+            <text x="352" y="132" style="fill: var(--code)">Change</text>
+
+            <rect x="336" y="176" width="176" height="34" rx="6" style="fill: var(--code-soft); stroke: var(--code)" stroke-width="1.3"/>
+            <text x="352" y="198" style="fill: var(--code)">Event</text>
+
+            <rect x="336" y="226" width="176" height="34" rx="6" style="fill: var(--code-soft); stroke: var(--code)" stroke-width="1.3"/>
+            <text x="352" y="248" style="fill: var(--code)">Document</text>
+          </g>
+
+          <!-- edges -->
+          <path d="M 202 51 L 268 51 L 268 77 L 330 77" fill="none" stroke="currentColor" stroke-width="1.3" marker-end="url(#a3)" opacity=".55"/>
+          <path d="M 202 89 L 268 89 L 268 77 L 330 77" fill="none" stroke="currentColor" stroke-width="1.3" marker-end="url(#a3)" opacity=".55"/>
+          <path d="M 202 127 L 250 127 L 250 77 L 330 77" fill="none" style="stroke: var(--ext)" stroke-width="1.4" marker-end="url(#a3)"/>
+          <path d="M 202 127 L 250 127 L 250 127 L 330 127" fill="none" style="stroke: var(--ext)" stroke-width="1.4" marker-end="url(#a3)"/>
+          <text x="212" y="152" class="svg-lab" style="fill: var(--ext)">a PR is both</text>
+
+          <path d="M 202 195 L 268 195 L 268 193 L 330 193" fill="none" stroke="currentColor" stroke-width="1.3" marker-end="url(#a3)" opacity=".55"/>
+          <path d="M 202 243 L 330 243" fill="none" stroke="currentColor" stroke-width="1.3" marker-end="url(#a3)" opacity=".55"/>
+
+          <!-- renderer -->
+          <rect x="660" y="96" width="200" height="108" rx="8" fill="none" style="stroke: var(--code)" stroke-width="1.6"/>
+          <text x="678" y="124" class="svg-title" style="fill: var(--code)">Full view</text>
+          <text x="678" y="146" class="svg-body" fill="currentColor">layer 1 swaps by archetype</text>
+          <text x="678" y="166" class="svg-body" fill="currentColor">layers 2–4 are identical</text>
+          <text x="678" y="188" class="svg-micro" fill="currentColor">EVERYWHERE</text>
+
+          <path d="M 512 77 L 590 77 L 590 130 L 654 130" fill="none" style="stroke: var(--code)" stroke-width="1.4" marker-end="url(#a3c)"/>
+          <path d="M 512 127 L 590 127 L 590 140 L 654 140" fill="none" style="stroke: var(--code)" stroke-width="1.4" marker-end="url(#a3c)"/>
+          <path d="M 512 193 L 590 193 L 590 155 L 654 155" fill="none" style="stroke: var(--code)" stroke-width="1.4" marker-end="url(#a3c)"/>
+          <path d="M 512 243 L 590 243 L 590 170 L 654 170" fill="none" style="stroke: var(--code)" stroke-width="1.4" marker-end="url(#a3c)"/>
+        </svg>
+      </div>
+      <figcaption>
+        Adding a connector is a mapping line — "Linear issues are Conversation plus Change" —
+        not a new renderer. Every archetype already has a read capability to fill it:
+        <code>email.read</code>, <code>messaging.get_thread</code>, <code>issue.get</code> +
+        <code>repo.get_diff</code>, <code>calendar.get</code>, <code>doc.get</code>.
+      </figcaption>
+    </figure>
+
+    <div class="prose">
+      <h3>What a Full view actually is</h3>
+      <p>
+        Four layers. Only the first one differs by source — and the ones that don't are the
+        reason this is not a link to the source with extra steps.
+      </p>
+    </div>
+
+    <div class="full">
+
+      <div class="layer ly-code">
+        <span class="layer-n">&mdash;</span>
+        <div class="layer-in">
+          <span class="layer-t">Frame · the same identity the card carried</span>
+          <p class="full-h">Sarah Chen · Series&nbsp;A term sheet</p>
+          <div class="card-hd">
+            <span class="pill p-insight">Proposal</span>
+            <span class="pill p-need">Needs you</span>
+            <span class="card-meta">gmail · thread · 3 messages · last 2:14pm</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="layer ly-ext">
+        <span class="layer-n">1</span>
+        <div class="layer-in">
+          <span class="layer-t">The thing itself · Conversation archetype</span>
+          <div class="msgs">
+            <div class="msg">
+              <div class="msg-hd"><span>Sarah Chen</span><span class="when">Mon 9:02</span></div>
+              <p class="msg-b">Sending over the revised term sheet — the valuation moved to what we discussed.</p>
+            </div>
+            <div class="msg mine">
+              <div class="msg-hd"><span>You</span><span class="when">Mon 18:40</span></div>
+              <p class="msg-b">Thanks — reading it tonight, will come back with questions.</p>
+            </div>
+            <div class="msg">
+              <div class="msg-hd"><span>Sarah Chen</span><span class="when">Today 2:14pm</span></div>
+              <p class="msg-b">Can you get back to me by Friday? The other LPs are waiting on us.</p>
+            </div>
+          </div>
+          <p class="note" style="font-size:.75rem">
+            Rendered by code, verbatim, every message attributed. muldro never reformats it
+            and never speaks in its voice.
+          </p>
+        </div>
+      </div>
+
+      <div class="layer ly-model">
+        <span class="layer-n">2</span>
+        <div class="layer-in">
+          <span class="layer-t">muldro's reasoning · the body, expanded</span>
+          <p class="full-p">
+            Third message on this thread and the first carrying a deadline — the two before
+            it were logistics. You said you'd come back with questions on Monday and haven't,
+            so this is a follow-up, not a new ask.
+          </p>
+        </div>
+      </div>
+
+      <div class="layer ly-model">
+        <span class="layer-n">3</span>
+        <div class="layer-in">
+          <span class="layer-t">Derivation · what a source link can never show you</span>
+          <div class="join">
+            <span class="join-t">Cross-source</span>
+            <p class="join-p">
+              Friday is the day before your board meeting, and the term sheet is on that
+              agenda. Sarah is the lead investor on your Series&nbsp;A goal.
+            </p>
+            <div class="join-src">
+              <span class="chip">gmail · thread</span>
+              <span class="chip">calendar · board meeting Sat 10:00</span>
+              <span class="chip">goal · close Series A</span>
+              <span class="chip">entity · Sarah Chen — lead investor</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="layer ly-code">
+        <span class="layer-n">4</span>
+        <div class="layer-in">
+          <span class="layer-t">Affordances · act here, don't go there</span>
+          <div class="card-btns">
+            <button class="btn btn-1" type="button">Draft a reply</button>
+            <button class="btn btn-2" type="button">Add to board prep</button>
+            <button class="btn btn-2" type="button">Remind me Thursday</button>
+            <button class="btn btn-x" type="button">Dismiss</button>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <div class="prose">
+      <p>
+        Layer&nbsp;4 is the immediate answer to "why not just link to Gmail": a link lets
+        you <em>read</em>; this lets you <em>act</em>. But layer&nbsp;3 is the real one.
+        <strong>That sentence requires gmail and calendar and your goals, joined</strong> —
+        no amount of clicking through to the source produces it. It can only exist somewhere
+        that holds all three, and that is the entire product.
+      </p>
+      <h3>Only layer 1 swaps</h3>
+      <p class="note">
+        The same Full view for three other archetypes. Layers 2, 3 and 4 are byte-identical
+        in structure — muldro's reasoning, the cross-source join, the affordances. Only the
+        thing itself changes shape.
+      </p>
+    </div>
+
+    <div class="arch">
+      <div class="arch-card">
+        <div class="arch-hd"><span class="arch-name">Change</span><span class="arch-src">github · pullrequest</span></div>
+        <div class="arch-body">
+          <div class="kv"><span class="k">state</span><span class="v">Open · 2 approvals · checks green</span></div>
+          <div class="kv"><span class="k">files</span><span class="v">4 changed</span></div>
+          <div style="display:flex;flex-direction:column;gap:.15rem">
+            <span class="diffline d-add">+ presence: Literal["present","absent"]</span>
+            <span class="diffline d-del">- can_pause: bool</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="arch-card">
+        <div class="arch-hd"><span class="arch-name">Event</span><span class="arch-src">calendar · meeting</span></div>
+        <div class="arch-body">
+          <div class="kv"><span class="k">when</span><span class="v">Sat 10:00 – 11:30</span></div>
+          <div class="kv"><span class="k">who</span><span class="v">Sarah Chen, 3 others</span></div>
+          <div class="kv"><span class="k">agenda</span><span class="v">Term sheet, runway, hiring</span></div>
+          <div class="kv"><span class="k">conflict</span><span class="v" style="color:var(--ext)">Overlaps standup</span></div>
+        </div>
+      </div>
+
+      <div class="arch-card">
+        <div class="arch-hd"><span class="arch-name">Document</span><span class="arch-src">notion · page</span></div>
+        <div class="arch-body">
+          <div class="kv"><span class="k">edited by</span><span class="v">Priya, 40m ago</span></div>
+          <div style="display:flex;flex-direction:column;gap:.3rem;padding-top:.15rem">
+            <span class="doc-line" style="width:88%"></span>
+            <span class="doc-line" style="width:96%"></span>
+            <span class="doc-line" style="width:62%"></span>
+            <span class="doc-line" style="width:78%;background:var(--ext-soft)"></span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="prose">
+      <h3>Where the content comes from</h3>
+      <p>
+        Fetching live on open is never stale but fails exactly when you need it — your
+        screenshot has gmail's circuit open, and clicking a card into "couldn't load" is
+        worse than a thin card. Storing everything at perception time is instant but goes
+        stale and quietly commits you to keeping full email bodies in Postgres.
+      </p>
+      <p>
+        <strong>Store the normalized archetype at perception time, refresh live on open.</strong>
+        Instant paint, correct within a second, degrades to stored-only when the source is
+        down. It isn't two code paths — it is one renderer over one archetype shape with two
+        possible data sources, and the renderer cannot tell which it got. Storing the
+        <em>archetype</em> rather than the raw provider blob does double duty: it bounds
+        storage growth and it bounds sensitivity, because what persists is the messages
+        muldro actually reasoned over, not every header Google returned.
+      </p>
+      <p class="note">
+        The mechanism already exists. <code>_fetch_thread_contexts</code>
+        (<code>perception_runner.py:35</code>) fetches full Gmail threads via
+        <code>get_gmail_thread_content</code> today — then uses them to build a prompt and
+        throws them away.
+      </p>
+    </div>
+  </section>
+
+  <hr class="rule">
+
+  <!-- ═══════════════ BOTH PATHS ═══════════════ -->
+  <section>
+    <div class="sec-head">
+      <p class="eyebrow">Chat and autonomous</p>
+      <h2>One shape, two producers</h2>
+      <p class="note">
+        The same object, the same renderer, on both paths. The asymmetry is not in the
+        shape — it is that chat has an <em>additional</em> ephemeral channel the autonomous
+        loop doesn't have, because chat is already framed by the thread you're reading.
+      </p>
+    </div>
+
+    <figure>
+      <div class="wrap">
+        <svg viewBox="0 0 900 320" role="img" aria-label="Today three rival channels reach three renderers; under frame and body two producers reach one renderer, with chat additionally able to emit prose only.">
+          <defs>
+            <marker id="a2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor"/>
+            </marker>
+            <marker id="a2c" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" style="fill: var(--code)"/>
+            </marker>
+          </defs>
+
+          <!-- TODAY -->
+          <text x="14" y="18" class="svg-micro" style="fill: var(--bad)">TODAY — THREE RIVAL CHANNELS</text>
+          <line x1="14" y1="28" x2="410" y2="28" stroke="currentColor" stroke-width="1" opacity=".25"/>
+
+          <rect x="14" y="48" width="150" height="44" rx="6" fill="none" stroke="currentColor" stroke-width="1.2" opacity=".55"/>
+          <text x="26" y="68" class="svg-body" fill="currentColor">Lead writes markdown</text>
+          <text x="26" y="84" class="svg-micro" fill="currentColor" opacity=".7">CHAT ONLY</text>
+
+          <rect x="14" y="106" width="150" height="44" rx="6"
+                style="fill: var(--bad-soft); stroke: var(--bad)" stroke-width="1.3"/>
+          <text x="26" y="126" class="svg-body" style="fill: var(--bad)">render_surface tool</text>
+          <text x="26" y="142" class="svg-micro" style="fill: var(--bad)">NEVER RENDERS</text>
+
+          <rect x="14" y="164" width="150" height="44" rx="6" fill="none" stroke="currentColor" stroke-width="1.2" opacity=".55"/>
+          <text x="26" y="184" class="svg-body" fill="currentColor">13 python builders</text>
+          <text x="26" y="200" class="svg-micro" fill="currentColor" opacity=".7">19 OPTIONAL SLOTS</text>
+
+          <path d="M 164 70 L 224 70" fill="none" stroke="currentColor" stroke-width="1.4" marker-end="url(#a2)" opacity=".6"/>
+          <path d="M 164 128 L 224 128" fill="none" style="stroke: var(--bad)" stroke-width="1.4" stroke-dasharray="4 4"/>
+          <g style="stroke: var(--bad)" stroke-width="2" stroke-linecap="round">
+            <line x1="186" y1="120" x2="200" y2="136"/><line x1="200" y1="120" x2="186" y2="136"/>
+          </g>
+          <path d="M 164 186 L 224 186" fill="none" stroke="currentColor" stroke-width="1.4" marker-end="url(#a2)" opacity=".6"/>
+
+          <rect x="228" y="48" width="160" height="44" rx="6" fill="none" stroke="currentColor" stroke-width="1.2" opacity=".55"/>
+          <text x="240" y="74" class="svg-body" fill="currentColor">MarkdownRenderer</text>
+
+          <rect x="228" y="106" width="160" height="44" rx="6" fill="none" stroke="currentColor" stroke-width="1.2" opacity=".3"/>
+          <text x="240" y="132" class="svg-body" fill="currentColor" opacity=".45">A2UIRenderer</text>
+
+          <rect x="228" y="164" width="160" height="44" rx="6" fill="none" stroke="currentColor" stroke-width="1.2" opacity=".55"/>
+          <text x="240" y="190" class="svg-body" fill="currentColor">SurfaceCard</text>
+
+          <text x="14" y="240" class="svg-lab" fill="currentColor" opacity=".8">The model picks the channel.</text>
+          <text x="14" y="258" class="svg-lab" fill="currentColor" opacity=".8">Same question twice → different</text>
+          <text x="14" y="276" class="svg-lab" fill="currentColor" opacity=".8">shape, different persistence.</text>
+
+          <!-- divider -->
+          <line x1="450" y1="20" x2="450" y2="300" stroke="currentColor" stroke-width="1" opacity=".2"/>
+
+          <!-- PROPOSED -->
+          <text x="486" y="18" class="svg-micro" style="fill: var(--code)">PROPOSED — ONE SHAPE</text>
+          <line x1="486" y1="28" x2="886" y2="28" stroke="currentColor" stroke-width="1" opacity=".25"/>
+
+          <rect x="486" y="48" width="146" height="44" rx="6"
+                style="fill: var(--code-soft); stroke: var(--code)" stroke-width="1.3"/>
+          <text x="498" y="68" class="svg-body" fill="currentColor">Autonomous loop</text>
+          <text x="498" y="84" class="svg-micro" style="fill: var(--code)">ALWAYS DURABLE</text>
+
+          <rect x="486" y="164" width="146" height="44" rx="6"
+                style="fill: var(--code-soft); stroke: var(--code)" stroke-width="1.3"/>
+          <text x="498" y="184" class="svg-body" fill="currentColor">Chat turn</text>
+          <text x="498" y="200" class="svg-micro" style="fill: var(--code)">SOMETIMES DURABLE</text>
+
+          <rect x="686" y="96" width="150" height="66" rx="7"
+                fill="none" style="stroke: var(--code)" stroke-width="1.6"/>
+          <text x="700" y="118" class="svg-title" style="fill: var(--code)">frame + body</text>
+          <text x="700" y="136" class="svg-body" fill="currentColor">one renderer</text>
+          <text x="700" y="153" class="svg-micro" fill="currentColor">CARD · INLINE · DETAIL</text>
+
+          <path d="M 632 70 L 660 70 L 660 118 L 680 118" fill="none"
+                style="stroke: var(--code)" stroke-width="1.5" marker-end="url(#a2c)"/>
+          <path d="M 632 186 L 660 186 L 660 142 L 680 142" fill="none"
+                style="stroke: var(--code)" stroke-width="1.5" marker-end="url(#a2c)"/>
+          <text x="640" y="92" class="svg-lab" style="fill: var(--code)">every run</text>
+          <text x="616" y="176" class="svg-lab" style="fill: var(--code)">when a row was created</text>
+
+          <!-- chat-only prose -->
+          <path d="M 559 208 L 559 250 L 686 250" fill="none" stroke="currentColor"
+                stroke-width="1.4" stroke-dasharray="5 4" marker-end="url(#a2)" opacity=".65"/>
+          <rect x="686" y="228" width="150" height="44" rx="6" fill="none"
+                stroke="currentColor" stroke-width="1.2" opacity=".65"/>
+          <text x="700" y="248" class="svg-body" fill="currentColor">Prose in a bubble</text>
+          <text x="700" y="264" class="svg-micro" fill="currentColor" opacity=".75">NOTHING DURABLE</text>
+          <text x="576" y="244" class="svg-lab" fill="currentColor" opacity=".75">otherwise</text>
+        </svg>
+      </div>
+      <figcaption>
+        The dashed branch on the right is the whole asymmetry: a chat turn that creates no
+        durable row stays prose in a bubble. The autonomous loop has no such branch — nobody
+        is watching, so anything it doesn't persist never happened.
+      </figcaption>
+    </figure>
+
+    <div class="prose">
+      <h3>The promotion decision is structural, not the model's opinion</h3>
+      <p>
+        "Did this turn produce something durable" is answered by looking at what the turn
+        <em>did</em> — a run row was created, a write was staged as an approval, a finding
+        was recorded — not by asking the model whether its answer was interesting.
+        <code>message_promotion.py</code> already argues exactly this
+        (<em>"the gate is structural, not semantic — the agent does not self-evaluate
+        usefulness"</em>). It is right, and it is currently applied to a dead code path. The
+        principle survives; its input changes from "which components did you emit" to "what
+        did you actually create".
+      </p>
+    </div>
+  </section>
+
+  <hr class="rule">
+
+  <!-- ═══════════════ RENDERING ═══════════════ -->
+  <section>
+    <div class="sec-head">
+      <p class="eyebrow">How it renders</p>
+      <h2>Your repository question</h2>
+      <p class="note">
+        You asked what happens to agent-written markdown. Here is the same question on both
+        sides of the rule.
+      </p>
+    </div>
+
+    <div class="specimens">
+      <div class="spec">
+        <p class="spec-label"><span class="tag tag-good">Chat</span> <span style="color:var(--tx-4)">nothing durable → prose only</span></p>
+        <div class="chat">
+          <div class="bubble-user">what are my active repos with activity?</div>
+          <div class="bubble-ai">
+            <p style="margin:0">Four of your repos moved this week. <strong>muldrov1</strong> is
+              where everything is happening; the other three are single commits.</p>
+            <div class="tbl-wrap">
+              <table class="md">
+                <thead><tr><th>Repo</th><th>Commits</th><th>Open PRs</th><th>Last push</th></tr></thead>
+                <tbody>
+                  <tr><td>muldrov1</td><td class="num">63</td><td class="num">2</td><td>2h ago</td></tr>
+                  <tr><td>muldro-infra</td><td class="num">4</td><td class="num">0</td><td>Tue</td></tr>
+                  <tr><td>rules</td><td class="num">1</td><td class="num">1</td><td>Mon</td></tr>
+                  <tr><td>skills</td><td class="num">1</td><td class="num">0</td><td>Sun</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <p style="margin:0">The PR on <strong>rules</strong> has been open eleven days with no review.</p>
+          </div>
+        </div>
+        <p class="note">
+          Markdown, rendered by <code>MarkdownRenderer</code> — which already handles GFM
+          tables well today. No card, because nothing durable was created. This is the
+          answer, and it is complete.
+        </p>
+      </div>
+
+      <div class="spec">
+        <p class="spec-label"><span class="tag tag-good">Chat</span> <span style="color:var(--tx-4)">a row was created → frame appears inline</span></p>
+        <div class="chat">
+          <div class="bubble-user">remind me Thursday about the stale one</div>
+          <div class="bubble-ai">
+            <p style="margin:0">Set. I'll bring it back Thursday morning.</p>
+            <div class="card" style="box-shadow:none">
+              <div class="band b-code">
+                <span class="band-tag">Frame</span>
+                <div class="card-hd">
+                  <span class="pill p-insight">Reminder</span>
+                  <span class="pill p-prop">Scheduled</span>
+                  <span class="card-meta" style="margin-left:auto">Thu 9:00</span>
+                </div>
+                <p class="card-title">Review the open PR on <span style="font-family:var(--mono);font-size:.92em">rules</span></p>
+              </div>
+              <div class="band b-model">
+                <span class="band-tag">Body</span>
+                <p class="card-sub" style="color:var(--tx-2)">Open eleven days with no review. I'll check whether it moved before pinging you.</p>
+              </div>
+              <div class="band b-code">
+                <span class="band-tag">Frame</span>
+                <div class="card-btns">
+                  <button class="btn btn-2" type="button">Change time</button>
+                  <button class="btn btn-x" type="button">Cancel</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <p class="note">
+          The same frame-and-body object the feed renders, placed inline in the thread.
+          One vocabulary, two placements — the reminder is now a real row, so it also
+          appears in the feed and survives the scrollback.
+        </p>
+      </div>
+    </div>
+
+    <div class="prose">
+      <p>
+        The thing to notice: <strong>the model wrote prose in both cases.</strong> It did
+        not choose a card, a kind, a component, or a layout. In the second turn a card
+        appeared because a schedule row was written — a fact about the system, checkable
+        without asking the model anything.
+      </p>
+    </div>
+  </section>
+
+  <hr class="rule">
+
+  <!-- ═══════════════ FORKS ═══════════════ -->
+  <section>
+    <div class="sec-head">
+      <p class="eyebrow">Decisions</p>
+      <h2>The forks, and where each stands</h2>
+    </div>
+
+    <div class="forks">
+
+      <div class="fork">
+        <div class="fork-side">
+          <span class="fork-id">Fork 1</span>
+          <span class="status st-settled">Settled</span>
+        </div>
+        <div class="fork-body">
+          <p class="fork-q">What is the unit the founder sees?</p>
+          <p class="fork-a">
+            <strong>One identity, two groupings layered on it.</strong> The key is
+            <code>(source, entity_type, entity_id)</code> — what the connector already
+            emits. A nullable <code>group_key</code> carries cross-source correlation. Goals
+            are a view that groups by <code>group_key</code>, not a third scheme.
+          </p>
+          <p class="fork-why">
+            Identity must be deterministic or dedup isn't dedup: an inferred key lets two
+            runs of one pipeline mint two keys for one thing, which is precisely the failure
+            in the screenshot. The connector's key comes from the source system and cannot
+            drift. <strong>Guardrail for the correlation layer:</strong> a merge must be
+            reversible from the UI. A wrong rank the founder can route around; a wrong merge
+            puts two contexts under one headline in muldro's voice, and they cannot undo it.
+          </p>
+        </div>
+      </div>
+
+      <div class="fork">
+        <div class="fork-side">
+          <span class="fork-id">Fork 2</span>
+          <span class="status st-settled">Superseded</span>
+        </div>
+        <div class="fork-body">
+          <p class="fork-q">Prose, or model-authored structure?</p>
+          <p class="fork-a">
+            Folded into Fork 3. <strong>Prose</strong> — but the reason the trade felt
+            painful was that killing model-authored structure seemed to kill affordances
+            with it. Frame-and-body keeps them, because they were never the model's to
+            author.
+          </p>
+          <p class="fork-why">
+            Worth stating plainly: <code>render_surface</code> has never rendered anything.
+            The tool emits <code>surface_id</code>; the WebSocket handler guards on
+            <code>msg.surface?.id</code> (<code>use-muldro-ws.ts:127</code>) and drops it.
+            It returns <code>{"status": "published"}</code> either way, so the model
+            believes it worked and writes only the short chat companion. Deleting it costs
+            zero capability.
+          </p>
+        </div>
+      </div>
+
+      <div class="fork">
+        <div class="fork-side">
+          <span class="fork-id">Fork 3</span>
+          <span class="status st-settled">Settled</span>
+        </div>
+        <div class="fork-body">
+          <p class="fork-q">Who authors what?</p>
+          <p class="fork-a">
+            <strong>Code owns the frame. The model writes one markdown body. External text
+            is quoted by code and never enters either.</strong>
+          </p>
+          <p class="fork-why">
+            Collapses nineteen optional slots to a fixed frame plus one field, so two cards
+            of a kind are the same shape by construction. Kills the double-render, the
+            invented evidence, the model-minted capability, and the markdown link-injection
+            hole in one move.
+          </p>
+        </div>
+      </div>
+
+      <div class="fork">
+        <div class="fork-side">
+          <span class="fork-id">Fork 4</span>
+          <span class="status st-settled">Settled</span>
+        </div>
+        <div class="fork-body">
+          <p class="fork-q">Does this apply to chat as well as the autonomous loop?</p>
+          <p class="fork-a">
+            <strong>Yes — one shape, both paths.</strong> Chat additionally keeps an
+            ephemeral prose channel, because a chat turn is already framed by the thread.
+            The autonomous loop has no such channel.
+          </p>
+          <p class="fork-why">
+            The no-external-text rule applies equally, and this is the part that is easy to
+            get wrong by assuming chat is safe. A chat turn puts GitHub and Gmail tool
+            results into the lead's context; the lead can echo an issue title verbatim into
+            its body. Same laundering, different door.
+          </p>
+        </div>
+      </div>
+
+      <div class="fork">
+        <div class="fork-side">
+          <span class="fork-id">Fork 5</span>
+          <span class="status st-settled">Settled</span>
+        </div>
+        <div class="fork-body">
+          <p class="fork-q">Should muldro remember what it told you?</p>
+          <p class="fork-a">
+            <strong>Yes — a durable <code>Finding</code> that stores its own derivation.</strong>
+            The claim, its sources, <em>and</em> how to recompute it: which tools ran, with
+            which arguments, against which rows — plus <code>as_of</code> and
+            <code>stale_after</code>. Fresh, it renders. Stale, it re-derives on view.
+          </p>
+          <p class="fork-why">
+            Storing the claim alone is a cache wearing a confidence badge — "you have four
+            active repos" is true for an hour, and a stale finding is muldro confidently
+            telling you something false. Storing only the <em>question</em> is never stale
+            but costs a re-derivation on every view, and not everything is a query. Carrying
+            the derivation on the row is the same invariant as everywhere else — a view is a
+            pure function of a row — and it hands you the watch feature later for free: a
+            finding with a short <code>stale_after</code> that the founder keeps opening is,
+            definitionally, something to watch.
+          </p>
+        </div>
+      </div>
+
+      <div class="fork">
+        <div class="fork-side">
+          <span class="fork-id">Fork 6</span>
+          <span class="status st-settled">Settled</span>
+        </div>
+        <div class="fork-body">
+          <p class="fork-q">Is <code>importance</code> computed or scored?</p>
+          <p class="fork-a">
+            <strong>Scored — but as a list-ranker over sanitized features, not an item-scorer
+            over raw content.</strong> Structural signals become the <em>features</em>; the
+            model does the <em>commensuration</em> over them; the engagement penalty is one
+            more feature. One ranker, three contributions.
+          </p>
+          <p class="fork-why">
+            Some signals compare across sources — recency, addressed-to-you, reply-to-you,
+            unresolved affordance. <strong>Importance itself does not.</strong> There is no
+            shared scale on which a <code>#general</code> message, a review request and an
+            investor email can be ordered, and a hand-tuned weight per source is just a guess
+            at the commensuration a model does better. That is the case for scoring, and it
+            holds.
+          </p>
+          <p class="fork-why">
+            Two things were conflated, and separating them is what makes scoring safe.
+            <strong>What the ranker reads:</strong> today
+            <code>assess_relevance</code> puts raw subjects and thread bodies into the prompt,
+            so "THIS IS EXTREMELY URGENT" is an instruction to the scorer. Feed it muldro's
+            <em>derived</em> facts instead — counterparty is a known entity, thread has N
+            messages, you replied twice, a deadline was extracted to a typed date, it matches
+            goal G — and the sender's prose never reaches it. An attacker can then lie about
+            <em>when</em>, not inject an <em>instruction</em>.
+            <strong>What it ranks:</strong> today it scores one signal alone, which is why it
+            cannot commensurate and why <code>0.7</code> means nothing. Rank the whole open
+            feed in one call and you get a real relative order, for one call per refresh
+            instead of one per item.
+          </p>
+          <p class="fork-why">
+            Engagement is a feature, <strong>demotion only</strong>. Promotion by engagement
+            is self-sealing: rank drives visibility, visibility drives engagement, so a
+            low-ranked type is never seen, never engaged, and sinks forever — you could never
+            discover you actually care about Notion edits. Demotion has no such loop, because
+            you had to see a thing to dismiss it. Promotion needs deliberate exploration, and
+            that spends founder attention on purpose — premature with no history at all.
+          </p>
+        </div>
+      </div>
+
+      <div class="fork">
+        <div class="fork-side">
+          <span class="fork-id">Fork 7</span>
+          <span class="status st-settled">Settled</span>
+        </div>
+        <div class="fork-body">
+          <p class="fork-q">How much does a card show, across five different sources?</p>
+          <p class="fork-a">
+            <strong>Glance stays uniform and answers "does this need me?" Full is faithful to
+            the source and answers "what do I do?"</strong> Four archetypes — Conversation,
+            Change, Event, Document — cover all five connectors. Only layer 1 of the Full
+            differs; muldro's reasoning, the cross-source join and the affordances are the
+            same everywhere.
+          </p>
+          <p class="fork-why">
+            Uniformity and richness are not in conflict once the two levels have different
+            jobs: you cannot rank things that don't look alike, and you cannot render an
+            email thread faithfully through a generic view. Content comes from the stored
+            archetype, refreshed live on open — instant, current, and still readable when the
+            source's circuit is open. And the reason this beats a link to the source is
+            layer 3: <em>"Friday is the day before your board meeting"</em> needs gmail and
+            calendar and your goals joined, which only muldro holds.
+          </p>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <hr class="rule">
+
+  <!-- ═══════════════ DELETIONS ═══════════════ -->
+  <section>
+    <div class="sec-head">
+      <p class="eyebrow">Consequences</p>
+      <h2>What stops existing</h2>
+      <p class="note">
+        All of this exists to serve one premise — that the model should author structure.
+        Once code owns the frame, none of it has a job.
+      </p>
+    </div>
+
+    <div class="del">
+      <div class="del-row">
+        <span class="del-what">render_surface · RenderSurfaceInput · AnyComponent</span>
+        <span class="del-why">The model-authors-structure channel. Has never rendered; deleting it costs no capability.</span>
+      </div>
+      <div class="del-row">
+        <span class="del-what">SurfacePreview — 19 optional fields</span>
+        <span class="del-why">Becomes one fixed frame struct. This is the design-inconsistency fix.</span>
+      </div>
+      <div class="del-row">
+        <span class="del-what">InsightSurfaceData · insight_data</span>
+        <span class="del-why">The second projection of the same row. Its existence is defects 1 and 2.</span>
+      </div>
+      <div class="del-row">
+        <span class="del-what">InlineMarkdown on titles — 5 call sites</span>
+        <span class="del-why">Headlines become plain text. Closes the link-injection hole.</span>
+      </div>
+      <div class="del-row">
+        <span class="del-what">SuggestedAction.capability — free-string</span>
+        <span class="del-why">Affordances come from real capabilities. The model can argue for one; it cannot mint one.</span>
+      </div>
+      <div class="del-row">
+        <span class="del-what">evidence_count · evidence_unit</span>
+        <span class="del-why">Replaced by an attributed quote. Evidence is something that exists, not a number.</span>
+      </div>
+      <div class="del-row">
+        <span class="del-what">json:surface fences · extract_surface_spec · extract_surface_data</span>
+        <span class="del-why">Two regexes and two silent-drop gates for a channel that no longer has a purpose.</span>
+      </div>
+      <div class="del-row">
+        <span class="del-what">_STRUCTURAL_COMPONENT_TYPES walker</span>
+        <span class="del-why"><code>message_promotion.py</code> keeps its name and its principle; its input becomes what the turn created.</span>
+      </div>
+      <div class="del-row">
+        <span class="del-what">rec_{i} ids · title substring-matching in detail builders</span>
+        <span class="del-why">Card and detail become one function of one row, so they cannot disagree.</span>
+      </div>
+      <div class="del-row">
+        <span class="del-what">_TABS_BY_KIND · TAB_BUILDERS · build_detail_config</span>
+        <span class="del-why">Tabs papered over not knowing what belonged together. Four archetypes replace nine tab lists.</span>
+      </div>
+      <div class="del-row">
+        <span class="del-what">assess_relevance's per-signal score</span>
+        <span class="del-why">Becomes a list-ranker over derived features. Raw subjects and bodies stop reaching the prompt.</span>
+      </div>
+      <div class="del-row">
+        <span class="del-what">Seven disagreeing truncation rules</span>
+        <span class="del-why"><code>max_len=120</code> · <code>reasoning[:200]</code> · <code>title[:100]</code> · two <code>_truncate</code> calls · <code>line-clamp-2</code> · <code>MAX_INLINE_SECTIONS</code>. Replaced by one lede budget per kind.</span>
+      </div>
+      <div class="del-row">
+        <span class="del-what">expires_at on surfaces — the 24h TTL</span>
+        <span class="del-why">Ranking controls attention. Deletion is not an attention mechanism, and you cannot learn from silence you deleted.</span>
+      </div>
+    </div>
+  </section>
+
+  <hr class="rule">
+
+  <!-- ═══════════════ ORDER ═══════════════ -->
+  <section>
+    <div class="sec-head">
+      <p class="eyebrow">Next</p>
+      <h2>What lands first</h2>
+      <p class="note">
+        Ordered by dependency, not by size. Each step removes its duplicate in the same
+        commit — a second parallel path is how this got here.
+      </p>
+    </div>
+
+    <div class="del">
+      <div class="del-row">
+        <span class="del-what">1 · Frame from NormalizedEvent</span>
+        <span class="del-why">Identity is <code>(source, entity_type, entity_id)</code>. Fix github's key to the PR, not the notification. Three duplicate cards become one that updates.</span>
+      </div>
+      <div class="del-row">
+        <span class="del-what">2 · Body as one markdown field</span>
+        <span class="del-why">Titles become plain text; external content moves to the quote band. Closes the injection hole. Deletes <code>render_surface</code> and the component catalog.</span>
+      </div>
+      <div class="del-row">
+        <span class="del-what">3 · Glance renderer</span>
+        <span class="del-why">One card shape, replacing nineteen optional slots. Every card of a kind now looks alike — which is what ranking needs.</span>
+      </div>
+      <div class="del-row">
+        <span class="del-what">4 · List-ranker</span>
+        <span class="del-why">Needs step 3: you cannot rank things that don't look alike. Features are structural, commensuration is the model's, engagement demotes.</span>
+      </div>
+      <div class="del-row">
+        <span class="del-what">5 · Full view · Conversation archetype</span>
+        <span class="del-why">Covers gmail, slack and github discussions in one renderer — three of five sources. Change, Event and Document follow.</span>
+      </div>
+      <div class="del-row">
+        <span class="del-what">6 · Finding, with derivation</span>
+        <span class="del-why">Chat answers become durable and re-derivable. Independent of 1–5; sequence it by product appetite.</span>
+      </div>
+      <div class="del-row">
+        <span class="del-what">7 · group_key correlation</span>
+        <span class="del-why">Cross-source merge, additive on step 1. Ships with a reversible-merge affordance or it doesn't ship.</span>
+      </div>
+    </div>
+
+    <div class="prose">
+      <p class="note">
+        Steps 1–3 are what you are looking at in the screenshot. Nothing there needs the
+        ranker, the archetypes, or the correlation layer to stop being broken.
+      </p>
+    </div>
+  </section>
+
+</div>

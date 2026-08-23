@@ -216,14 +216,22 @@ GITHUB = GatewayProvider(
     display_name="GitHub",
     oauth_credential_key="github",
     actions=GITHUB_ACTIONS,
-    # GitHub's native OAuth was retired with Google's, so the "github" perception
-    # source has no token and no route that can mint one. Declaring it here routes
-    # it to the connection-derived branch, where an unconnected source is SKIPPED
-    # (still due, self-healing) rather than permanently marked needs_reauth --
-    # which pauses the row and can only be cleared by an OAuthManager check that
-    # will never return ok. The gateway perception DATA path does not exist yet
-    # (connectors still poll provider REST APIs directly); porting it is its own
-    # increment. This declaration is what keeps that port from needing a data
-    # migration to un-poison rows the scheduler paused in the meantime.
-    perception_sources=("github",),
+    # No perception_sources on purpose. GitHub deliberately holds TWO credentials
+    # with two jobs, and consolidating them silently breaks one:
+    #
+    #   * the gateway/platform-JWT credential backs the ACTIONS above -- every
+    #     github.* MCP tool call still runs through OpenConnector, unchanged;
+    #   * a native OAuth token in ``oauth_tokens`` backs the POLL only.
+    #     ``GitHubConnector`` reads https://api.github.com/notifications directly,
+    #     because the OpenConnector catalog exposes no notifications action --
+    #     there is nothing here for a gateway data path to call.
+    #
+    # Declaring the source here used to route it to the connection-derived
+    # branch, where ``connector_poller`` found a non-GatewayConnector and skipped
+    # every poll with a synthetic transient error. That was a holding pattern for
+    # a window with no route that could mint a GitHub token: skipping kept the row
+    # due and self-healing, whereas marking it needs_reauth would pause it behind
+    # a recovery check that could never return ok. ``/v1/auth/github/authorize``
+    # can mint that token again, so the hazard is gone and the source is polled
+    # natively; a genuinely revoked token now correctly means needs_reauth.
 )

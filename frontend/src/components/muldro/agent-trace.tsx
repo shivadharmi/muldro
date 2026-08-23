@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { type PlanOutput } from "@/lib/api";
 import { StatusBadge } from "@/components/ui/status-badge";
-import { stepStatusIcon } from "@/components/a2ui/components/step-presentation";
+import { stepStatusIcon } from "@/components/execution/step-presentation";
 
 /** Maps the agent-card status union to the canonical step status used by
  *  stepStatusIcon / StatusBadge, so the chat trace shares one glyph + dot

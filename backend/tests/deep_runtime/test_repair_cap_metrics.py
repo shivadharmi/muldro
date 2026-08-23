@@ -93,7 +93,7 @@ def _handler(*results: ToolMessage):
 
 async def test_invalid_args_rejection_counts_rejected_once():
     """Every argument-validation failure counts — including the very first one."""
-    tool = _tool("render_surface")
+    tool = _tool("store_memory")
     before = _counts(tool)
 
     mw = make_repair_cap_middleware()
@@ -104,7 +104,7 @@ async def test_invalid_args_rejection_counts_rejected_once():
 
 async def test_every_failure_counts_rejected_not_just_the_last_one():
     """Three failures below the cap are three rejections — the denominator must be honest."""
-    tool = _tool("render_surface")
+    tool = _tool("store_memory")
     before = _counts(tool)
 
     mw = make_repair_cap_middleware()
@@ -126,7 +126,7 @@ async def test_every_failure_counts_rejected_not_just_the_last_one():
 
 async def test_success_after_a_failure_counts_repaired_once():
     """A tool that failed and then went through is the whole point of the loop."""
-    tool = _tool("render_surface")
+    tool = _tool("store_memory")
     before = _counts(tool)
 
     mw = make_repair_cap_middleware()
@@ -172,7 +172,7 @@ async def test_an_unrelated_tool_error_is_neither_a_rejection_nor_a_repair():
 
 async def test_the_cap_refusing_to_dispatch_counts_exhausted_once():
     """The burning-tokens tail: MAX_ATTEMPTS rejections, then one refusal without dispatch."""
-    tool = _tool("render_surface")
+    tool = _tool("store_memory")
     before = _counts(tool)
 
     mw = make_repair_cap_middleware()
@@ -194,7 +194,7 @@ async def test_the_cap_refusing_to_dispatch_counts_exhausted_once():
 
 async def test_every_capped_call_counts_exhausted():
     """A model that keeps calling a capped tool is exactly the cost we want visible."""
-    tool = _tool("render_surface")
+    tool = _tool("store_memory")
     before = _counts(tool)
 
     mw = make_repair_cap_middleware()
@@ -243,7 +243,7 @@ async def test_outcome_log_renders_tool_and_outcome_in_the_message(caplog):
     ``outcome``, so an ``extra=``-carried fact is silently dropped under MULDRO_LOG_JSON.
     Asserting on the RENDERED message is what makes that regression impossible.
     """
-    tool = _tool("render_surface")
+    tool = _tool("store_memory")
     mw = make_repair_cap_middleware()
 
     with caplog.at_level("INFO", logger="src.deep_runtime.middleware.repair_cap"):

@@ -1,0 +1,641 @@
+<title>Where Untrusted Text Goes</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400;500&family=Geist:wght@400;500;600&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,600;1,6..72,400&display=swap">
+
+<style>
+  /* ══ Tokens — inherited verbatim from mockup.html ═══════════════
+     The three hues carry one meaning each, everywhere, in both files. */
+  :root {
+    --bg:            hsl(220 20% 97%);
+    --s1:            hsl(0 0% 100%);
+    --s2:            hsl(220 16% 96%);
+    --s3:            hsl(220 14% 93%);
+
+    --tx:            hsl(220 30% 12%);
+    --tx-2:          hsl(220 16% 36%);
+    --tx-3:          hsl(220 10% 50%);
+    --tx-4:          hsl(220 8% 62%);
+
+    --bd:            hsl(220 14% 90%);
+    --bd-2:          hsl(220 12% 84%);
+
+    --code:          hsl(193 88% 38%);
+    --code-soft:     hsl(193 88% 45% / 0.10);
+    --model:         hsl(247 66% 56%);
+    --model-soft:    hsl(247 72% 60% / 0.10);
+    --ext:           hsl(30 92% 38%);
+    --ext-soft:      hsl(35 92% 48% / 0.12);
+
+    --bad:           hsl(351 74% 48%);
+    --bad-soft:      hsl(351 78% 54% / 0.09);
+    --good:          hsl(155 70% 30%);
+    --good-soft:     hsl(155 70% 36% / 0.10);
+
+    --shadow:        0 1px 2px hsl(220 30% 12% / .04), 0 4px 16px hsl(220 30% 12% / .05);
+
+    --measure: 68ch;
+    --r-sm: .375rem;
+    --r-md: .5rem;
+    --r-lg: .75rem;
+
+    --sans: "Geist", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, monospace;
+    --serif: "Newsreader", Georgia, "Times New Roman", serif;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg:          hsl(220 20% 7%);
+      --s1:          hsl(220 18% 10%);
+      --s2:          hsl(220 16% 13%);
+      --s3:          hsl(220 14% 17%);
+      --tx:          hsl(220 20% 95%);
+      --tx-2:        hsl(220 12% 72%);
+      --tx-3:        hsl(220 8% 56%);
+      --tx-4:        hsl(220 6% 44%);
+      --bd:          hsl(220 16% 18%);
+      --bd-2:        hsl(220 14% 24%);
+      --code:        hsl(193 100% 62%);
+      --code-soft:   hsl(193 100% 62% / 0.13);
+      --model:       hsl(247 84% 76%);
+      --model-soft:  hsl(247 80% 72% / 0.14);
+      --ext:         hsl(36 92% 62%);
+      --ext-soft:    hsl(36 90% 60% / 0.14);
+      --bad:         hsl(351 90% 70%);
+      --bad-soft:    hsl(351 90% 68% / 0.11);
+      --good:        hsl(155 62% 50%);
+      --good-soft:   hsl(155 62% 50% / 0.12);
+      --shadow:      0 1px 2px hsl(0 0% 0% / .3), 0 4px 16px hsl(0 0% 0% / .3);
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --bg:          hsl(220 20% 7%);
+    --s1:          hsl(220 18% 10%);
+    --s2:          hsl(220 16% 13%);
+    --s3:          hsl(220 14% 17%);
+    --tx:          hsl(220 20% 95%);
+    --tx-2:        hsl(220 12% 72%);
+    --tx-3:        hsl(220 8% 56%);
+    --tx-4:        hsl(220 6% 44%);
+    --bd:          hsl(220 16% 18%);
+    --bd-2:        hsl(220 14% 24%);
+    --code:        hsl(193 100% 62%);
+    --code-soft:   hsl(193 100% 62% / 0.13);
+    --model:       hsl(247 84% 76%);
+    --model-soft:  hsl(247 80% 72% / 0.14);
+    --ext:         hsl(36 92% 62%);
+    --ext-soft:    hsl(36 90% 60% / 0.14);
+    --bad:         hsl(351 90% 70%);
+    --bad-soft:    hsl(351 90% 68% / 0.11);
+    --good:        hsl(155 62% 50%);
+    --good-soft:   hsl(155 62% 50% / 0.12);
+    --shadow:      0 1px 2px hsl(0 0% 0% / .3), 0 4px 16px hsl(0 0% 0% / .3);
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--tx);
+    font-family: var(--sans);
+    font-size: 16px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 1.5rem 6rem; }
+  .col  { max-width: var(--measure); }
+
+  h1, h2, h3 { text-wrap: balance; margin: 0; }
+
+  h1 {
+    font-family: var(--serif);
+    font-size: clamp(2.1rem, 5vw, 3.1rem);
+    font-weight: 600;
+    line-height: 1.08;
+    letter-spacing: -0.015em;
+  }
+
+  h2 {
+    font-family: var(--serif);
+    font-size: clamp(1.4rem, 3vw, 1.85rem);
+    font-weight: 600;
+    line-height: 1.2;
+    letter-spacing: -0.01em;
+  }
+
+  h3 {
+    font-size: .95rem;
+    font-weight: 600;
+    letter-spacing: -0.005em;
+  }
+
+  p { margin: 0; }
+  .lede { font-family: var(--serif); font-size: 1.16rem; line-height: 1.55; color: var(--tx-2); }
+  .note { font-size: .875rem; line-height: 1.6; color: var(--tx-3); }
+  strong { font-weight: 600; color: var(--tx); }
+  code, .mono { font-family: var(--mono); font-size: .855em; }
+
+  .eyebrow {
+    font-size: .68rem;
+    font-weight: 500;
+    letter-spacing: .11em;
+    text-transform: uppercase;
+    color: var(--tx-4);
+    font-family: var(--sans);
+  }
+
+  header.masthead {
+    padding: 4.5rem 0 2.5rem;
+    display: flex; flex-direction: column; gap: 1.25rem;
+  }
+
+  section { padding: 3.25rem 0 0; display: flex; flex-direction: column; gap: 1.5rem; }
+  .stack  { display: flex; flex-direction: column; gap: 1rem; }
+  .stack-tight { display: flex; flex-direction: column; gap: .55rem; }
+
+  hr.rule { border: 0; border-top: 1px solid var(--bd); margin: 3.25rem 0 0; }
+
+  /* ── Authorship legend ─────────────────────────────────────── */
+  .legend { display: grid; gap: .75rem; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); }
+  .lg {
+    border: 1px solid var(--bd);
+    border-left-width: 3px;
+    border-radius: var(--r-md);
+    background: var(--s1);
+    padding: .8rem .95rem;
+    display: flex; flex-direction: column; gap: .3rem;
+  }
+  .lg-code { border-left-color: var(--code); }
+  .lg-model { border-left-color: var(--model); }
+  .lg-ext  { border-left-color: var(--ext); }
+  .lg-name { font-family: var(--mono); font-size: .8rem; font-weight: 500; }
+  .lg-code .lg-name { color: var(--code); }
+  .lg-model .lg-name { color: var(--model); }
+  .lg-ext .lg-name  { color: var(--ext); }
+  .lg-desc { font-size: .82rem; line-height: 1.5; color: var(--tx-3); }
+
+  /* ── Door set-piece ────────────────────────────────────────── */
+  .subject-line {
+    background: var(--ext-soft);
+    border: 1px solid color-mix(in srgb, var(--ext) 30%, transparent);
+    border-radius: var(--r-md);
+    padding: .85rem 1rem;
+    font-family: var(--mono);
+    font-size: .82rem;
+    line-height: 1.7;
+    color: var(--tx);
+    overflow-x: auto;
+    white-space: nowrap;
+  }
+  .subject-tag {
+    font-size: .66rem; letter-spacing: .1em; text-transform: uppercase;
+    color: var(--ext); font-family: var(--sans); font-weight: 500;
+    display: block; margin-bottom: .35rem;
+  }
+
+  .doors { display: grid; gap: .75rem; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); }
+  .door {
+    border-radius: var(--r-lg);
+    border: 1px solid var(--bd);
+    background: var(--s1);
+    padding: 1rem;
+    display: flex; flex-direction: column; gap: .6rem;
+    box-shadow: var(--shadow);
+  }
+  .door-hd { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
+  .door-slot { font-family: var(--mono); font-size: .82rem; font-weight: 500; }
+  .door-code .door-slot { color: var(--code); }
+  .door-model .door-slot { color: var(--model); }
+  .door-ext .door-slot  { color: var(--ext); }
+
+  .verdict {
+    font-size: .64rem; letter-spacing: .08em; text-transform: uppercase;
+    font-weight: 500; padding: .16rem .45rem; border-radius: var(--r-sm);
+    margin-left: auto; white-space: nowrap;
+  }
+  .v-shut  { background: var(--bad-soft); color: var(--bad); }
+  .v-open  { background: var(--good-soft); color: var(--good); }
+  .door-body { font-size: .855rem; line-height: 1.6; color: var(--tx-2); }
+
+  /* ── Before / after ────────────────────────────────────────── */
+  .ba { display: grid; gap: .6rem; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+  .ba-cell {
+    border-radius: var(--r-md); padding: .7rem .85rem;
+    font-family: var(--mono); font-size: .78rem; line-height: 1.65;
+    overflow-x: auto;
+  }
+  .ba-was { background: var(--bad-soft); border: 1px solid color-mix(in srgb, var(--bad) 26%, transparent); }
+  .ba-now { background: var(--good-soft); border: 1px solid color-mix(in srgb, var(--good) 26%, transparent); }
+  .ba-lbl {
+    display: block; font-family: var(--sans); font-size: .64rem;
+    letter-spacing: .09em; text-transform: uppercase; font-weight: 500;
+    margin-bottom: .3rem;
+  }
+  .ba-was .ba-lbl { color: var(--bad); }
+  .ba-now .ba-lbl { color: var(--good); }
+
+  /* ── Matrix ────────────────────────────────────────────────── */
+  .scroller { overflow-x: auto; border-radius: var(--r-lg); border: 1px solid var(--bd); background: var(--s1); }
+  table { border-collapse: collapse; width: 100%; min-width: 720px; font-size: .855rem; }
+  thead th {
+    text-align: left; font-weight: 500; font-size: .68rem;
+    letter-spacing: .09em; text-transform: uppercase; color: var(--tx-4);
+    padding: .8rem 1rem; border-bottom: 1px solid var(--bd); white-space: nowrap;
+  }
+  tbody td { padding: .8rem 1rem; border-bottom: 1px solid var(--bd); vertical-align: top; line-height: 1.55; color: var(--tx-2); }
+  tbody tr:last-child td { border-bottom: 0; }
+  td.src { font-family: var(--mono); font-weight: 500; color: var(--tx); white-space: nowrap; }
+
+  .chip {
+    display: inline-block; font-size: .68rem; font-weight: 500;
+    padding: .14rem .45rem; border-radius: var(--r-sm); white-space: nowrap;
+    font-family: var(--sans);
+  }
+  .chip-struct { background: var(--code-soft); color: var(--code); }
+  .chip-prose  { background: var(--ext-soft); color: var(--ext); }
+  .chip-none   { background: var(--s3); color: var(--tx-3); }
+  .chip-model  { background: var(--bad-soft); color: var(--bad); }
+
+  /* ── Contrast pair ─────────────────────────────────────────── */
+  .pair { display: grid; gap: .9rem; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); }
+  .pane {
+    border-radius: var(--r-lg); padding: 1.1rem; border: 1px solid var(--bd);
+    background: var(--s1); display: flex; flex-direction: column; gap: .7rem;
+  }
+  .pane-bad { border-color: color-mix(in srgb, var(--bad) 30%, transparent); }
+  .pane-good { border-color: color-mix(in srgb, var(--good) 30%, transparent); }
+  .pane-title { font-family: var(--mono); font-size: .85rem; font-weight: 500; }
+  .pane-bad .pane-title { color: var(--bad); }
+  .pane-good .pane-title { color: var(--good); }
+  .checks { display: flex; flex-direction: column; gap: .45rem; margin: 0; padding: 0; list-style: none; }
+  .checks li { display: flex; gap: .55rem; font-size: .84rem; line-height: 1.55; color: var(--tx-2); }
+  .checks .m { font-family: var(--mono); flex-shrink: 0; font-weight: 500; }
+  .pane-bad .checks .m { color: var(--bad); }
+  .pane-good .checks .m { color: var(--good); }
+
+  /* ── Rule box ──────────────────────────────────────────────── */
+  .rulebox {
+    border-radius: var(--r-lg);
+    border: 1px solid var(--bd-2);
+    background: var(--s2);
+    padding: 1.4rem 1.5rem;
+    display: flex; flex-direction: column; gap: .9rem;
+  }
+  .q {
+    font-family: var(--serif); font-size: 1.24rem; line-height: 1.45;
+    font-style: italic; color: var(--tx);
+  }
+  .ladder { display: flex; flex-direction: column; gap: .5rem; margin: 0; padding: 0; list-style: none; }
+  .rung {
+    display: flex; gap: .75rem; align-items: baseline;
+    padding: .6rem .8rem; border-radius: var(--r-md);
+    border: 1px solid var(--bd); background: var(--s1);
+    font-size: .87rem; line-height: 1.5; color: var(--tx-2);
+  }
+  .rung-1 { border-left: 3px solid var(--code); }
+  .rung-2 { border-left: 3px solid var(--ext); }
+  .rung-3 { border-left: 3px solid var(--bad); }
+  .rung b { font-family: var(--mono); font-size: .8rem; font-weight: 500; white-space: nowrap; }
+  .rung-1 b { color: var(--code); }
+  .rung-2 b { color: var(--ext); }
+  .rung-3 b { color: var(--bad); }
+
+  footer { padding-top: 3.25rem; }
+
+  a { color: var(--code); text-underline-offset: 2px; }
+  a:focus-visible, .scroller:focus-visible { outline: 2px solid var(--code); outline-offset: 3px; border-radius: var(--r-sm); }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; }
+  }
+</style>
+
+<div class="wrap">
+
+  <header class="masthead">
+    <p class="eyebrow">muldro · view layer · companion to Frame and Body</p>
+    <h1>Where untrusted text goes</h1>
+    <p class="lede col">
+      An inbound email is written by someone who is not your user and does not
+      wish them well. This page traces every place that text can reach inside
+      muldro, what it can do when it arrives, and why each door is shut by
+      <em>construction</em> rather than by detection.
+    </p>
+  </header>
+
+  <section>
+    <div class="col stack-tight">
+      <p class="eyebrow">The vocabulary</p>
+      <h2>Three authors, and only one of them is a stranger</h2>
+      <p class="note">
+        Every value on screen has exactly one author. The whole design is the
+        discipline of never letting the third kind wear the voice of the first.
+      </p>
+    </div>
+
+    <div class="legend">
+      <div class="lg lg-code">
+        <span class="lg-name">code</span>
+        <span class="lg-desc">muldro's own logic over a database row. Headline, kind, status, counts, button labels.</span>
+      </div>
+      <div class="lg lg-model">
+        <span class="lg-name">model</span>
+        <span class="lg-desc">an LLM writing muldro's prose. Exactly one field — <code>body</code> — and nowhere else.</span>
+      </div>
+      <div class="lg lg-ext">
+        <span class="lg-name">external</span>
+        <span class="lg-desc">an email subject, a message, a fetched page. The <code>quotes</code> band only, verbatim, attributed.</span>
+      </div>
+    </div>
+
+    <p class="note col">
+      The rule that matters is enforceable rather than instructed. <em>"Do not quote
+      the email text in your summary"</em> cannot be enforced, because the model holds
+      the text and cannot prove it didn't use it. So the body slot never carries
+      external provenance — because external values arrive on a different field
+      that only code renders.
+    </p>
+  </section>
+
+  <hr class="rule">
+
+  <section>
+    <div class="col stack-tight">
+      <p class="eyebrow">The set-piece</p>
+      <h2>One subject line, traced</h2>
+      <p class="note">
+        A real inbound subject, and the three slots it tries to reach.
+      </p>
+    </div>
+
+    <div>
+      <span class="subject-tag">inbound · gmail · From: a stranger</span>
+      <div class="subject-line" tabindex="0">**URGENT** — [Verify your account](https://phish.example) — www.phish.example</div>
+    </div>
+
+    <div class="doors">
+      <div class="door door-code">
+        <div class="door-hd">
+          <span class="door-slot">frame.headline</span>
+          <span class="verdict v-shut">welded shut</span>
+        </div>
+        <p class="door-body">
+          Refused at the type boundary. The validator rejects every construct
+          GFM would turn into emphasis, a heading, or a live link — including
+          all three autolink forms — plus newlines and bidi overrides.
+        </p>
+        <p class="note" style="font-size:.8rem">
+          Length is <strong>bounded, not refused</strong>: a rejected headline is a card
+          the founder never sees.
+        </p>
+      </div>
+
+      <div class="door door-model">
+        <div class="door-hd">
+          <span class="door-slot">body</span>
+          <span class="verdict v-shut">no route in</span>
+        </div>
+        <p class="door-body">
+          The model writes this field, and the model has read the email — so this
+          door cannot be closed by instruction. It is closed by giving external
+          text <em>somewhere else to go</em>, where code renders it with a name attached.
+        </p>
+        <p class="note" style="font-size:.8rem">
+          The lede renders inline markdown only, and <strong>never a link</strong>.
+        </p>
+      </div>
+
+      <div class="door door-ext">
+        <div class="door-hd">
+          <span class="door-slot">quotes[]</span>
+          <span class="verdict v-open">open, by design</span>
+        </div>
+        <p class="door-body">
+          Carried <strong>verbatim</strong> and never sanitized — neutralizing would
+          misrepresent what the sender wrote, and a quote is evidence. Safety lives in
+          the renderer, which never passes a quote to a markdown renderer.
+        </p>
+        <p class="note" style="font-size:.8rem">
+          An <strong>unattributed</strong> quote is dropped: with no name on it, it is
+          indistinguishable from muldro's own voice.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <hr class="rule">
+
+  <section>
+    <div class="col stack-tight">
+      <p class="eyebrow">The quieter vector</p>
+      <h2>Wearing the voice, versus raising the rank</h2>
+      <p class="lede">
+        The headline attack makes untrusted text <em>look</em> like muldro. The
+        second one never touches a word of copy — it just gets itself read first.
+      </p>
+    </div>
+
+    <div class="col stack">
+      <p>
+        <code>frame.importance</code> was carried from an LLM score whose prompt
+        interpolated <code>Title:</code> and <code>Summary:</code> — the raw subject and
+        body. So <code>THIS IS EXTREMELY URGENT</code> in a subject line was not data
+        to that model. It was an instruction.
+      </p>
+    </div>
+
+    <div class="ba">
+      <div class="ba-cell ba-was" tabindex="0">
+        <span class="ba-lbl">was</span>
+        importance = _importance(event.importance_score)<br>
+        <span style="color:var(--tx-3)"># LLM output, over attacker-controlled text</span>
+      </div>
+      <div class="ba-cell ba-now" tabindex="0">
+        <span class="ba-lbl">now</span>
+        def frame_for_event(event, *, importance: float = 0.0)<br>
+        <span style="color:var(--tx-3)"># the caller's decision, like kind and status</span>
+      </div>
+    </div>
+
+    <p class="note col">
+      The channel was <strong>removed</strong>, not defended. Nothing reads the field yet —
+      which is precisely why it had to be closed now: the next feature to touch it
+      would reasonably assume it was safe to sort on.
+    </p>
+  </section>
+
+  <hr class="rule">
+
+  <section>
+    <div class="col stack-tight">
+      <p class="eyebrow">Why not just check it</p>
+      <h2>A score cannot be verified. An order can.</h2>
+      <p class="note">
+        The tempting fix is a second model that asks <em>"is this genuinely important,
+        or is it manipulating me?"</em> But that is the question the first model was
+        already asked — so the verifier is the scorer with extra steps.
+      </p>
+    </div>
+
+    <div class="pair">
+      <div class="pane pane-bad">
+        <span class="pane-title">a score: 0.0 – 1.0</span>
+        <ul class="checks">
+          <li><span class="m">✗</span><span><strong>Unfalsifiable.</strong> <code>0.9</code> looks exactly as valid as <code>0.2</code>. Importance is what you delegated — there is no outside fact to check it against.</span></li>
+          <li><span class="m">✗</span><span><strong>Unbounded.</strong> A fooled model puts the item first.</span></li>
+          <li><span class="m">✗</span><span><strong>Unlimited attempts.</strong> They send email until one lands. Your prompt does not iterate.</span></li>
+        </ul>
+      </div>
+
+      <div class="pane pane-good">
+        <span class="pane-title">an order: a permutation of keys</span>
+        <ul class="checks">
+          <li><span class="m">✓</span><span><strong>Totally checkable.</strong> Every input key exactly once. Nothing invented, nothing dropped — the output alphabet is fixed to the input.</span></li>
+          <li><span class="m">✓</span><span><strong>Bounded.</strong> Displacement is clamped: a maximally-fooled model moves an item a few places, not to the top.</span></li>
+          <li><span class="m">✓</span><span><strong>Fails whole.</strong> Anything that is not a valid permutation is discarded and the deterministic baseline stands. No partial trust.</span></li>
+        </ul>
+      </div>
+    </div>
+
+    <p class="note col">
+      And the ranker holds no prose at all — no headline, no summary, no snippet.
+      It orders opaque keys. <strong>It cannot be prompted because there is nothing to
+      prompt it with.</strong>
+    </p>
+  </section>
+
+  <hr class="rule">
+
+  <section>
+    <div class="col stack-tight">
+      <p class="eyebrow">The part that scales</p>
+      <h2>Provenance is a question you answer five times</h2>
+      <p class="lede">
+        A feature is not one decision. Each connector exposes different structure,
+        so <em>"where does a deadline come from"</em> has five different answers — and
+        two of them are "nowhere, yet".
+      </p>
+    </div>
+
+    <div class="scroller" tabindex="0">
+      <table>
+        <thead>
+          <tr>
+            <th>Source</th>
+            <th>Is <code>summary</code> verbatim?</th>
+            <th>Structured deadline</th>
+            <th>So a deadline comes from</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="src">calendar</td>
+            <td>no — composed by muldro</td>
+            <td><span class="chip chip-struct">start_time</span></td>
+            <td><strong>the structured field. Never extract.</strong> The meeting's start <em>is</em> the deadline.</td>
+          </tr>
+          <tr>
+            <td class="src">gmail</td>
+            <td>yes — the message snippet</td>
+            <td><span class="chip chip-none">none</span></td>
+            <td><span class="chip chip-prose">deterministic extraction</span></td>
+          </tr>
+          <tr>
+            <td class="src">slack</td>
+            <td>yes — the message text</td>
+            <td><span class="chip chip-none">none</span></td>
+            <td><span class="chip chip-prose">deterministic extraction</span></td>
+          </tr>
+          <tr>
+            <td class="src">github</td>
+            <td>no — composed by muldro</td>
+            <td><span class="chip chip-none">not captured</span></td>
+            <td>nothing today. <code>milestone.due_on</code> exists in the API and the connector fetches neither.</td>
+          </tr>
+          <tr>
+            <td class="src">notion</td>
+            <td>no — composed by muldro</td>
+            <td><span class="chip chip-none">not captured</span></td>
+            <td>nothing today. Date properties exist; only <code>last_edited_time</code> is stored.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p class="note col">
+      Calendar is the instructive row. Running a text parser over its composed
+      <code>"{title} from {start} to {end}"</code> string would be <strong>strictly worse</strong>
+      than reading the typed timestamp sitting beside it — and would open a parse
+      surface where none existed. One general mechanism pointed at every source is
+      how that mistake gets made.
+    </p>
+  </section>
+
+  <hr class="rule">
+
+  <section>
+    <div class="col stack-tight">
+      <p class="eyebrow">The decision procedure</p>
+      <h2>Ask this of every field, of every connector</h2>
+    </div>
+
+    <div class="rulebox">
+      <p class="q">
+        “Is this a value the provider computed, a value a human wrote, or a value
+        a model inferred?”
+      </p>
+
+      <ul class="ladder">
+        <li class="rung rung-1">
+          <b>provider</b>
+          <span>A typed value from the API. No parser to feed, nothing to inject. <strong>Always preferred where it exists.</strong></span>
+        </li>
+        <li class="rung rung-2">
+          <b>human prose</b>
+          <span>Deterministic extraction only — a parser, never a model. Attacker-influenced but bounded and checkable. Acceptable.</span>
+        </li>
+        <li class="rung rung-3">
+          <b>model inference</b>
+          <span>Rejected. This is an assertion about attacker-controlled text wearing a typed name.</span>
+        </li>
+      </ul>
+
+      <p class="note">
+        Only the first two may enter. A sixth connector means answering this five
+        more times — once per feature — and the <strong>fail-closed default means
+        forgetting to answer costs a signal rather than opening a hole.</strong>
+      </p>
+    </div>
+
+    <p class="note col">
+      There is one honest exception, and it generalizes: <code>classify_by_rules</code>
+      reads mail headers — <code>List-Unsubscribe</code>, <code>Precedence: bulk</code> — which
+      <em>are</em> attacker-writable, but only in the <strong>demoting</strong> direction.
+      Adding <code>List-Unsubscribe</code> demotes the sender; omitting it merely declines a
+      demotion they could not have claimed anyway. <strong>An input an attacker can only
+      use against themselves is safe to read.</strong>
+    </p>
+  </section>
+
+  <hr class="rule">
+
+  <footer>
+    <div class="col stack-tight">
+      <p class="note">
+        Companion to <strong>Frame and Body</strong> (<code>mockup.html</code>) and the
+        design in <code>docs/view-layer/spec.md</code> §2, §6 and §10. The ranker's typed
+        interface and its per-connector provenance map are in
+        <code>docs/view-layer/ranker-interface.md</code>.
+      </p>
+      <p class="note" style="color:var(--tx-4)">
+        Every claim on this page was verified by running it — against the project's own
+        markdown stack, its connectors, and its database, not against documentation.
+      </p>
+    </div>
+  </footer>
+
+</div>

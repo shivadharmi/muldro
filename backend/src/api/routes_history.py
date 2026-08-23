@@ -29,7 +29,6 @@ from src.models.approvals import Approval
 from src.models.plans import Plan
 from src.models.runtime_event import RuntimeEvent
 from src.models.task_graph import TaskRun, TaskStep
-from src.models.ui_state import UISurface
 from src.services.execution_state import TERMINAL_SUCCESS, transition_run
 
 logger = logging.getLogger(__name__)
@@ -40,16 +39,17 @@ def resolve_history_approval(
     thin: HistoryApprovalContext | None,
     surface_payload: dict | None,
 ) -> ApprovalContext | HistoryApprovalContext | None:
-    """Prefer the rich ``ApprovalContext`` persisted on the run's surface (B12 / P3.2).
+    """Prefer a rich ``ApprovalContext`` over the thin one, when a caller has one.
 
-    The autonomous surface machine persists the full ``ApprovalContext`` under
-    ``UISurface.payload["last_surface_update"]["approval"]`` (execution_surface_emitter).
-    This lets the persisted/REST approval path carry the SAME rich context the live-WS
-    path emits, so the frontend renders ONE ``InlineApprovalCard`` from either source.
+    The rich context used to be read back from a persisted copy of the last
+    surface update. Nothing persists a view any more, so no caller in this module
+    has a rich payload to pass and every call takes the ABSENT branch. The
+    classification is kept because it is the single place the absent /
+    well-formed / malformed rule is stated, and it is still applied to whatever
+    a caller does pass.
 
     Applies the shared ``extract_persisted_rich_approval`` classification:
-      * ABSENT → return *thin* (fallback; byte-neutral for existing data that predates
-        / lacks a persisted rich context);
+      * ABSENT → return *thin* (the fallback every caller now takes);
       * RICH → return the rich ``ApprovalContext``;
       * MALFORMED → FAIL CLOSED (return ``None``) rather than emit a half-rendered card.
     """
@@ -210,47 +210,26 @@ async def list_history(
                     risk_level=appr.risk_level or "low",
                 )
 
-            # B12 / P3.2: prefer the rich ApprovalContext persisted on the run's
-            # surface (execution_surface_emitter writes it under
-            # ``last_surface_update.approval``). Absent → thin fallback; malformed →
-            # fail closed (see helper). Enrichment relies on ``surface_id == run_id``
-            # (the default run-surface keying); a chat-linked autonomous run whose
-            # surface_id is overridden (graph_executor.py) simply falls through to the
-            # thin card — graceful degradation, intended. Scope by workspace_id + user_id
-            # (matching the sibling live-surface query below) so tenant isolation is
-            # LOCAL, not a transitive argument a future refactor could break.
-            run_surf = await db.execute(
-                select(UISurface).where(
-                    UISurface.surface_id == run.run_id,
-                    UISurface.workspace_id == workspace_id,
-                    UISurface.user_id == user_id,
-                )
-            )
-            run_surface = run_surf.scalar_one_or_none()
-            approval_ctx = resolve_history_approval(
-                approval_ctx, run_surface.payload if run_surface else None
-            )
+            # The rich ApprovalContext used to be read back from a persisted
+            # copy of the last surface update. Nothing persists a view any more —
+            # a view is a pure function of a live row, so there is no view to
+            # store — which leaves no source for the rich context. Passing None
+            # takes resolve_history_approval's ABSENT branch: the thin context,
+            # which is what data lacking a rich context always got.
+            approval_ctx = resolve_history_approval(approval_ctx, None)
 
-        # Live surface state
+        # The surface id the live WS frames are keyed by. GraphExecutor stores it
+        # on the run itself when the run starts, so it is read from the run row
+        # rather than from any persisted view. The frontend needs it to match an
+        # incoming surface_update frame to this row.
+        #
+        # live_phase has no REST source: it only ever existed inside a surface
+        # update, and nothing stores those. It stays None here and the client
+        # fills it from the live frames it receives while the run is executing.
         live_phase: str | None = None
-        surface_id: str | None = None
-        try:
-            surf_result = await db.execute(
-                select(UISurface).where(
-                    UISurface.workspace_id == workspace_id,
-                    UISurface.user_id == user_id,
-                )
-            )
-            surfaces = surf_result.scalars().all()
-            for surf in surfaces:
-                payload = surf.payload or {}
-                if payload.get("source_run_id") == run.run_id:
-                    surface_id = surf.surface_id
-                    last_update = payload.get("last_surface_update", {})
-                    live_phase = last_update.get("phase")
-                    break
-        except Exception:
-            pass
+        checkpoint = run.checkpoint if isinstance(run.checkpoint, dict) else {}
+        raw_surface_id = checkpoint.get("surface_id")
+        surface_id: str | None = raw_surface_id if isinstance(raw_surface_id, str) else None
 
         # Duration from run timestamps (None while still running)
         duration_ms: int | None = None

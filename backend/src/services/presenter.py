@@ -410,7 +410,7 @@ class Presenter:
     async def _get_pending_approvals(self, user_id: str, workspace_id: str = "") -> list[Approval]:
         # Function-local like the other prepared-work queries: ``approval_persistence`` imports
         # back into ``src.services``, so the constant is pulled in at call time, not import time.
-        from src.deep_runtime.middleware.approval_persistence import PREPARED_APPROVAL_TYPE
+        from src.models.approvals import PREPARED_APPROVAL_TYPE
 
         result = await self._db.execute(
             select(Approval)
@@ -432,7 +432,7 @@ class Presenter:
 
     async def _count_prepared_actions(self, user_id: str, workspace_id: str = "") -> int:
         """Count pending prepared actions for the briefing's one pointer line."""
-        from src.deep_runtime.middleware.approval_persistence import PREPARED_APPROVAL_TYPE
+        from src.models.approvals import PREPARED_APPROVAL_TYPE
 
         result = await self._db.execute(
             select(func.count())

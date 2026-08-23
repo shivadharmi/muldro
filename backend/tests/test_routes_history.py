@@ -178,7 +178,6 @@ async def test_list_history_returns_items_with_correct_shape():
     #   4) steps query → scalars().all() returns [step]
     #   5) plan query → scalar_one_or_none() returns plan
     #   6) approval query → scalar_one_or_none() returns None (no approval)
-    # UISurface lookup is wrapped in try/except — provide a result that yields None
     execute_results = [
         _FakeResult(scalar=1),  # count
         _FakeResult(rows=[run]),  # runs
@@ -198,19 +197,18 @@ async def test_list_history_returns_items_with_correct_shape():
     mock_db = MagicMock()
     mock_db.execute = fake_execute
 
-    with patch("src.models.ui_state.UISurface", create=True):
-        resp = await list_history(
-            status="all",
-            source="all",
-            search=None,
-            date_from=None,
-            date_to=None,
-            limit=20,
-            offset=0,
-            user_id="usr_01JTEST00000000000000000000",
-            workspace_id="ws_test",
-            db=mock_db,
-        )
+    resp = await list_history(
+        status="all",
+        source="all",
+        search=None,
+        date_from=None,
+        date_to=None,
+        limit=20,
+        offset=0,
+        user_id="usr_01JTEST00000000000000000000",
+        workspace_id="ws_test",
+        db=mock_db,
+    )
 
     assert resp.total == 1
     assert resp.limit == 20
@@ -288,19 +286,18 @@ async def test_list_history_handles_multiple_pending_approvals():
     mock_db = MagicMock()
     mock_db.execute = fake_execute
 
-    with patch("src.models.ui_state.UISurface", create=True):
-        resp = await list_history(
-            status="all",
-            source="all",
-            search=None,
-            date_from=None,
-            date_to=None,
-            limit=20,
-            offset=0,
-            user_id="usr_01JTEST00000000000000000000",
-            workspace_id="ws_test",
-            db=mock_db,
-        )
+    resp = await list_history(
+        status="all",
+        source="all",
+        search=None,
+        date_from=None,
+        date_to=None,
+        limit=20,
+        offset=0,
+        user_id="usr_01JTEST00000000000000000000",
+        workspace_id="ws_test",
+        db=mock_db,
+    )
 
     # No exception raised; the run surfaces with exactly one approval (the newest).
     assert resp.total == 1
@@ -317,92 +314,76 @@ async def test_list_history_handles_multiple_pending_approvals():
 
 
 @pytest.mark.asyncio
-async def test_list_history_run_surface_enrichment_query_is_workspace_scoped():
-    """B12 / P3.2 defense-in-depth: the rich-approval enrichment lookup must scope by
-    workspace_id + user_id (matching its sibling live-surface query), so tenant
-    isolation is LOCAL — not a transitive argument a future refactor could break.
+async def test_list_history_surface_id_comes_from_the_run_checkpoint():
+    """``surface_id`` is read off the run row, not off any stored view.
 
-    A real cross-tenant bite is unconstructable (``surface_id`` is a globally-unique
-    PK == run_id, so no two ui_surfaces rows can share it across tenants), so this
-    asserts the query CONSTRUCTION instead: the ``select(UISurface)`` scoped by
-    ``surface_id`` also filters ``workspace_id`` and ``user_id``. Removing either
-    filter makes this bite.
+    The frontend keys an incoming live ``surface_update`` frame to a history row
+    by this id, so it has to survive. GraphExecutor writes it into the run's
+    checkpoint when the run starts, which is the only live source left. A
+    checkpoint that is missing or not a mapping must yield ``None`` rather than
+    leaking a non-string into the response.
     """
     from src.api.routes_history import list_history
 
-    run = MagicMock()
-    run.run_id = "run_scope"
-    run.plan_id = None
-    run.user_id = "usr_01JTEST00000000000000000000"
-    run.workspace_id = "ws_test"
-    run.status = "awaiting_approval"
-    run.source = "background"
-    run.retry_count = 0
-    run.trace_id = None
-    run.cost_usd = 0.0
-    run.started_at = datetime(2026, 4, 13, 10, 0, tzinfo=timezone.utc)
-    run.completed_at = None
-    run.updated_at = datetime(2026, 4, 13, 10, 0, 6, tzinfo=timezone.utc)
-    run.error = None
+    def _run(checkpoint):
+        run = MagicMock()
+        run.run_id = "run_ckpt"
+        run.plan_id = None
+        run.user_id = "usr_01JTEST00000000000000000000"
+        run.workspace_id = "ws_test"
+        run.status = "running"
+        run.source = "background"
+        run.retry_count = 0
+        run.trace_id = None
+        run.cost_usd = 0.0
+        run.started_at = datetime(2026, 4, 13, 10, 0, tzinfo=timezone.utc)
+        run.completed_at = None
+        run.updated_at = datetime(2026, 4, 13, 10, 0, 6, tzinfo=timezone.utc)
+        run.error = None
+        run.checkpoint = checkpoint
+        return run
 
-    appr = MagicMock()
-    appr.approval_id = "apr_1"
-    appr.step_id = "step_1"
-    appr.title = "Send email"
-    appr.risk_level = "high"
-    appr.created_at = datetime(2026, 4, 13, 10, 0, 5, tzinfo=timezone.utc)
+    async def _call(run):
+        execute_results = [
+            _FakeResult(scalar=1),  # count
+            _FakeResult(rows=[run]),  # runs
+            _FakeResult(rows=[]),  # trace batch
+            _FakeResult(rows=[]),  # steps
+        ]
+        call_index = 0
 
-    # Sequence: count, runs, trace, steps, approval, ENRICHMENT (UISurface), live-surface.
-    execute_results = [
-        _FakeResult(scalar=1),  # count
-        _FakeResult(rows=[run]),  # runs
-        _FakeResult(rows=[]),  # trace batch
-        _FakeResult(rows=[]),  # steps
-        _FakeResult(rows=[appr]),  # approval
-        _FakeResult(scalar=None),  # enrichment UISurface lookup → None (thin fallback)
-        _FakeResult(rows=[]),  # live-surface query
-    ]
-    captured: list = []
-    call_index = 0
+        async def fake_execute(_stmt, *args, **kwargs):
+            nonlocal call_index
+            result = (
+                execute_results[call_index] if call_index < len(execute_results) else _FakeResult()
+            )
+            call_index += 1
+            return result
 
-    async def fake_execute(stmt, *args, **kwargs):
-        nonlocal call_index
-        captured.append(stmt)
-        result = execute_results[call_index] if call_index < len(execute_results) else _FakeResult()
-        call_index += 1
-        return result
+        mock_db = MagicMock()
+        mock_db.execute = fake_execute
+        return await list_history(
+            status="all",
+            source="all",
+            search=None,
+            date_from=None,
+            date_to=None,
+            limit=20,
+            offset=0,
+            user_id="usr_01JTEST00000000000000000000",
+            workspace_id="ws_test",
+            db=mock_db,
+        )
 
-    mock_db = MagicMock()
-    mock_db.execute = fake_execute
+    resp = await _call(_run({"surface_id": "run_ckpt"}))
+    assert resp.items[0].surface_id == "run_ckpt"
 
-    resp = await list_history(
-        status="all",
-        source="all",
-        search=None,
-        date_from=None,
-        date_to=None,
-        limit=20,
-        offset=0,
-        user_id="usr_01JTEST00000000000000000000",
-        workspace_id="ws_test",
-        db=mock_db,
-    )
-    assert resp.items[0].status == "awaiting_approval"
+    # No live source for the phase remains; the client fills it from live frames.
+    assert resp.items[0].live_phase is None
 
-    # The enrichment query is the UISurface select scoped by surface_id. Inspect its
-    # WHERE clause ONLY (not the SELECT column list, which names every column) so the
-    # assertion reflects the actual filters — removing either bites.
-    enrichment = [
-        s
-        for s in captured
-        if "ui_surfaces" in str(s).lower()
-        and getattr(s, "whereclause", None) is not None
-        and "surface_id" in str(s.whereclause).lower()
-    ]
-    assert enrichment, "expected the run-surface enrichment query to be issued"
-    where_sql = str(enrichment[0].whereclause).lower()
-    assert "workspace_id" in where_sql  # tenant scope — bites if the filter is removed
-    assert "user_id" in where_sql
+    for absent in (None, {}, {"surface_id": 17}, "not-a-mapping"):
+        resp = await _call(_run(absent))
+        assert resp.items[0].surface_id is None, absent
 
 
 # ---------------------------------------------------------------------------

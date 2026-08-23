@@ -10,15 +10,17 @@ import type {
   Briefing,
   BriefingFeedbackInput,
   BriefingFeedbackSummary,
+  CredentialDeleteResult,
+  FilterRule,
   MeetingPrep,
   MemoryItem,
+  ModelBinding,
   ModelCatalog,
   ModelConfig,
   Notification,
   PlanOutput,
   ProviderStatus,
   SearchResponse,
-  TierBinding,
   SystemDashboard,
   TrustDashboardEntry,
   TrustCapabilityDetail,
@@ -27,11 +29,13 @@ import type {
 import type { RuntimeSummary } from "./types/runtime";
 
 
-import { getStoredToken } from "./auth";
+import { getStoredToken } from "./auth-storage";
 import {
   formatApiError,
   parseApiError,
+  parseBindRejection,
   SAFE_FALLBACK_MESSAGE,
+  type BindRejection,
   type ParsedApiError,
 } from "./api-error";
 
@@ -51,17 +55,25 @@ export class ApiError extends Error {
   readonly correlationId: string | null;
   /** Client-safe message without the status prefix, e.g. "Not found.". */
   readonly safeMessage: string;
+  /**
+   * Populated only for a `PUT /v1/model-config` 422 bind rejection — the one
+   * deliberate exception to the standard error envelope (see
+   * `toModelConfigApiError`). `null` for every other error.
+   */
+  readonly bindRejections: BindRejection[] | null;
 
   constructor(
     public readonly status: number,
     public readonly statusText: string,
-    parsed: ParsedApiError
+    parsed: ParsedApiError,
+    bindRejections: BindRejection[] | null = null
   ) {
     super(`API ${status}: ${parsed.message || statusText}`);
     this.name = "ApiError";
     this.code = parsed.code;
     this.correlationId = parsed.correlationId;
     this.safeMessage = parsed.message || SAFE_FALLBACK_MESSAGE;
+    this.bindRejections = bindRejections;
   }
 
   /** Client-safe message + correlation id, e.g. "Not found. — reference: req_abc". */
@@ -96,6 +108,36 @@ async function toApiError(res: Response): Promise<ApiError> {
   return new ApiError(res.status, res.statusText, parsed);
 }
 
+/**
+ * `PUT /v1/model-config` can reject with `422 { "detail": [ConfigWarning, ...] }`
+ * — a deliberate, scoped exception to the standard `{ error: {...} }` envelope
+ * (see `backend/src/api/routes_model_config.py::put_model_config`), because the
+ * per-binding detail spec §2.4 requires would not survive the generic handler's
+ * collapse. Check for that shape FIRST; fall back to the generic parse for
+ * everything else (network errors, unrelated 4xx/5xx, malformed bodies).
+ */
+async function toModelConfigApiError(res: Response): Promise<ApiError> {
+  const correlationHeader = res.headers.get("X-Request-ID");
+  const text = await res.text().catch(() => "");
+  const rejections = parseBindRejection(text);
+  if (rejections) {
+    const message =
+      rejections.length === 1
+        ? rejections[0].message
+        : `${rejections.length} bindings could not be saved: ${rejections
+            .map((r) => r.message)
+            .join(" ")}`;
+    return new ApiError(
+      res.status,
+      res.statusText,
+      { code: "bind_rejected", message, correlationId: correlationHeader },
+      rejections
+    );
+  }
+  const parsed = parseApiError(text, correlationHeader);
+  return new ApiError(res.status, res.statusText, parsed);
+}
+
 // ── Helpers ─────────────────────────────────────────────────────
 
 function authHeaders(): Record<string, string> {
@@ -105,13 +147,17 @@ function authHeaders(): Record<string, string> {
   return headers;
 }
 
-async function api<T>(path: string, init?: RequestInit): Promise<T> {
+async function api<T>(
+  path: string,
+  init?: RequestInit,
+  errorMapper: (res: Response) => Promise<ApiError> = toApiError
+): Promise<T> {
   const res = await fetch(`/api${path}`, {
     ...init,
     headers: { ...authHeaders(), ...init?.headers },
   });
   if (!res.ok) {
-    throw await toApiError(res);
+    throw await errorMapper(res);
   }
   if (res.status === 204) return undefined as T;
   return res.json();
@@ -147,6 +193,15 @@ export function verifyMagicLink(
   token: string
 ): Promise<{ access_token: string; expires_at: string; user: { user_id: string; email: string; display_name: string } }> {
   return post("/auth/verify", { token });
+}
+
+/**
+ * Revoke the session server-side. Clearing localStorage only makes the browser
+ * forget the token; the session row stays valid until it expires, so anyone
+ * still holding the value keeps full access after "signing out".
+ */
+export function logoutSession(): Promise<{ status: string }> {
+  return post("/auth/logout", {});
 }
 
 export function getCurrentUser(): Promise<{
@@ -378,8 +433,11 @@ export function fetchRuntimeSummary(): Promise<RuntimeSummary> {
 
 // ── Approvals ───────────────────────────────────────────────────
 
-export function fetchApprovals(status?: string): Promise<Approval[]> {
-  const qs = status ? `?status=${status}` : "";
+export function fetchApprovals(status?: string, approvalType?: string): Promise<Approval[]> {
+  const params = new URLSearchParams();
+  if (status) params.set("status", status);
+  if (approvalType) params.set("approval_type", approvalType);
+  const qs = params.toString() ? `?${params}` : "";
   return api(`/approvals${qs}`);
 }
 
@@ -501,52 +559,23 @@ export function fetchMemories(
 }
 
 
-// ── Insights ───────────────────────────────────────────────────
+// ── Workspace feed ──────────────────────────────────────────────
 
-export function dismissInsight(
-  surfaceId: string,
-  reason?: string
-): Promise<{ status: string; surface_id: string }> {
-  return post(`/insights/${surfaceId}/dismiss`, { reason: reason || null });
+export function fetchWorkspaceUnits(): Promise<{
+  units: import("@/lib/types/unit").Unit[];
+  count: number;
+  /**
+   * Index into `units` where attention stops: everything from here on is
+   * collapsed behind one row. NOT a filter — the tail is on the wire, ordered
+   * and reachable. `fold_after === count` means nothing folds.
+   */
+  fold_after: number;
+}> {
+  return api("/workspace/units");
 }
 
-// ── UI Surfaces ─────────────────────────────────────────────────
-
-export function fetchSurfaces() {
-  return api("/ui/surfaces");
-}
-
-export function fetchSurface(surfaceId: string) {
-  return api(`/ui/surfaces/${surfaceId}`);
-}
-
-interface WorkspaceSurfaceResponse {
-  id: string;
-  kind: import("@/lib/types/surfaces").SurfaceKind;
-  preview: import("@/lib/a2ui-types").SurfacePreview;
-  detail_config: import("@/lib/a2ui-types").DetailConfig | null;
-  source_run_id?: string | null;
-  response_preview?: string | null;
-  created_at?: string | null;
-  phase?: import("@/lib/a2ui-types").ExecutionPhase;
-  steps?: import("@/lib/a2ui-types").StepState[];
-  current_step?: string | null;
-  progress?: string;
-  approval?: import("@/lib/a2ui-types").ApprovalContext | null;
-  results?: import("@/lib/a2ui-types").ResultSummary | null;
-  surface_data?: import("@/lib/a2ui-types").SurfaceDataPayload | null;
-  trust_context?: Record<string, string> | null;
-}
-
-export function fetchWorkspaceSurfaces(): Promise<{ surfaces: WorkspaceSurfaceResponse[]; count: number }> {
-  return api("/workspace/surfaces");
-}
-
-export function fetchSurfaceDetail(
-  surfaceId: string,
-  tabId: string
-): Promise<import("@/lib/a2ui-types").DetailTabResponse> {
-  return api(`/surfaces/${surfaceId}/detail/${tabId}`);
+export function dismissUnit(frameKey: string): Promise<{ status: string }> {
+  return post("/workspace/units/dismiss", { frame_key: frameKey });
 }
 
 // ── Message Context / Evidence ──────────────────────────────────
@@ -802,6 +831,15 @@ export interface UnifiedIntegration {
   oc_provider_labels?: Record<string, string>;
   // Per-provider connection state, e.g. {"gmail": true, "googlecalendar": false}.
   provider_connections?: Record<string, boolean>;
+  // The SECOND credential a dual-credential installation holds: gateway-backed
+  // for its actions AND its own OAuth token for a poll the gateway cannot serve.
+  // Absent on every single-credential installation. When present, the card
+  // renders a chip and a separately-labelled connect button for it, and
+  // `connected` is all-of across both.
+  native_provider?: string | null;
+  native_connected?: boolean;
+  // Short human phrase for what that token buys ("notifications").
+  native_purpose?: string;
 }
 
 export function fetchInstallations(): Promise<Installation[]> {
@@ -1026,6 +1064,23 @@ export async function setTimePolicies(
   });
 }
 
+// ── Filter rules ───────────────────────────────────────────────
+
+export async function fetchFilterRules(): Promise<{
+  rules: FilterRule[];
+  count: number;
+}> {
+  return api("/workspace/filter-rules");
+}
+
+/** Revoking releases the events the rule had frozen; `released` is how many
+ *  came back into view. */
+export async function revokeFilterRule(
+  ruleId: string
+): Promise<{ rule_id: string; released: number }> {
+  return api(`/workspace/filter-rules/${ruleId}`, { method: "DELETE" });
+}
+
 // ── History ─────────────────────────────────────────────────────
 
 export async function fetchHistory(params: {
@@ -1076,25 +1131,38 @@ export async function fetchModelConfig(): Promise<ModelConfig> {
 }
 
 export async function saveModelConfig(body: {
-  tiers: TierBinding[];
-  agent_overrides: TierBinding[];
+  tiers: ModelBinding[];
+  agent_overrides: ModelBinding[];
 }): Promise<ModelConfig> {
-  return api("/model-config", {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
+  return api(
+    "/model-config",
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    },
+    toModelConfigApiError
+  );
 }
 
-export async function saveProviderKey(
+/**
+ * Partial credential update. Only the keys present in `fields` are sent, and the
+ * server leaves everything it does not receive untouched — so rotating a key no
+ * longer wipes the base URL. `JSON.stringify` drops `undefined`, which is what
+ * makes omission expressible; pass `null` to clear a field deliberately.
+ */
+export async function saveProviderCredential(
   provider: string,
-  apiKey: string,
-  baseUrl?: string
-): Promise<{ status: string }> {
+  fields: {
+    api_key?: string;
+    base_url?: string | null;
+    extra_config?: Record<string, unknown> | null;
+  }
+): Promise<ProviderStatus> {
   return api(`/providers/${provider}/credentials`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ api_key: apiKey, base_url: baseUrl }),
+    body: JSON.stringify(fields),
   });
 }
 
@@ -1106,6 +1174,6 @@ export async function testProviderKey(
 
 export async function deleteProviderKey(
   provider: string
-): Promise<ProviderStatus> {
+): Promise<CredentialDeleteResult> {
   return api(`/providers/${provider}/credentials`, { method: "DELETE" });
 }

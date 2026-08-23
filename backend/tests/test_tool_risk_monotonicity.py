@@ -113,12 +113,10 @@ def test_downward_risk_divergence_is_allowlisted():
     # diverge downward from email.send (high) were deleted when google-workspace moved
     # to the gateway; the gateway's gmail action set has no label/filter-management
     # action, so that divergence no longer exists.
-    expected = {
-        # render_surface publishes to the founder's own workspace UI and nothing else; the
-        # capability inherits the internal family's default `low`, the tool is honestly
-        # `none`. Both bands are ungated, so this divergence cannot weaken a gate.
-        "render_surface": ("none", "low"),
-    }
+    # Empty today, and that is the desired state: it means no tool claims a lower risk
+    # than the capability it is gated on. An entry here is a conscious exception, never a
+    # convenience.
+    expected: dict[str, tuple[str, str]] = {}
 
     actual: dict[str, tuple[str, str]] = {}
     for name, capability, risk, _approval in _all_tools():

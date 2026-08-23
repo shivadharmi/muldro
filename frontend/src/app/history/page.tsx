@@ -11,7 +11,7 @@ import { useWsActionStore } from "@/stores/ws-action-store";
 import { RunRow } from "@/components/history/run-row";
 import { HistoryFilters } from "@/components/history/history-filters";
 import { RunDetailModal } from "@/components/history/run-detail-modal";
-import type { SurfaceUpdate } from "@/lib/a2ui-types";
+import type { SurfaceUpdate } from "@/lib/types/execution";
 
 export default function HistoryPage() {
   const { user } = useAuth();

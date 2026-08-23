@@ -196,3 +196,51 @@ async def test_disconnecting_a_native_installation_is_unchanged():
     finally:
         await _clear_connections(factory)
         await engine.dispose()
+
+
+async def test_disconnecting_a_dual_credential_installation_revokes_both_grants():
+    """GitHub holds two credentials, and Disconnect must end both.
+
+    `_clear_connection_artifacts` picked the OAuth provider off
+    `inst.auth_provider`, which is "platform_jwt" for EVERY gateway
+    installation — so it matched nothing in the native map and `delete_token`
+    never fired. Disconnecting GitHub revoked the gateway connection_map rows
+    and left the native notifications token live: the card read "Not connected"
+    while Muldro still held a credential that could read the founder's
+    notifications, and the poll kept working. A revocation control that leaves
+    a grant standing is worse than none, because it reports success.
+
+    Which providers hold a second grant is a REGISTRY question
+    (`native_perception_for_provider`), never a brand named here.
+    """
+    factory, engine = make_test_db()
+    try:
+        await seed_user_workspace(factory, _USER, _WS)
+        await _clear_connections(factory)
+        await _add_connection(factory, "github")
+
+        oauth_mgr = AsyncMock()
+        await _disconnect(factory, _make_inst("github", "platform_jwt"), oauth_mgr)
+
+        assert await _statuses_rows(factory) == {"github": "revoked"}
+        oauth_mgr.delete_token.assert_awaited_once_with(_USER, "github")
+    finally:
+        await _clear_connections(factory)
+        await engine.dispose()
+
+
+async def test_a_gateway_only_installation_deletes_no_native_token():
+    """Scoped by the registry: google-workspace declares no native credential."""
+    factory, engine = make_test_db()
+    try:
+        await seed_user_workspace(factory, _USER, _WS)
+        await _clear_connections(factory)
+        await _add_connection(factory, "gmail")
+
+        oauth_mgr = AsyncMock()
+        await _disconnect(factory, _make_inst("google-workspace", "platform_jwt"), oauth_mgr)
+
+        oauth_mgr.delete_token.assert_not_awaited()
+    finally:
+        await _clear_connections(factory)
+        await engine.dispose()

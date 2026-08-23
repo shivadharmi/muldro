@@ -2,15 +2,15 @@
 
 Extracted from ``MuldroOrchestrator`` (god-object decomposition, 2026-06-19). This
 is the final and most delicate extraction: the chat path. It owns the single
-intent → plan → route → execute → present → surface → learn sequence that drives
-every interactive (chat) turn, in both the batch (``process_message``) and
-streaming (``process_message_events`` / ``process_message_stream``) shapes.
+intent → plan → route → execute → present → learn sequence that drives every
+interactive (chat) turn, in both the batch (``process_message``) and streaming
+(``process_message_events`` / ``process_message_stream``) shapes.
 
 Depends downward on AgentInvoker (running sub-agents), ContextAssembler
-(conversation history), PlanStore (plan + interaction persistence), SurfacePusher
-(A2UI surfaces), EventPublisher (runtime events), the SystemCapabilityHandler,
-and the PerceptionRunner (only for the intent-driven perception bump) — never the
-reverse, which keeps the chat<->perception relationship acyclic.
+(conversation history), PlanStore (plan + interaction persistence), EventPublisher
+(runtime events), the SystemCapabilityHandler, and the PerceptionRunner (only for
+the intent-driven perception bump) — never the reverse, which keeps the
+chat<->perception relationship acyclic.
 """
 
 import json
@@ -133,7 +133,6 @@ class ChatProcessor(_ChatSingleLeadMixin):
         invoker,
         context,
         plans,
-        surfaces,
         events,
         system_capability_handler,
         perception,
@@ -151,7 +150,6 @@ class ChatProcessor(_ChatSingleLeadMixin):
         self._invoker = invoker
         self._context = context
         self._plans = plans
-        self._surfaces = surfaces
         self._events = events
         self._system_capability_handler = system_capability_handler
         self._perception = perception

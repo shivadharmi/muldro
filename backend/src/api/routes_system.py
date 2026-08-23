@@ -1,5 +1,7 @@
 """System endpoints — heartbeat, maintenance, diagnostics, metrics, capabilities."""
 
+import logging
+
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,6 +12,7 @@ from src.middleware.observability import RequestMetrics
 from src.services.dead_letter import DeadLetterService
 from src.services.heartbeat import HeartbeatService
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 

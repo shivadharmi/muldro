@@ -7,7 +7,9 @@ Three outcomes, exhaustive:
 
   None       + any              -> OAuthManager token (unchanged native path)
   provider   + GatewayConnector -> GatewayToolCaller, no OAuthManager
-  provider   + native connector -> NON-permanent skip (the github deferral)
+  provider   + native connector -> NON-permanent skip (no source is in this
+                                   state today; the branch stays because a
+                                   future half-ported source would land in it)
 
 These tests must supply REAL classes: the discriminator calls
 ``issubclass(connector_cls, GatewayConnector)``, which raises TypeError on a
@@ -49,13 +51,21 @@ def test_ported_sources_really_are_gateway_connectors():
         )
 
 
-def test_deferred_and_native_sources_are_not_gateway_connectors():
-    """The negative half: github (deferred) and slack (native) must NOT be."""
+def test_native_sources_are_not_gateway_connectors():
+    """The negative half: github and slack are OAuth sources, not gateway ones.
+
+    github is the interesting one — its MCP ACTIONS are gateway-served, but the
+    notifications poll runs on a native OAuth token because the OpenConnector
+    catalog has no notifications action. If the registry ever claimed the source
+    again, poll() would take the gateway branch, find a non-GatewayConnector and
+    skip every poll with a synthetic transient error — perception dark, no error
+    surfaced.
+    """
     from src.connectors.base import CONNECTOR_REGISTRY
     from src.connectors.gateway_connector import GatewayConnector
     from src.integrations.gateway_actions import gateway_provider_for_source
 
-    assert gateway_provider_for_source("github") is not None
+    assert gateway_provider_for_source("github") is None
     assert not issubclass(CONNECTOR_REGISTRY["github"], GatewayConnector)
 
     assert gateway_provider_for_source("slack") is None
@@ -122,29 +132,45 @@ class TestCredentialDiscriminator:
         assert recorded["credentials"] == {}
 
     async def test_gateway_backed_but_unported_connector_skips_non_permanently(self):
-        """github is gateway-backed but still a native connector (deferred port).
+        """A gateway-claimed source with a native connector must skip softly.
 
-        Without the issubclass guard it would skip OAuthManager, read an empty
-        access_token and return auth_failed — and auth_failed is PERMANENT,
-        i.e. threshold 1. A source whose data path was deliberately not built
-        must never open a permanent circuit.
+        No shipped source is in this middle state — github left it when its
+        notifications poll went back to a native OAuth token — so the source here
+        is synthetic. Without the issubclass guard such a source would skip
+        OAuthManager, read an empty access_token and return auth_failed, and
+        auth_failed is PERMANENT (threshold 1). A source whose data path was
+        deliberately not built must never open a permanent circuit.
         """
-        from src.connectors.base import CONNECTOR_REGISTRY
-        from src.connectors.gateway_connector import GatewayConnector
-        from src.integrations.gateway_actions import gateway_provider_for_source
+        from src.connectors.base import BaseConnector, ConnectorHealth
         from src.orchestrator.connector_poller import ConnectorPoller
         from src.services.perception_policy import classify_error
 
-        # Preconditions: github really is in this middle state.
-        assert gateway_provider_for_source("github") is not None
-        assert not issubclass(CONNECTOR_REGISTRY["github"], GatewayConnector)
+        class _Unported(BaseConnector):
+            provider = "halfway"
+            cursor_type = "opaque"
+
+            async def poll(self, user_id, cursor, credentials):  # pragma: no cover
+                raise AssertionError("an unported connector must never be polled")
+
+            def get_auth_url(self, scopes=None) -> str:  # pragma: no cover - unused
+                return "https://example.invalid/auth"
+
+            async def test(self, credentials) -> ConnectorHealth:  # pragma: no cover
+                return ConnectorHealth(status="healthy")
 
         def _explode(*args, **kwargs):
             raise AssertionError("OAuthManager was constructed for a gateway source")
 
-        with patch("src.services.oauth_manager.OAuthManager", _explode):
+        with (
+            patch("src.connectors.base.CONNECTOR_REGISTRY", {"halfway": _Unported}),
+            patch(
+                "src.integrations.gateway_actions.gateway_provider_for_source",
+                lambda source: "halfway" if source == "halfway" else None,
+            ),
+            patch("src.services.oauth_manager.OAuthManager", _explode),
+        ):
             events, cursor, error, _cursor_type = await ConnectorPoller.poll(
-                self._poller(), "github", TEST_USER_ID, "ws_test"
+                self._poller(), "halfway", TEST_USER_ID, "ws_test"
             )
 
         assert events == []
@@ -153,6 +179,57 @@ class TestCredentialDiscriminator:
         assert "permanent" not in error.lower()
         assert "transient" in error.lower()
         assert classify_error(error) == "transient"
+
+    async def test_github_takes_the_oauth_path_with_the_notifications_token(self):
+        """github polls /notifications with a native OAuthManager token.
+
+        The whole point of un-claiming the source: the poller must reach
+        OAuthManager under provider "github" and hand the connector a real
+        access_token, not the empty credential dict the gateway branch passes.
+        """
+        from src.connectors.base import BaseConnector, ConnectorHealth
+        from src.connectors.poll_result import PollResult
+        from src.orchestrator.connector_poller import ConnectorPoller
+        from src.services.oauth_manager import TokenResult
+
+        recorded = {}
+
+        class _Native(BaseConnector):
+            provider = "github"
+            cursor_type = "since_timestamp"
+
+            async def poll(self, user_id, cursor, credentials):
+                recorded["credentials"] = credentials
+                return PollResult(events=[], cursor="2026-08-23T00:00:00Z", error_class="none")
+
+            def get_auth_url(self, scopes=None) -> str:  # pragma: no cover - unused
+                return "https://example.invalid/auth"
+
+            async def test(self, credentials) -> ConnectorHealth:  # pragma: no cover
+                return ConnectorHealth(status="healthy")
+
+        mock_oauth = AsyncMock()
+        mock_oauth.get_valid_token_with_reason = AsyncMock(
+            return_value=TokenResult(token="gho_notifications", reason="ok")
+        )
+
+        with (
+            patch("src.connectors.base.CONNECTOR_REGISTRY", {"github": _Native}),
+            patch("src.services.oauth_manager.OAuthManager") as mock_oauth_cls,
+        ):
+            mock_oauth_cls.return_value = mock_oauth
+            _events, cursor, error, cursor_type = await ConnectorPoller.poll(
+                self._poller(), "github", TEST_USER_ID, "ws_test"
+            )
+
+        assert error is None
+        assert cursor == "2026-08-23T00:00:00Z"
+        assert cursor_type == "since_timestamp"
+        assert recorded["credentials"] == {"access_token": "gho_notifications"}
+        assert mock_oauth.get_valid_token_with_reason.await_args.args == (
+            TEST_USER_ID,
+            "github",
+        )
 
     async def test_native_source_still_takes_the_oauth_path(self):
         """A source the registry does not claim is still an OAuthManager question."""

@@ -60,12 +60,10 @@ def _make_orchestrator(*, lead_text: str = "Hello! How can I help?"):
     orch._chat._invoker.stream_deep_lead = _stream_deep_lead
     orch._chat._invoker.has_durable_checkpointer = MagicMock(return_value=True)
     orch._chat._plans.log_interaction = AsyncMock(return_value="ilog_01")
-    orch._push_workspace_surface = AsyncMock()
     orch._chat._events.emit_runtime_event = AsyncMock()
     orch._chat._context.load_conversation_history = AsyncMock(return_value="")
     orch._chat._context.assemble_context = AsyncMock(return_value="")
     orch._chat._get_available_capabilities = AsyncMock(return_value=[])
-    orch._chat._surfaces.push_presenter_surface = AsyncMock(return_value=None)
     return orch
 
 
@@ -194,85 +192,3 @@ class TestProcessMessageStreamPlanning:
         assert [e for e in events if e.get("event") == "error"] == []
         responses = [e["text"] for e in events if e.get("event") == "response"]
         assert responses == ["Hi!"]
-
-
-class TestSurfacePushForPlanOutput:
-    """_derive_surface_kind works with PlanOutput."""
-
-    def test_respond_only_returns_none(self):
-        from src.contracts import PlanOutput, PlanStep
-        from src.services.surface_mapping import derive_surface_kind
-
-        plan = PlanOutput(
-            goal="Hi",
-            steps=[
-                PlanStep(step_id="s1", description="Respond", capability="respond"),
-            ],
-        )
-        assert derive_surface_kind(plan) is None
-
-    def test_write_action_returns_plan(self):
-        from src.contracts import PlanOutput, PlanStep
-        from src.services.surface_mapping import derive_surface_kind
-
-        plan = PlanOutput(
-            goal="Send email",
-            steps=[
-                PlanStep(
-                    step_id="s1",
-                    description="Read",
-                    capability="email.read",
-                    risk="none",
-                ),
-                PlanStep(
-                    step_id="s2",
-                    description="Draft",
-                    capability="email.draft",
-                    risk="medium",
-                ),
-            ],
-        )
-        kind, title = derive_surface_kind(plan)
-        assert kind == "plan"
-
-    def test_briefing_capability(self):
-        from src.contracts import PlanOutput, PlanStep
-        from src.services.surface_mapping import derive_surface_kind
-
-        plan = PlanOutput(
-            goal="Add to brief",
-            steps=[
-                PlanStep(
-                    step_id="s1",
-                    description="Add",
-                    capability="system.add_to_brief",
-                ),
-            ],
-        )
-        kind, title = derive_surface_kind(plan)
-        assert kind == "briefing"
-
-    def test_single_read_returns_summary(self):
-        from src.contracts import PlanOutput, PlanStep
-        from src.services.surface_mapping import derive_surface_kind
-
-        plan = PlanOutput(
-            goal="Check email",
-            steps=[
-                PlanStep(
-                    step_id="s1",
-                    description="Read",
-                    capability="email.search",
-                    risk="none",
-                ),
-            ],
-        )
-        kind, title = derive_surface_kind(plan)
-        assert kind == "summary"
-
-    def test_empty_steps_returns_none(self):
-        from src.contracts import PlanOutput
-        from src.services.surface_mapping import derive_surface_kind
-
-        plan = PlanOutput(goal="Nothing", steps=[])
-        assert derive_surface_kind(plan) is None

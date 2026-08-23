@@ -52,6 +52,8 @@ AGENT_CAPABILITY_SCOPES: dict[str, set[str]] = {
         "workflow.get",
         "workflow.search",
         "workflow.get_teams",
+        "workflow.get_project",
+        "workflow.list_projects",
         # Internal observation tools
         "internal.ingest_event",
         "internal.report_observation",
@@ -140,6 +142,8 @@ AGENT_CAPABILITY_SCOPES: dict[str, set[str]] = {
         "workflow.delete",
         "workflow.delete_comment",
         "workflow.delete_milestone",
+        "workflow.get_project",
+        "workflow.list_projects",
         # Docs
         "doc.create",
         "doc.update",
@@ -151,7 +155,6 @@ AGENT_CAPABILITY_SCOPES: dict[str, set[str]] = {
     "presenter": {
         "internal.get_briefing",
         "internal.search",
-        "internal.push_ui",
         "messaging.send",
     },
     "persona": {

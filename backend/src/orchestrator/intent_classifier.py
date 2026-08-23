@@ -67,7 +67,7 @@ Only include sources the user's intent clearly relates to. Omit if none apply.
 """
 
 # Valid perception sources returned by the intent classifier
-VALID_PERCEPTION_SOURCES = {"gmail", "calendar", "slack", "github"}
+VALID_PERCEPTION_SOURCES = {"gmail", "calendar", "slack", "github", "notion"}
 
 # Intents that skip the Planner entirely
 FAST_INTENTS = {

@@ -19,12 +19,14 @@ from src.config.settings import Settings
 
 if TYPE_CHECKING:
     from src.services.vector_store import VectorStore
+from src.deep_runtime.middleware.approval_persistence import PREPARED_KEY
 from src.models.approvals import Approval
 from src.models.memory import Memory
 from src.models.perception_state import PerceptionState
 from src.models.plans import Plan
 from src.models.schedules import Schedule
 from src.models.task_graph import TaskRun
+from src.services.audit import AuditService
 from src.services.execution_state import InvalidTransitionError, transition_run
 
 logger = logging.getLogger(__name__)
@@ -161,7 +163,16 @@ class HeartbeatService:
         return escalated
 
     async def _expire_approvals(self, user_id: str) -> int:
-        """Expire pending approvals past their deadline."""
+        """Expire pending approvals past their deadline.
+
+        Expiry is the third outcome of an approval and the only one nobody chose, so it
+        is recorded at least as carefully as approve and reject: an audit row per
+        approval, naming what expired and that nobody answered.
+
+        Only run-linked approvals reach here. Staged work is created with no `expires_at`
+        (`approval_service.NON_EXPIRING_TYPES`) because a timer cannot review anything —
+        expiring it deleted a fully-derived external write with nobody having decided.
+        """
         now = datetime.now(timezone.utc)
 
         result = await self._db.execute(
@@ -174,9 +185,44 @@ class HeartbeatService:
         )
         approvals = list(result.scalars().all())
 
+        audit = AuditService(self._db, self._settings)
+
         for approval in approvals:
             approval.status = "expired"
             approval.decided_at = now
+
+            # Same discriminator the approve and reject routes use, so the three sites
+            # that must agree on "is this staged work?" cannot drift apart. A prepared row
+            # should never reach here at all — it is created with no `expires_at` — so this
+            # stays as the record for any row that predates that rule.
+            is_prepared = (approval.artifact_refs or {}).get(PREPARED_KEY) is True
+
+            # Deliberately not wrapped in a swallowing except: an unwritable audit row
+            # means a staged external write vanished with no record at all, which is the
+            # failure this whole path exists to prevent.
+            await audit.log(
+                user_id=approval.user_id or user_id,
+                action_type="approval_expired",
+                workspace_id=approval.workspace_id or "",
+                approval_id=approval.approval_id,
+                execution_id=approval.execution_id or None,
+                summary=f"Expired unreviewed: {approval.title}",
+                policy_decision="expired_unanswered",
+                details={
+                    "approval_type": approval.approval_type,
+                    "risk_level": approval.risk_level,
+                    "expires_at": (
+                        approval.expires_at.isoformat() if approval.expires_at else None
+                    ),
+                    "prepared": is_prepared,
+                },
+            )
+
+            # A prepared action has no run and no step by design — it is a single tool
+            # call recorded mid-turn, not an agentic unit. Looking one up would query for
+            # the empty string and always miss.
+            if not approval.execution_id:
+                continue
 
             # Cancel the associated execution. Goes through ``transition_run`` —
             # never a direct status assignment — so the transition is VALIDATED and

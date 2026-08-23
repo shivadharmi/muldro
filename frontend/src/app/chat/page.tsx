@@ -1,34 +1,38 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { ChatPanel } from "@/components/muldro/chat-panel";
 import { SessionSidebar } from "@/components/muldro/session-sidebar";
 import { CommandWorkspace } from "@/components/feature/command/command-workspace";
-import { SurfaceCard } from "@/components/workspace/surface-card";
-import { SurfaceDetailModal } from "@/components/workspace/surface-detail-modal";
+import { UnitCard } from "@/components/workspace/unit-card";
+import { UnitDetail } from "@/components/workspace/unit-detail";
+import { PreparedQueue } from "@/components/workspace/prepared-queue";
 import { useAuth } from "@/lib/auth";
 import { useMuldroWs } from "@/hooks/use-muldro-ws";
-import { useSurfaceStore } from "@/stores/surface-store";
+import { useUnitStore } from "@/stores/unit-store";
 import { useCommandStore } from "@/stores/command-store";
 import { useWsActionStore } from "@/stores/ws-action-store";
-import { fetchConversationMessages, type ConversationMessage } from "@/lib/api";
+import {
+  fetchConversationMessages,
+  fetchWorkspaceUnits,
+  type ConversationMessage,
+} from "@/lib/api";
 import { formatApiError, type ParsedApiError } from "@/lib/api-error";
 import { useToast } from "@/components/ui/toast";
-import type { WorkspaceSurfacePush, SurfacePreview, SurfaceUpdate } from "@/lib/a2ui-types";
-import { normalizeSurfaceKind } from "@/lib/types/surfaces";
-import { sortSurfacesActiveFirst } from "@/lib/surface-merge";
+import type { Unit } from "@/lib/types/unit";
 
 export default function ChatPage() {
   const { user } = useAuth();
   const userId = user?.user_id ?? "";
 
-  const surfaces = useSurfaceStore((s) => s.surfaces);
-  const addSurface = useSurfaceStore((s) => s.addSurface);
-  const activeSurfaceId = useSurfaceStore((s) => s.activeSurfaceId);
-  const detailModalOpen = useSurfaceStore((s) => s.detailModalOpen);
-  const openDetailModal = useSurfaceStore((s) => s.openDetailModal);
-  const closeDetailModal = useSurfaceStore((s) => s.closeDetailModal);
-  const updateSurface = useSurfaceStore((s) => s.updateSurface);
+  const units = useUnitStore((s) => s.units);
+  const setUnits = useUnitStore((s) => s.setUnits);
+  const upsertUnit = useUnitStore((s) => s.upsertUnit);
+  const activeKey = useUnitStore((s) => s.activeKey);
+  const detailOpen = useUnitStore((s) => s.detailOpen);
+  const openDetail = useUnitStore((s) => s.openDetail);
+  const closeDetail = useUnitStore((s) => s.closeDetail);
 
   const { permissionMode, setPermissionMode } = useCommandStore();
   const setGlobalSendAction = useWsActionStore((s) => s.setSendAction);
@@ -39,36 +43,20 @@ export default function ChatPage() {
     [addToast]
   );
 
-  const handleSurfacePush = useCallback(
-    (push: WorkspaceSurfacePush) => {
-      addSurface({
-        id: push.id,
-        kind: normalizeSurfaceKind(push.kind, push.id),
-        preview: push.preview,
-        detail_config: push.detail_config,
-        source_run_id: push.source_run_id,
-        response_preview: push.response_preview,
-        created_at: push.created_at || new Date().toISOString(),
-        surface_data: push.surface_data ?? null,
-        // Forward the insight payload — previously dropped here because
-        // the WorkspaceSurfacePush type omitted the field, so insight
-        // surfaces rendered with empty details even though the backend
-        // sent the data.
-        insight_data: push.insight_data ?? null,
-        // Live execution fields: when the run surface is pushed (REST or
-        // WS), these let the run renderer show the current phase/steps
-        // without waiting for a separate surface_update message.
-        phase: push.phase ?? null,
-        steps: push.steps ?? null,
-        current_step: push.current_step ?? null,
-        progress: push.progress ?? null,
-        approval: push.approval ?? null,
-        results: push.results ?? null,
-        trust_context: push.trust_context ?? null,
-      });
-    },
-    [addSurface]
-  );
+  // The rail reads the SAME feed the workspace does. A chat turn produces a
+  // Unit when it created a durable ROW, and code builds that frame from the
+  // row — not from a preview the chat stream hand-assembled.
+  const { data: unitData } = useQuery({
+    queryKey: ["workspace-units"],
+    queryFn: fetchWorkspaceUnits,
+    refetchInterval: 15_000,
+  });
+
+  useEffect(() => {
+    if (unitData?.units) setUnits(unitData.units);
+  }, [unitData, setUnits]);
+
+  const handleUnitPush = useCallback((unit: Unit) => upsertUnit(unit), [upsertUnit]);
 
   // Restore active conversation from global store (survives navigation)
   const [activeConversationId, setActiveConversationId] = useState<string | null>(
@@ -79,11 +67,7 @@ export default function ChatPage() {
 
   const { connected, sendAction } = useMuldroWs({
     userId,
-    onSurfacePush: handleSurfacePush,
-    onSurfaceUpdate: useCallback(
-      (update: SurfaceUpdate) => updateSurface(update.surface_id, update),
-      [updateSurface]
-    ),
+    onUnitPush: handleUnitPush,
     onError: handleWsError,
     enabled: !!user,
   });
@@ -121,37 +105,7 @@ export default function ChatPage() {
     setSidebarRefreshKey((k) => k + 1);
   }, []);
 
-  // SSE surfaces from chat stream → convert to WorkspaceSurface
-  const handleSSESurface = useCallback(
-    (surface: { id: string; children: unknown[]; metadata: Record<string, unknown> }) => {
-      const meta = surface.metadata ?? {};
-      const preview: SurfacePreview = {
-        title: String(meta.title ?? "Surface"),
-        subtitle: meta.reasoning ? String(meta.reasoning).slice(0, 120) : null,
-        status: null,
-        priority: (meta.priority as SurfacePreview["priority"]) ?? null,
-        metrics: [],
-        entities: [],
-        progress: null,
-        timestamp: new Date().toISOString(),
-        tags: [],
-      };
-      addSurface({
-        id: surface.id,
-        kind: normalizeSurfaceKind(meta.kind as string | undefined, surface.id),
-        preview,
-        detail_config: null,
-        source_run_id: (meta.source_run_id as string) ?? null,
-        response_preview: (meta.response_preview as string) ?? null,
-        created_at: new Date().toISOString(),
-      });
-    },
-    [addSurface]
-  );
-
-  const activeSurface = activeSurfaceId
-    ? surfaces.find((s) => s.id === activeSurfaceId) ?? null
-    : null;
+  const active = activeKey ? units.find((u) => u.frame.key === activeKey) ?? null : null;
 
   if (!user) return null;
 
@@ -220,42 +174,37 @@ export default function ChatPage() {
               initialMessages={initialMessages}
               onConversationCreated={handleConversationCreated}
               onMessageSent={handleMessageSent}
-              onSurface={handleSSESurface}
             />
           </div>
         }
         surfaces={
-          surfaces.length > 0 ? (
+          units.length > 0 ? (
             <div className="p-4 space-y-3">
               <div className="flex items-center justify-between">
-                <span className="text-[13px] font-semibold text-t-secondary">
-                  Surfaces
-                </span>
+                <span className="text-[13px] font-semibold text-t-secondary">Workspace</span>
                 <span className="text-[10px] px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-surface-2 text-t-muted font-medium">
-                  {surfaces.length}
+                  {units.length}
                 </span>
               </div>
 
-              {sortSurfacesActiveFirst(surfaces)
-                .map((surface) => (
-                  <SurfaceCard
-                    key={surface.id}
-                    surface={surface}
-                    onClick={() => openDetailModal(surface.id)}
-                  />
-                ))}
+              {/* The server's rank order, rendered as given. No client sort:
+                  re-sorting a list the server already ranked throws the
+                  ranking away and puts arrival order back. */}
+              {units.map((u) => (
+                <UnitCard
+                  key={u.frame.key}
+                  unit={u}
+                  onOpen={() => openDetail(u.frame.key)}
+                />
+              ))}
             </div>
           ) : undefined
         }
       />
 
-      {activeSurface && (
-        <SurfaceDetailModal
-          surface={activeSurface}
-          open={detailModalOpen}
-          onClose={closeDetailModal}
-        />
-      )}
+      <UnitDetail unit={active} open={detailOpen} onClose={closeDetail}>
+        {active?.frame.entity_type === "prepared_work" && <PreparedQueue />}
+      </UnitDetail>
     </>
   );
 }

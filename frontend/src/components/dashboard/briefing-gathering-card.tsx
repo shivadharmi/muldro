@@ -3,12 +3,22 @@
 import Link from "next/link";
 
 /**
- * Shown on the dashboard when no briefing surface exists yet. Because the
- * morning-briefing schedule is enabled at workspace creation, a brand-new user
- * should see that Muldro is already working — assembling their first briefing —
- * rather than a "nothing here" empty state. Connecting a source enriches it.
+ * Shown when sources are connected but no briefing exists yet.
+ *
+ * This card is only reachable with at least one source connected — with none,
+ * `resolveFirstRunState` returns `onboarding` and the OnboardingCard renders
+ * instead. So its old copy ("Connect a source to make it sharper", above a
+ * primary "Connect Sources" button) could never be true at the moment it was
+ * shown: it told a founder who had just connected Gmail to go and connect
+ * something, while their mail sat in cards directly beneath it.
+ *
+ * What is actually true here is that muldro is already watching and the
+ * briefing runs on a schedule, so that is what it says.
  */
-export function BriefingGatheringCard() {
+export function BriefingGatheringCard({ sourceCount }: { sourceCount: number }) {
+  const sources =
+    sourceCount === 1 ? "one source" : `${sourceCount} sources`;
+
   return (
     <div className="rounded-[var(--radius-xl)] border border-b-secondary bg-surface-1 p-8 sm:p-10">
       <div className="flex flex-col items-center text-center max-w-md mx-auto">
@@ -24,25 +34,25 @@ export function BriefingGatheringCard() {
           />
         </div>
         <p className="text-[15px] text-t-primary font-medium mb-1">
-          Gathering data for your first briefing
+          Your first briefing is being assembled
         </p>
         <p className="text-sm text-t-tertiary leading-relaxed mb-6">
-          Muldro is getting set up and will prepare your daily briefing here.
-          Connect a source to make it sharper — until then it draws on whatever
-          it can reach.
+          Muldro is watching {sources} and will write your briefing here on its
+          daily schedule. Anything it finds before then appears below as it
+          arrives.
         </p>
         <div className="flex gap-3">
           <Link
-            href="/integrations"
+            href="/chat"
             className="px-4 py-2 rounded-[var(--radius-md)] bg-j-primary text-j-primary-fg text-[13px] font-medium hover:bg-j-primary-hover transition-colors shadow-[var(--shadow-sm)]"
           >
-            Connect Sources
+            Talk to Muldro
           </Link>
           <Link
-            href="/chat"
+            href="/integrations"
             className="px-4 py-2 rounded-[var(--radius-md)] border border-b-secondary text-t-secondary text-[13px] hover:bg-surface-2 transition-colors"
           >
-            Talk to Muldro
+            Add another source
           </Link>
         </div>
       </div>

@@ -1,0 +1,130 @@
+{
+  "_readme": [
+    "SHARED CORPUS. Two implementations of 'paragraph 1 of the body' must agree:",
+    "backend/src/view/body.py::lede_of and frontend/src/components/workspace/unit-card.tsx::ledeOf.",
+    "backend/tests/view/test_body.py and frontend/src/components/workspace/unit-card.test.tsx",
+    "BOTH read this file. A change to EITHER implementation must be reflected here,",
+    "and a case may only be added once both sides produce the expected lede.",
+    "Two independently hand-written test corpora is exactly how the pair drifted:",
+    "Python's str.strip()/\\s and JavaScript's trim()/\\s classify different characters",
+    "(Python does not treat U+FEFF as whitespace, JavaScript does not treat U+001C as",
+    "whitespace), so the card rendered as prose a heading the backend had budgeted as",
+    "a heading. Both sides therefore trim SPACES AND TABS ONLY and treat a blank line",
+    "as spaces and tabs only, which is CommonMark's own rule and depends on neither",
+    "language's notion of whitespace.",
+    "Write every control and Unicode character as an explicit \\uXXXX escape. A literal",
+    "invisible character in this file cannot be reviewed."
+  ],
+  "cases": [
+    {
+      "name": "a_multi_paragraph_briefing_ledes_on_its_first_claim",
+      "body": "Three of your four active repos are effectively idle - muldrov1 is where everything is happening.\n\n## What moved\n\nmuldrov1 took 63 commits this week, nearly all on the single-lead cutover branch.\n\n## What's stuck\n\nThe PR on rules has been open eleven days with no review.\n",
+      "lede": "Three of your four active repos are effectively idle - muldrov1 is where everything is happening."
+    },
+    {
+      "name": "soft_wrapped_lines_of_one_paragraph_join_with_a_space",
+      "body": "Sarah is asking for a decision\nby Friday.\n\nMore detail here.",
+      "lede": "Sarah is asking for a decision by Friday."
+    },
+    {
+      "name": "a_plain_blank_line_separates_paragraphs",
+      "body": "First para.\n\nSecond para.",
+      "lede": "First para."
+    },
+    {
+      "name": "a_crlf_blank_line_separates_paragraphs",
+      "body": "First para.\r\n\r\nSecond para.",
+      "lede": "First para."
+    },
+    {
+      "name": "a_lone_cr_blank_line_separates_paragraphs",
+      "body": "First para.\r\rSecond para.",
+      "lede": "First para."
+    },
+    {
+      "name": "a_blank_line_carrying_a_space_separates_paragraphs",
+      "body": "First para.\n \nSecond para.",
+      "lede": "First para."
+    },
+    {
+      "name": "a_blank_line_carrying_a_tab_separates_paragraphs",
+      "body": "First para.\n\t\nSecond para.",
+      "lede": "First para."
+    },
+    {
+      "name": "several_blank_lines_are_one_break",
+      "body": "First para.\n\n\nSecond para.",
+      "lede": "First para."
+    },
+    {
+      "name": "blank_lines_before_the_first_paragraph_are_skipped",
+      "body": "\n\nFirst para.\n\nSecond para.",
+      "lede": "First para."
+    },
+    {
+      "name": "a_leading_heading_is_a_label_not_the_claim",
+      "body": "# Repository activity\n\nThree repos moved this week.",
+      "lede": "Three repos moved this week."
+    },
+    {
+      "name": "a_heading_indented_up_to_three_spaces_is_still_a_heading",
+      "body": "   # Repository activity\n\nThree repos moved this week.",
+      "lede": "Three repos moved this week."
+    },
+    {
+      "name": "a_heading_only_body_has_no_lede",
+      "body": "# Repository activity\n",
+      "lede": ""
+    },
+    {
+      "name": "an_empty_body_has_no_lede",
+      "body": "",
+      "lede": ""
+    },
+    {
+      "name": "a_whitespace_only_body_has_no_lede",
+      "body": "   \n\n  ",
+      "lede": ""
+    },
+    {
+      "name": "a_single_paragraph_body_is_its_own_lede",
+      "body": "Sarah is asking for a decision by Friday.",
+      "lede": "Sarah is asking for a decision by Friday."
+    },
+    {
+      "name": "u2028_line_separator_is_not_a_markdown_line_break",
+      "body": "ls\u2028sep\n\nnext",
+      "lede": "ls\u2028sep"
+    },
+    {
+      "name": "a_vertical_tab_is_not_a_markdown_line_break",
+      "body": "ls\u000bsep\n\nnext",
+      "lede": "ls\u000bsep"
+    },
+    {
+      "name": "a_form_feed_is_not_a_markdown_line_break",
+      "body": "ls\fsep\n\nnext",
+      "lede": "ls\fsep"
+    },
+    {
+      "name": "a_zwnbsp_before_a_hash_means_the_line_is_not_a_heading",
+      "body": "\ufeff# Heading\n\nreal claim",
+      "lede": "\ufeff# Heading"
+    },
+    {
+      "name": "a_line_holding_only_a_zwnbsp_is_not_a_blank_line",
+      "body": "a\n\ufeff\nb",
+      "lede": "a \ufeff b"
+    },
+    {
+      "name": "a_line_holding_only_a_file_separator_is_not_a_blank_line",
+      "body": "a\n\u001c\nb",
+      "lede": "a \u001c b"
+    },
+    {
+      "name": "a_line_holding_only_a_no_break_space_is_not_a_blank_line",
+      "body": "a\n\u00a0\nb",
+      "lede": "a \u00a0 b"
+    }
+  ]
+}

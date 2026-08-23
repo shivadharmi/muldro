@@ -12,11 +12,16 @@ from tests.conftest import TEST_USER_ID
 class TestOAuthConnectRoutes:
     """The native OAuth connect routes, and what they no longer serve.
 
-    ``google`` and ``github`` moved behind the OpenConnector gateway, which owns
-    their OAuth clients. Their native authorize/callback branches were deleted,
-    so both now fall through to the shared "Unknown provider" 400 — even when
-    Muldro-side client credentials happen to be configured. Minting a token
-    nothing reads was the failure mode this closes.
+    ``google`` and ``notion`` moved behind the OpenConnector gateway, which owns
+    their OAuth client. Their native authorize/callback branches were deleted, so
+    they fall through to the shared "Unknown provider" 400 — even when
+    Muldro-side client credentials happen to be configured, which for notion they
+    still ARE, because the startup registrar needs them. Minting a token nothing
+    reads was the failure mode this closes.
+
+    ``github`` is the exception that proves the rule: its native route came back
+    precisely because something DOES read that token — ``GitHubConnector``
+    polling /notifications, which no gateway action can replace.
     """
 
     def _client(self):
@@ -51,7 +56,46 @@ class TestOAuthConnectRoutes:
             app.dependency_overrides.pop(get_settings, None)
             self._cleanup()
 
-    def test_github_authorize_is_retired(self):
+    def test_github_authorize_serves_the_notifications_token(self):
+        """github is NOT retired here — the poll needs a token only this mints.
+
+        `issue_state` is stubbed because the route FAILS CLOSED without a state
+        store: no Redis means no CSRF binding means 503, by design. Left
+        unstubbed this test passed locally (Redis is up in dev) and failed in
+        CI, which is the least useful shape a test can have.
+        """
+        from unittest.mock import AsyncMock, patch
+
+        from src.config.settings import get_settings
+        from tests.conftest import make_mock_settings
+
+        mock_settings = make_mock_settings(
+            github_oauth_client_id="gh_client_id",
+            github_oauth_client_secret="gh_secret",
+            github_oauth_redirect_uri="http://localhost:8000/v1/auth/github/callback",
+            backend_token="",
+        )
+        app.dependency_overrides[get_settings] = lambda: mock_settings
+        client = self._client()
+        try:
+            with patch(
+                "src.api.routes_auth_oauth.issue_state", AsyncMock(return_value="st_opaque")
+            ):
+                resp = client.get("/v1/auth/oauth/github/authorize")
+            assert resp.status_code == 200
+            assert "gh_client_id" in resp.json()["url"]
+        finally:
+            app.dependency_overrides.pop(get_settings, None)
+            self._cleanup()
+
+    def test_authorize_fails_closed_without_a_state_store(self):
+        """No CSRF binding, no authorization — never an unbound state.
+
+        The fallback this refuses would restore the original vulnerability
+        exactly, in a window nobody can see.
+        """
+        from unittest.mock import AsyncMock, patch
+
         from src.config.settings import get_settings
         from tests.conftest import make_mock_settings
 
@@ -63,8 +107,12 @@ class TestOAuthConnectRoutes:
         app.dependency_overrides[get_settings] = lambda: mock_settings
         client = self._client()
         try:
-            resp = client.get("/v1/auth/oauth/github/authorize")
-            assert resp.status_code == 400
+            with patch(
+                "src.api.routes_auth_oauth.issue_state",
+                AsyncMock(side_effect=RuntimeError("no redis")),
+            ):
+                resp = client.get("/v1/auth/oauth/github/authorize")
+            assert resp.status_code == 503
             assert "gh_client_id" not in resp.text
         finally:
             app.dependency_overrides.pop(get_settings, None)
@@ -91,25 +139,97 @@ class TestOAuthConnectRoutes:
             app.dependency_overrides.pop(get_settings, None)
             self._cleanup()
 
-    def test_unmigrated_provider_still_authorizes(self):
-        """Retirement is scoped: notion keeps its native authorize URL."""
+    def test_notion_native_authorize_is_retired(self):
+        """Notion is gateway-served, so a native authorize URL would mint a dead token.
+
+        Its OAuth client settings are still populated — the startup registrar
+        hands them to OpenConnector — so a route that merely checked for
+        credentials would happily return a URL. Retirement has to be decided by
+        the provider being gateway-backed, not by whether a client_id exists.
+        """
         from src.config.settings import get_settings
         from tests.conftest import make_mock_settings
 
         mock_settings = make_mock_settings(
             notion_oauth_client_id="notion_client_id",
-            notion_oauth_redirect_uri="http://localhost:3000/auth/callback",
+            notion_oauth_client_secret="notion_secret",
             backend_token="",
         )
         app.dependency_overrides[get_settings] = lambda: mock_settings
         client = self._client()
         try:
             resp = client.get("/v1/auth/oauth/notion/authorize")
-            assert resp.status_code == 200
-            assert "notion_client_id" in resp.json()["url"]
+            assert resp.status_code == 400
         finally:
             app.dependency_overrides.pop(get_settings, None)
             self._cleanup()
+
+    def test_notion_callback_is_retired(self):
+        from src.config.settings import get_settings
+        from tests.conftest import make_mock_settings
+
+        mock_settings = make_mock_settings(
+            notion_oauth_client_id="notion_client_id",
+            notion_oauth_client_secret="notion_secret",
+            backend_token="",
+        )
+        app.dependency_overrides[get_settings] = lambda: mock_settings
+        try:
+            client = self._client()
+            resp = client.get(
+                f"/v1/auth/oauth/notion/callback?code=test_code&state={TEST_USER_ID}",
+                follow_redirects=False,
+            )
+            assert resp.status_code == 400
+        finally:
+            app.dependency_overrides.pop(get_settings, None)
+            self._cleanup()
+
+    def test_atlassian_native_authorize_is_retired(self):
+        """Atlassian moved to the gateway as TWO OC services, jira + confluence.
+
+        Its native flow additionally harvested cloud_id, projects and an
+        atlassian_user into the installation config, injected as `tool_defaults`
+        on every call to Atlassian's own Rovo MCP server. OpenConnector's jira
+        actions take no cloudId — it resolves the site itself — so that
+        enrichment has no reader left either.
+        """
+        from src.config.settings import get_settings
+        from tests.conftest import make_mock_settings
+
+        mock_settings = make_mock_settings(
+            atlassian_oauth_client_id="atlassian_client_id",
+            atlassian_oauth_client_secret="atlassian_secret",
+            backend_token="",
+        )
+        app.dependency_overrides[get_settings] = lambda: mock_settings
+        client = self._client()
+        try:
+            resp = client.get("/v1/auth/oauth/atlassian/authorize")
+            assert resp.status_code == 400
+        finally:
+            app.dependency_overrides.pop(get_settings, None)
+            self._cleanup()
+
+    def test_github_is_the_only_provider_left_with_a_native_flow(self):
+        """The rule, stated executably: gateway unless the gateway cannot serve it.
+
+        GitHub is the sole exception, and only because OpenConnector's 145
+        github actions include no notifications action for its poll to call.
+        Anything else reaching this route would be minting a token nothing reads.
+        """
+        from src.integrations.gateway_actions import PROVIDER_REGISTRY
+        from src.integrations.provider_map import (
+            native_perception_for_provider,
+            provider_for_server,
+        )
+
+        needs_native = {
+            provider_for_server(p.server_name)
+            for p in PROVIDER_REGISTRY.values()
+            if native_perception_for_provider(provider_for_server(p.server_name)) is not None
+        }
+        assert needs_native == {"github"}
 
     def test_auth_route_exists(self):
         # Assert via the OpenAPI path map rather than iterating ``app.routes``.

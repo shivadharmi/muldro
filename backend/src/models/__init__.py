@@ -12,6 +12,7 @@ from src.models.dead_letter import DeadLetterEntry
 from src.models.engagement_history import EngagementHistory
 from src.models.entities import Entity, EntityAlias, EntityFact, EntityRelationship
 from src.models.events import NormalizedEvent
+from src.models.filter_rule import FilterRule
 from src.models.idempotency_ledger import IdempotencyLedgerEntry
 from src.models.integration_audit import IntegrationAuditEvent
 from src.models.integration_installation import IntegrationInstallation
@@ -35,7 +36,8 @@ from src.models.tool_definitions import ToolDefinition
 from src.models.traces import ModelCall, Trace
 from src.models.triggers import Trigger
 from src.models.trust_state import TrustCeiling, TrustState
-from src.models.ui_state import UISurface
+from src.models.unit_body import UnitBody
+from src.models.unit_dismissal import UnitDismissal
 from src.models.users import (
     MagicLink,
     Session,
@@ -70,7 +72,6 @@ __all__ = [
     "AgentDecisionLog",
     "ObservationCursor",
     "OAuthToken",
-    "UISurface",
     # Multi-tenant
     "User",
     "Workspace",
@@ -113,4 +114,8 @@ __all__ = [
     # Model configuration
     "ProviderCredential",
     "ModelBinding",
+    # View layer
+    "FilterRule",
+    "UnitBody",
+    "UnitDismissal",
 ]

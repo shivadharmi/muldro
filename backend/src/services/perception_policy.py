@@ -63,6 +63,10 @@ DEFAULT_INTERVALS: dict[str, int] = {
     "calendar": 900,
     "slack": 300,
     "github": 600,
+    # Pages change far less often than mail, and every poll walks the workspace
+    # newest-first rather than reading a server-side window, so a slower cadence
+    # is both cheaper and no less timely.
+    "notion": 900,
 }
 
 # Error-class-aware circuit breaker thresholds

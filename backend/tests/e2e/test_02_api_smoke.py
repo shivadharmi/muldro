@@ -386,22 +386,6 @@ class TestAuth:
         assert resp.status_code in (200, 302, 400)
 
 
-# ── 2.22 UI Surfaces & Canvas ───────────────────────────────────
-
-
-class TestUISurfacesAndCanvas:
-    async def test_get_surfaces(self, client: httpx.AsyncClient):
-        # Surfaces are returned for the authenticated user (no user_id in path).
-        resp = await client.get("/v1/ui/surfaces")
-        assert resp.status_code == 200
-        assert "surfaces" in resp.json()
-
-    async def test_get_nonexistent_surface(self, client: httpx.AsyncClient):
-        # The single path segment is a surface_id, not a user_id.
-        resp = await client.get("/v1/ui/surfaces/surf_nonexistent")
-        assert resp.status_code == 404
-
-
 # ── 2.24 Meetings ───────────────────────────────────────────────
 
 

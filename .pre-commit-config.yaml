@@ -1,8 +1,8 @@
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.8.4
+    rev: v0.15.7
     hooks:
-      - id: ruff
+      - id: ruff-check
         args: [--fix]
         files: ^backend/
       - id: ruff-format
@@ -20,6 +20,24 @@ repos:
         entry: python3 scripts/check_file_size.py
         language: system
         types_or: [python, ts, tsx]
+
+      # Carried over from the hand-written .git/hooks/pre-commit that this
+      # framework replaces. gitleaks + detect-private-key above supersede that
+      # hook's regex secret scan, but nothing else typechecks the frontend.
+      #
+      # It announces a skip rather than passing quietly. The hook it replaces
+      # had `if [ -d ".venv" ]` around its ruff checks, so a worktree without a
+      # venv skipped Python lint entirely and still printed "checks passed" —
+      # a guard that cannot fail is worse than no guard, because it reads as
+      # coverage.
+      - id: tsc
+        name: TypeScript types (frontend)
+        entry: >-
+          bash -c 'if [ -d frontend/node_modules ]; then cd frontend && npx tsc --noEmit;
+          else echo "SKIPPED - frontend/node_modules absent, run npm install to typecheck"; fi'
+        language: system
+        types_or: [ts, tsx]
+        pass_filenames: false
 
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v5.0.0

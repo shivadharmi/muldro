@@ -111,9 +111,6 @@ def _make_orch(canned: dict[str, str]) -> tuple[object, _Recorder]:
     chat._system_capability_handler = MagicMock()
     chat._system_capability_handler.handle_system_capability = AsyncMock(return_value="SYS_OK")
 
-    chat._surfaces = MagicMock()
-    chat._surfaces.push_presenter_surface = AsyncMock(return_value=None)
-
     async def _call_agent_stream(agent_name, *, message, **kw):
         rec.agent_messages.append((agent_name, message))
         text = canned.get(agent_name, "")

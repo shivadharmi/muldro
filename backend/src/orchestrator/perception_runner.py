@@ -8,9 +8,9 @@ The connector-facing half — polling, raw-event ingest, and cursor I/O — live
 ``ConnectorPoller``, which this class composes.
 
 Depends downward on ConnectorPoller (connector I/O), AgentInvoker (running
-sub-agents), EventPublisher (event bus + runtime events), SurfacePusher (insight
-surfaces), PlanStore (plan persistence), and the SystemCapabilityHandler — never
-on the chat path, which is what keeps the chat<->perception relationship acyclic.
+sub-agents), EventPublisher (event bus + runtime events), PlanStore (plan
+persistence), and the SystemCapabilityHandler — never on the chat path, which is
+what keeps the chat<->perception relationship acyclic.
 """
 
 import logging
@@ -25,8 +25,8 @@ from src.orchestrator.budget import BudgetTracker
 from src.orchestrator.connector_poller import ConnectorPoller
 from src.orchestrator.event_publisher import EventPublisher
 from src.orchestrator.intent_classifier import extract_plan
+from src.orchestrator.perception_units import publish_perception_units
 from src.orchestrator.plan_store import PlanStore
-from src.orchestrator.surface_pusher import SurfacePusher, _clean_insight_title
 from src.orchestrator.tracing import TraceManager
 
 logger = logging.getLogger(__name__)
@@ -85,6 +85,17 @@ async def _fetch_thread_contexts(
     return contexts
 
 
+# The insight-publication predicates live in perception_insight.py; imported
+# here rather than re-exported deliberately, so this module has one obvious
+# place to look and the tests that already import them from here keep working.
+from src.orchestrator.perception_insight import (  # noqa: E402
+    SYNTHESIS_SOURCE,
+    _is_publishable_insight,
+    _publishes_insights,
+    extract_perception_policy,
+)
+
+
 class PerceptionRunner:
     """Runs perception cycles and cross-source synthesis for the orchestrator."""
 
@@ -98,7 +109,6 @@ class PerceptionRunner:
         poller: ConnectorPoller,
         invoker: AgentInvoker,
         events: EventPublisher,
-        surfaces: SurfacePusher,
         plans: PlanStore,
         system_capability_handler,
         spawn_background,
@@ -114,7 +124,6 @@ class PerceptionRunner:
         self._poller = poller
         self._invoker = invoker
         self._events = events
-        self._surfaces = surfaces
         self._plans = plans
         self._system_capability_handler = system_capability_handler
         self._spawn_background = spawn_background
@@ -163,7 +172,7 @@ class PerceptionRunner:
             # Queue any actionable plans from the synthesis
             plan = await self._queue_perception_plan(
                 planner_result,
-                "synthesis",
+                SYNTHESIS_SOURCE,
                 user_id,
                 workspace_id,
                 trace.trace_id,
@@ -272,11 +281,54 @@ class PerceptionRunner:
                 cursor_type=cursor_type,
             )
 
+            await publish_perception_units(
+                raw_events,
+                source=source,
+                user_id=user_id,
+                workspace_id=workspace_id,
+                events=self._events,
+                db_factory=self._db_factory,
+            )
+
+            # NEW means newly INGESTED, not merely fetched. Connectors re-fetch
+            # an overlap window on purpose (clock-skew insurance), so a steady
+            # poll normally returns rows that are all already stored;
+            # `ingest_raw_events` drops those from its summaries because they
+            # are not new observations.
+            #
+            # Without this branch the cycle carried on with an EMPTY summary
+            # list under a header that still counted the fetched rows — so the
+            # assessor and the Planner were handed "Polled gmail: 2 new
+            # event(s)." and nothing else, and reasoned about a count they
+            # could not see. They said so, in the briefing items they wrote:
+            # "Without knowing sender, subject, or context, they may be
+            # important". Every poll produced another one, plus a goal invented
+            # about the same invisible events, at two model calls a time.
+            #
+            # The units above are still published: those are built from the
+            # events themselves and are correct whether or not this poll was
+            # the one that first stored them.
+            if not event_summaries:
+                logger.info(
+                    "perception_no_new_observations",
+                    extra={"source": source, "fetched": len(raw_events)},
+                )
+                return {
+                    "status": "completed",
+                    "source": source,
+                    "events": 0,
+                    "fetched": len(raw_events),
+                }
+
             # Fetch full thread context for reply emails
             thread_contexts = await _fetch_thread_contexts(raw_events, user_id, workspace_id)
 
-            observer_summary = f"Polled {source}: {len(raw_events)} new event(s).\n" + "\n".join(
-                f"- {s}" for s in event_summaries[:20]
+            # Count what is actually listed below. The header used to report
+            # `len(raw_events)` over a list holding only the newly-ingested
+            # ones, so it disagreed with itself whenever anything deduped.
+            observer_summary = (
+                f"Polled {source}: {len(event_summaries)} new event(s).\n"
+                + "\n".join(f"- {s}" for s in event_summaries[:20])
             )
             if thread_contexts:
                 observer_summary += "\n\n--- Thread Context (full conversation) ---"
@@ -400,15 +452,14 @@ class PerceptionRunner:
                     try:
                         async with self._db_factory() as db:
                             mem_svc = MemoryService(self._settings, db)
-                            # Use the clean human headline (not the raw
-                            # "Polled ... (event_id=...)" observer prose) so the
-                            # briefing memory and any surface built from it stay
-                            # user-facing-clean.
-                            briefing_headline = _clean_insight_title(signal.summary)
                             await mem_svc.store_briefing_memory(
                                 user_id=user_id,
                                 workspace_id=workspace_id,
-                                text=f"{briefing_headline}\n\nWhy: {assessment.reasoning}",
+                                # The signal summary is per-POLL observer prose
+                                # ("Polled gmail: 3 new event(s)…"), which is why
+                                # it needed cleaning. The assessment's reasoning
+                                # is muldro's own sentence about why this matters.
+                                text=assessment.reasoning,
                                 source=f"perception:{source}",
                                 relevance_score=assessment.relevance_score,
                                 signal_source=source,
@@ -418,15 +469,17 @@ class PerceptionRunner:
                         logger.warning("Failed to store briefing memory", exc_info=True)
 
                 elif assessment.notification_tier == "push":
-                    try:
-                        await self._surfaces.push_insight_surface(
-                            signal, assessment, user_id, workspace_id
-                        )
-                    except Exception:
-                        logger.warning(
-                            "Failed to push insight surface for signal",
-                            exc_info=True,
-                        )
+                    # No per-poll insight surface any more: the three identical
+                    # "New activity" cards WERE this branch, one per poll cycle.
+                    # The Unit for each actual thing is published by
+                    # ``publish_units`` above, keyed on the thing the connector
+                    # named rather than on the tick. The tier is still logged so
+                    # relevance stays measurable.
+                    logger.info(
+                        "perception_push_tier source=%s score=%.2f",
+                        source,
+                        assessment.relevance_score,
+                    )
 
                 else:
                     # silent tier: in world model from Librarian, record as ignored
@@ -562,7 +615,7 @@ class PerceptionRunner:
         from src.contracts import PerceptionDecision
         from src.services.perception_policy import PerceptionPolicyService
 
-        policy = self._extract_perception_policy(planner_text)
+        policy = extract_perception_policy(planner_text)
         if policy is None and event_count > 0:
             # Deterministic fallback: if events were found, check sooner
             policy = PerceptionDecision(
@@ -622,7 +675,7 @@ class PerceptionRunner:
             # cross-cutting insight (esp. on the synthesis path, which has no
             # prior relevance-routing step). Surface it as a briefing item so
             # the reasoning isn't silently discarded.
-            if plan.goal and plan.goal.strip():
+            if _publishes_insights(source) and _is_publishable_insight(plan.goal):
                 try:
                     from src.services.memory_service import MemoryService
 
@@ -737,11 +790,39 @@ class PerceptionRunner:
                     source,
                 )
         except Exception:
-            logger.warning(
-                "Failed to create background run for perception plan %s",
+            # The Plan is ALREADY COMMITTED at this point — persist_plan_record
+            # runs in its own transaction — so swallowing this leaves a durable
+            # plan with no run, no approval and no card: invisible work that
+            # cannot be opened or retried, and that only an hourly TTL reaper
+            # eventually relabels "failed" with no reason attached.
+            #
+            # Recording the failure ON the plan is what makes it a fact rather
+            # than an absence. It stays best-effort (a plan already exists; a
+            # second failure must not raise out of a perception cycle) but the
+            # log is ERROR, not WARNING: a plan the founder asked for and never
+            # got is not a routine event.
+            logger.error(
+                "Failed to create background run for perception plan %s — "
+                "marking it failed so it is not silently stalled",
                 plan.plan_id,
                 exc_info=True,
             )
+            try:
+                from sqlalchemy import update as _update
+
+                from src.models.plans import Plan as _Plan
+
+                async with self._db_factory() as db:
+                    await db.execute(
+                        _update(_Plan)
+                        .where(_Plan.plan_id == plan.plan_id, _Plan.status == "created")
+                        .values(status="failed")
+                    )
+                    await db.commit()
+            except Exception:
+                logger.warning(
+                    "Could not mark perception plan %s failed", plan.plan_id, exc_info=True
+                )
 
         return plan
 
@@ -761,28 +842,3 @@ class PerceptionRunner:
                 await db.commit()
         except Exception:
             logger.warning("Failed to bump perception for sources", exc_info=True)
-
-    @staticmethod
-    def _extract_perception_policy(planner_text: str):
-        """Parse a perception_policy JSON block from planner output, if present."""
-        from src.contracts import PerceptionDecision
-
-        if not planner_text or "perception_policy" not in planner_text:
-            return None
-
-        try:
-            # Find the perception_policy JSON — could be embedded in markdown
-            import re
-
-            pattern = r'"perception_policy"\s*:\s*(\{[^}]+\})'
-            match = re.search(pattern, planner_text)
-            if not match:
-                return None
-
-            import json
-
-            raw = json.loads(match.group(1))
-            return PerceptionDecision(**raw)
-        except Exception:
-            logger.debug("Failed to parse perception_policy from planner", exc_info=True)
-            return None

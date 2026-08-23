@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from ulid import ULID
 
+from src.api.approval_trust_scope import decision_route, rejected_capability
 from src.api.deps import get_current_user_id, get_current_workspace_id, get_session
 from src.api.routes_approvals_prepared import publish_prepared_decision, run_prepared_action
 from src.api.schemas import ApprovalDecisionRequest, ApprovalDetailResponse, ApprovalResponse
@@ -22,6 +23,8 @@ from src.models.plans import Plan
 from src.models.task_graph import TaskRun, TaskStep
 from src.services.audit import AuditService
 from src.services.execution_state import transition_run, transition_step
+from src.services.filter_proposals import FILTER_PROPOSAL_TYPE
+from src.services.filter_rules import apply_approved_proposal
 from src.services.graph_executor import create_graph_executor
 
 logger = logging.getLogger(__name__)
@@ -82,21 +85,26 @@ async def get_approval_detail(
 @router.get("/v1/approvals", response_model=list[ApprovalResponse])
 async def list_approvals(
     status: str = "pending",
+    approval_type: str = "",
     user_id: str = Depends(get_current_user_id),
     workspace_id: str = Depends(get_current_workspace_id),
     db: AsyncSession = Depends(get_session),
 ):
-    """List approvals for the user, filtered by status."""
-    result = await db.execute(
-        select(Approval)
-        .where(
-            Approval.user_id == user_id,
-            Approval.workspace_id == workspace_id,
-            Approval.status == status,
-        )
-        .order_by(Approval.created_at.desc())
-        .limit(50)
+    """List approvals for the user, filtered by status and optionally by type.
+
+    `approval_type` exists so the prepared-work queue can ask for exactly the
+    rows it is the only route to — see CLAUDE.md, "a prepared action has no run
+    and no step". An empty value means no filter, which is the pre-existing
+    behaviour byte for byte.
+    """
+    stmt = select(Approval).where(
+        Approval.user_id == user_id,
+        Approval.workspace_id == workspace_id,
+        Approval.status == status,
     )
+    if approval_type:
+        stmt = stmt.where(Approval.approval_type == approval_type)
+    result = await db.execute(stmt.order_by(Approval.created_at.desc()).limit(50))
     approvals = result.scalars().all()
     return [
         ApprovalResponse(
@@ -104,8 +112,10 @@ async def list_approvals(
             status=a.status,
             title=a.title,
             summary=a.summary,
+            approval_type=a.approval_type,
             risk_level=a.risk_level,
             created_at=a.created_at,
+            decision_route=decision_route(a.artifact_refs),
         )
         for a in approvals
     ]
@@ -169,6 +179,7 @@ async def approve_action(
             status=approval.status,
             title=approval.title,
             summary=approval.summary,
+            approval_type=approval.approval_type,
             risk_level=approval.risk_level,
             created_at=approval.created_at,
         )
@@ -224,6 +235,14 @@ async def approve_action(
 
     await db.commit()
 
+    # A confirmed FILTER PROPOSAL becomes rules. Same principle as a prepared
+    # action one branch below: the addresses come off the row the founder read,
+    # never off fresh evidence. It does not return early — no later branch
+    # matches a proposal, and the generic response is the right one.
+    if approval.approval_type == FILTER_PROPOSAL_TYPE:
+        await apply_approved_proposal(db, approval)
+        await db.commit()
+
     # PREPARED actions: the action was fully derived on the original turn and recorded on this
     # row. Confirmation REPLAYS that recorded payload — it must NOT be routed through
     # GraphExecutor, whose agent would re-derive it and could run something other than what
@@ -243,6 +262,7 @@ async def approve_action(
             status=approval.status,
             title=approval.title,
             summary=approval.summary,
+            approval_type=approval.approval_type,
             risk_level=approval.risk_level,
             created_at=approval.created_at,
         )
@@ -413,6 +433,7 @@ async def approve_action(
         status=approval.status,
         title=approval.title,
         summary=approval.summary,
+        approval_type=approval.approval_type,
         risk_level=approval.risk_level,
         created_at=approval.created_at,
     )
@@ -442,6 +463,7 @@ async def reject_action(
             status=approval.status,
             title=approval.title,
             summary=approval.summary,
+            approval_type=approval.approval_type,
             risk_level=approval.risk_level,
             created_at=approval.created_at,
         )
@@ -499,6 +521,7 @@ async def reject_action(
             status=approval.status,
             title=approval.title,
             summary=approval.summary,
+            approval_type=approval.approval_type,
             risk_level=approval.risk_level,
             created_at=approval.created_at,
         )
@@ -540,18 +563,16 @@ async def reject_action(
         details={"reason": req.reason if req else None},
     )
 
-    # Trust feedback loop — record rejection for graduated autonomy
-    try:
-        from src.services.risk_assessor import record_approval_decision
+    # Only when the thing rejected IS a capability — see `rejected_capability`.
+    if capability := rejected_capability(approval.approval_type):
+        try:
+            from src.services.risk_assessor import record_approval_decision
 
-        capability = approval.approval_type
-        if ":" in capability:
-            capability = capability.split(":", 1)[1]
-        await record_approval_decision(
-            db, workspace_id, capability, approval.risk_level or "low", "rejected"
-        )
-    except Exception:
-        logger.warning("Trust feedback failed for rejection %s", approval_id, exc_info=True)
+            await record_approval_decision(
+                db, workspace_id, capability, approval.risk_level or "low", "rejected"
+            )
+        except Exception:
+            logger.warning("Trust feedback failed for rejection %s", approval_id, exc_info=True)
 
     await db.commit()
 
@@ -602,6 +623,7 @@ async def reject_action(
         status=approval.status,
         title=approval.title,
         summary=approval.summary,
+        approval_type=approval.approval_type,
         risk_level=approval.risk_level,
         created_at=approval.created_at,
     )
@@ -656,6 +678,7 @@ async def edit_approval(
         status=approval.status,
         title=approval.title,
         summary=approval.summary,
+        approval_type=approval.approval_type,
         risk_level=approval.risk_level,
         created_at=approval.created_at,
     )

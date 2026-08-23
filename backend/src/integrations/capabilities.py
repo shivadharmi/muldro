@@ -145,8 +145,6 @@ CAPABILITY_CATALOG: dict[str, CapabilityMeta] = {
     "internal.extract_preferences": _cap(CapabilityFamily.INTERNAL, False),
     "internal.verify_run": _cap(CapabilityFamily.INTERNAL, False),
     "internal.update_execution": _cap(CapabilityFamily.INTERNAL, False),
-    "internal.push_ui": _cap(CapabilityFamily.INTERNAL, False),
-    "internal.render_surface": _cap(CapabilityFamily.INTERNAL, False),
     "internal.store_memory": _cap(CapabilityFamily.INTERNAL, False),
     "internal.store_preference": _cap(CapabilityFamily.INTERNAL, False),
     "internal.get_entity": _cap(CapabilityFamily.INTERNAL, True),

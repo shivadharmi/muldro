@@ -12,15 +12,14 @@ This module proves:
   1. helper on/off — appends a PRESENTER_VOICE block when True; identity when False;
   2. immutability — the input block list is never mutated;
   3. forced-on integration (promotes spike 0.1, backend/spikes/deep_collapse/
-     inline_format_probe.py) — with the augmentation on, a deep agent driven by a scripted
-     streaming fake model emits a reply + fenced ``json:surface`` block that the existing
-     surface parsers consume; plus a NEGATIVE CONTROL that PRESENTER_VOICE is absent from
-     the built deep system prompt when the flag is off (the augmentation is gated).
+     inline_format_probe.py) — with the augmentation on, the voice reaches the built deep
+     system prompt and a deep agent driven by a scripted streaming fake model streams the
+     reply through to ``agent_done`` intact; plus a NEGATIVE CONTROL that PRESENTER_VOICE
+     is absent from the built deep system prompt when the flag is off (gated).
 """
 
 from __future__ import annotations
 
-import json
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -35,32 +34,27 @@ from src.deep_runtime.prompt_bridge import build_system_message, flatten_system_
 from src.deep_runtime.stream_adapter import stream_deep_agent_events
 from src.orchestrator.agent_invoker import _augment_system_blocks_for_inline
 from src.orchestrator.prompts import PRESENTER_VOICE
-from src.services.surface_mapping import extract_surface_spec, strip_surface_blocks
 from tests.conftest import make_mock_settings
 
 MODEL_ID = "claude-sonnet-4-6"
 AGENT_NAME = "presenter"
 
-# --- the target: a Presenter reply + a fenced surface block (from spike 0.1) --------
-REPLY_TEXT = "Here is your summary."
-SURFACE_JSON = json.dumps({"should_surface": True, "kind": "summary", "title": "Weekly Summary"})
-FENCE_OPEN = "```json:surface"
-FENCE_CLOSE = "```"
-FULL_TEXT = f"{REPLY_TEXT}\n\n{FENCE_OPEN}\n{SURFACE_JSON}\n{FENCE_CLOSE}"
+# --- the target: a multi-sentence Presenter reply (from spike 0.1) ------------------
+REPLY_TEXT = "Here is your summary. Two invoices are overdue and one meeting moved."
 
 
 def _chunks(text: str, size: int = 7) -> list[str]:
-    """Split *text* into fixed-size slices so fence/JSON boundaries land MID-chunk."""
+    """Split *text* into fixed-size slices so word and sentence boundaries land MID-chunk."""
     return [text[i : i + size] for i in range(0, len(text), size)]
 
 
-class _SurfaceStreamingFakeModel(BaseChatModel):
-    """Streams REPLY_TEXT + a fenced surface block as many small text deltas (fence + JSON
-    split mid-chunk), then a terminal usage/stop chunk. No tool calls. Fully offline."""
+class _ReplyStreamingFakeModel(BaseChatModel):
+    """Streams REPLY_TEXT as many small text deltas (boundaries split mid-chunk), then a
+    terminal usage/stop chunk. No tool calls. Fully offline."""
 
     @property
     def _llm_type(self) -> str:
-        return "scripted-surface-fake"
+        return "scripted-reply-fake"
 
     def bind_tools(self, tools, **kwargs):  # noqa: ANN001, ANN003, ARG002
         return self
@@ -69,7 +63,7 @@ class _SurfaceStreamingFakeModel(BaseChatModel):
     def _script() -> list[AIMessageChunk]:
         chunks: list[AIMessageChunk] = [
             AIMessageChunk(content=[{"type": "text", "text": piece, "index": 0}])
-            for piece in _chunks(FULL_TEXT)
+            for piece in _chunks(REPLY_TEXT)
         ]
         chunks.append(
             AIMessageChunk(
@@ -167,9 +161,9 @@ def test_augment_does_not_mutate_input():
 
 
 # --- 3. forced-on integration (promotes spike 0.1) + negative control -----------------
-async def test_inline_format_on_streams_reply_and_surface():
+async def test_inline_format_on_streams_reply():
     """With deep_inline_format=True, a deep agent whose system prompt carries the
-    augmentation streams a reply + surface that the existing surface parsers consume."""
+    augmentation streams the reply through to agent_done intact."""
     settings = make_mock_settings(runtime="deep", deep_inline_format=True)
     base_blocks = [{"type": "text", "text": "You are Muldro's Presenter."}]
 
@@ -182,7 +176,7 @@ async def test_inline_format_on_streams_reply_and_surface():
     assert PRESENTER_VOICE in flatten_system_blocks(system.content)
 
     agent = create_deep_agent(
-        model=_SurfaceStreamingFakeModel(),
+        model=_ReplyStreamingFakeModel(),
         tools=[],
         system_prompt=system,
         checkpointer=MemorySaver(),
@@ -202,14 +196,8 @@ async def test_inline_format_on_streams_reply_and_surface():
     assert done is not None, "no agent_done frame — stream did not complete"
     done_text = done.get("text") or ""
 
-    # reply text survives streaming and strips clean; surface spec parses.
-    assert strip_surface_blocks(done_text) == REPLY_TEXT
-    assert FENCE_OPEN not in strip_surface_blocks(done_text)
-    spec = extract_surface_spec(done_text)
-    assert spec is not None
-    assert spec.should_surface is True
-    assert spec.kind == "summary"
-    assert spec.title == "Weekly Summary"
+    # The reply survives chunked streaming and is reassembled byte-for-byte.
+    assert done_text == REPLY_TEXT
 
 
 def test_inline_format_off_negative_control():

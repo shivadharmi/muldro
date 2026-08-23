@@ -164,6 +164,60 @@ class GitHubConnector(BaseConnector):
         return "/v1/auth/oauth/github/authorize"
 
     @staticmethod
+    def _occurred_at_from_updated_at(value: object) -> datetime | None:
+        """Parse a notification's ``updated_at`` into a tz-aware UTC datetime.
+
+        GitHub sends ISO-8601 with a trailing ``Z``. Without this every GitHub
+        event carried ``occurred_at=None``, and the two consumers of that None
+        disagree: the frame builder falls back to ``now()`` while the feed
+        grouper sorts a missing timestamp at ``datetime.min`` - so one event
+        would render "just now" on a card the feed had ordered at year-1.
+
+        Always aware, never naive: a naive value raises on any comparison
+        against an aware one downstream. Always total, never raising: a bad
+        timestamp must cost this one event its time, not take down the whole
+        poll for the source.
+        """
+        if not isinstance(value, str) or not value.strip():
+            return None
+        try:
+            parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+
+    @staticmethod
+    def _entity_id_from_subject_url(url: str | None, fallback: str) -> str:
+        """Derive a durable "owner/repo#number" id from a subject API URL.
+
+        A notification is an occurrence; the pull request or issue is the
+        thing. Keying on the notification meant one PR collecting three
+        review comments minted three identities and three cards.
+
+        A wrong id is worse than the fallback - it silently merges two
+        different things onto one card - so this only accepts the exact
+        ``.../repos/{owner}/{repo}/{kind}/{number}`` shape and falls back on
+        everything else. In particular the number must sit in the number
+        POSITION: ``.../issues/comments/12345`` is a comment, not issue
+        12345, and matching on trailing digits would collapse every comment
+        thread in a repo onto a single identity.
+        """
+        if not isinstance(url, str):
+            return fallback
+        path = url.split("?", 1)[0].split("#", 1)[0]
+        parts = [p for p in path.split("/") if p]
+        # The API prefix is always the first "repos" segment, so an owner or
+        # repo of that name (.../repos/repos/repos/pulls/7) still resolves.
+        if "repos" not in parts:
+            return fallback
+        i = parts.index("repos")
+        if len(parts) != i + 5 or not parts[i + 4].isdigit():
+            return fallback
+        return f"{parts[i + 1]}/{parts[i + 2]}#{parts[i + 4]}"
+
+    @staticmethod
     def _normalize_notification(notif: dict) -> RawEvent | None:
         """Convert a GitHub notification to a RawEvent."""
         subject = notif.get("subject", {})
@@ -181,17 +235,37 @@ class GitHubConnector(BaseConnector):
         }
         event_type = type_map.get(notif_type, "github_notification")
 
+        notification_id = notif.get("id", "")
         return RawEvent(
             source="github",
             source_account_id="github_primary",
             event_type=event_type,
             entity_type=notif_type.lower() if notif_type else "notification",
-            entity_id=notif.get("id", ""),
-            title=f"[{repo}] {title}",
+            entity_id=GitHubConnector._entity_id_from_subject_url(
+                subject.get("url"), notification_id
+            ),
+            occurred_at=GitHubConnector._occurred_at_from_updated_at(notif.get("updated_at")),
+            # The repo travels in actor now, so the title is the bare subject
+            # and the frame composes the headline from the two.
+            title=title,
             summary=f"{reason}: {title} in {repo}",
-            actor={"type": "system", "name": repo},
+            # The commenter is not in the notifications payload, so the repo
+            # is the only counterparty github gives us - and the frame wants
+            # one, because the title above is now the bare subject and
+            # `frame_for_event` composes "<actor> - <subject>" from the two.
+            #
+            # `type` is descriptive only: NOTHING READS IT. `_actor_name`
+            # takes `name`/`canonical_name` whatever the type says, so the
+            # headline is "acme/web - Add retry to poller", formatted exactly
+            # like "Sarah Chen - Series A term sheet". Marking it "repository"
+            # does not stop that and was never going to; it records what the
+            # value is for a future consumer (entity resolution, which should
+            # not mint a Person for a repo). Making the frame skip a
+            # non-person actor would delete the repo name from every github
+            # headline, which is the opposite of why it is here.
+            actor={"type": "repository", "name": repo},
             raw_payload={
-                "notification_id": notif.get("id"),
+                "notification_id": notification_id,
                 "reason": reason,
                 "repo": repo,
                 "url": subject.get("url"),

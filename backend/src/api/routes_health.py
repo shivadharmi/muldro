@@ -5,7 +5,7 @@ queues, agent stats, and observation health.
 """
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
@@ -23,6 +23,16 @@ logger = logging.getLogger(__name__)
 # Loop-health thresholds
 _FAILURE_RATE_THRESHOLD = 0.5
 _FAILURE_VOLUME_THRESHOLD = 3
+
+# How long a plan may sit in `created` before it counts as stalled rather than
+# starting. The scheduler ticks every 30s, so a plan that has produced no run
+# after this long is not waiting its turn — nothing is coming for it.
+#
+# This exists because such a plan was INVISIBLE: it has no run and no approval,
+# so no card, no queue entry the founder can open, nothing. Its only trace was
+# a "1 task" counter pointing at something unreachable. Counting it as queued
+# work was the lie; naming it as impaired health is the truth.
+PLAN_STALL_MINUTES = 15
 
 
 def derive_loop_health(
@@ -57,6 +67,13 @@ def derive_loop_health(
                 f"perception source '{source}' failing ({info['consecutive_failures']} consecutive)"
             )
 
+    # Plans that never started. Deliberately DEGRADED, not unhealthy: the loop is
+    # still perceiving and can still act, but something it decided to do was
+    # dropped, and the founder cannot see that anywhere else.
+    stalled = (queues or {}).get("plans_stalled", 0)
+    if stalled:
+        degraded.append(f"{stalled} plan{'s' if stalled != 1 else ''} created but never started")
+
     # Queues — exhausted DLQ entries need human intervention; pending = retrying.
     if (queues or {}).get("dlq_exhausted", 0) > 0:
         unhealthy.append(f"{queues['dlq_exhausted']} dead-lettered operations exhausted")
@@ -77,7 +94,13 @@ def derive_loop_health(
 
 
 class HealthDashboardResponse(BaseModel):
-    status: str = "ok"
+    # healthy | degraded | unhealthy — the SAME vocabulary `/v1/health/loop`
+    # returns, because the dashboard is where the client actually reads it.
+    # This was a hardcoded "ok", a fourth value nothing consumed: the status bar
+    # switches on healthy/degraded/unhealthy and fell through to "Unknown" for
+    # every workspace, for ever, while `derive_loop_health` sat right here
+    # computing the real answer for an endpoint nothing called.
+    status: str = "healthy"
     budget: dict
     queues: dict
     observations: dict
@@ -121,7 +144,10 @@ async def system_dashboard(
     except Exception:
         pass
 
+    status, _reasons = derive_loop_health(observation_info, queue_info, run_info, budget_info)
+
     return HealthDashboardResponse(
+        status=status,
         budget=budget_info,
         queues=queue_info,
         observations=observation_info,
@@ -263,21 +289,38 @@ async def _get_queue_info(workspace_id: str) -> dict:
             )
             approvals_pending = approvals_result.scalar() or 0
 
+            # `created` is NOT in flight — nothing has started. Counting it here
+            # put a task in the founder's queue that led nowhere: a created plan
+            # has no run and no approval, so there is no card to open and no
+            # decision to make. It is reported separately, as stalled.
             plans_result = await db.execute(
                 select(func.count())
                 .select_from(Plan)
                 .where(
-                    Plan.status.in_(["created", "executing"]),
+                    Plan.status == "executing",
                     Plan.workspace_id == workspace_id,
                 )
             )
             plans_in_flight = plans_result.scalar() or 0
+
+            stalled_before = datetime.now(timezone.utc) - timedelta(minutes=PLAN_STALL_MINUTES)
+            stalled_result = await db.execute(
+                select(func.count())
+                .select_from(Plan)
+                .where(
+                    Plan.status == "created",
+                    Plan.created_at < stalled_before,
+                    Plan.workspace_id == workspace_id,
+                )
+            )
+            plans_stalled = stalled_result.scalar() or 0
 
             return {
                 "dlq_pending": dlq_pending,
                 "dlq_exhausted": dlq_exhausted,
                 "approvals_pending": approvals_pending,
                 "plans_in_flight": plans_in_flight,
+                "plans_stalled": plans_stalled,
             }
     except Exception as e:
         logger.error("Failed to get queue info: %s", e)
@@ -286,6 +329,7 @@ async def _get_queue_info(workspace_id: str) -> dict:
             "dlq_exhausted": 0,
             "approvals_pending": 0,
             "plans_in_flight": 0,
+            "plans_stalled": 0,
         }
 
 

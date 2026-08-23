@@ -320,6 +320,8 @@ def test_rejection_audit_trail(mock_audit_cls):
     mock_approval.execution_id = "exec_pipeline_001"
     mock_approval.title = "Approve: Send weekly report"
     mock_approval.summary = "Automated weekly report to team"
+    # ApprovalResponse.approval_type is required; a MagicMock attribute is not a str.
+    mock_approval.approval_type = "tool:email_send"
     mock_approval.risk_level = "low"
     mock_approval.created_at = datetime(2026, 3, 14, 9, 0, tzinfo=timezone.utc)
     mock_approval.expires_at = None

@@ -88,48 +88,40 @@ _DEFAULT_INSTALLATIONS: list[dict] = [
         ],
     },
     {
+        # Gateway-backed: routed to the OpenConnector adapter (notion provider).
+        # Credentials live in OpenConnector, not OAuthManager. This replaced an
+        # `npx @notionhq/notion-mcp-server` stdio process launched with
+        # NOTION_TOKEN resolved out of the environment — a secret readable in
+        # `ps aux` for the life of the child, which is the exposure the gateway
+        # exists to close. `scopes_granted` is None like every other gateway
+        # installation: the registry already knows which capabilities the
+        # provider exposes, so restating them here could only drift.
         "server_name": "notion",
         "display_name": "Notion",
-        "transport": "stdio",
-        "command": "npx",
-        "args": ["-y", "@notionhq/notion-mcp-server@2.4.0"],
-        "env_template": {
-            "NOTION_TOKEN": "Notion integration token",
-        },
-        "auth_provider": "notion",
-        "scopes_granted": [
-            "doc.create",
-            "doc.update",
-            "doc.get",
-            "doc.search",
-            "doc.comment",
-            "doc.append",
-        ],
-    },
-    {
-        "server_name": "atlassian",
-        "display_name": "Atlassian (Jira + Confluence)",
         "transport": "streamable-http",
-        "remote_url": "https://mcp.atlassian.com/v1/mcp",
+        "remote_url": None,
         "command": None,
         "args": None,
         "env_template": {},
-        "auth_provider": "atlassian",
-        "scopes_granted": [
-            # Jira
-            "issue.create",
-            "issue.update",
-            "issue.search",
-            "issue.comment",
-            "issue.transition",
-            # Confluence
-            "doc.create",
-            "doc.update",
-            "doc.get",
-            "doc.search",
-            "doc.comment",
-            "doc.list",
-        ],
+        "auth_provider": "platform_jwt",
+        "scopes_granted": None,
+    },
+    {
+        # Gateway-backed: routed to the OpenConnector adapter, serving the
+        # `jira` OC provider. Confluence is NOT served: OpenConnector requires
+        # an api_key for it and has no OAuth config, so registering it aborts
+        # startup — see gateway_actions/atlassian.py. `remote_url` drops with
+        # the native transport: it addressed Atlassian's own Rovo MCP server,
+        # which the gateway replaces.
+        "server_name": "atlassian",
+        "display_name": "Jira",
+        "transport": "streamable-http",
+        "remote_url": None,
+        "command": None,
+        "args": None,
+        "env_template": {},
+        "auth_provider": "platform_jwt",
+        "scopes_granted": None,
     },
 ]
 
@@ -186,6 +178,15 @@ async def seed_installations(db: AsyncSession, workspace_id: str, user_id: str) 
         inst = existing[server_name]
         needs_update = False
 
+        # display_name is synced like every other seeded field. It was not, and
+        # the omission surfaced the moment a migration changed one: the
+        # Atlassian installation kept rendering "Atlassian (Jira + Confluence)"
+        # after Confluence was found to be unservable, so the card advertised a
+        # product the gateway cannot reach. A field the seed declares but never
+        # propagates is a code change that silently does not ship.
+        if inst.display_name != inst_data["display_name"]:
+            inst.display_name = inst_data["display_name"]
+            needs_update = True
         if inst.transport != inst_data.get("transport", "stdio"):
             # Transport changed — tool schemas may differ between modes, so
             # clear them once. Steady-state restarts no longer clear schemas,

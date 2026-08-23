@@ -3,10 +3,10 @@
 import { useCallback } from "react";
 import type { HistoryItem, HistoryStepSummary, RunApproval } from "@/stores/history-store";
 import { useHistoryStore } from "@/stores/history-store";
-import type { ApprovalContext } from "@/lib/a2ui-types";
+import type { ApprovalContext } from "@/lib/types/execution";
 import { StatusBadge } from "@/components/ui/status-badge";
-import { InlineApprovalCard } from "@/components/a2ui/components/inline-approval";
-import { stepStatusIcon, formatDuration } from "@/components/a2ui/components/step-presentation";
+import { InlineApprovalCard } from "@/components/execution/inline-approval";
+import { stepStatusIcon, formatDuration } from "@/components/execution/step-presentation";
 
 /** A rich unified `ApprovalContext` carries evidence fields (e.g. `risk_reasoning`)
  *  the thin `HistoryApprovalContext` fallback never has. */

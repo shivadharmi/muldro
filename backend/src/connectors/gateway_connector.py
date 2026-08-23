@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Protocol
@@ -263,6 +264,7 @@ class GatewayConnector(BaseConnector):
         max_pages: int,
         page_token_key: str = "pageToken",
         next_token_key: str = "nextPageToken",
+        stop_when: Callable[[list[dict]], bool] | None = None,
     ) -> PageWalk:
         """Follow pagination, returning a :class:`PageWalk`.
 
@@ -300,6 +302,18 @@ class GatewayConnector(BaseConnector):
         method owns the "never advance past an undrained window" rule so it
         lives in one place; every subclass must route through it (an explicit
         per-connector acceptance criterion).
+
+        ``stop_when`` ends the walk cleanly once a page proves the rest is
+        already known. It exists for providers whose read action offers no
+        server-side time window: those must sort NEWEST-FIRST and stop at the
+        watermark, because the alternative — oldest-first with a client-side
+        skip — re-reads the whole history every poll and, once the history
+        exceeds ``max_pages``, truncates before ever reaching the new rows. The
+        cursor is then held (correctly) and the walk repeats the same pages for
+        ever, observing nothing. A stop is emphatically NOT truncation: the
+        window WAS drained, so ``truncated`` stays False and the caller may
+        advance. Returning True on a page that does not actually prove
+        exhaustion would advance the cursor past unread rows.
         """
         pages: list[list[dict]] = []
         page_token: str | None = None
@@ -358,6 +372,9 @@ class GatewayConnector(BaseConnector):
                     len(rows),
                 )
             pages.append(kept)
+
+            if stop_when is not None and stop_when(kept):
+                return PageWalk(pages=pages, error_class=None, truncated=False)
 
             page_token = result.get(next_token_key)
             if not page_token:

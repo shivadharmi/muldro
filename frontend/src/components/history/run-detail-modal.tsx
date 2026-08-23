@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { fetchHistoryDetail } from "@/lib/api";
 import { useHistoryStore } from "@/stores/history-store";
-import { stepStatusIcon, formatDuration } from "@/components/a2ui/components/step-presentation";
+import { stepStatusIcon, formatDuration } from "@/components/execution/step-presentation";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 

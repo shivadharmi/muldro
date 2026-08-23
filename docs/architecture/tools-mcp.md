@@ -86,7 +86,6 @@ Defined as `InternalToolDef` entries in `catalog.py`. Served via in-process Fast
 | `schedule_reminder` | intelligence | Schedule a reminder |
 | `add_to_brief` | intelligence | Add an item to the daily brief |
 | `report_governor_verdict` | _special | Return input as-is (inline dispatch) |
-| `push_ui_update` | communication | Push A2UI surface update |
 
 ### Capability Summary
 

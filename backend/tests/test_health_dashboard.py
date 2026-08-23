@@ -33,7 +33,9 @@ class TestHealthDashboard:
     async def test_dashboard_returns_all_sections(self, _bud, _q, _obs, _ag, _tr, _run):
         result = await system_dashboard(user_id=TEST_USER_ID)
         assert isinstance(result, HealthDashboardResponse)
-        assert result.status == "ok"
+        # "ok" was a fourth value nothing consumed: the status bar switches on
+        # healthy/degraded/unhealthy and read every workspace as "Unknown".
+        assert result.status == "healthy"
         assert result.budget["daily_spend_usd"] == 1.23
         assert result.budget["budget_mode"] == "normal"
         assert result.queues["dlq_pending"] == 0
@@ -116,3 +118,71 @@ class TestAgentInfoTokenAggregation:
         assert "token_usage.trigger not like 'tool:%'" in sql.lower(), (
             f"aggregate does not exclude tool:* breakdown rows on the trigger column: {sql}"
         )
+
+
+class TestDashboardReportsRealHealth:
+    """The dashboard is the endpoint the status bar reads, so it must report the
+    COMPUTED verdict, not a constant.
+
+    `status` was hardcoded `"ok"` — a fourth value nothing consumed. The status
+    bar switches on healthy/degraded/unhealthy, so every workspace read
+    "Unknown" for ever, while `derive_loop_health` sat in the same module
+    computing the real answer for `/v1/health/loop`, which nothing called.
+
+    Asserted with a NON-default verdict on purpose: the field defaults to
+    "healthy", so a healthy fixture passes whether or not the wiring exists.
+    """
+
+    @patch("src.api.routes_health._get_run_metrics", new_callable=AsyncMock, return_value={})
+    @patch("src.api.routes_health._get_trace_metrics", new_callable=AsyncMock, return_value={})
+    @patch("src.api.routes_health._get_agent_info", new_callable=AsyncMock, return_value={})
+    @patch(
+        "src.api.routes_health._get_observation_info",
+        new_callable=AsyncMock,
+        return_value={},
+    )
+    @patch(
+        "src.api.routes_health._get_queue_info",
+        new_callable=AsyncMock,
+        return_value={
+            "dlq_pending": 0,
+            "dlq_exhausted": 0,
+            "approvals_pending": 0,
+            "plans_in_flight": 0,
+            "plans_stalled": 1,
+        },
+    )
+    @patch(
+        "src.api.routes_health._get_budget_info",
+        new_callable=AsyncMock,
+        return_value={"budget_mode": "normal"},
+    )
+    async def test_a_stalled_plan_makes_the_dashboard_say_degraded(
+        self, _bud, _q, _obs, _ag, _tr, _run
+    ):
+        result = await system_dashboard(user_id=TEST_USER_ID)
+        assert result.status == "degraded"
+
+    @patch("src.api.routes_health._get_run_metrics", new_callable=AsyncMock, return_value={})
+    @patch("src.api.routes_health._get_trace_metrics", new_callable=AsyncMock, return_value={})
+    @patch("src.api.routes_health._get_agent_info", new_callable=AsyncMock, return_value={})
+    @patch(
+        "src.api.routes_health._get_observation_info",
+        new_callable=AsyncMock,
+        return_value={},
+    )
+    @patch(
+        "src.api.routes_health._get_queue_info",
+        new_callable=AsyncMock,
+        return_value={"dlq_pending": 0, "dlq_exhausted": 0, "approvals_pending": 0},
+    )
+    @patch(
+        "src.api.routes_health._get_budget_info",
+        new_callable=AsyncMock,
+        return_value={"budget_mode": "paused"},
+    )
+    async def test_a_paused_budget_makes_the_dashboard_say_unhealthy(
+        self, _bud, _q, _obs, _ag, _tr, _run
+    ):
+        result = await system_dashboard(user_id=TEST_USER_ID)
+        assert result.status == "unhealthy"

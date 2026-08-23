@@ -36,7 +36,16 @@ class Settings(BaseSettings):
     # Per-sub-tick timeout: a single hung sub-tick (e.g. perception holding a
     # lock) must never starve later sub-ticks (resume / health). On timeout the
     # dispatcher logs and continues to the next sub-tick.
-    scheduler_subtick_timeout_s: float = 90.0
+    #
+    # 90s was too tight for perception and the failure was silent in the worst
+    # way: the cancellation landed AFTER the poll had ingested, triaged and
+    # published its cards but BEFORE the Planner gate, so the feed kept filling
+    # while no plan and no task run was ever created. Perception logged success
+    # up to the cut. A perception tick is not one operation — it is a poll plus
+    # a triage call plus a relevance call plus up to MAX_BODIES_PER_POLL body
+    # calls, each a round trip to a provider whose latency is not ours to
+    # promise — so it cannot be bounded by a number chosen for a lock-holder.
+    scheduler_subtick_timeout_s: float = 300.0
     # Stale approval-resume reaper: a run approved by the user but never resumed
     # by the background tick is re-driven through resume_run after this age, and
     # failed after the attempt cap to avoid hot-looping.
@@ -138,11 +147,13 @@ class Settings(BaseSettings):
     github_oauth_client_secret: str = ""
     github_oauth_redirect_uri: str = "http://localhost:8000/v1/auth/github/callback"
 
-    # Notion OAuth
+    # Notion OAuth — the CLIENT credentials the startup registrar hands to
+    # OpenConnector, which then owns the authorization and holds the token. No
+    # redirect_uri: the callback lands on the gateway, not on Muldro. No
+    # notion_token either — the stdio MCP server that read it is retired, and it
+    # was the last place a Notion secret reached a child process's environment.
     notion_oauth_client_id: str = ""
     notion_oauth_client_secret: str = ""
-    notion_oauth_redirect_uri: str = "http://localhost:8000/v1/auth/notion/callback"
-    notion_token: str = ""  # For MCP server (@notionhq/notion-mcp-server)
 
     # Atlassian OAuth (Jira + Confluence via Rovo MCP)
     atlassian_oauth_client_id: str = ""
@@ -200,11 +211,6 @@ class Settings(BaseSettings):
     # Step 8: gate the JIT-hybrid slim context pack. Deep chat path only; when
     # False the deep path builds the full eager pack (byte-identical to legacy).
     deep_context_jit: bool = False  # MULDRO_DEEP_CONTEXT_JIT
-
-    # Single-lead cutover: how long a PREPARED action stays actionable in the review queue
-    # before it expires. Longer than approval_service's 24h default because prepared work is
-    # reviewed on the founder's schedule, not the turn's.
-    prepared_action_ttl_days: int = 7  # MULDRO_PREPARED_ACTION_TTL_DAYS
 
     # Step 10D P2.5c: drop the Planner from the chat single-lead path. When True a chat turn
     # skips classify_intent + fast-path + Planner + plan record + resolve_plan_routing entirely

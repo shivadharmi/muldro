@@ -11,8 +11,8 @@ and no Presenter step:
 * :meth:`_run_single_lead_planless` — the same, without a plan (``chat_planless``).
 * :meth:`resume_message_events` — the RESUME half of a paused ask/auto turn (drives the
   invoker's ``resume_deep_lead``, re-homes the continuation reply, runs the tail).
-* :meth:`_emit_completion_tail` — the ONE completion tail (run_completed → surface push →
-  optional learner → ``RunCompleted``) shared by every producer of a terminal reply.
+* :meth:`_emit_completion_tail` — the ONE completion tail (run_completed → optional
+  learner → ``RunCompleted``) shared by every producer of a terminal reply.
 
 INVARIANT: a non-failing turn ALWAYS ends in a ``Presentation``. ``routes_chat`` persists
 the reply only on that event and the frontend has no other source of terminal text, so a
@@ -44,7 +44,6 @@ from src.orchestrator.core_events import (
     UserActionsReady,
     agent_event_from_sse,
 )
-from src.services.surface_mapping import extract_surface_spec, strip_surface_blocks
 
 logger = logging.getLogger(__name__)
 
@@ -60,8 +59,8 @@ class _ChatSingleLeadMixin:
     """The deep single-lead chat path (run + resume) + the shared completion tail.
 
     Mixed into :class:`~src.orchestrator.chat_processor.ChatProcessor`; every attribute
-    referenced (``self._invoker``, ``self._surfaces``, ``self._events``,
-    ``self._spawn_background`` …) is provided by ``ChatProcessor.__init__``.
+    referenced (``self._invoker``, ``self._events``, ``self._spawn_background`` …)
+    is provided by ``ChatProcessor.__init__``.
     """
 
     async def _emit_completion_tail(
@@ -75,15 +74,15 @@ class _ChatSingleLeadMixin:
         intent: str | None = None,
         run_learner: bool = False,
     ) -> AsyncGenerator[CoreEvent, None]:
-        """The ONE completion tail: run_completed event → surface push → optional
-        learner spawn → terminal ``RunCompleted``.
+        """The ONE completion tail: run_completed event → optional learner spawn →
+        terminal ``RunCompleted``.
 
         Shared by all producers of a terminal chat reply so the tail (and its exact
         ordering) lives in one place. ``resume_message_events`` sets ``run_learner=True``
         (A1: fires the learner on an approved resume; ``message`` = the ORIGINAL user
         message, persisted on the Approval and read back off the ``agent_done`` frame).
 
-        Ordering is preserved: run_completed → surface → learner → ``RunCompleted``.
+        Ordering is preserved: run_completed → learner → ``RunCompleted``.
         """
         self._spawn_background(
             self._events.emit_runtime_event(
@@ -94,30 +93,6 @@ class _ChatSingleLeadMixin:
                 payload={"trace_id": trace.trace_id},
             )
         )
-
-        # Push workspace surface. DEPRECATED path: the lead now calls the typed
-        # `render_surface` tool, whose schema a provider can enforce. This fenced-block
-        # parser stays for one release because a model may still emit the old shape —
-        # but it logs when it fires, so the fallback's usage is visible, not silent.
-        # ``presenter_text`` is kept raw for extraction.
-        surface_id = None
-        try:
-            surface_spec = extract_surface_spec(presenter_text)
-            if surface_spec is not None:
-                logger.warning(
-                    "lead emitted a legacy fenced surface block instead of calling "
-                    "render_surface; the fenced path is deprecated and unvalidated"
-                )
-            if surface_spec and surface_spec.should_surface:
-                surface_id = await self._surfaces.push_presenter_surface(
-                    spec=surface_spec,
-                    user_id=user_id,
-                    workspace_id=workspace_id,
-                    run_id=None,
-                    response_text=presenter_text,
-                )
-        except Exception:
-            logger.warning("Surface push failed", exc_info=True)
 
         # Interaction learning (async, non-blocking). Skipped on resume (P2.7).
         if run_learner and self._interaction_learner:
@@ -133,7 +108,10 @@ class _ChatSingleLeadMixin:
                 )
             )
 
-        yield RunCompleted(trace_id=trace.trace_id, run_id=None, surface_id=surface_id)
+        # No surface is built here any more. The turn's view is published from what
+        # the turn actually DID (a run row, a staged write, a recorded finding), not
+        # from a block parsed back out of the reply text.
+        yield RunCompleted(trace_id=trace.trace_id, run_id=None, surface_id=None)
 
     async def _run_single_lead(
         self,
@@ -285,9 +263,9 @@ class _ChatSingleLeadMixin:
                 # RE-HOME the presenter output (C-CORR2): stream_deep_lead emits NO
                 # Presentation frame, so synthesize it here — else the reply is never
                 # persisted (routes_chat persists only on Presentation) and the chat bubble
-                # is empty. Keep presenter_text RAW for the shared tail's surface extraction;
+                # is empty. Keep presenter_text RAW for the shared tail's learner;
                 # only the CHAT-VISIBLE text falls back when there is nothing to show.
-                reply = strip_surface_blocks(presenter_text).strip()
+                reply = presenter_text.strip()
                 yield Presentation(text=reply or _NO_REPLY_TEXT)
 
         if not saw_agent_done:
@@ -492,13 +470,13 @@ class _ChatSingleLeadMixin:
                         # RE-HOME the presenter output (C-CORR2): resume_deep_lead emits NO
                         # Presentation frame, so synthesize it here — else the resumed reply is
                         # never persisted (routes_chat persists only on Presentation) and the
-                        # chat bubble is empty. Keep presenter_text RAW for the tail's surface
-                        # extraction.
+                        # chat bubble is empty. Keep presenter_text RAW for the tail's
+                        # learner.
                         presenter_text = frame.get("text", "")
                         # A1: resume_deep_lead piggybacks the ORIGINAL user message here so the
                         # tail can fire the interaction-learner (see the completion tail below).
                         resume_user_message = frame.get("user_message", "")
-                        yield Presentation(text=strip_surface_blocks(presenter_text))
+                        yield Presentation(text=presenter_text)
 
                 # COMPLETION TAIL (the shared ``_emit_completion_tail``: run_completed →
                 # surface push → interaction-learner → RunCompleted). Runs ONLY on the terminal

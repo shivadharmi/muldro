@@ -61,17 +61,17 @@ REPAIR_CAP_CODE = "repair_cap_exceeded"
 # original call plus TWO repair attempts.
 #
 # Measured, not guessed — and the measurement is thin. Live ``gpt-5-mini``, two observed
-# rejections of ``render_surface``; both were followed by a retry that shortened the
-# offending field, and only one of the two retries produced a valid call: ``subtitle`` went
-# 145 → 127 (still over the 120 limit) in the first, and 121 → 117 (valid) in the second.
-# So a single retry was INSUFFICIENT in 1 of 2 observed cases. n=2 is far too thin to call
-# this a distribution; R3b adds the counter that will let us revisit it with real data.
+# argument-validation rejections on a tool with length-capped string fields; both were
+# followed by a retry that shortened the offending field, and only one of the two retries
+# produced a valid call — the first shortened it but still overshot the cap, the second
+# landed inside it. So a single retry was INSUFFICIENT in 1 of 2 observed cases. n=2 is far
+# too thin to call this a distribution; the per-tool counter below is what will let us
+# revisit it with real data.
 #
-# The design spec (``docs/superpowers/specs/2026-08-20-typed-generation-design.md`` §3.4)
-# says the repair loop is "capped at one retry". This deliberately deviates by one round,
-# because the two errors are not symmetric: being one round too generous costs a model
-# round, while being one round too tight costs the rendered surface entirely — the lead
-# falls back to chat text and the user never sees the surface it was building.
+# One retry was the original design. This deliberately allows a second, because the two
+# errors are not symmetric: being one round too generous costs a model round, while being
+# one round too tight costs the tool call entirely — the model gives up on the tool and
+# falls back to chat text, and the user never gets what it was building.
 MAX_ATTEMPTS = 3
 
 # Terminal steer, in the house style of ``unavailable_server._UNAVAILABLE_STEER`` and

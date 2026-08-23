@@ -1,16 +1,17 @@
 """OAuth routes: provider listing, authorize-URL generation, and the
 callback that exchanges codes for tokens and provisions integrations.
 
-Serves the providers Muldro still authenticates natively (slack/notion/
-atlassian). ``google`` and ``github`` were retired here when they moved behind
-the OpenConnector gateway: that gateway owns their OAuth clients and stores
-their credentials, so both hit the "Unknown provider" 400 and are connected
-through ``routes_integrations`` instead.
+Serves the one provider Muldro still authenticates natively: github, and
+only for its notifications poll.
+``google`` was retired here when it moved behind the OpenConnector gateway: that
+gateway owns its OAuth client and stores its credentials, so it hits the
+"Unknown provider" 400 and is connected through ``routes_integrations`` instead.
+``github`` is a split case — its MCP actions run on the gateway credential,
+while the token minted here backs only the native notifications poll.
 
 Extracted from routes_auth.py (decomposition, 2026-06-20)."""
 
 import logging
-from datetime import datetime, timedelta, timezone
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
@@ -20,6 +21,7 @@ from src.api.deps import (
     get_current_user_id,
     get_current_workspace_id,
 )
+from src.api.oauth_state import consume_state, issue_state
 from src.api.routes_auth_oauth_integration import (
     _ensure_integration,
     _error_redirect,
@@ -162,6 +164,32 @@ async def _resume_after_reauth(db_factory, user_id: str, provider: str, workspac
                 logger.debug("Failed to close reauth-resume Redis client", exc_info=True)
 
 
+async def _close_redis(redis) -> None:
+    """Close a short-lived Redis client without letting teardown break the flow."""
+    if redis is None:
+        return
+    try:
+        await redis.aclose()
+    except Exception:
+        logger.debug("Failed to close OAuth-state Redis client", exc_info=True)
+
+
+def _state_redis(settings: Settings):
+    """Open a Redis client for the OAuth state binding, or None.
+
+    A fresh client per call rather than a shared one: both call sites are a
+    single round trip on a browser-driven request, and the reauth-resume helper
+    above already established this shape in this module.
+    """
+    try:
+        import redis.asyncio as aioredis
+
+        return aioredis.from_url(settings.redis_url, decode_responses=True)
+    except Exception:
+        logger.warning("Could not open Redis for OAuth state", exc_info=True)
+        return None
+
+
 @router.get("/v1/auth/{provider}/authorize", response_model=OAuthUrlResponse)
 @router.get("/v1/auth/oauth/{provider}/authorize", response_model=OAuthUrlResponse)
 async def oauth_authorize(
@@ -172,58 +200,56 @@ async def oauth_authorize(
 ):
     """Generate OAuth authorization URL for a provider.
 
-    ``google`` and ``github`` are deliberately absent: both are served by the
-    OpenConnector gateway, which owns their OAuth clients. Minting a Muldro-side
-    credential for them would produce a token nothing reads, so they fall
-    through to the "Unknown provider" 400 below.
-    """
-    if provider == "notion":
-        client_id = settings.notion_oauth_client_id
-        if not client_id:
-            raise HTTPException(status_code=400, detail="Notion OAuth not configured")
-        params = {
-            "client_id": client_id,
-            "redirect_uri": settings.notion_oauth_redirect_uri,
-            "response_type": "code",
-            "owner": "user",
-            "state": user_id,
-        }
-        url = f"https://api.notion.com/v1/oauth/authorize?{urlencode(params)}"
-        return OAuthUrlResponse(url=url, provider="notion")
+    ``google`` and ``notion`` are deliberately absent: both are served entirely
+    by the OpenConnector gateway, which owns their OAuth client. Minting a
+    Muldro-side credential for either would produce a token nothing reads, so
+    they fall through to the "Unknown provider" 400 below. Their
+    ``*_oauth_client_id``/``_secret`` settings are still required — the startup
+    registrar hands those to OpenConnector — but the authorization itself now
+    runs through ``POST /v1/connections/begin``.
 
-    elif provider == "atlassian":
-        client_id = settings.atlassian_oauth_client_id
+    ``github`` is here for ONE job — the notifications poll. Its MCP actions keep
+    running on the gateway credential; the token minted here is read only by
+    ``GitHubConnector``, which the gateway catalog cannot replace because it
+    exposes no notifications action.
+    """
+    if provider == "github":
+        client_id = settings.github_oauth_client_id
         if not client_id:
-            raise HTTPException(status_code=400, detail="Atlassian OAuth not configured")
-        # Scope list required by Atlassian's hosted Remote MCP
-        # (https://mcp.atlassian.com/v1/mcp). Missing `read:me` was the
-        # cause of every MCP tool call returning the opaque
-        # {"error":true,"message":"We are having trouble completing this action..."}
-        # wrapper even though direct REST calls with the same token worked.
-        # The RMCP server needs to resolve the calling identity on every
-        # tool invocation; without read:me / read:account-scoped claims it
-        # fails silently with the generic message instead of a 403.
-        default_scopes = (
-            "offline_access read:me "
-            "read:jira-work write:jira-work read:jira-user manage:jira-project "
-            "read:confluence-content.all read:confluence-content.summary "
-            "write:confluence-content "
-            "read:confluence-space.summary "
-            "read:confluence-props write:confluence-props "
-            "read:confluence-user read:confluence-groups "
-            "search:confluence"
-        )
+            raise HTTPException(status_code=400, detail="GitHub OAuth not configured")
+
+        # `state` used to be the raw user_id. It is echoed back verbatim by the
+        # provider and the callback trusted it as the identity to file the token
+        # under, so a guessed id was enough to have a credential stored against
+        # someone else's account. User ids are not secret; `state` must be.
+        redis = _state_redis(settings)
+        try:
+            state = await issue_state(redis, user_id)
+        except Exception as exc:
+            # Fail closed. Falling back to an unbound state would restore the
+            # vulnerability exactly, in a window nobody can see.
+            raise HTTPException(
+                status_code=503, detail="Could not start OAuth: state store unavailable"
+            ) from exc
+        finally:
+            await _close_redis(redis)
+        # ``notifications`` is the scope that grants read access to the
+        # /notifications API this connector polls; ``read:user`` identifies the
+        # account the notifications belong to. Notifications originating in
+        # PRIVATE repositories additionally require the broad ``repo`` scope, and
+        # we deliberately do not request it: ``repo`` carries write access to
+        # every repository the founder can reach, which is far more authority
+        # than a perception source may hold. Missing private-repo notifications
+        # is the accepted cost.
+        default_scopes = "notifications read:user"
         params = {
-            "audience": "api.atlassian.com",
             "client_id": client_id,
+            "redirect_uri": settings.github_oauth_redirect_uri,
             "scope": scopes or default_scopes,
-            "redirect_uri": settings.atlassian_oauth_redirect_uri,
-            "state": user_id,
-            "response_type": "code",
-            "prompt": "consent",
+            "state": state,
         }
-        url = f"https://auth.atlassian.com/authorize?{urlencode(params)}"
-        return OAuthUrlResponse(url=url, provider="atlassian")
+        url = f"https://github.com/login/oauth/authorize?{urlencode(params)}"
+        return OAuthUrlResponse(url=url, provider="github")
 
     else:
         raise HTTPException(status_code=400, detail=f"Unknown provider: {provider}")
@@ -257,45 +283,70 @@ async def oauth_callback(
     if not code:
         return _error_redirect(settings, f"OAuth {provider}: no authorization code received")
 
-    # user_id must be passed in state param from the authorize step
-    if not state or not state.startswith("usr_"):
-        return _error_redirect(settings, "Invalid OAuth state: missing user_id")
-    user_id = state
+    # The provider is checked BEFORE the state is consumed. A state is
+    # single-use, so consuming one for a provider this route cannot serve would
+    # burn a live authorization and force the founder to start over — and it
+    # would let anyone spend a state by replaying the callback against a
+    # nonsense provider.
+    if provider != "github":
+        raise HTTPException(status_code=400, detail=f"Unknown provider: {provider}")
 
-    if provider == "notion":
-        client_id = settings.notion_oauth_client_id
-        client_secret = settings.notion_oauth_client_secret
+    # `state` names a single-use binding minted at authorize time; it is NOT the
+    # user id. Every failure mode — absent, expired, forged, already spent —
+    # gives the same message on purpose: distinguishing them is a probing oracle.
+    redis = _state_redis(settings)
+    try:
+        user_id = await consume_state(redis, state)
+    finally:
+        await _close_redis(redis)
+    if not user_id:
+        return _error_redirect(settings, "Invalid or expired OAuth state")
+
+    if provider == "github":
+        client_id = settings.github_oauth_client_id
+        client_secret = settings.github_oauth_client_secret
         if not client_id or not client_secret:
-            return _error_redirect(settings, "Notion OAuth not configured")
+            return _error_redirect(settings, "GitHub OAuth not configured")
 
-        import base64
-
-        basic_auth = base64.b64encode(f"{client_id}:{client_secret}".encode()).decode()
         async with httpx.AsyncClient() as client:
             resp = await client.post(
-                "https://api.notion.com/v1/oauth/token",
-                json={
-                    "grant_type": "authorization_code",
+                "https://github.com/login/oauth/access_token",
+                data={
+                    "client_id": client_id,
+                    "client_secret": client_secret,
                     "code": code,
-                    "redirect_uri": settings.notion_oauth_redirect_uri,
+                    "redirect_uri": settings.github_oauth_redirect_uri,
                 },
-                headers={
-                    "Authorization": f"Basic {basic_auth}",
-                },
+                # Without this header GitHub answers form-encoded
+                # (``access_token=gho_...&scope=...``), not JSON, and ``.json()``
+                # raises. This is the single most common way this flow breaks.
+                headers={"Accept": "application/json"},
                 timeout=15,
             )
             if resp.status_code != 200:
                 logger.error(
-                    "Notion token exchange failed (status=%d): %s",
+                    "GitHub token exchange failed (status=%d): %s",
                     resp.status_code,
-                    resp.text,
+                    resp.text[:200],
                 )
-                return _error_redirect(
-                    settings, f"Notion token exchange failed: {resp.json().get('error', resp.text)}"
-                )
+                return _error_redirect(settings, "Failed to exchange GitHub authorization code")
             token_data = resp.json()
 
-        # Notion tokens don't expire
+        # GitHub reports a rejected exchange as HTTP 200 with an ``error`` key
+        # (bad_verification_code, incorrect_client_credentials, ...). Checking
+        # only the status would store ``token_data["access_token"]`` -> KeyError,
+        # or worse a None token that looks connected.
+        if token_data.get("error"):
+            logger.error(
+                "GitHub token exchange rejected: %s (%s)",
+                token_data.get("error"),
+                token_data.get("error_description", ""),
+            )
+            return _error_redirect(settings, f"GitHub token exchange failed: {token_data['error']}")
+        access_token = token_data.get("access_token")
+        if not access_token:
+            return _error_redirect(settings, "GitHub returned no access token")
+
         db_factory = get_session_factory()
         from src.api.deps import resolve_workspace_id
 
@@ -307,206 +358,26 @@ async def oauth_callback(
             encryption_key=settings.oauth_encryption_key,
             settings=settings,
         )
+        # An OAuth App token does not expire and carries no refresh token, so
+        # both are None by design — a future reader must not read that as a bug
+        # and go looking for the missing half of the response. (GitHub *Apps*
+        # issue expiring user-to-server tokens; this is the OAuth *App* flow.)
         await oauth_mgr.store_token(
             user_id=user_id,
-            provider="notion",
-            access_token=token_data["access_token"],
+            provider="github",
+            access_token=access_token,
             refresh_token=None,
             expires_at=None,
+            scopes=token_data.get("scope", "").split(",") if token_data.get("scope") else None,
             workspace_id=workspace_id,
         )
-        await _ensure_integration(db_factory, user_id, "notion", workspace_id=workspace_id)
-        logger.info("Notion integration linked for %s", user_id)
-        background_tasks.add_task(_trigger_initial_observation, user_id, ["notion"], workspace_id)
-
-    elif provider == "atlassian":
-        client_id = settings.atlassian_oauth_client_id
-        client_secret = settings.atlassian_oauth_client_secret
-        if not client_id or not client_secret:
-            return _error_redirect(settings, "Atlassian OAuth not configured")
-
-        async with httpx.AsyncClient() as client:
-            resp = await client.post(
-                "https://auth.atlassian.com/oauth/token",
-                json={
-                    "grant_type": "authorization_code",
-                    "code": code,
-                    "client_id": client_id,
-                    "client_secret": client_secret,
-                    "redirect_uri": settings.atlassian_oauth_redirect_uri,
-                },
-                headers={"Content-Type": "application/json"},
-                timeout=10,
-            )
-            if resp.status_code != 200:
-                logger.error("Atlassian token exchange failed: %s", resp.text)
-                return _error_redirect(settings, "Failed to exchange Atlassian authorization code")
-            token_data = resp.json()
-
-            # Fetch accessible resources — Atlassian's MCP tools (and any REST
-            # API call we make ourselves) require the cloudId. Agents won't
-            # know this value on their own, so we persist it on the
-            # installation and later auto-inject it into every MCP tool call.
-            cloud_id = ""
-            site_url = ""
-            sites: list[dict] = []
-            res_resp = await client.get(
-                "https://api.atlassian.com/oauth/token/accessible-resources",
-                headers={"Authorization": f"Bearer {token_data['access_token']}"},
-                timeout=10,
-            )
-            if res_resp.status_code == 200:
-                resources = res_resp.json()
-                sites = [
-                    {
-                        "id": r.get("id", ""),
-                        "name": r.get("name", ""),
-                        "url": r.get("url", ""),
-                        "scopes": r.get("scopes", []),
-                    }
-                    for r in resources
-                ]
-                if resources:
-                    cloud_id = resources[0].get("id", "")
-                    site_url = resources[0].get("url", "")
-
-            # Fetch accessible projects up-front so the agent has context
-            # ("your projects are X, Y, Z") without needing a tool call on
-            # every user question. Bounded to 50 to keep the request small;
-            # full list is still available via MCP tools.
-            projects: list[dict] = []
-            if cloud_id:
-                try:
-                    proj_resp = await client.get(
-                        f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/project/search",
-                        params={"maxResults": 50},
-                        headers={
-                            "Authorization": f"Bearer {token_data['access_token']}",
-                            "Accept": "application/json",
-                        },
-                        timeout=10,
-                    )
-                    if proj_resp.status_code == 200:
-                        data = proj_resp.json()
-                        projects = [
-                            {
-                                "id": p.get("id", ""),
-                                "key": p.get("key", ""),
-                                "name": p.get("name", ""),
-                                "project_type": p.get("projectTypeKey", ""),
-                            }
-                            for p in data.get("values", [])
-                        ]
-                    else:
-                        logger.warning(
-                            "Atlassian project fetch returned %s: %s",
-                            proj_resp.status_code,
-                            proj_resp.text[:200],
-                        )
-                except Exception:
-                    logger.warning("Atlassian project fetch failed", exc_info=True)
-
-            # Fetch the current Atlassian user profile so the agent can
-            # personalize output without another roundtrip.
-            atlassian_user: dict = {}
-            if cloud_id:
-                try:
-                    me_resp = await client.get(
-                        f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/myself",
-                        headers={
-                            "Authorization": f"Bearer {token_data['access_token']}",
-                            "Accept": "application/json",
-                        },
-                        timeout=10,
-                    )
-                    if me_resp.status_code == 200:
-                        me = me_resp.json()
-                        atlassian_user = {
-                            "account_id": me.get("accountId", ""),
-                            "display_name": me.get("displayName", ""),
-                            "email": me.get("emailAddress", ""),
-                            "timezone": me.get("timeZone", ""),
-                        }
-                except Exception:
-                    logger.debug("Atlassian user profile fetch failed", exc_info=True)
-
-        expires_at = None
-        if token_data.get("expires_in"):
-            expires_at = datetime.now(timezone.utc) + timedelta(seconds=token_data["expires_in"])
-
-        db_factory = get_session_factory()
-        from src.api.deps import resolve_workspace_id
-
-        async with db_factory() as _db:
-            workspace_id = await resolve_workspace_id(_db, user_id)
-
-        oauth_mgr = OAuthManager(
-            db_factory,
-            encryption_key=settings.oauth_encryption_key,
-            settings=settings,
-        )
-        await oauth_mgr.store_token(
-            user_id=user_id,
-            provider="atlassian",
-            access_token=token_data["access_token"],
-            refresh_token=token_data.get("refresh_token"),
-            expires_at=expires_at,
-            scopes=token_data.get("scope", "").split() if token_data.get("scope") else None,
-            workspace_id=workspace_id,
-        )
-        # server_name matches seed_installations.py ("atlassian"), not provider name
-        await _ensure_integration(
-            db_factory,
-            user_id,
-            "atlassian",
-            workspace_id=workspace_id,
-        )
-        # Persist everything the agent will need on the installation record:
-        # - cloud_id / site_url / sites: so we don't re-fetch from Atlassian
-        # - projects / atlassian_user: give the Planner/Presenter real context
-        # - tool_defaults: auto-injected by session_pool.call_tool so the
-        #   agent never needs to ask "what's your cloudId?" for MCP calls.
-        if cloud_id:
-            from sqlalchemy import select as sa_select
-
-            from src.models.integration_installation import IntegrationInstallation
-
-            async with db_factory() as _db:
-                result = await _db.execute(
-                    sa_select(IntegrationInstallation).where(
-                        IntegrationInstallation.user_id == user_id,
-                        IntegrationInstallation.server_name == "atlassian",
-                        IntegrationInstallation.workspace_id == workspace_id,
-                    )
-                )
-                inst = result.scalar_one_or_none()
-                if inst:
-                    config = inst.config or {}
-                    config["cloud_id"] = cloud_id
-                    if site_url:
-                        config["site_url"] = site_url
-                    if sites:
-                        config["sites"] = sites
-                    if projects:
-                        config["projects"] = projects
-                    if atlassian_user:
-                        config["atlassian_user"] = atlassian_user
-                    # Keys merged into every Atlassian MCP tool_input when
-                    # absent (agent doesn't need to learn cloudId).
-                    config["tool_defaults"] = {"cloudId": cloud_id}
-                    inst.config = config
-                    await _db.commit()
-
-        logger.info(
-            "Atlassian integration linked for %s (cloudId=%s site=%s projects=%d)",
-            user_id,
-            cloud_id,
-            site_url or "?",
-            len(projects),
-        )
-        background_tasks.add_task(
-            _trigger_initial_observation, user_id, ["atlassian"], workspace_id
-        )
+        # server_name matches seed_installations.py ("github"). This reactivates
+        # the existing installation and enables the observe_github schedule; it
+        # does not change the installation's gateway transport or auth provider,
+        # which still serve the github.* MCP actions.
+        await _ensure_integration(db_factory, user_id, "github", workspace_id=workspace_id)
+        logger.info("GitHub integration linked for %s", user_id)
+        background_tasks.add_task(_trigger_initial_observation, user_id, ["github"], workspace_id)
 
     else:
         raise HTTPException(status_code=400, detail=f"Unknown provider: {provider}")
@@ -515,12 +386,16 @@ async def oauth_callback(
     try:
         from src.connectors.mcp_bridge import refresh_server_auth
 
-        # Map provider to MCP server names that use it. google/github are absent:
-        # they authenticate through the OpenConnector gateway, never here.
+        # Map provider to MCP server names that use it. google and github are
+        # absent: their MCP servers authenticate through the OpenConnector
+        # gateway's platform JWT. GitHub's native token is for the notifications
+        # poll only and its MCP session must not be re-keyed to it.
+        # Only slack remains: every other installation authenticates to the
+        # OpenConnector adapter with a platform JWT, which no native token
+        # re-keys. GitHub's token serves the notifications poll alone and must
+        # NOT be pushed into its MCP session.
         _provider_servers = {
             "slack": ["slack"],
-            "notion": ["notion"],
-            "atlassian": ["atlassian"],
         }
         for server_name in _provider_servers.get(provider, []):
             background_tasks.add_task(
@@ -534,7 +409,8 @@ async def oauth_callback(
 
     # Auto-resume: clear any needs-reauth state for this provider — un-pause its
     # perception sources and re-queue runs parked in awaiting_reauth. Runs for
-    # every natively-authenticated provider (slack/notion/atlassian), best-effort.
+    # every natively-authenticated provider (github/slack),
+    # best-effort.
     background_tasks.add_task(
         _resume_after_reauth,
         db_factory,

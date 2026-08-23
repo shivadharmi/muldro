@@ -26,17 +26,18 @@ logger = logging.getLogger(__name__)
 # LLM-facing schemas in schemas.py deliberately omit them.
 _CONTEXT_ARGS = ("user_id", "workspace_id")
 
-# Pydantic v2 errors are verbose, and a malformed component tree yields one entry per bad
-# node plus a long `msg` naming every valid AnyComponent tag. Render only the first few and
-# say how many were dropped — the agent needs the first offending field, not the census.
-# (AnyComponent's `type` discriminator keeps an unknown tag to ONE error rather than one
-# per union member; the cap is for breadth of errors, not for union fan-out.)
+# Pydantic v2 errors are verbose: a malformed nested payload yields one entry per bad
+# node, and a tagged-union field adds a long `msg` naming every tag it would accept.
+# Render only the first few and say how many were dropped — the agent needs the first
+# offending field, not the census. (A `type` discriminator keeps an unknown tag to ONE
+# error rather than one per union member; the cap is for breadth of errors, not for
+# union fan-out.)
 #
 # The per-error cap is sized off a MEASUREMENT, because the longest message is also the
-# most actionable one: an unknown component tag produces exactly one error whose `msg` is
-# 260 chars and lists all 17 valid AnyComponent tags. At the old 100-char cap the agent
-# was told three tags and then cut mid-word, destroying the one thing that lets it repair
-# the call. 280 = 260 measured + room for a few more component types.
+# most actionable one: the worst case measured was a single error whose `msg` ran 260
+# chars enumerating the seventeen tags its union accepted. At the old 100-char cap the
+# agent was told three of them and then cut mid-word, destroying the one thing that lets
+# it repair the call. 280 = 260 measured + headroom.
 # The overall cap survives that intact: envelope (42) + loc (~12) + 260 + trailer (61) =
 # 375 for a single tag-list error, so 900 fits it whole with room for two neighbours,
 # while still bounding a broadly-malformed payload to ~225 tokens.
@@ -152,16 +153,16 @@ def _validate_tool_input(tool_name: str, tool_input: dict) -> str | None:
 def _internal_tool_context_args() -> dict[str, frozenset[str]]:
     """Map each internal tool name → the contextual args its impl actually accepts.
 
-    Built once by introspecting the FastMCP impl functions in the intelligence
-    and communication servers. Injection is signature-aware: a tool only receives
-    a contextual arg (user_id / workspace_id) if its implementation declares it.
-    This is what lets push_ui_update (user_id only, no workspace_id) work without
-    re-breaking validation, and removes any per-server special-casing.
+    Built once by introspecting the FastMCP impl functions in the internal servers.
+    Injection is signature-aware: a tool only receives a contextual arg (user_id /
+    workspace_id) if its implementation declares it. A tool that takes only one of
+    the two therefore works without re-breaking validation, and no server needs a
+    special case.
     """
-    from src.tools import communication_server, intelligence_server
+    from src.tools import intelligence_server
 
     mapping: dict[str, frozenset[str]] = {}
-    for module in (intelligence_server, communication_server):
+    for module in (intelligence_server,):
         for name, obj in vars(module).items():
             if not inspect.iscoroutinefunction(obj):
                 continue
@@ -411,11 +412,9 @@ class ToolExecutor:
     ) -> dict:
         """Call an internal tool via in-process FastMCP Client (MCP protocol).
 
-        The composed server mounts tools under namespaced prefixes:
-        - intelligence tools: "intelligence_" prefix
-        - communication tools: "communication_" prefix
-        We map flat tool names (e.g. "search", "push_ui_update") to namespaced names
-        (e.g. "intelligence_search", "communication_push_ui_update").
+        The composed server mounts tools under namespaced prefixes — intelligence
+        tools carry the "intelligence_" prefix. We map flat tool names (e.g. "search")
+        to namespaced names (e.g. "intelligence_search").
         """
         from fastmcp import Client
 
@@ -533,9 +532,9 @@ class ToolExecutor:
                 case ToolBackend.INTERNAL_MCP:
                     # Inject contextual args (user_id / workspace_id) signature-aware:
                     # each internal tool receives only the contextual args its impl
-                    # actually declares. Intelligence tools take both; communication's
-                    # push_ui_update takes user_id but not workspace_id. The LLM-facing
-                    # schemas omit these fields, so the dispatcher supplies them here.
+                    # actually declares, so a tool taking only one of the two is not
+                    # handed the other. The LLM-facing schemas omit these fields, so
+                    # the dispatcher supplies them here.
                     enriched_input = _enrich_internal_input(
                         tool_name, tool_input, user_id, workspace_id
                     )

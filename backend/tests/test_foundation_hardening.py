@@ -792,16 +792,26 @@ class TestNotifierSurfaceSync:
             db=db,
         )
 
+        # `auto_execute_notify` BYPASSES the priority and rate-limit filters, so
+        # the call actually reaches delivery. With `info_update` it did not: the
+        # computed priority fell under 0.6, notify() returned at the
+        # briefing hold, and the sync fallback below was never executed. The
+        # assertion still passed, because the hold happened to LPUSH a
+        # briefing_hold key nothing ever read — so this test was green on a
+        # write it was not testing, and went red only when that dead write was
+        # deleted.
         await notifier.notify(
             user_id="usr_test",
-            notification_type="info_update",
+            notification_type="auto_execute_notify",
             title="Test",
             body="Body",
             workspace_id="ws_test",
         )
 
-        # Redis lpush should have been called for sync fallback
-        redis.lpush.assert_called()
+        # Named explicitly: asserting only that SOME lpush happened is what let
+        # an unrelated key stand in for this one.
+        keys = [call.args[0] for call in redis.lpush.call_args_list]
+        assert "muldro:pending_sync:usr_test" in keys, keys
 
 
 class TestSchedulerDLQRetry:

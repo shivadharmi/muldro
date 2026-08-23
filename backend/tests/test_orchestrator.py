@@ -452,35 +452,6 @@ class TestRecovery:
         assert summary["expired_approvals"] == 0
 
 
-# ── A2UI Renderer Tests ─────────────────────────────────────────────────
-
-
-class TestA2UIRenderer:
-    def test_text_component(self):
-        from src.ui.renderer import text
-
-        c = text("t1", "Hello", "heading")
-        assert c.type == "Text"
-        assert c.id == "t1"
-        assert c.properties["text"] == "Hello"
-        assert c.properties["variant"] == "heading"
-
-    def test_button_with_action(self):
-        from src.ui.renderer import button
-
-        c = button("b1", "Click me", "primary", {"action": "approve", "id": "apr_1"})
-        assert c.type == "Button"
-        assert len(c.actions) == 1
-        assert c.actions[0].payload["action"] == "approve"
-
-    def test_card_with_children(self):
-        from src.ui.renderer import card, text
-
-        c = card("c1", [text("t1", "Title"), text("t2", "Body")])
-        assert c.type == "Card"
-        assert len(c.children) == 2
-
-
 # ── Perception Coordinator Tests ─────────────────────────────────────────
 
 

@@ -2,6 +2,8 @@
 
 from pydantic import BaseModel
 
+from src.integrations.gateway_actions import PROVIDER_REGISTRY
+from src.integrations.gateway_naming import action_id_to_tool_name
 from src.tools.catalog import (
     EXTERNAL_TOOL_SEEDS,
     INTERNAL_TOOLS,
@@ -14,9 +16,8 @@ from src.tools.catalog import (
 
 
 def test_internal_tools_count():
-    """Verify exactly 30 internal tools are registered (25 + 4 P2.5a system.* tools +
-    render_surface)."""
-    assert len(INTERNAL_TOOLS) == 30
+    """Verify exactly 28 internal tools are registered (24 + 4 system.* action tools)."""
+    assert len(INTERNAL_TOOLS) == 28
 
 
 def test_internal_tool_names_match_muldro():
@@ -44,8 +45,6 @@ def test_internal_tool_names_match_muldro():
         "get_plan_details",
         "discover_capabilities",
         "report_governor_verdict",
-        "push_ui_update",
-        "render_surface",
         "get_entity",
         "query_facts",
         "traverse",
@@ -69,14 +68,12 @@ def test_all_input_models_are_pydantic():
 
 
 def test_server_distribution():
-    """Verify correct server counts: 27 intelligence, 2 communication, 1 _special."""
+    """Verify correct server counts: 27 intelligence, 1 _special, nothing else."""
     server_counts = {}
     for tool in INTERNAL_TOOLS:
         server_counts[tool.server] = server_counts.get(tool.server, 0) + 1
 
-    assert server_counts.get("intelligence", 0) == 27, "Expected 27 intelligence tools"
-    assert server_counts.get("communication", 0) == 2, "Expected 2 communication tools"
-    assert server_counts.get("_special", 0) == 1, "Expected 1 _special tool"
+    assert server_counts == {"intelligence": 27, "_special": 1}
 
 
 def test_get_internal_tool_by_name_found():
@@ -93,14 +90,6 @@ def test_get_internal_tool_by_name_not_found():
     """Verify get_internal_tool_by_name returns None for nonexistent name."""
     tool = get_internal_tool_by_name("nonexistent_tool_xyz")
     assert tool is None
-
-
-def test_get_internal_tools_for_server_communication():
-    """Verify get_internal_tools_for_server returns both communication tools."""
-    tools = get_internal_tools_for_server("communication")
-    assert len(tools) == 2
-    names = {t.name for t in tools}
-    assert names == {"push_ui_update", "render_surface"}
 
 
 def test_get_internal_tools_for_server_intelligence():
@@ -165,25 +154,6 @@ def test_all_tools_have_capabilities():
         assert len(tool.capability.split(".")) == 2, f"{tool.name} capability malformed"
 
 
-# Communication tools that only publish to the founder's OWN workspace UI. Nothing leaves
-# the system and the next push supersedes the last, so they are risk-free and ungated. A new
-# communication tool that reaches anyone else does NOT belong here.
-_UI_PUSH_TOOLS = {"push_ui_update", "render_surface"}
-
-
-def test_communication_tools_that_are_not_ui_pushes_require_approval():
-    """A UI push is risk-free; anything else on this server delivers to a human somewhere
-    and must be gated."""
-    comm_tools = get_internal_tools_for_server("communication")
-    for tool in comm_tools:
-        if tool.name in _UI_PUSH_TOOLS:
-            assert tool.risk_level in ("none", "low"), f"{tool.name} should be safe-risk"
-            assert not tool.requires_approval, f"{tool.name} should not require approval"
-        else:
-            assert tool.risk_level == "medium", f"{tool.name} should have medium risk_level"
-            assert tool.requires_approval, f"{tool.name} should require approval"
-
-
 def test_special_tool_properties():
     """Verify report_governor_verdict has correct properties."""
     tool = get_internal_tool_by_name("report_governor_verdict")
@@ -198,15 +168,49 @@ def test_special_tool_properties():
 # ── External Tool Seed Tests ───────────────────────────────────────
 
 
-def test_external_tool_seeds_count():
-    """Verify exactly 65 external tool seeds are registered."""
-    assert len(EXTERNAL_TOOL_SEEDS) == 65
+def test_every_gateway_action_is_seeded_exactly_once():
+    """The derived block must cover the registry, with no name colliding.
+
+    Replaces a hardcoded total. A count pins nothing useful — it goes red when
+    an action is legitimately added and stays green if one is swapped for
+    another — whereas the real contract is that the seed list and the registry
+    describe the same set of actions under the agent-legal naming.
+    """
+    expected = {
+        (provider.server_name, action_id_to_tool_name(action.action_id))
+        for provider in PROVIDER_REGISTRY.values()
+        for action in provider.actions
+    }
+    seeded = {(seed.server, seed.name) for seed in EXTERNAL_TOOL_SEEDS}
+    assert expected <= seeded
+
+    derived_names = [
+        (seed.server, seed.name)
+        for seed in EXTERNAL_TOOL_SEEDS
+        if (seed.server, seed.name) in expected
+    ]
+    assert len(derived_names) == len(expected), "a gateway action is seeded twice"
 
 
-def test_verified_seeds_count():
-    """Verify exactly 43 seeds are verified."""
-    verified = get_verified_seeds()
-    assert len(verified) == 43
+def test_a_gateway_backed_server_has_no_hand_written_seeds():
+    """A migrated server is gateway-only — its seeds all come from the registry.
+
+    This is the invariant the per-server counts were standing in for. Leaving a
+    hand-written seed behind after a migration offers agents two names for one
+    action, the stale one addressing a stdio process no longer installed.
+    """
+    gateway_servers = {p.server_name for p in PROVIDER_REGISTRY.values()}
+    derived = {
+        (provider.server_name, action_id_to_tool_name(action.action_id))
+        for provider in PROVIDER_REGISTRY.values()
+        for action in provider.actions
+    }
+    for seed in EXTERNAL_TOOL_SEEDS:
+        if seed.server in gateway_servers:
+            assert (seed.server, seed.name) in derived, (
+                f"{seed.server} is gateway-backed but {seed.name} is hand-written"
+            )
+            assert seed.verified is True
 
 
 def test_no_duplicate_external_names_per_server():
@@ -225,29 +229,24 @@ def test_all_seeds_have_capabilities():
         assert "." in seed.capability, f"{seed.name} capability should contain '.'"
 
 
-def test_notion_seeds_api_prefix():
-    """Verify Notion seeds all start with API- prefix."""
-    notion_seeds = get_seeds_for_server("notion")
-    assert len(notion_seeds) == 22
-    for seed in notion_seeds:
-        assert seed.name.startswith("API-"), f"Notion tool {seed.name} should start with 'API-'"
+def test_seed_names_are_agent_legal():
+    """Dots are illegal in Anthropic/OpenAI tool names.
+
+    The derived block runs every action id through action_id_to_tool_name for
+    exactly this reason; a hand-written seed must satisfy the same contract.
+    """
+    for seed in EXTERNAL_TOOL_SEEDS:
+        assert "." not in seed.name, f"{seed.name} is not a legal tool name"
 
 
-def test_seeds_for_server_counts():
-    """Verify per-server tool counts match expected."""
-    expected_counts = {
-        "google-workspace": 13,
-        "github": 8,
-        "slack": 8,
-        "notion": 22,
-        "atlassian": 13,
-        "_composite": 1,
-    }
-    for server, expected_count in expected_counts.items():
-        actual_count = len(get_seeds_for_server(server))
-        assert actual_count == expected_count, (
-            f"Server {server}: expected {expected_count}, got {actual_count}"
-        )
+def test_every_unmigrated_server_still_has_seeds():
+    """A server with neither a registry entry nor hand-written seeds is invisible.
+
+    Named rather than counted: the point is that no INSTALLED server silently
+    offers zero tools, which is what a half-finished migration looks like.
+    """
+    for server in ("slack", "atlassian", "_composite"):
+        assert get_seeds_for_server(server), f"{server} offers no tools at all"
 
 
 def test_get_seeds_for_server_helper():
@@ -266,22 +265,23 @@ def test_get_seeds_for_server_helper():
 def test_get_verified_seeds_helper():
     """Verify get_verified_seeds only returns verified=True entries."""
     verified = get_verified_seeds()
-    assert len(verified) == 43
+    assert verified
 
     # All returned seeds should be verified
     for seed in verified:
         assert seed.verified is True
 
-    # Verify expected servers are present in verified seeds. google-workspace
-    # and github are gateway-only servers; their derived seeds are all
-    # verified=True (adapter warm-start is the ground truth for these names).
+    # A gateway-backed server's seeds are all derived, and derived seeds are
+    # verified=True (adapter warm-start is the ground truth for those names).
+    # Anything still hand-written is unverified. Both halves come from the
+    # registry so a migration moves a server between them automatically.
     verified_servers = {seed.server for seed in verified}
-    expected_verified = {"notion", "google-workspace", "github"}
-    assert expected_verified.issubset(verified_servers)
+    gateway_servers = {p.server_name for p in PROVIDER_REGISTRY.values()}
+    assert gateway_servers.issubset(verified_servers)
 
-    # Verify unverified servers are NOT in verified seeds
-    unverified_servers = {"slack", "atlassian", "_composite"}
-    assert verified_servers.isdisjoint(unverified_servers)
+    hand_written = {s.server for s in EXTERNAL_TOOL_SEEDS} - gateway_servers
+    assert hand_written, "nothing left unmigrated — update this test's premise"
+    assert verified_servers.isdisjoint(hand_written)
 
 
 def test_seed_server_names_match_installations():
@@ -309,10 +309,14 @@ def test_high_risk_tools_require_approval():
 
 
 def test_verified_tool_servers():
-    """Verify exactly 3 servers have verified tools."""
-    verified = get_verified_seeds()
-    verified_servers = {seed.server for seed in verified}
-    assert verified_servers == {"notion", "google-workspace", "github"}
+    """Verified means gateway-derived: the adapter warm-start is the ground truth.
+
+    Named from the registry rather than listed, because "which servers are
+    verified" is not an independent fact — it IS the set of migrated servers,
+    and a hand-kept list only ever lags a migration by one commit.
+    """
+    verified_servers = {seed.server for seed in get_verified_seeds()}
+    assert verified_servers == {p.server_name for p in PROVIDER_REGISTRY.values()}
 
 
 def test_composite_tools():

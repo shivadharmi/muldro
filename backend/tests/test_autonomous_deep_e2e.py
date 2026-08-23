@@ -274,7 +274,6 @@ async def _teardown_workspace(factory, workspace_id: str, user_id: str) -> None:
     from src.models.approvals import Approval
     from src.models.runtime_event import RuntimeEvent
     from src.models.trust_state import TrustState
-    from src.models.ui_state import UISurface
 
     ws_scoped = [
         RuntimeEvent,
@@ -287,7 +286,6 @@ async def _teardown_workspace(factory, workspace_id: str, user_id: str) -> None:
         IdempotencyLedgerEntry,
         Approval,
         TrustState,
-        UISurface,
     ]
     for model in ws_scoped:
         try:

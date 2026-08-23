@@ -116,7 +116,6 @@ class GraphExecutor:
             db=db,
             event_bus=event_bus,
             redis=redis,
-            db_factory=db_factory,
         )
         # Step-DAG persistence (build/query/readiness/refs/checkpoint) lives in an
         # injected leaf collaborator; the hub forwards to it via facades so the
@@ -1008,14 +1007,6 @@ class GraphExecutor:
             results,
             workspace_id,
         )
-
-    async def _emit_summary_surface(
-        self,
-        run: TaskRun,
-        run_surface_id: str,
-    ) -> None:
-        """Forward to the SurfaceEmitter collaborator (SVC-P1-3)."""
-        await self._surface_emitter.emit_summary_surface(run, run_surface_id)
 
     @staticmethod
     def _build_graph_definition(tasks: list[PlanTask]) -> dict:

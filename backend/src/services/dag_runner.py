@@ -45,6 +45,7 @@ from src.services.outcome_learner import OutcomeLearner
 from src.services.step_graph_store import StepGraphStore
 from src.services.step_runner import StepRunner
 from src.services.trust_gate import TrustGate
+from src.services.user_action_steps import handle_user_action_step, park_if_blocked_on_founder
 
 if TYPE_CHECKING:
     from src.services.verification import VerifyVerdict
@@ -174,9 +175,6 @@ class DagRunner:
                             tokens=((run.input_tokens or 0) + (run.output_tokens or 0)) or None,
                             cost_usd=run.cost_usd if run.cost_usd else None,
                         )
-                        # Emit a lightweight summary card for the workspace
-                        # feed and archive the run surface.
-                        await self._emitter.emit_summary_surface(run, surface_id)
                     break
                 # If there are pending steps but none ready, we're blocked
                 failed = [s for s in all_steps if s.status == "failed"]
@@ -198,9 +196,8 @@ class DagRunner:
                             progress=f"{len(failed)} step(s) failed",
                             workspace_id=run.workspace_id,
                         )
-                        await self._emitter.emit_summary_surface(run, surface_id)
                     break
-                # Must be waiting for approval or external event
+                await park_if_blocked_on_founder(run, all_steps, self._emitter)
                 break
 
             # Execute ready steps sequentially (shared AsyncSession is not
@@ -293,6 +290,9 @@ class DagRunner:
             capability = (step.input_data or {}).get(
                 "capability", (step.input_data or {}).get("task_type", "")
             )
+
+            if await handle_user_action_step(step, run, self._emitter, self._db):
+                return
 
             # ── Fail-closed contract guard ───────────────────────────────
             # The autonomous path MUST be gated by the TrustEngine. Two

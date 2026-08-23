@@ -1,12 +1,17 @@
-"""WebSocket endpoint for streaming A2UI surfaces and notifications.
+"""WebSocket endpoint for streaming live run updates and notifications.
 
 Clients connect to /ws/{user_id} and authenticate via an auth message:
   { "type": "auth", "token": "<session_token>" }
 
 After authentication, clients receive real-time updates:
-- A2UI surface payloads (briefings, approvals, dashboards)
+- ``surface_update`` frames carrying live run progress
 - Notification events
 - Surface sync events (action taken on another surface)
+
+There is no replay on reconnect. Nothing persists a view, so a client that was
+offline recovers by re-reading the live domain rows over REST (GET /v1/history)
+rather than from a replayed frame. The live push is the live push; the durable
+truth is the TaskRun row.
 """
 
 import asyncio
@@ -25,27 +30,6 @@ router = APIRouter()
 
 # Active WebSocket connections per user
 _connections: dict[str, list[WebSocket]] = {}
-
-
-def _backfill_message_for_surface(surface) -> dict | None:
-    """Build the WS replay message for a persisted surface on reconnect.
-
-    Surface kinds replay in different shapes:
-    - ``proactive_insight`` → the live ``{"type": "surface", "surface": payload}``
-      push (so insights missed while offline still render).
-    - ``execution`` (and other live-update kinds) → the last ``SurfaceUpdate``
-      stored under ``payload["last_surface_update"]`` as a ``surface_update``.
-
-    Returns ``None`` when the surface has nothing to replay.
-    """
-    if surface.surface_type == "proactive_insight":
-        if surface.payload:
-            return {"type": "surface", "surface": surface.payload}
-        return None
-    last_update = (surface.payload or {}).get("last_surface_update")
-    if last_update:
-        return {"type": "surface_update", **last_update}
-    return None
 
 
 @router.websocket("/ws/{user_id}")
@@ -113,40 +97,6 @@ async def muldro_ws(websocket: WebSocket, user_id: str):
 
     # Auth succeeded
     await websocket.send_json({"type": "auth_ok"})
-
-    # Backfill: send current active execution surfaces on reconnect so clients
-    # recover surface state that was missed while disconnected.
-    try:
-        from sqlalchemy import select
-
-        from src.api.deps import resolve_workspace_id
-        from src.models.database import get_session_factory
-        from src.models.ui_state import UISurface
-
-        async with get_session_factory()() as db:
-            # Scope backfill to the user's current workspace — a multi-workspace
-            # user must not receive surfaces from another workspace on reconnect.
-            backfill_ws_id = await resolve_workspace_id(db, user_id)
-            result = await db.execute(
-                select(UISurface)
-                .where(
-                    UISurface.user_id == user_id,
-                    UISurface.workspace_id == backfill_ws_id,
-                    # Replay both live execution surfaces AND proactive insights
-                    # that arrived while the client was offline.
-                    UISurface.surface_type.in_(("execution", "proactive_insight")),
-                )
-                .order_by(UISurface.updated_at.desc())
-                .limit(10)
-            )
-            active_surfaces = result.scalars().all()
-
-            for surface in active_surfaces:
-                msg = _backfill_message_for_surface(surface)
-                if msg is not None:
-                    await websocket.send_text(json.dumps(msg))
-    except Exception:
-        logger.debug("Failed to backfill surfaces on WS connect", exc_info=True)
 
     # Track connection
     _connections.setdefault(user_id, []).append(websocket)
@@ -409,198 +359,11 @@ async def _process_edit_approval_ws(user_id: str, payload: dict, app, cid: str =
             return safe_error_event(e, cid, channel="ws")
 
 
-async def _handle_execute_insight(user_id: str, payload: dict, app, cid: str = "") -> dict:
-    """Handle insight action execution — transitions insight to execution surface.
-
-    When a user clicks a suggested action on an insight surface, this handler:
-    1. Fetches the insight surface and the selected action
-    2. Records engagement
-    3. Executes via the orchestrator
-    """
-    from src.api.deps import resolve_workspace_id
-    from src.models.database import get_session_factory
-
-    surface_id = payload.get("surface_id", "")
-    action_index = payload.get("action_index", 0)
-
-    if not surface_id:
-        return {"status": "error", "error": "surface_id required"}
-
-    async with get_session_factory()() as db:
-        try:
-            workspace_id = await resolve_workspace_id(db, user_id)
-        except Exception as e:
-            logger.warning("ws_insight_workspace_resolve_failed: %s", e)
-            return {"status": "error", "error": "Could not resolve workspace"}
-
-        # Fetch the insight surface
-        from sqlalchemy import select
-
-        from src.models.ui_state import UISurface
-
-        result = await db.execute(
-            select(UISurface).where(
-                UISurface.surface_id == surface_id,
-                UISurface.user_id == user_id,
-                UISurface.workspace_id == workspace_id,
-                UISurface.surface_type == "proactive_insight",
-            )
-        )
-        surface = result.scalar_one_or_none()
-        if not surface:
-            return {"status": "error", "error": "Insight surface not found"}
-
-        payload_data = surface.payload or {}
-        insight_data = payload_data.get("insight_data", {})
-        actions = insight_data.get("suggested_actions", [])
-
-        if action_index >= len(actions):
-            return {"status": "error", "error": "Invalid action index"}
-
-        selected = actions[action_index]
-
-        # Record engagement
-        from src.services.engagement_service import EngagementService
-
-        eng_svc = EngagementService(db, workspace_id)
-        await eng_svc.record_engagement(
-            insight_data.get("signal_source", "unknown"),
-            insight_data.get("signal_category", "unknown"),
-            "engaged",
-        )
-        await db.commit()
-
-    # Execute via orchestrator
-    orchestrator = getattr(app.state, "orchestrator", None)
-    if not orchestrator:
-        return {"status": "error", "error": "Orchestrator not available"}
-
-    capability = str(selected.get("capability") or "").strip()
-    if not capability:
-        # No capability means nothing for the trust gate to evaluate. Refuse
-        # rather than fall back to re-planning from the description, which is
-        # how the ungated path existed in the first place.
-        logger.warning(
-            "ws_execute_insight_no_capability: surface=%s index=%s", surface_id, action_index
-        )
-        return {"status": "error", "error": "Suggested action has no capability"}
-
-    action_input = selected.get("action_input")
-    if not isinstance(action_input, dict):
-        action_input = {}
-
-    try:
-        run_id = await _queue_insight_action(
-            user_id=user_id,
-            workspace_id=workspace_id,
-            surface_id=surface_id,
-            capability=capability,
-            action_input=action_input,
-        )
-        if not run_id:
-            return {"status": "error", "error": "Could not queue insight action"}
-        return {
-            "status": "success",
-            "surface_id": surface_id,
-            "capability": capability,
-            "run_id": run_id,
-        }
-    except Exception as e:
-        logger.warning("ws_execute_insight_failed: %s", e, exc_info=True)
-        return safe_error_event(e, cid, channel="ws")
-
-
-async def _queue_insight_action(
-    *,
-    user_id: str,
-    workspace_id: str,
-    surface_id: str,
-    capability: str,
-    action_input: dict,
-) -> str | None:
-    """Queue one structured insight action as a GATED autonomous run.
-
-    Why this exists rather than a ``process_message`` call:
-    ``RelevanceAssessment.suggested_actions[].description`` is prose written by a
-    model that was reading attacker-controllable content (an email body, a Slack
-    message). Passing it to ``process_message`` relabels it as the founder's own
-    words -- that path carries ``authorization_source=DIRECT_USER_REQUEST``, so
-    ``trust_gate`` returns early ("the user's message IS the authorization"), and
-    the batch entry is ``presence=absent``, where ``permission_gate`` PREPARES a
-    confirmable write rather than blocking it. One click would then stage, or in
-    ``auto`` outright run, an external write derived from attacker-influenced prose.
-
-    Note what this does and does not fix. ``capability`` and ``action_input`` are
-    *also* model-authored, so they are not trusted here -- they are **gated**.
-    Routing through a persisted Plan and a ``source="background"`` TaskRun puts the
-    action behind ``DagRunner``'s TrustEngine evaluation, the same gate every other
-    autonomous write passes. The founder sees the real capability and arguments in
-    the approval, instead of a re-plan derived from prose.
-
-    The description is deliberately not carried into the plan. The founder already
-    read it on the card; the runtime has no use for it and every reason not to.
-
-    Returns the run id, or ``None`` if the plan was not persisted (idempotent skip).
-    """
-    from src.config.settings import get_settings
-    from src.contracts import PlanOutput, PlanStep
-    from src.models.database import get_session_factory
-    from src.orchestrator.plan_store import PlanStore
-    from src.services.graph_executor_factory import create_graph_executor
-
-    settings = get_settings()
-    factory = get_session_factory()
-
-    plan = PlanOutput(
-        goal=f"Insight action: {capability}",
-        reasoning=f"Founder selected a suggested action on insight surface {surface_id}.",
-        steps=[
-            PlanStep(
-                step_id="s1",
-                description=f"Execute {capability} (insight {surface_id})",
-                actor="muldro",
-                capability=capability,
-                input=action_input,
-            )
-        ],
-    )
-
-    store = PlanStore(lambda: factory)
-    persisted = await store.persist_plan_record(
-        plan,
-        user_id,
-        workspace_id,
-        trigger_type="insight_action",
-        idempotency_key=f"insight:{surface_id}:{capability}",
-    )
-    if not persisted.plan_id:
-        logger.info("insight_action_plan_not_persisted: surface=%s", surface_id)
-        return None
-
-    async with factory() as db:
-        executor = await create_graph_executor(settings=settings, db=db, workspace_id=workspace_id)
-        run = await executor.create_run(
-            plan_id=persisted.plan_id,
-            user_id=user_id,
-            workspace_id=workspace_id,
-            source="background",
-        )
-        await db.commit()
-        logger.info(
-            "insight_action_queued: surface=%s capability=%s run=%s",
-            surface_id,
-            capability,
-            run.run_id,
-        )
-        return run.run_id
-
-
 # Registry of named action handlers
 ACTION_HANDLERS: dict[str, object] = {
     "approve": _handle_approve,
     "reject": _handle_reject,
     "edit_before_approve": _handle_edit_before_approve,
-    "execute_insight": _handle_execute_insight,
 }
 
 

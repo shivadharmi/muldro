@@ -10,40 +10,181 @@ The handler owns the transaction: put_config() stages changes but never commits.
 
 from __future__ import annotations
 
+import logging
+from typing import get_args
+
 from sqlalchemy import delete, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.config import secret_crypto
 from src.config.model_catalog import MODEL_CATALOG
+from src.config.provider_catalog import get_provider_spec, public_field_keys
 from src.config.settings import get_settings
-from src.contracts.model_config import ModelConfigResponse, ProviderStatus, TierBinding
+from src.contracts.model_config import (
+    ConfigWarning,
+    Effort,
+    ModelBindingDTO,
+    ModelConfigResponse,
+    ProviderStatus,
+)
 from src.models.model_binding import ModelBinding
 from src.models.provider_credential import ProviderCredential
-from src.services.model_resolver import _ENV_KEY_ATTR
+from src.services.model_resolver import (
+    _ENV_KEY_ATTR,
+    KEYLESS_PROVIDERS,
+    ModelResolver,
+    credential_is_usable,
+)
+
+logger = logging.getLogger(__name__)
 
 TIER_ORDER = ("reasoning", "balanced", "fast")
+
+
+def _split_extra_config(provider: str, extra: dict | None) -> tuple[dict[str, str], list[str]]:
+    """Split a stored extra_config into returnable values and secret key NAMES.
+
+    Fails closed: a key is public only if it is a DECLARED non-secret field for this
+    provider. An undeclared key is therefore treated as a secret and never echoed,
+    so adding a field to a provider's schema is what makes it visible — not storing it.
+    """
+    if not extra:
+        return {}, []
+    allowed = public_field_keys(provider)
+    public: dict[str, str] = {}
+    for k, v in extra.items():
+        if k not in allowed:
+            continue  # not a declared field -> stays hidden, unchanged
+        if v is None:
+            # A stored JSON null means "no value". str(None) == "None" would
+            # pre-fill the credential form's text box with the literal word
+            # "None", which then round-trips back as a real value on Save --
+            # so the key is omitted entirely rather than stringified.
+            continue
+        if not isinstance(v, str | int | float | bool):
+            logger.warning(
+                "dropping non-scalar extra_config value for %s.%s: %r", provider, k, type(v)
+            )
+            continue
+        public[k] = str(v)
+    hidden = sorted(k for k in extra if k not in allowed)
+    return public, hidden
+
+
+# A declared extra_config value is a short scalar: a region, an endpoint, a
+# deployment name, an account id. Nothing legitimate approaches this. The cap is what
+# bounds the BYTES axis -- the key-count axis is already bounded by the declared set,
+# but per-key merge keeps whatever is written forever, and a blob stored under a
+# SECRET key cannot be cleared through the form at all (the form never sends an
+# explicit null for a secret, because blank there means "keep").
+MAX_EXTRA_VALUE_LEN = 2048
+
+
+def rejected_extra_keys(provider: str, submitted: dict[str, object] | None) -> dict[str, str]:
+    """Submitted extra_config keys that must not be written, mapped to why.
+
+    The write-side twin of ``_split_extra_config``'s fail-closed read rule, and it
+    checks the same two things that rule checks -- the key is DECLARED, and the value
+    is a short scalar -- so the two halves cannot drift. Validating names alone let
+    the write side accept what the read side refuses: a nested value stored happily
+    under a declared key, then dropped with a log warning on the way out, leaving the
+    founder a blank field forever and a 200 that claimed otherwise.
+
+    It exists at all because the merge below is accumulative. Under the old wholesale
+    replace the map arrived complete every time, so junk could not build up; under a
+    merge, anything ever written stays. And a key that COLLIDES with a top-level field
+    (``extra_config.base_url`` on a provider that declares ``base_url``) would be
+    echoed back as public and contradict the real one.
+
+    Rejecting a WRITE cannot destroy a stored value, precisely because omission now
+    means keep -- so this stays safe if the catalog ever drops a field that rows
+    still carry.
+    """
+    if not submitted:
+        return {}
+    spec = get_provider_spec(provider)
+    # api_key and base_url are top-level columns, never members of the map.
+    declared = {f.key for f in spec.credential_fields} - {"api_key", "base_url"} if spec else set()
+
+    rejected: dict[str, str] = {}
+    for key in sorted(submitted):
+        value = submitted[key]
+        if key not in declared:
+            rejected[key] = "not a declared field"
+        elif value is None:
+            continue  # an explicit null is the delete verb, not a value
+        elif not isinstance(value, str | int | float | bool):
+            rejected[key] = "not a scalar"
+        elif isinstance(value, str) and len(value) > MAX_EXTRA_VALUE_LEN:
+            rejected[key] = f"longer than {MAX_EXTRA_VALUE_LEN} characters"
+    return rejected
+
+
+def merge_extra_config(
+    stored: dict[str, object] | None, submitted: dict[str, object] | None
+) -> dict[str, object] | None:
+    """Per-key merge of extra_config, mirroring the top-level partial-update rule.
+
+    Lives beside ``_split_extra_config`` on purpose: that decides what is RETURNED,
+    this decides what is STORED, and the two must agree about what a key means. Split
+    across the api/service boundary, a change to one had no structural reason to
+    visit the other.
+
+    ``extra_config`` holds SECRETS as well as public fields, and a secret's value is
+    never returned to a client. So a client editing a public field alongside a stored
+    secret has no way to resend that secret -- it can only omit it. Replacing the
+    whole map therefore destroyed the secret, while the credential form's
+    "configured -- leave blank to keep" hint promised the opposite. That is B1 one
+    level down.
+
+    Three-valued, exactly like base_url:
+      * key omitted from ``submitted``        -> keep the stored value
+      * key present with an explicit ``None`` -> delete that key
+      * key present with a value              -> set it
+
+    ``submitted is None`` is the top-level explicit null and still clears the map;
+    a merge that empties it collapses to ``None`` so the column stays tidy.
+    """
+    if submitted is None:
+        return None
+    merged: dict[str, object] = dict(stored or {})
+    for key, value in submitted.items():
+        if value is None:
+            merged.pop(key, None)
+        else:
+            merged[key] = value
+    return merged or None
 
 
 class ModelConfigService:
     def __init__(self, db: AsyncSession) -> None:
         self._db = db
 
-    async def put_config(self, workspace_id, tiers, agent_overrides) -> None:
+    async def put_config(
+        self,
+        workspace_id: str,
+        tiers: list[ModelBindingDTO],
+        agent_overrides: list[ModelBindingDTO] | None,
+    ) -> None:
         """UPSERT workspace tier bindings; REPLACE workspace agent overrides.
 
         Tiers merge (an omitted tier falls through to the deployment default). Agent
-        overrides use replace semantics: the submitted list is the complete set, so a
-        workspace override omitted from it is deleted and the agent reverts to its tier
-        default. Does NOT commit (handler owns it).
+        overrides are three-valued: ``None`` means absent — leave existing workspace
+        overrides untouched; any list (including ``[]``) is the complete replacement
+        set, so a workspace override omitted from it is deleted and the agent reverts
+        to its tier default. Does NOT commit (handler owns it).
         """
         for b in tiers:
-            await self._upsert_binding(workspace_id, "tier", b.tier, b)
+            await self._upsert_binding(workspace_id, "tier", b.scope_key, b)
+        if agent_overrides is None:
+            # Absent, not empty: leave existing overrides untouched. An explicit []
+            # still means "clear them all", which is what REPLACE semantics require.
+            return
         for b in agent_overrides:
-            # For an agent override the reused TierBinding carries the agent name
-            # in the ``tier`` field; it is written as scope_key of a scope_type="agent" row.
-            await self._upsert_binding(workspace_id, "agent", b.tier, b)
-        await self._prune_agent_overrides(workspace_id, keep={b.tier for b in agent_overrides})
+            await self._upsert_binding(workspace_id, "agent", b.scope_key, b)
+        await self._prune_agent_overrides(workspace_id, keep={b.scope_key for b in agent_overrides})
 
-    async def _prune_agent_overrides(self, workspace_id, keep: set[str]) -> None:
+    async def _prune_agent_overrides(self, workspace_id: str, keep: set[str]) -> None:
         """Delete this workspace's agent-override rows whose agent is not in ``keep``.
 
         Scoped to the workspace's own rows (never the NULL-default rows), so an
@@ -99,25 +240,67 @@ class ModelConfigService:
             if current is None or (current.workspace_id is None and r.workspace_id is not None):
                 bucket[r.scope_key] = r
 
-        tiers = [
-            self._to_tier_binding(TierBinding, tier_by_key[t])
-            for t in TIER_ORDER
-            if t in tier_by_key
-        ]
+        tiers = [self._to_binding_dto(tier_by_key[t]) for t in TIER_ORDER if t in tier_by_key]
         # Only the workspace's own agent rows are surfaced as overrides.
         agent_overrides = [
-            self._to_tier_binding(TierBinding, r)
-            for r in agent_by_key.values()
-            if r.workspace_id is not None
+            self._to_binding_dto(r) for r in agent_by_key.values() if r.workspace_id is not None
         ]
 
-        providers = await self._provider_statuses(workspace_id, provider_status_cls=ProviderStatus)
+        providers = await self._provider_statuses(workspace_id)
+        warnings = await self.unconfigured_bindings(workspace_id, tiers, agent_overrides)
 
         return ModelConfigResponse(
             tiers=tiers,
             agent_overrides=agent_overrides,
             providers=providers,
+            warnings=warnings,
         )
+
+    async def unconfigured_bindings(
+        self,
+        workspace_id: str,
+        tiers: list[ModelBindingDTO],
+        agent_overrides: list[ModelBindingDTO],
+    ) -> list[ConfigWarning]:
+        """Bindings whose provider resolves no usable credential.
+
+        Mirrors ModelResolver._build_resolved's condition exactly -- an api_key, or a
+        keyless provider -- so a warning is shown if and only if the runtime would
+        fail. Credential lookups are memoised per provider: a workspace with three
+        tiers on one provider does one lookup, not three.
+        """
+        resolver = ModelResolver(self._db)
+        usable: dict[str, bool] = {}
+        out: list[ConfigWarning] = []
+
+        for b in [*tiers, *agent_overrides]:
+            ok = usable.get(b.provider)
+            if ok is None:
+                api_key, _ = await resolver.resolve_credential(b.provider, workspace_id)
+                ok = credential_is_usable(api_key, b.provider)
+                usable[b.provider] = ok
+            if ok:
+                continue
+            if b.scope_type == "tier":
+                message = (
+                    f"{b.provider} is not connected. There is no tier fallback — every "
+                    f"agent on {b.scope_key} will fail until you connect it."
+                )
+            else:
+                message = (
+                    f"{b.provider} is not connected. The {b.scope_key} override will "
+                    f"fall back to its tier binding until you connect it."
+                )
+            out.append(
+                ConfigWarning(
+                    scope_type=b.scope_type,
+                    scope_key=b.scope_key,
+                    provider=b.provider,
+                    code="provider_not_configured",
+                    message=message,
+                )
+            )
+        return out
 
     async def _load_bindings(self, workspace_id) -> list[ModelBinding]:
         stmt = select(ModelBinding).where(
@@ -129,13 +312,31 @@ class ModelConfigService:
         )
         return list((await self._db.execute(stmt)).scalars().all())
 
-    @staticmethod
-    def _to_tier_binding(tier_binding_cls, r: ModelBinding):
-        return tier_binding_cls(
-            tier=r.scope_key,
+    _VALID_EFFORTS = frozenset(get_args(Effort))
+
+    @classmethod
+    def _to_binding_dto(cls, r: ModelBinding) -> ModelBindingDTO:
+        # Coerce an out-of-range stored effort rather than 500ing the whole endpoint:
+        # `effort` was an unvalidated str until this change, so a legacy row may hold
+        # anything. The PUT /v1/model-config write path is now Literal-validated, but
+        # seed_defaults() writes ModelBinding rows straight from tuples (bypassing
+        # ModelBindingDTO/Pydantic entirely) and the DB column has no CHECK constraint,
+        # so other write paths (seeding, migrations, direct SQL) can still put anything
+        # here. This stays as a safety net.
+        effort = r.effort if r.effort in cls._VALID_EFFORTS else "none"
+        if effort != r.effort:
+            logger.warning(
+                "coercing unknown effort %r on binding %s/%s to 'none'",
+                r.effort,
+                r.scope_type,
+                r.scope_key,
+            )
+        return ModelBindingDTO(
+            scope_type=r.scope_type,
+            scope_key=r.scope_key,
             provider=r.provider,
             model_id=r.model_id,
-            effort=r.effort,
+            effort=effort,
             max_tokens=r.max_tokens,
             temperature=r.temperature,
         )
@@ -145,9 +346,9 @@ class ModelConfigService:
 
         Exposed so the credentials routes can report the state that actually remains
         after a write or delete, instead of asserting one."""
-        return await self._provider_statuses(workspace_id, provider_status_cls=ProviderStatus)
+        return await self._provider_statuses(workspace_id)
 
-    async def _provider_statuses(self, workspace_id, *, provider_status_cls) -> list:
+    async def _provider_statuses(self, workspace_id) -> list[ProviderStatus]:
         stmt = select(ProviderCredential).where(
             or_(
                 ProviderCredential.workspace_id == workspace_id,
@@ -163,10 +364,28 @@ class ModelConfigService:
             if current is None or (current.workspace_id is None and c.workspace_id is not None):
                 cred_by_provider[c.provider] = c
 
+        # Catalogued providers first, in catalog order; then any provider that has a
+        # credential row but is no longer catalogued, so an orphaned row stays visible
+        # and therefore removable.
+        strays = sorted(p for p in cred_by_provider if p not in MODEL_CATALOG)
         statuses = []
-        for provider in MODEL_CATALOG:
+        for provider in [*MODEL_CATALOG, *strays]:
             cred = cred_by_provider.get(provider)
-            if cred is not None:
+            # "configured" must mean what the RUNTIME means: usable credential material,
+            # not merely a row. A keyed provider whose key was cleared has a row and no
+            # credential, and ModelResolver raises for exactly that state. A column
+            # check alone is not enough either: a row whose ciphertext no longer
+            # decrypts (e.g. after a master-key rotation) has key material the resolver
+            # cannot use, so it must not read as configured with a stale "valid" status
+            # -- the exact drift this fix exists to close, reopened for this input.
+            has_material = cred is not None and (
+                provider in KEYLESS_PROVIDERS
+                or (
+                    bool(cred.api_key_encrypted)
+                    and secret_crypto.try_decrypt_secret(cred.api_key_encrypted) is not None
+                )
+            )
+            if has_material:
                 # A real credential row always wins (its own status). Only a row
                 # OWNED by this workspace is deletable through the credentials API —
                 # the NULL-workspace row is the deployment default and shared.
@@ -178,12 +397,20 @@ class ModelConfigService:
                 configured, status, source = True, "valid", "env"
             else:
                 configured, status, source = False, "unconfigured", "none"
+            base_url = cred.base_url if cred is not None else None
+            public, secret_keys = _split_extra_config(
+                provider, cred.extra_config if cred is not None else None
+            )
             statuses.append(
-                provider_status_cls(
+                ProviderStatus(
                     provider=provider,
                     configured=configured,
                     status=status,
                     source=source,
+                    base_url=base_url,
+                    extra_config_public=public,
+                    extra_config_secret_keys=secret_keys,
+                    catalogued=provider in MODEL_CATALOG,
                 )
             )
         return statuses

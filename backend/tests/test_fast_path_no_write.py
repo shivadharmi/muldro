@@ -133,9 +133,6 @@ def _make_chat() -> object:
     chat._system_capability_handler = MagicMock()
     chat._system_capability_handler.handle_system_capability = AsyncMock(return_value="SYS_OK")
 
-    chat._surfaces = MagicMock()
-    chat._surfaces.push_presenter_surface = AsyncMock(return_value=None)
-
     recorded: list[tuple[str, str]] = []
 
     async def _call_agent_stream(agent_name, *, message, **kw):

@@ -49,7 +49,6 @@ from langchain.agents.middleware import AgentMiddleware, wrap_tool_call
 from langchain_core.messages import ToolMessage
 from langgraph.types import interrupt
 
-from src.config.settings import get_settings
 from src.deep_runtime.builtins import DEEPAGENTS_BUILTIN_NAMES
 from src.deep_runtime.confirmation import Presence, prepared_tool_message, resolve_confirmation
 from src.deep_runtime.middleware.approval_persistence import (
@@ -146,9 +145,7 @@ async def _persist_permission_approval(
     # ONE decision, threaded into both Task-4a helpers: a write nobody is present to confirm
     # is RECORDED (typed + longer-lived) rather than interrupted on.
     prepared = resolve_confirmation(presence) == "prepare"
-    approval_type, expires_at = prepared_approval_overrides(
-        prepared, get_settings().prepared_action_ttl_days
-    )
+    approval_type, expires_at = prepared_approval_overrides(prepared)
 
     refs = {
         "thread_id": thread_id,

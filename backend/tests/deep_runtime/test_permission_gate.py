@@ -994,7 +994,9 @@ async def test_a_prepared_approval_is_typed_and_not_chat_flagged():
 
     assert approval_id == "apr_prepared"
     assert captured["approval_type"] == "prepared_action"
-    assert captured["expires_at"] is not None
+    # No deadline: staged work waits for the founder, and the factory exempts this type
+    # from create_approval's 24h default rather than treating None as "use the default".
+    assert captured["expires_at"] is None
     refs = captured["artifact_refs"]
     assert refs["prepared"] is True
     assert refs["effective_presence"] == "absent"

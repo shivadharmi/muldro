@@ -23,15 +23,36 @@ below are asymmetric — see each one's comment.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class NativePerception:
+    """A provider's OWN OAuth token, and what that token buys.
+
+    ``purpose`` is a short human phrase the integrations UI renders next to the
+    credential. It lives here, beside the sources, so a provider cannot acquire
+    a second credential without also saying what it is for -- and so no reader
+    downstream has to name a brand to find out.
+    """
+
+    sources: tuple[str, ...]
+    purpose: str
+
+
 # OAuth provider -> the perception sources it backs. Providers absent from this
 # map back a single source whose name equals the provider (identity).
 #
-# EMPTY IS CORRECT, NOT AN OVERSIGHT. This map only has to name a provider that
-# fans out to SEVERAL sources; every one-source provider is served by the
-# identity fallback below. The only such entry was ``google -> [gmail,
-# calendar]``, retired when those sources moved behind the OpenConnector
-# gateway. Both readers of this map are now native-only paths that gmail and
-# calendar can no longer reach:
+# ``github`` is listed even though it is identity-shaped, because being listed is
+# what makes the pause/resume path SEE it. The GitHub notifications poll runs on
+# a native OAuth token again (``GitHubConnector`` against /notifications), so a
+# revoked token must be able to pause the source and a reconnect must resume it.
+# GitHub's gateway credential is a separate thing serving the github.* MCP
+# actions; it never reaches this map.
+#
+# The one entry this map used to carry was ``google -> [gmail, calendar]``,
+# retired when those sources moved behind the OpenConnector gateway. Both
+# readers are native-only paths that gmail and calendar can no longer reach:
 #
 # * ``provider_for_source`` — called by ``connector_poller`` and
 #   ``perception_tick`` AFTER ``gateway_provider_for_source`` has already
@@ -47,12 +68,20 @@ from __future__ import annotations
 #   either. That branch ORDER is pinned executably by
 #   ``tests/integrations/test_session_pool_auth.py::
 #   test_platform_jwt_branch_returns_a_bearer_without_raising_reauth`` — if it
-#   goes red, restore the entry below before doing anything else.
+#   goes red, that ordering has changed and the github MCP server would start
+#   raising reauth against this entry; fix the order, not this map.
 #
-# Re-add an entry here the moment a native OAuth provider backs more than one
-# perception source — without it that provider's extra sources are invisible to
-# the pause/resume path.
-_PROVIDER_SOURCES: dict[str, list[str]] = {}
+# Add an entry the moment a native OAuth provider backs a perception source
+# whose name differs from it, or backs more than one — without it those sources
+# are invisible to the pause/resume path.
+_PROVIDER_NATIVE_PERCEPTION: dict[str, NativePerception] = {
+    "github": NativePerception(sources=("github",), purpose="notifications"),
+}
+
+# Derived, so the sources are declared exactly once above.
+_PROVIDER_SOURCES: dict[str, list[str]] = {
+    provider: list(native.sources) for provider, native in _PROVIDER_NATIVE_PERCEPTION.items()
+}
 
 # OAuth provider -> the MCP server names it powers. Providers absent from this
 # map run a single server whose name equals the provider (identity). ``google``
@@ -99,6 +128,18 @@ def provider_for_source(source: str) -> str:
         if source in sources:
             return provider
     return source
+
+
+def native_perception_for_provider(provider: str) -> NativePerception | None:
+    """Return what ``provider`` polls on its OWN OAuth token, or None.
+
+    Unlike ``sources_for_provider`` this has NO identity fallback, and the
+    difference is the whole point: the fallback answers "yes, one source" for
+    every provider ever named, including the fully gateway-backed ones, so a
+    caller asking "does this provider hold a second, native credential?" would
+    get a yes for all of them. Only an explicit declaration above counts.
+    """
+    return _PROVIDER_NATIVE_PERCEPTION.get(provider)
 
 
 def sources_for_provider(provider: str) -> list[str]:

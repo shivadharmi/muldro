@@ -199,27 +199,57 @@ export function statusLabel(status: string): string {
   return STATUS_LABELS[status] ?? status;
 }
 
-/** Maps surface kind to badge styling (bg + text classes) */
+/** Maps frame kind to badge styling (bg + text classes) */
 export function kindStyle(kind: string): { bg: string; text: string } {
   switch (kind) {
-    case "plan":
+    case "proposal":
+      return { bg: "bg-j-secondary-soft", text: "text-j-secondary" };
+    case "finding":
       return { bg: "bg-j-info-soft", text: "text-j-info" };
-    case "approval":
-      return { bg: "bg-j-warning-soft", text: "text-j-warning" };
+    case "run":
+      return { bg: "bg-j-info-soft", text: "text-j-info" };
     case "briefing":
       return { bg: "bg-j-success-soft", text: "text-j-success" };
-    case "alert":
-      return { bg: "bg-j-error-soft", text: "text-j-error" };
-    case "proactive_insight":
-    case "recommendation":
-      return { bg: "bg-j-secondary-soft", text: "text-j-secondary" };
-    // Prepared work is staged, not done — the same warning tone as an approval.
-    case "prepared_work":
-      return { bg: "bg-j-warning-soft", text: "text-j-warning" };
+    case "record":
+      return { bg: "bg-surface-3", text: "text-t-secondary" };
     default:
       return { bg: "bg-surface-3", text: "text-t-secondary" };
   }
 }
+
+/** Maps frame status to a dot colour.
+ *
+ *  FrameStatus is a DIFFERENT vocabulary from the execution/task statuses
+ *  `statusColor` covers: `needs_you` would fall to its grey default. Kept
+ *  separate rather than merged so neither vocabulary silently absorbs the
+ *  other's fallbacks. */
+export function frameStatusColor(status: string): string {
+  switch (status) {
+    case "needs_you":
+      return "bg-j-warning";
+    case "running":
+      return "bg-j-info";
+    case "done":
+      return "bg-j-success";
+    case "failed":
+      return "bg-j-error";
+    case "new":
+      return "bg-j-secondary";
+    default:
+      return "bg-t-muted";
+  }
+}
+
+/** Title-case display labels for priorities.
+ *
+ *  Priority is the one badge that used to be printed verbatim off the wire,
+ *  which is why it read lowercase beside Title-case neighbours. */
+export const PRIORITY_LABELS: Record<string, string> = {
+  low: "Low",
+  medium: "Medium",
+  high: "High",
+  critical: "Critical",
+};
 
 /** Maps priority to badge styling (bg + text classes) */
 export function priorityStyle(priority: string): { bg: string; text: string } {
@@ -285,14 +315,53 @@ export const TRUST_LEVEL_LABELS: Record<string, string> = {
   blocked: "Blocked",
 };
 
-/** Human-readable labels for surface kinds */
+/** Human-readable labels for frame kinds */
 export const KIND_LABELS: Record<string, string> = {
-  plan: "Plan",
-  approval: "Approval",
+  proposal: "Proposal",
+  finding: "Finding",
+  run: "Run",
+  record: "Record",
   briefing: "Briefing",
-  alert: "Alert",
-  summary: "Summary",
-  recommendation: "Rec",
-  proactive_insight: "Insight",
-  prepared_work: "Prepared",
 };
+
+/** Human-readable labels for frame statuses.
+ *
+ *  Deliberately not merged into STATUS_LABELS: that map is the execution/task
+ *  vocabulary, and a frame status printed through it falls through raw —
+ *  `needs_you` lowercase-with-underscore beside Title-case neighbours. */
+export const FRAME_STATUS_LABELS: Record<string, string> = {
+  needs_you: "Needs you",
+  scheduled: "Scheduled",
+  running: "Running",
+  done: "Done",
+  failed: "Failed",
+  new: "New",
+  seen: "Seen",
+};
+
+/**
+ * What the events of a unit are called. A meeting is not a message, and the
+ * fallback has to survive an entity type nobody has mapped yet, so it is a
+ * noun that is true of anything a connector can group.
+ */
+export const EVENT_NOUN: Record<string, string> = {
+  email_thread: "messages",
+  meeting: "events",
+  issue: "updates",
+  pull_request: "updates",
+  channel: "messages",
+  page: "revisions",
+};
+
+export const DEFAULT_EVENT_NOUN = "updates";
+
+/**
+ * A count of one says nothing the card does not already show, and it is where
+ * the wrong noun was on display. Lives here rather than in either view: the
+ * card and the detail modal are two projections of one frame, and they read
+ * `1 message` on a meeting for as long as each owned its own copy.
+ */
+export function eventCountLabel(entityType: string, count: number): string | null {
+  if (count <= 1) return null;
+  return `${count} ${EVENT_NOUN[entityType] ?? DEFAULT_EVENT_NOUN}`;
+}

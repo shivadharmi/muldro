@@ -14,12 +14,6 @@ _DEFAULT_TRUST_RECORDS: list[dict] = [
         "status": "active",
     },
     {
-        "server_name": "communication-server",
-        "trust_tier": "T0",
-        "verified_by": "system",
-        "status": "active",
-    },
-    {
         "server_name": "google-workspace",
         "trust_tier": "T1",
         "verified_by": "anthropic",

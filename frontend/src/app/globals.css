@@ -223,6 +223,32 @@ body {
 }
 
 /* ── Focus ring ────────────────────────────────────────────────── */
+/* The ONE focus indicator on the surface. Do not hand-roll a second one, and do
+   not try to suppress this one from a component.
+
+   This rule is UNLAYERED. Tailwind emits its utilities inside `@layer utilities`,
+   and an unlayered normal declaration beats every layered one regardless of
+   specificity — so `focus-visible:outline-none` in a className has never
+   suppressed anything in this codebase, and a `focus-visible:ring-*` beside it
+   renders as a SECOND indicator in a second colour. Six settings controls
+   carried exactly that pair for months — four spelled `focus-visible:` (the
+   mobile back and close controls, every rail row, and the provider row anchor)
+   and two spelled `focus:` (the trust ceiling select and the budget input) —
+   and every one of them drew two rings.
+
+   THE CLEANUP WAS NOT APP-WIDE, and this note should not be read as though it
+   were. The pair was removed from those six settings controls and from the chat
+   composer. It remains elsewhere — most importantly in `lib/focus-ring.ts`, the
+   SHARED helper every importer inherits it from, which still spells
+   `focus-visible:outline-none` beside `focus-visible:ring-2`. More call sites
+   spell the same pair inline, across the button primitive, the sidebar, the
+   search and history filters, the login form and the inline approval card. So
+   the rule above is the law; the codebase does not yet obey it everywhere.
+   Fixing the shared helper is the single highest-leverage step and is filed
+   separately — it touches many owners, which is why it was not done here.
+
+   None of that is visible in the source; it only appears in the compiled
+   stylesheet, which is why it is written down here. */
 :focus-visible {
   outline: 2px solid var(--muldro-primary);
   outline-offset: 2px;
@@ -313,16 +339,6 @@ body {
 }
 .animate-pulse-live {
   animation: pulse-live 2s ease-in-out infinite;
-}
-
-/* ── Surface card hover ──────────────────────────────────────── */
-.surface-card {
-  transition: box-shadow 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
-}
-.surface-card:hover {
-  box-shadow: var(--shadow-md);
-  border-color: var(--muldro-border-default);
-  transform: translateY(-1px);
 }
 
 /* ── Subtle noise texture for depth ──────────────────────────── */

@@ -2,9 +2,9 @@
 
 ``TOOL_INPUT_MODELS`` (src/tools/schemas.py) was consulted at startup by
 ``validate_registry()`` and nowhere else at call time, so an internal tool's typed
-schema never actually constrained a call. ``render_surface`` is the sharp edge:
-FastMCP only checks that ``sections`` is a ``list[dict]``, so ``{"type": "Bogus"}``
-publishes cleanly and the frontend renders ``[Unknown: Bogus]``.
+schema never actually constrained a call. FastMCP checks only the coarse JSON type
+of each argument, so every bound the Pydantic model declares — a Literal's admissible
+values, a numeric floor, a length cap — passed straight through to the tool.
 
 The parse now REJECTS: a call whose arguments fail their model never reaches the
 tool, and the agent gets back an ``invalid_tool_args`` error naming the offending
@@ -23,28 +23,45 @@ it was — and never, under any circumstances, echoing the offending value back.
 """
 
 import logging
+from contextlib import contextmanager
 from unittest.mock import AsyncMock, MagicMock, create_autospec, patch
 
 import pytest
+from pydantic import BaseModel, Field
 
 from src.models.tool_definitions import ToolDefinition
 from tests.conftest import TEST_USER_ID, TEST_WORKSPACE_ID
 
 _TOOLARGS_PREFIX = "[toolargs]"
 
-# A valid render_surface payload, exactly as an agent would emit it: no user_id,
+# A valid store_memory payload, exactly as an agent would emit it: no user_id,
 # no workspace_id — the dispatcher injects those AFTER validation.
-_VALID_RENDER_SURFACE = {
-    "kind": "message",
-    "title": "Quarterly numbers",
-    "sections": [
-        {
-            "id": "t1",
-            "type": "Text",
-            "properties": {"text": "Revenue is up.", "variant": "body"},
-        }
-    ],
+_VALID_STORE_MEMORY = {
+    "text": "Revenue is up.",
+    "memory_type": "fact",
+    "scope": "general",
 }
+
+# The bound-annotation tests need a length-bounded field and a length-bounded list.
+# No shipped input model declares either today, so they drive a synthetic model
+# through the real renderer instead. That is not a weaker test: the annotation keys
+# off the pydantic ERROR TYPE, never off the fields any one model happens to have,
+# so which model produced the error is exactly the thing it must be indifferent to.
+_BOUNDED_TOOL = "bounded_tool"
+
+
+class _BoundedInput(BaseModel):
+    """Stand-in for any tool whose schema declares length bounds."""
+
+    subtitle: str = Field(default="", max_length=120)
+    metrics: list[str] = Field(default_factory=list, max_length=4)
+
+
+@contextmanager
+def _bounded_model(model: type[BaseModel] = _BoundedInput):
+    """Register ``model`` under ``_BOUNDED_TOOL`` for the duration of the block."""
+    with patch.dict("src.tools.schemas.TOOL_INPUT_MODELS", {_BOUNDED_TOOL: model}, clear=False):
+        yield
 
 
 def _make_tool_record(backend: str, *, server: str = "default", input_schema=None):
@@ -108,71 +125,42 @@ def _toolargs_records(caplog) -> list[logging.LogRecord]:
 async def test_invalid_args_are_rejected_before_dispatch(caplog):
     """A violation is enforced, not merely reported.
 
-    ``sections`` carries a component type outside the AnyComponent union — the exact
-    shape that renders as ``[Unknown: Bogus]`` — so the call must never reach the tool.
+    ``ttl_days`` is declared ``ge=0``. JSON-schema-level checking sees a valid integer
+    and would let it through, so a bound that lives only in the Pydantic model is the
+    honest test of whether the model is consulted at all.
     """
     caplog.set_level(logging.WARNING)
-    bad_input = {
-        **_VALID_RENDER_SURFACE,
-        "sections": [{"id": "t1", "type": "Bogus", "properties": {"text": "x"}}],
-    }
+    bad_input = {**_VALID_STORE_MEMORY, "ttl_days": -1}
 
-    result, call_internal = await _run_internal("render_surface", bad_input)
+    result, call_internal = await _run_internal("store_memory", bad_input)
 
     logged = _toolargs_records(caplog)
     assert len(logged) == 1, f"expected exactly one [toolargs] warning, got {logged}"
-    assert "render_surface" in logged[0].getMessage()
+    assert "store_memory" in logged[0].getMessage()
 
     call_internal.assert_not_awaited()
     assert result["error_code"] == "invalid_tool_args"
-    assert "sections" in result["error"]
+    assert "ttl_days" in result["error"]
 
 
 @pytest.mark.asyncio
 async def test_missing_required_field_is_rejected_before_dispatch(caplog):
-    """A structurally incomplete call (no ``title``) is blocked, and the error says so.
+    """A structurally incomplete call (no ``text``) is blocked, and the error says so.
 
     This is the end-to-end half of ``TestRenderedError.test_names_the_offending_field``:
     the field name has to survive all the way out of ``execute_tool``, not just out of
     ``_render_validation_error``.
     """
     caplog.set_level(logging.WARNING)
-    bad_input = {"kind": "message", "sections": []}
+    bad_input = {"memory_type": "fact"}
 
-    result, call_internal = await _run_internal("render_surface", bad_input)
+    result, call_internal = await _run_internal("store_memory", bad_input)
 
     assert len(_toolargs_records(caplog)) == 1
     call_internal.assert_not_awaited()
     assert result["error_code"] == "invalid_tool_args"
-    assert "title" in result["error"]
-    assert "render_surface" in result["error"]
-
-
-@pytest.mark.asyncio
-async def test_overlong_subtitle_from_the_live_corpus_is_rejected(caplog):
-    """Regression built from the one real violation in the live corpus.
-
-    Captured 2026-08-20 from a live backend with all three model tiers bound to OpenAI
-    ``gpt-5-mini``: across 18 chat turns, 13 ``render_surface`` calls carrying 133
-    components, exactly one payload failed its model — a 153-character ``subtitle``
-    against ``max_length=120``. PRESENTER_VOICE rule 12 already says "under 120
-    characters" in prose; the prose did not hold, which is the case for enforcing the
-    schema. This is the exact string the model emitted.
-    """
-    caplog.set_level(logging.WARNING)
-    subtitle = (
-        "Draft: comprehensive history, communications, decisions, outstanding items, "
-        "and recommended next steps. Missing private sources (email, calendar, Slack)."
-    )
-    assert len(subtitle) == 153, "the corpus string must not be reflowed"
-
-    result, call_internal = await _run_internal(
-        "render_surface", {**_VALID_RENDER_SURFACE, "subtitle": subtitle}
-    )
-
-    call_internal.assert_not_awaited()
-    assert result["error_code"] == "invalid_tool_args"
-    assert "subtitle" in result["error"]
+    assert "text" in result["error"]
+    assert "store_memory" in result["error"]
 
 
 @pytest.mark.asyncio
@@ -180,34 +168,35 @@ async def test_valid_call_is_dispatched_untouched(caplog):
     """The other side of enforcement: a conforming payload is not disturbed."""
     caplog.set_level(logging.WARNING)
 
-    result, call_internal = await _run_internal("render_surface", dict(_VALID_RENDER_SURFACE))
+    result, call_internal = await _run_internal("store_memory", dict(_VALID_STORE_MEMORY))
 
     assert _toolargs_records(caplog) == []
     call_internal.assert_awaited_once()
     assert result == {"status": "ok"}
     assert "error" not in result
     # The agent-supplied args reach the tool untouched apart from context injection.
-    assert call_internal.await_args.args[1]["sections"] == _VALID_RENDER_SURFACE["sections"]
+    assert call_internal.await_args.args[1]["text"] == _VALID_STORE_MEMORY["text"]
 
 
 @pytest.mark.asyncio
 async def test_context_args_are_not_required_by_the_input_model(caplog):
     """A valid agent payload WITHOUT the injected context args must validate cleanly.
 
-    ``_VALID_RENDER_SURFACE`` carries no user_id/workspace_id, because the dispatcher
+    ``_VALID_STORE_MEMORY`` carries no user_id/workspace_id, because the dispatcher
     injects them after the parse. If a context field were ever added to an input model
     as required, this fails — and every internal tool call would log a false violation.
     """
     caplog.set_level(logging.WARNING)
-    assert "user_id" not in _VALID_RENDER_SURFACE
-    assert "workspace_id" not in _VALID_RENDER_SURFACE
+    assert "user_id" not in _VALID_STORE_MEMORY
+    assert "workspace_id" not in _VALID_STORE_MEMORY
 
-    _, call_internal = await _run_internal("render_surface", dict(_VALID_RENDER_SURFACE))
+    _, call_internal = await _run_internal("store_memory", dict(_VALID_STORE_MEMORY))
 
     assert _toolargs_records(caplog) == []
-    # The context arg IS present by the time the tool is called. (Only user_id:
-    # injection is signature-aware and render_surface's impl declares no workspace_id.)
+    # The context args ARE present by the time the tool is called. Injection is
+    # signature-aware, and store_memory's impl declares both.
     assert call_internal.await_args.args[1]["user_id"] == TEST_USER_ID
+    assert call_internal.await_args.args[1]["workspace_id"] == TEST_WORKSPACE_ID
 
 
 @pytest.mark.asyncio
@@ -231,7 +220,7 @@ async def test_validation_runs_on_the_pre_injection_input():
 
     spy = create_autospec(te_mod._validate_tool_input, side_effect=_record)
     with patch.object(te_mod, "_validate_tool_input", spy):
-        await _run_internal("render_surface", dict(_VALID_RENDER_SURFACE))
+        await _run_internal("store_memory", dict(_VALID_STORE_MEMORY))
 
     assert seen, "the parse never ran for an internal tool"
     assert "user_id" not in seen[0], (
@@ -351,9 +340,9 @@ class TestRenderedError:
         return rendered
 
     def test_names_the_offending_field(self):
-        rendered = self._render("render_surface", {"kind": "message", "sections": []})
-        assert "title" in rendered
-        assert "render_surface" in rendered
+        rendered = self._render("store_memory", {"memory_type": "fact"})
+        assert "text" in rendered
+        assert "store_memory" in rendered
 
     def test_is_capped_when_pydantic_reports_many_errors(self):
         """A broadly-malformed payload produces more errors than an agent can use.
@@ -365,64 +354,40 @@ class TestRenderedError:
         from pydantic import ValidationError
 
         from src.orchestrator.tool_executor import _MAX_ARG_ERROR_CHARS
-        from src.tools.schemas import RenderSurfaceInput
+        from src.tools.schemas import StoreMemoryInput
 
         bad = {
-            "kind": "not_a_kind",
-            "sections": [
-                {"type": "Text"},
-                {"id": "", "type": "Markdown"},
-                {"id": "c3", "type": "Table", "properties": {}},
-            ],
+            "text": [],
+            "memory_type": [],
+            "scope": [],
+            "ttl_days": -5,
+            "entity_ids": [],
+            "source": [],
         }
         with pytest.raises(ValidationError) as exc_info:
-            RenderSurfaceInput.model_validate(bad)
+            StoreMemoryInput.model_validate(bad)
         raw_error_count = len(exc_info.value.errors())
         assert raw_error_count > 3, f"expected >3 raw errors, got {raw_error_count}"
 
-        rendered = self._render("render_surface", bad)
+        rendered = self._render("store_memory", bad)
         assert len(rendered) <= _MAX_ARG_ERROR_CHARS, f"{len(rendered)} chars: {rendered}"
         assert "more)" in rendered, "truncation must be visible, not silent"
 
     def test_tells_the_agent_what_to_do(self):
         """House style, set by the existing missing-required-args return: say what is
         wrong AND what to do."""
-        rendered = self._render("render_surface", {"kind": "message", "sections": []})
+        rendered = self._render("store_memory", {"memory_type": "fact"})
         assert "again" in rendered.lower()
 
     def test_returns_none_for_a_valid_payload(self):
         from src.orchestrator.tool_executor import _validate_tool_input
 
-        assert _validate_tool_input("render_surface", dict(_VALID_RENDER_SURFACE)) is None
+        assert _validate_tool_input("store_memory", dict(_VALID_STORE_MEMORY)) is None
 
     def test_returns_none_for_a_tool_with_no_model(self):
         from src.orchestrator.tool_executor import _validate_tool_input
 
         assert _validate_tool_input("search_gmail_messages", {"whatever": 1}) is None
-
-    def test_an_unknown_component_tag_keeps_its_whole_tag_list(self):
-        """The most actionable message in the system must survive the per-error cap.
-
-        An unknown ``type`` produces exactly ONE pydantic error whose ``msg`` names every
-        valid AnyComponent tag — measured at 260 characters. Truncated, the agent is told
-        the first few tags and then cut mid-word, which destroys the only thing that lets
-        it repair the call. Asserting on the LAST tag is deliberate: asserting on the
-        first would pass under a 100-character cap and prove nothing.
-        """
-        from src.ui.contracts import ComponentType
-
-        rendered = self._render(
-            "render_surface",
-            {
-                **_VALID_RENDER_SURFACE,
-                "sections": [{"id": "t1", "type": "Bogus", "properties": {"text": "x"}}],
-            },
-        )
-        assert "'Divider'" in rendered, f"tag list was truncated: {rendered}"
-        # ...and it really is the whole list, not just a longer prefix of it.
-        for tag in ("Text", "Table", "ExecutionTrace", "Divider"):
-            assert f"'{tag}'" in rendered
-        assert len(ComponentType) >= 17
 
 
 @pytest.mark.asyncio
@@ -449,9 +414,9 @@ async def test_a_validator_that_raises_does_not_break_dispatch(caplog):
             raise TypeError("validator blew up")
 
     with patch.dict(
-        "src.tools.schemas.TOOL_INPUT_MODELS", {"render_surface": _ExplodingInput}, clear=False
+        "src.tools.schemas.TOOL_INPUT_MODELS", {"store_memory": _ExplodingInput}, clear=False
     ):
-        result, call_internal = await _run_internal("render_surface", {"anything": 1})
+        result, call_internal = await _run_internal("store_memory", {"anything": 1})
 
     call_internal.assert_awaited_once()
     assert result == {"status": "ok"}
@@ -462,8 +427,8 @@ class TestSizeAnnotation:
     """A rejected call must say how far over the limit it was, not just the limit.
 
     Measured live on 2026-08-20 (gpt-5-mini, all tiers): a model repairing an overlong
-    ``subtitle`` against ``max_length=120`` went 123 -> 141 -> 128 -> 109 chars. Attempt
-    two was WORSE than attempt one, and the surface was lost one retry short of success.
+    string against a 120-character cap went 123 -> 141 -> 128 -> 109 chars. Attempt two
+    was WORSE than attempt one, and the call was abandoned one retry short of success.
     It was guessing, because "String should have at most 120 characters" does not tell
     it what it sent. Pydantic knows: ``err["input"]`` is the offending value.
     """
@@ -483,7 +448,8 @@ class TestSizeAnnotation:
         )
         assert len(subtitle) == 141, "the reproduction must not be reflowed"
 
-        rendered = self._render("render_surface", {**_VALID_RENDER_SURFACE, "subtitle": subtitle})
+        with _bounded_model():
+            rendered = self._render(_BOUNDED_TOOL, {"subtitle": subtitle})
 
         assert "120" in rendered, "the limit must still be stated"
         assert "141" in rendered, f"the agent was not told what it sent: {rendered}"
@@ -501,7 +467,8 @@ class TestSizeAnnotation:
         secret = "sk-live-9f3a" + "Qx7ZmNp4Kd" * 15  # 162 chars, unmistakable if leaked
         assert len(secret) == 162
 
-        rendered = self._render("render_surface", {**_VALID_RENDER_SURFACE, "subtitle": secret})
+        with _bounded_model():
+            rendered = self._render(_BOUNDED_TOOL, {"subtitle": secret})
 
         assert "162" in rendered, "the size must be reported"
         assert secret not in rendered
@@ -516,17 +483,14 @@ class TestSizeAnnotation:
 
         No shipped input model carries a ``min_length`` today, so this drives it through
         a synthetic one — the annotation must key off the pydantic error type, not off
-        the fields ``render_surface`` happens to declare.
+        the fields any particular tool happens to declare.
         """
-        from pydantic import BaseModel, Field
 
         class _MinLenInput(BaseModel):
             slug: str = Field(min_length=10)
 
-        with patch.dict(
-            "src.tools.schemas.TOOL_INPUT_MODELS", {"render_surface": _MinLenInput}, clear=False
-        ):
-            rendered = self._render("render_surface", {"slug": "abc"})
+        with _bounded_model(_MinLenInput):
+            rendered = self._render(_BOUNDED_TOOL, {"slug": "abc"})
 
         assert "10" in rendered
         assert "(got 3)" in rendered, f"the agent was not told what it sent: {rendered}"
@@ -551,7 +515,7 @@ class TestSizeAnnotation:
 
         for bad_input in (12345, _LenExplodes()):
             exc = ValidationError.from_exception_data(
-                "RenderSurfaceInput",
+                "_BoundedInput",
                 [
                     {
                         "type": "string_too_long",
@@ -561,7 +525,7 @@ class TestSizeAnnotation:
                     }
                 ],
             )
-            rendered = _render_validation_error("render_surface", exc)
+            rendered = _render_validation_error(_BOUNDED_TOOL, exc)
             assert "subtitle" in rendered
             assert "120" in rendered
             assert "(got" not in rendered, f"invented a size for {bad_input!r}: {rendered}"
@@ -569,22 +533,18 @@ class TestSizeAnnotation:
     def test_errors_that_are_not_about_size_are_not_annotated(self):
         """A size is noise wherever the message already says everything actionable.
 
-        ``missing`` has no value to measure; ``union_tag_invalid`` and ``literal_error``
-        already enumerate the admissible values; a ``*_type`` error is about the KIND of
-        the value, for which its size explains nothing. Annotating any of them would
-        spend the agent's attention without narrowing its next attempt.
+        ``missing`` has no value to measure; ``literal_error`` already enumerates the
+        admissible values; a ``*_type`` error is about the KIND of the value, for which
+        its size explains nothing. Annotating any of them would spend the agent's
+        attention without narrowing its next attempt.
         """
         cases = {
-            "missing (no title)": {"kind": "message", "sections": []},
-            "union_tag_invalid (unknown component tag)": {
-                **_VALID_RENDER_SURFACE,
-                "sections": [{"id": "t1", "type": "Bogus", "properties": {"text": "x"}}],
-            },
-            "literal_error (unknown kind)": {**_VALID_RENDER_SURFACE, "kind": "not_a_kind"},
-            "string_type (title is a number)": {**_VALID_RENDER_SURFACE, "title": 5},
+            "missing (no approval_id)": {"decision": "approved"},
+            "literal_error (unknown decision)": {"approval_id": "apr_1", "decision": "maybe"},
+            "string_type (approval_id is a number)": {"approval_id": 5, "decision": "approved"},
         }
         for label, bad in cases.items():
-            rendered = self._render("render_surface", bad)
+            rendered = self._render("approve_action", bad)
             assert "(got" not in rendered, f"{label} was annotated with a size: {rendered}"
 
     def test_a_too_long_list_is_not_annotated_because_pydantic_already_counts_it(self):
@@ -594,35 +554,10 @@ class TestSizeAnnotation:
         ``msg`` — "should have at most 4 items after validation, not 5". Annotating them
         would say the same number twice and read as two different facts.
         """
-        five_metrics = [{"label": f"m{i}", "value": str(i)} for i in range(5)]
+        five_metrics = [f"m{i}" for i in range(5)]
 
-        bad = {**_VALID_RENDER_SURFACE, "metrics": five_metrics}
-
-        rendered = self._render("render_surface", bad)
+        with _bounded_model():
+            rendered = self._render(_BOUNDED_TOOL, {"metrics": five_metrics})
 
         assert "not 5" in rendered, f"pydantic stopped reporting the count: {rendered}"
         assert "(got" not in rendered, f"the count was stated twice: {rendered}"
-
-    def test_the_annotation_does_not_crowd_out_the_tag_list(self):
-        """The cap arithmetic must still hold when an annotated error shares the message.
-
-        The unknown-component-tag error is the single most actionable message in the
-        system — one error, 260 chars, naming all 17 valid tags — and the 900-char cap
-        was sized to fit it whole. Here it arrives alongside an annotated ``subtitle``
-        violation, which sorts FIRST (field order), so any bloat the annotation adds is
-        spent before the tag list is rendered.
-        """
-        from src.orchestrator.tool_executor import _MAX_ARG_ERROR_CHARS
-
-        rendered = self._render(
-            "render_surface",
-            {
-                **_VALID_RENDER_SURFACE,
-                "subtitle": "x" * 141,
-                "sections": [{"id": "t1", "type": "Bogus", "properties": {"text": "x"}}],
-            },
-        )
-
-        assert "(got 141)" in rendered
-        assert "'Divider'" in rendered, f"the tag list was truncated: {rendered}"
-        assert len(rendered) <= _MAX_ARG_ERROR_CHARS, f"{len(rendered)} chars: {rendered}"

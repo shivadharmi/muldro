@@ -154,7 +154,7 @@ class DeferredVerificationTickMixin:
                 if not steps:
                     return
 
-                notifier = self._resolve_deferred_notifier(db)
+                notifier = self._resolve_notifier(db)
                 verifier = self._build_deferred_verifier(db)
 
                 for step in steps:
@@ -174,32 +174,6 @@ class DeferredVerificationTickMixin:
                 await db.commit()
         except Exception:
             logger.warning("Deferred verification tick failed", exc_info=True)
-
-    def _resolve_deferred_notifier(self, db):
-        """Resolve a Notifier for the async-divergence surface.
-
-        Preferred: reuse the orchestrator's already-wired notifier (built with a live
-        redis client, so hold-for-briefing + rate-limiting actually work) — the same
-        source sibling ticks use (``services.notifier``). Fallback: build one from
-        ``settings.redis_url`` so ``_hold_for_briefing`` genuinely buffers. Returns None
-        only if no redis is reachable at all (the divergence transition still happens;
-        only the surface push is skipped)."""
-        services = getattr(self._orchestrator, "_services", None) if self._orchestrator else None
-        wired = getattr(services, "notifier", None) if services else None
-        if wired is not None:
-            return wired
-
-        try:
-            import redis.asyncio as aioredis
-
-            from src.services.notifier import Notifier
-            from src.services.surface_registry import SurfaceRegistry
-
-            redis = aioredis.from_url(self._settings.redis_url, decode_responses=True)
-            return Notifier(surface_registry=SurfaceRegistry(redis=redis), redis=redis, db=db)
-        except Exception:
-            logger.debug("Notifier unavailable for deferred verification tick", exc_info=True)
-            return None
 
     def _build_deferred_verifier(self, db) -> ReadBackVerifier:
         """Build the re-check verifier. read_fn reuses the same read path as the inline

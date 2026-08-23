@@ -1,6 +1,6 @@
 """PRESENTER_PROMPT content pin.
 
-``PRESENTER_VOICE`` (the reusable formatting + surface-emission fragment) is extracted
+``PRESENTER_VOICE`` (the reusable formatting fragment) is extracted
 from ``PRESENTER_PROMPT`` so the deep runtime can append it as an inline-format
 augmentation. This golden-hash test pins the exact bytes of ``PRESENTER_PROMPT`` so
 unintended edits to the prompt are caught.
@@ -10,8 +10,8 @@ PRESENTER_VOICE (the extraction was required to change zero bytes). It was **re-
 in Step-9 P1** when the dead surface-kinds (``checklist, comparison, timeline, table,
 activity``) and dead component-types (``DataGrid``, ``StatusIndicator``, ``Column``) were
 pruned from PRESENTER_VOICE in lockstep with their deletion from the A2UI schema — the
-prompt was still advertising kinds that ``SurfaceSpec.kind`` (a strict ``SurfaceKind``
-Literal) now rejects, which silently dropped chat-path workspace surfaces. The hash no
+prompt was still advertising kinds that the then-strict surface-kind Literal now rejects,
+which silently dropped chat-path workspace surfaces. The hash no
 longer asserts historical byte-neutrality; it pins the *current* pruned content forward.
 A companion ``test_presenter_voice_has_no_dead_schema_tokens`` gave that prune teeth, until
 the sixth re-baseline below removed the prose it searched.
@@ -22,26 +22,25 @@ Presenter agent in <product>"); ``PRESENTER_VOICE`` itself was byte-identical ac
 rebrand, so the reusable voice fragment carries no rebrand delta.
 
 It was re-baselined a third time when the surface-kind guidance was corrected in **both**
-directions. ``message`` — the kind defined for Presenter-authored content, with its own
-promotion path in ``surface_pusher`` — was never offered in the kinds table, so the model was
-never told its own default existed; it was added. And the "do not use" list forbade only
+directions. ``message`` — the kind defined for Presenter-authored content, which had its own
+promotion path at the time — was never offered in the kinds table, so the model was never
+told its own default existed; it was added. And the "do not use" list forbade only
 ``approval`` and ``proactive_insight``, leaving ``run``, ``prepared_work`` and the legacy
-``plan`` emittable, since ``SurfaceSpec.kind`` validates against the whole Literal and forbids
-nothing the prompt does not; all three were added. ``prepared_work`` in particular, because
+``plan`` emittable, since the surface-kind field validated against the whole Literal and
+forbade nothing the prompt did not; all three were added. ``prepared_work`` in particular, because
 settled decision D2 makes that review queue the ONLY place an action staged with no human
 present can be acted on — an agent-authored second one would split it. The companion
-``test_surface_kind_guidance`` parses the table rows and the bullet list as structure and
-asserts set relations against the Literal in both directions, so this correction cannot drift
-back silently.
+``test_surface_kind_guidance`` parsed the table rows and the bullet list as structure and
+asserted set relations against the Literal in both directions; it was deleted with the prose
+it read.
 
 It was re-baselined a fourth time when ``TableProperties.rows`` became positional ``cells``.
 The prompt was the only *other* producer of Table components — the lead authors them directly
 in a ```json:surface_data``` block — and it taught row-keyed-by-column-key, a shape the closed
-model now rejects. That is not a cosmetic drift: one bad Table makes ``extract_surface_data``
-return ``None`` for the WHOLE payload, so every section of the surface is dropped silently.
-The companion ``TestPresenterVoiceExampleMatchesTheSchema`` in ``test_surface_spec.py`` now
-runs the prompt's own worked example through the real parser, so prose and schema can no
-longer disagree without CI saying so.
+model now rejects. That is not a cosmetic drift: one bad Table made the fenced parser return
+``None`` for the WHOLE payload, so every section of the surface was dropped silently. A
+companion test ran the prompt's own worked example through the real parser; it was deleted
+with that parser.
 
 It was re-baselined a fifth time when ``EntityCardProperties.attributes`` became a closed list
 of ``{"key", "value"}`` pairs. The prompt taught ``"attributes"?: {}`` — an open map, which is
@@ -53,14 +52,17 @@ shape rather than only asserting the prose was edited.
 It was re-baselined a sixth time when the whole ``<surface_generation>`` block was deleted.
 The A2UI taxonomy it recited — the kinds table, the ```json:surface``` and
 ```json:surface_data``` worked examples, the component list with each type's required
-properties, and the list-of-dict rules — now lives in the ``render_surface`` tool's input
-schema, where a provider can enforce it instead of a model having to remember it. What
-replaced it is the ``<surfaces>`` block, which carries only WHEN to surface: judgement a
-schema cannot express. The companion assertions moved with the content — the kind rules to
-``test_surface_kind_guidance`` (now asserting against ``RenderSurfaceInput.kind``'s Literal
-rather than parsing a markdown table), and the dead-schema-token guard was deleted outright,
-because the prompt no longer names a single kind or component type for a drift to
+properties, and the list-of-dict rules — moved out of prose and into a typed tool input
+schema, where a provider could enforce it instead of a model having to remember it. What
+replaced it was a short ``<surfaces>`` block carrying only WHEN to surface: judgement a
+schema cannot express. The dead-schema-token guard was deleted outright at the same time,
+because the prompt no longer named a single kind or component type for a drift to
 re-introduce.
+
+It was re-baselined a seventh time when model-authored UI was removed entirely. There is no
+longer a tool for the model to draw a card with, so the ``<surfaces>`` block and the two
+surface title/subtitle length rules had nothing left to govern and were deleted. What
+remains is the voice alone: how to speak, not what to draw.
 
 To re-baseline intentionally, recompute with:
     uv run python -c "from src.orchestrator.prompts import PRESENTER_PROMPT; \\
@@ -75,10 +77,11 @@ from src.orchestrator.prompts import PRESENTER_PROMPT, PRESENTER_VOICE
 # again for the Muldro product rebrand (name substitution only), again for the surface-kind
 # guidance correction (`message` offered; `run`/`prepared_work`/`plan` forbidden), again
 # for the positional Table.rows shape (`{"cells": [...]}` replacing rows keyed by column key),
-# again for EntityCard.attributes becoming a list of `{"key", "value"}` pairs, and again for
-# the deletion of `<surface_generation>` — the taxonomy moved out of prose and into the
-# `render_surface` tool schema, leaving only the WHEN-to-surface judgement behind.
-_PRESENTER_PROMPT_GOLDEN_SHA256 = "15dde7dd812c77adbda06ffdaafa1ff9775282a5aa30f3c0681e7bd854ece575"
+# again for EntityCard.attributes becoming a list of `{"key", "value"}` pairs, again for the
+# deletion of `<surface_generation>`, and again for the removal of model-authored UI — with
+# no tool left to draw a card, the `<surfaces>` block and its two length rules governed
+# nothing and were deleted.
+_PRESENTER_PROMPT_GOLDEN_SHA256 = "6ecd297907da9bf15d162178a95d403434ab1e7665e906ce9fd79049f8c9a7cd"
 
 
 def test_presenter_prompt_matches_golden_hash():
@@ -93,10 +96,10 @@ def test_presenter_prompt_matches_golden_hash():
 
 def test_presenter_voice_is_substring_of_presenter_prompt():
     """The extracted fragment must be the exact contiguous block still embedded in
-    PRESENTER_PROMPT (rules + when-to-surface guidance)."""
+    PRESENTER_PROMPT (the formatting rules)."""
     assert PRESENTER_VOICE in PRESENTER_PROMPT
     # The fragment is the reusable voice, NOT the Presenter-specific role or examples.
     assert PRESENTER_VOICE.startswith("<rules>")
-    assert PRESENTER_VOICE.endswith("</surfaces>")
+    assert PRESENTER_VOICE.endswith("</rules>")
     assert "<role>" not in PRESENTER_VOICE
     assert "<examples>" not in PRESENTER_VOICE

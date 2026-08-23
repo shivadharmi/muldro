@@ -27,8 +27,17 @@ function AuthGate({ children }: { children: ReactNode }) {
   const setMobileOpen = (open: boolean) => setMobileOpenFor(open ? pathname : null);
 
   const isPublic = PUBLIC_ROUTES.some((r) => pathname.startsWith(r));
-  const hasAccess =
-    isLoading || isAuthenticated || !process.env.NEXT_PUBLIC_REQUIRE_AUTH;
+  // `isLoading` is the pre-hydration state, not an authenticated one: the
+  // token lives in localStorage and cannot be read during SSR, so a redirect
+  // before hydration would bounce every signed-in reader to /login.
+  //
+  // There is deliberately no opt-out here. This read used to end in
+  // `|| !process.env.NEXT_PUBLIC_REQUIRE_AUTH`, and that variable was set
+  // nowhere in the repo — no env file, no compose file, no Dockerfile — so it
+  // was permanently `undefined`, `!undefined` was permanently true, and the
+  // gate had never once refused anyone. Signing out cleared the token and left
+  // the reader looking at the full workspace.
+  const hasAccess = isLoading || isAuthenticated;
 
   useEffect(() => {
     if (!isPublic && !hasAccess) {

@@ -10,9 +10,9 @@ import { MarkdownRenderer } from "./markdown-renderer";
 import { AgentTrace, type AgentStep } from "./agent-trace";
 import { ChatTodos } from "./chat-todos";
 import { todosFromToolCall, type Todo } from "@/lib/todos";
-import { StepList } from "@/components/a2ui/components/step-list";
-import { InlineApprovalCard } from "@/components/a2ui/components/inline-approval";
-import type { ApprovalContext, StepState } from "@/lib/a2ui-types";
+import { StepList } from "@/components/execution/step-list";
+import { InlineApprovalCard } from "@/components/execution/inline-approval";
+import type { ApprovalContext, StepState } from "@/lib/types/execution";
 
 interface ChatMessage {
   id: string;
@@ -59,7 +59,6 @@ interface ChatPanelProps {
   initialMessages?: ConversationMessage[];
   onConversationCreated?: (id: string) => void;
   onMessageSent?: () => void;
-  onSurface?: (surface: { id: string; children: unknown[]; metadata: Record<string, unknown> }) => void;
 }
 
 function backendMessagesToChat(messages: ConversationMessage[]): ChatMessage[] {
@@ -194,7 +193,6 @@ export function ChatPanel({
   initialMessages,
   onConversationCreated,
   onMessageSent,
-  onSurface,
 }: ChatPanelProps) {
   // Restore messages from cache on mount, fall back to initialMessages
   const [messages, setMessages] = useState<ChatMessage[]>(() => {
@@ -421,16 +419,6 @@ export function ChatPanel({
         }));
         break;
       }
-
-      case "surface":
-        if (onSurface && event.id && event.metadata) {
-          onSurface({
-            id: event.id,
-            children: event.children ?? [],
-            metadata: event.metadata,
-          });
-        }
-        break;
 
       case "tool_call": {
         // P3a: `write_todos` is the lead's plan channel — render it as an inline checklist
@@ -660,7 +648,7 @@ function AssistantMessage({
 
   return (
     <div
-      className={`flex justify-start cursor-pointer transition-all ${isFocused ? "ring-1 ring-accent-primary/40 rounded-[var(--radius-lg)]" : ""}`}
+      className={`flex justify-start cursor-pointer transition-all ${isFocused ? "ring-1 ring-j-primary/40 rounded-[var(--radius-lg)]" : ""}`}
       onClick={handleFocus}
     >
       <div className="max-w-[95%] w-full space-y-2">

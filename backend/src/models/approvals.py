@@ -6,6 +6,13 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from src.models.base import Base, TimestampMixin
 
+# ``Approval.approval_type`` for a write that was RECORDED rather than executed, because
+# no human was reachable to review it. Defined with the model rather than beside the gate
+# that writes it: the approval factory, the two gates, the review queue and the briefing
+# all key on this one value, and the bottom layer is the only place all of them can import
+# from without a cycle.
+PREPARED_APPROVAL_TYPE = "prepared_action"
+
 
 class Approval(Base, TimestampMixin):
     __tablename__ = "approvals"

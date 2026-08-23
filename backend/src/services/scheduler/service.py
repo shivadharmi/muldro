@@ -11,6 +11,7 @@ from src.services.scheduler.background_tasks_tick import BackgroundTasksTickMixi
 from src.services.scheduler.checkpoint_reaper_tick import CheckpointReaperTickMixin
 from src.services.scheduler.deferred_verification_tick import DeferredVerificationTickMixin
 from src.services.scheduler.dlq_tick import DlqTickMixin
+from src.services.scheduler.filter_proposal_tick import FilterProposalTickMixin
 from src.services.scheduler.lifecycle_tick import LifecycleTickMixin
 from src.services.scheduler.notification_tick import NotificationTickMixin
 from src.services.scheduler.perception_tick import PerceptionTickMixin
@@ -28,6 +29,7 @@ class SchedulerLoop(
     NotificationTickMixin,
     RunHealthTickMixin,
     PersonaTickMixin,
+    FilterProposalTickMixin,
     ScheduleDispatchMixin,
     WebhookRenewalTickMixin,
     DeferredVerificationTickMixin,

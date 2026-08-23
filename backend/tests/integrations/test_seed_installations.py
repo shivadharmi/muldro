@@ -34,9 +34,21 @@ def test_http_schemas_not_cleared_on_seed():
     assert "_clear_stale_tool_schemas(db, server_name, workspace_id)" not in src
 
 
+def _stdio_installations() -> list[dict]:
+    """Every seeded installation still launched as a local child process.
+
+    Derived rather than named: a provider that migrates to the gateway loses its
+    `args` entirely, and a hardcoded name list turns that success into a
+    TypeError on `None`. What must stay true is a property of whatever remains
+    stdio, not of any particular brand.
+    """
+    return [i for i in _DEFAULT_INSTALLATIONS if i["transport"] == "stdio" and i.get("args")]
+
+
 def test_npx_servers_are_version_pinned():
-    for name in ("slack", "notion"):
-        inst = _by_name(name)
+    stdio = _stdio_installations()
+    for inst in stdio:
+        name = inst["server_name"]
         pkg = next(
             (a for a in inst["args"] if not a.startswith("-") and "@" in a),
             None,
@@ -49,7 +61,7 @@ def test_npx_servers_are_version_pinned():
 
 
 def test_migrated_installations_declare_platform_jwt():
-    for name in ("google-workspace", "github"):
+    for name in ("google-workspace", "github", "notion"):
         inst = _by_name(name)
         assert inst["auth_provider"] == "platform_jwt"
         assert inst["transport"] == "streamable-http"
@@ -64,5 +76,35 @@ def test_migrated_installations_carry_no_native_transport_config():
 
 
 def test_unmigrated_installations_keep_native_transport():
+    """Slack is the last native installation, and only because OC lacks a client.
+
+    Atlassian left this test when it migrated: its remote_url addressed
+    Atlassian's own Rovo MCP server, which the gateway replaces. Slack cannot
+    follow until a Slack OAuth app exists — MULDRO_SLACK_OAUTH_CLIENT_ID has no
+    setting and no value, and adding slack to PROVIDER_REGISTRY without one
+    makes register_gateway_oauth_configs abort startup.
+    """
     assert _by_name("slack")["command"] == "npx"
-    assert _by_name("atlassian")["remote_url"] == "https://mcp.atlassian.com/v1/mcp"
+    assert _by_name("slack")["transport"] == "stdio"
+
+
+def test_every_seeded_field_the_installer_writes_is_also_synced():
+    """A seed field that is created but never updated silently does not ship.
+
+    `display_name` was exactly that: the Atlassian card kept advertising
+    "Atlassian (Jira + Confluence)" after Confluence was found unservable,
+    because the re-seed only synced transport/command/args/auth/scopes/env. The
+    row was created from the seed and then frozen against it.
+    """
+    src = inspect.getsource(seed_mod.seed_installations)
+    for field in (
+        "display_name",
+        "transport",
+        "remote_url",
+        "command",
+        "args",
+        "auth_provider",
+        "scopes_granted",
+        "env_template",
+    ):
+        assert f"inst.{field} = " in src, f"{field} is created from the seed but never synced"

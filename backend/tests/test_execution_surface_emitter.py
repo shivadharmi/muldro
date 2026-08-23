@@ -1,15 +1,14 @@
 """Characterization tests for the surface/event emission cluster.
 
 These freeze the observable behavior of the emission methods
-(``_emit_event``, ``_publish_progress``, ``_emit_surface_update``,
-``_emit_summary_surface``) BEFORE the SurfaceEmitter collaborator extraction
-(SVC-P1-3). They drive the methods through the GraphExecutor hub so they remain
-valid both before extraction (methods live on the hub) and after (hub forwards
-to the collaborator). They must stay green across the structural change.
+(``_emit_event``, ``_publish_progress``, ``_emit_surface_update``) BEFORE the
+SurfaceEmitter collaborator extraction (SVC-P1-3). They drive the methods
+through the GraphExecutor hub so they remain valid both before extraction
+(methods live on the hub) and after (hub forwards to the collaborator). They
+must stay green across the structural change.
 """
 
 import json
-import types
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -108,72 +107,6 @@ class TestEmitEventProgress:
         executor = _make_executor(redis_mock=redis, event_bus=event_bus)
 
         await executor._emit_event("memory.updated", "usr_1", {"memory_id": "mem_001"})
-
-        redis.publish.assert_not_called()
-
-
-class TestEmitSummarySurface:
-    def _make_db_factory(self):
-        """A db_factory whose async context manager yields a db supporting the
-        execute/add/commit calls used by _emit_summary_surface."""
-        step_result = MagicMock()
-        step_result.scalars.return_value.all.return_value = []
-        run_result = MagicMock()
-        run_result.scalar_one_or_none.return_value = None
-
-        db = AsyncMock()
-        db.execute = AsyncMock(side_effect=[step_result, run_result])
-        db.add = MagicMock()
-        db.commit = AsyncMock()
-
-        cm = MagicMock()
-        cm.__aenter__ = AsyncMock(return_value=db)
-        cm.__aexit__ = AsyncMock(return_value=False)
-        return MagicMock(return_value=cm), db
-
-    async def test_publishes_summary_surface_to_workspace_feed(self):
-        redis = AsyncMock()
-        db_factory, _db = self._make_db_factory()
-        executor = _make_executor(redis_mock=redis, db_factory=db_factory)
-
-        run = types.SimpleNamespace(
-            run_id="run_777",
-            user_id="usr_5",
-            workspace_id="ws_1",
-            status="completed",
-            error=None,
-            input_tokens=100,
-            output_tokens=50,
-            cost_usd=0.01,
-        )
-
-        await executor._emit_summary_surface(run, "run_surface_777")
-
-        # A "surface" message (kind=summary) is published to the a2ui feed.
-        assert redis.publish.await_count >= 1
-        channel, raw = redis.publish.call_args.args
-        assert channel == "muldro:a2ui:usr_5"
-        payload = json.loads(raw)
-        assert payload["type"] == "surface"
-        assert payload["surface"]["kind"] == "summary"
-        assert payload["surface"]["source_run_id"] == "run_777"
-
-    async def test_no_op_without_db_factory(self):
-        redis = AsyncMock()
-        executor = _make_executor(redis_mock=redis, db_factory=None)
-
-        run = types.SimpleNamespace(
-            run_id="run_888",
-            user_id="usr_6",
-            workspace_id="ws_2",
-            status="completed",
-            error=None,
-            input_tokens=0,
-            output_tokens=0,
-            cost_usd=0.0,
-        )
-
-        await executor._emit_summary_surface(run, "run_surface_888")
 
         redis.publish.assert_not_called()
 

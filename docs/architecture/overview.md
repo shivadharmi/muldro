@@ -91,7 +91,7 @@ These six are the **autonomous** path's cast: `GraphExecutor` routes each plan s
 | **Librarian** | balanced | Extract entities, update world model | `entities`, `relationships`, `memories` | update_entity, search |
 | **Planner** | reasoning | Determine intent, produce capability-based plans (PlanOutput) | `plans`, `plan_tasks` | plan_command, get_active_plans, search, discover_capabilities |
 | **Executor** | balanced | Execute approved plans via tools, scoped to each step's capability | `task_runs`, `task_steps` | Per-step capability tools (Gmail/Calendar/Slack/GitHub sends, etc.) |
-| **Presenter** | balanced | Generate user-facing output | `briefings`, `UI payloads` | get_briefing, search, push_ui_update |
+| **Presenter** | balanced | Generate user-facing output | `briefings` | get_briefing, search, messaging.send |
 | **Persona** | fast | Learn user preferences from interactions | `memories` (preference type) | search, extract_preferences |
 
 > The **Governor** is not a routed sub-agent. It is a deterministic policy service (`services/governor.py`) invoked as an audit-only pre-tool hook — see [Design Decisions](decisions.md#19-single-trustengine-gate).

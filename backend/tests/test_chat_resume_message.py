@@ -3,19 +3,16 @@
 The processor-layer wrapper that drives the invoker's ``resume_deep_lead`` (P2.2a) and
 produces the CoreEvent stream the resume HTTP endpoint (a later task) serves. It is the
 missing owner the bare invoker method cannot be: without it the approved write fires but
-the reply is never persisted (routes_chat persists only on a ``Presentation``) and no
-A2UI surface builds — the exact C-CORR2 failure P1 fixed for the initial turn, un-fixed
-on resume [Corr-C1].
+the reply is never persisted (routes_chat persists only on a ``Presentation``) — the exact
+C-CORR2 failure P1 fixed for the initial turn, un-fixed on resume [Corr-C1].
 
 These pin the continuation semantics:
 
 * **reply persisted** — an approve continuation whose ``resume_deep_lead`` yields
-  text_delta + ``agent_done`` → a ``Presentation(strip_surface_blocks(text))``.
-* **surface built** — the shared completion tail extracts + pushes a surface from the RAW
-  presenter_text; ``RunCompleted.surface_id`` reflects it.
+  text_delta + ``agent_done`` → a ``Presentation`` carrying the lead's text.
 * **chained pause** — a resumed continuation that re-pauses (2nd write) → a typed
-  ``ApprovalRequired`` and STOPS, SKIPPING the completion tail (no ``RunCompleted``, no
-  surface) — while ``finish_trace`` still runs (the ``finally``).
+  ``ApprovalRequired`` and STOPS, SKIPPING the completion tail (no ``RunCompleted``) —
+  while ``finish_trace`` still runs (the ``finally``).
 * **error passthrough** — ``resume_deep_lead`` refuses (bad decision / guard failure) →
   the client-safe error frame passes through, no tail, ``finish_trace`` still runs.
 * **trace finished** — ``finish_trace`` is awaited on every terminal path.
@@ -27,7 +24,7 @@ model, DB, or Redis.
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -46,8 +43,7 @@ pytestmark = pytest.mark.asyncio
 
 TRACE_ID = "trace_resume"
 # ``resume_message_events`` + its shared completion tail live in the single-lead mixin
-# (P2.2c). The surface seams (``strip_surface_blocks`` / ``extract_surface_spec``) resolve
-# in THAT module's namespace, so patches target it.
+# (P2.2c), so patches target THAT module's namespace.
 _MOD = "src.orchestrator.chat_single_lead"
 
 
@@ -58,11 +54,10 @@ class _Recorder:
         self.resume_calls: list[dict] = []
 
 
-def _make_resume_chat(*, frames: list[dict], surface_id: str | None = None):
+def _make_resume_chat(*, frames: list[dict]):
     """Construct a ChatProcessor with every collaborator the resume path touches mocked.
 
-    ``frames`` is the scripted SSE stream the fake ``resume_deep_lead`` yields. ``surface_id``
-    is what ``push_presenter_surface`` returns (None = no surface built).
+    ``frames`` is the scripted SSE stream the fake ``resume_deep_lead`` yields.
     """
     from src.orchestrator.chat_processor import ChatProcessor
 
@@ -86,9 +81,6 @@ def _make_resume_chat(*, frames: list[dict], surface_id: str | None = None):
 
     chat._events = MagicMock()
     chat._events.emit_runtime_event = AsyncMock()
-
-    chat._surfaces = MagicMock()
-    chat._surfaces.push_presenter_surface = AsyncMock(return_value=surface_id)
 
     # Default: no interaction-learner wired, so the completion tail's ``run_learner=True`` (A1)
     # no-ops (``if run_learner and self._interaction_learner``). The A1 parity test below wires a
@@ -138,7 +130,7 @@ def _sse(events: list) -> list[dict]:
 
 async def test_resume_reply_persisted_as_presentation():
     """An approve continuation (text_delta + agent_done) yields a Presentation carrying the
-    stripped reply — the frame routes_chat persists so the chat bubble is not empty."""
+    reply — the frame routes_chat persists so the chat bubble is not empty."""
     frames = [
         {"event": "agent_start", "agent": "lead", "model": "m"},
         {"event": "text_delta", "agent": "lead", "text": "All "},
@@ -146,8 +138,7 @@ async def test_resume_reply_persisted_as_presentation():
         {"event": "agent_done", "agent": "lead", "text": "All done."},
     ]
     chat, rec = _make_resume_chat(frames=frames)
-    with patch(f"{_MOD}.strip_surface_blocks", new=lambda t: f"STRIPPED::{t}"):
-        events = await _drive(chat)
+    events = await _drive(chat)
 
     # resume_deep_lead was driven with the forwarded decision/ids.
     assert rec.resume_calls == [
@@ -159,14 +150,14 @@ async def test_resume_reply_persisted_as_presentation():
             "workspace_id": "ws_1",
         }
     ]
-    # Exactly one Presentation, carrying the STRIPPED reply.
+    # Exactly one Presentation, carrying the lead's reply.
     presentations = [e for e in events if isinstance(e, Presentation)]
     assert len(presentations) == 1
-    assert presentations[0].text == "STRIPPED::All done."
+    assert presentations[0].text == "All done."
     # Terminal RunCompleted still closes the turn.
     assert isinstance(events[-1], RunCompleted)
     # The SSE view carries the `response` frame routes_chat persists on.
-    assert {"event": "response", "text": "STRIPPED::All done."} in _sse(events)
+    assert {"event": "response", "text": "All done."} in _sse(events)
 
 
 async def test_resume_reject_reason_is_forwarded():
@@ -190,58 +181,16 @@ async def test_resume_first_event_is_trace_started():
     assert events[0].trace_id == TRACE_ID
 
 
-# ── surface built on resume ───────────────────────────────────────────────────────
+# ── no surface is built on resume ─────────────────────────────────────────────────
 
 
-async def test_resume_surface_built_from_raw_presenter_text():
-    """The completion tail extracts a surface from the RAW presenter_text and pushes it;
-    RunCompleted.surface_id reflects the pushed surface."""
+async def test_resume_run_completed_carries_no_surface():
+    """The completion tail builds nothing from the reply text: no view is parsed back out
+    of what the model wrote, so ``RunCompleted.surface_id`` is always None on a resume."""
     frames = [{"event": "agent_done", "agent": "lead", "text": "REPLY_RAW"}]
-    chat, _ = _make_resume_chat(frames=frames, surface_id="ui_surf_1")
-
-    spec = MagicMock()
-    spec.should_surface = True
-
-    with (
-        patch(f"{_MOD}.strip_surface_blocks", new=lambda t: f"STRIPPED::{t}"),
-        patch(f"{_MOD}.extract_surface_spec", new=MagicMock(return_value=spec)),
-    ):
-        events = await _drive(chat)
-
-    # push_presenter_surface was awaited with the RAW presenter_text (not the stripped reply).
-    push = chat._surfaces.push_presenter_surface
-    push.assert_awaited_once()
-    assert push.await_args.kwargs["response_text"] == "REPLY_RAW"
-    assert push.await_args.kwargs["run_id"] is None
-    # RunCompleted carries the surface id.
-    completed = [e for e in events if isinstance(e, RunCompleted)]
-    assert len(completed) == 1
-    assert completed[0].surface_id == "ui_surf_1"
-
-
-async def test_resume_no_surface_when_spec_should_not_surface():
-    frames = [{"event": "agent_done", "agent": "lead", "text": "REPLY"}]
     chat, _ = _make_resume_chat(frames=frames)
 
-    spec = MagicMock()
-    spec.should_surface = False
-    with patch(f"{_MOD}.extract_surface_spec", new=MagicMock(return_value=spec)):
-        events = await _drive(chat)
-
-    chat._surfaces.push_presenter_surface.assert_not_awaited()
-    assert [e for e in events if isinstance(e, RunCompleted)][0].surface_id is None
-
-
-async def test_resume_surface_push_failure_is_swallowed():
-    """A surface push exception is logged, not raised — the turn still completes."""
-    frames = [{"event": "agent_done", "agent": "lead", "text": "REPLY"}]
-    chat, _ = _make_resume_chat(frames=frames)
-    chat._surfaces.push_presenter_surface = AsyncMock(side_effect=RuntimeError("boom"))
-
-    spec = MagicMock()
-    spec.should_surface = True
-    with patch(f"{_MOD}.extract_surface_spec", new=MagicMock(return_value=spec)):
-        events = await _drive(chat)
+    events = await _drive(chat)
 
     completed = [e for e in events if isinstance(e, RunCompleted)]
     assert len(completed) == 1
@@ -274,8 +223,7 @@ async def test_resume_fires_interaction_learner_with_original_user_message():
     learner.learn = MagicMock()
     chat._interaction_learner = learner
 
-    with patch(f"{_MOD}.strip_surface_blocks", new=lambda t: t):
-        events = await _drive(chat)
+    events = await _drive(chat)
 
     # The turn completed (so the tail — and its learner spawn — ran).
     assert isinstance(events[-1], RunCompleted)
@@ -347,8 +295,6 @@ async def test_resume_chained_pause_suspends_and_skips_tail():
     assert not any(isinstance(e, Presentation) for e in events)
     assert not any(isinstance(e, RunCompleted) for e in events)
     assert "SHOULD_NOT_APPEAR" not in "".join(str(e) for e in events)
-    # The completion tail (surface push) never ran on a suspended turn.
-    chat._surfaces.push_presenter_surface.assert_not_awaited()
     # finish_trace STILL ran (the finally survives the early return).
     chat._trace_manager.finish_trace.assert_awaited_once()
 
@@ -393,7 +339,6 @@ async def test_resume_error_frame_passes_through_and_skips_tail():
     assert stream_events[0].payload == {"event": "error", "message": "approval not resumable"}
     # No tail: nothing completed.
     assert not any(isinstance(e, (Presentation, RunCompleted)) for e in events)
-    chat._surfaces.push_presenter_surface.assert_not_awaited()
     # finish_trace STILL ran.
     chat._trace_manager.finish_trace.assert_awaited_once()
     # SSE view keeps the error frame intact.

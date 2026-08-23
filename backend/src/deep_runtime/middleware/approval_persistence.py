@@ -28,12 +28,12 @@ the two gates (``permission_gate`` alone carries ``chat`` / ``permission_mode`` 
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
-from src.models.approvals import Approval
+from src.models.approvals import PREPARED_APPROVAL_TYPE, Approval
 from src.services.approval_service import create_approval
 
 # Cap the persisted ContextPack echoed onto the Approval's artifact_refs. artifact_refs is
@@ -143,27 +143,23 @@ def build_legibility_refs(
     return refs
 
 
-# ``Approval.approval_type`` for a write that was recorded rather than executed. The review
-# queue finds these rows by this exact value, so it is a constant, not an inline literal.
-PREPARED_APPROVAL_TYPE = "prepared_action"
-
-
-def prepared_approval_overrides(
-    prepared: bool, ttl_days: int
-) -> tuple[str | None, datetime | None]:
+def prepared_approval_overrides(prepared: bool) -> tuple[str | None, datetime | None]:
     """Return the ``(approval_type, expires_at)`` overrides for ``_get_or_create_approval``.
 
     ``(None, None)`` when the write is being interrupted rather than prepared — which
     ``_get_or_create_approval`` reads as "keep today's defaults", so the live-approval path is
     untouched. Returning a pair rather than mutating keeps the two gates' call sites symmetric
     and makes the prepared/live distinction one decision instead of two scattered conditionals.
+
+    A prepared row's ``expires_at`` is ``None`` and STAYS None: ``create_approval`` exempts
+    ``PREPARED_APPROVAL_TYPE`` from its 24h default (``NON_EXPIRING_TYPES``), because staged
+    work waits for a human and a timer is not one. Do not reintroduce a TTL here — the None
+    returned below would otherwise be read as "use the default" and give staged work a
+    SHORTER life than the run-linked approvals it is supposed to outlive.
     """
     if not prepared:
         return (None, None)
-    return (
-        PREPARED_APPROVAL_TYPE,
-        datetime.now(timezone.utc) + timedelta(days=ttl_days),
-    )
+    return (PREPARED_APPROVAL_TYPE, None)
 
 
 async def _find_existing_approval(workspace_id, thread_id, tool_call_id, db_factory):

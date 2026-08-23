@@ -9,9 +9,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
-
-from src.ui.contracts import A2UIComponent, SurfaceKind
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class AgentEnvelope(BaseModel):
@@ -218,7 +216,7 @@ class PolicyDecision(BaseModel):
     rejected_count: int = 0
 
 
-# ── Realtime / A2UI contracts ────────────────────────────────────
+# ── Realtime contracts ───────────────────────────────────────────
 
 
 class RealtimeEventPayload(BaseModel):
@@ -232,123 +230,6 @@ class RealtimeEventPayload(BaseModel):
     payload: dict[str, Any] = Field(default_factory=dict)
     metadata: dict[str, Any] = Field(default_factory=dict)
     created_at: str = ""
-
-
-class WorkspaceSurfacePush(BaseModel):
-    """Full surface push payload sent via WebSocket / Redis Pub/Sub.
-
-    Two-layer model: ``preview`` drives the workspace grid card,
-    ``detail_config`` tells the frontend which tabs to show in the
-    detail modal and where to fetch each tab's content.
-
-    The old ``children`` + ``WorkspaceSurfaceMetadata`` shape is removed —
-    grid cards render from SurfacePreview data, not A2UI component trees.
-    """
-
-    model_config = ConfigDict(extra="ignore", frozen=True)
-
-    type: Literal["surface"] = "surface"
-    id: str
-    kind: SurfaceKind
-    preview: Any  # SurfacePreview — imported at runtime to avoid circular deps
-    detail_config: Any | None = None  # DetailConfig — same reason
-    decision: str | None = None
-    source_run_id: str | None = None
-    response_preview: str | None = None
-    created_at: str = ""
-    ttl_hours: int = 24
-    # Merged from REST-only path
-    trust_context: dict[str, str] | None = None
-    insight_data: dict | None = None
-    phase: str | None = None
-    steps: list[dict] | None = None
-    current_step: str | None = None
-    progress: str | None = None
-    approval: dict | None = None
-    results: dict | None = None
-    surface_data: dict | None = None
-
-
-class SurfaceDataPayload(BaseModel):
-    """Presenter-authored rich content for a surface's detail view.
-
-    Each section is a full A2UIComponent tree — the frontend dispatches through
-    the existing A2UIRenderer. The A2UIComponent.type field is the discriminator
-    that routes to per-type property validation (see src/ui/component_properties.py).
-    """
-
-    model_config = ConfigDict(extra="ignore", frozen=True)
-
-    sections: list[A2UIComponent] = Field(default_factory=list)
-
-
-class SuggestedActionRef(BaseModel):
-    """Reference to a suggested action stored in the surface payload."""
-
-    model_config = ConfigDict(extra="ignore", frozen=True)
-
-    description: str
-    capability: str
-    action_input: dict[str, Any] = Field(default_factory=dict)
-    action_preview: str = ""
-
-
-class InsightSurfaceData(BaseModel):
-    """Data payload for proactive_insight surfaces, stored in UISurface.payload."""
-
-    model_config = ConfigDict(extra="ignore", frozen=True)
-
-    signal_source: str
-    signal_category: str = ""
-    signal_summary: str
-    relevance_score: float = 0.0
-    relevance_reasoning: str = ""
-    related_goals: list[str] = Field(default_factory=list)
-    suggested_actions: list[SuggestedActionRef] = Field(default_factory=list)
-    dismiss_available: bool = True
-    # Human-readable observation evidence, e.g. "42 days observed" / "4 recurrences".
-    # Rendered under the insight headline so the user sees why it surfaced.
-    evidence: str | None = None
-
-
-class SurfaceSpec(BaseModel):
-    """Surface specification produced by the Presenter agent.
-
-    The Presenter decides IF a surface should be created, what KIND it is,
-    and what PREVIEW data to show. Parsed from the Presenter's JSON output.
-    """
-
-    model_config = ConfigDict(extra="ignore", frozen=True)
-
-    should_surface: bool = False
-    kind: SurfaceKind
-    title: str
-    subtitle: str | None = None
-    status: (
-        Literal[
-            "pending",
-            "running",
-            "completed",
-            "failed",
-            "awaiting_approval",
-            "cancelled",
-            "proposal",
-        ]
-        | None
-    ) = None
-    priority: Literal["low", "medium", "high", "critical"] | None = None
-    metrics: list[dict] = Field(default_factory=list)
-    tags: list[str] = Field(default_factory=list)
-
-    @field_validator("title")
-    @classmethod
-    def _cap_title(cls, v: str) -> str:
-        return v[:80]
-
-    @field_validator("subtitle")
-    @classmethod
-    def _cap_subtitle(cls, v: str | None) -> str | None:
-        return v[:120] if v else None
 
 
 # ── Execution surface update contracts ────────────────────────────
@@ -393,9 +274,8 @@ class StepState(BaseModel):
 #
 # ``completed_unverified``/``partially_completed`` are passed through unchanged —
 # the verification nuance now reaches the UI (frontend step-presentation.tsx renders
-# ✓? for completed_unverified and ⚠ for partially_completed; backend ui/units.py
-# step_list mirrors the same glyphs for the persisted run-detail Steps tab), so the
-# backend no longer collapses them into completed/failed.
+# ✓? for completed_unverified and ⚠ for partially_completed), so the backend no
+# longer collapses them into completed/failed.
 _STEP_STATUS_TO_UI: dict[str, str] = {
     "pending": "pending",
     "ready": "pending",
@@ -459,11 +339,22 @@ class ResultSummary(BaseModel):
 
 
 class SurfaceUpdate(BaseModel):
-    """Live execution progress pushed to workspace surfaces.
+    """Live execution state for one autonomous run.
 
-    Published to Redis channel muldro:a2ui:{user_id} with
-    type='surface_update'. The frontend applies incremental
-    updates to the matching surface_id.
+    NOT a view-layer contract. This is the AUTONOMOUS path's phase machine —
+    emitted from graph_executor / dag_runner / trust_gate via
+    execution_surface_emitter, and never by the deep chat path, which emits no
+    phases at all. ``frontend/src/app/history/page.tsx`` renders it as the live
+    rows of the run history, so deleting this model would break /history.
+
+    Published to Redis channel muldro:a2ui:{user_id} with type='surface_update';
+    the frontend merges each frame into the run it names.
+
+    ``surface_id`` keeps its name even though it carries the RUN id (see
+    execution_surface_emitter's ``run_meta = {"run_id": surface_id}``). The name
+    is wire vocabulary the backend publishes and the frontend reads under; a
+    rename on one side alone would leave the two disagreeing about the same
+    message.
     """
 
     model_config = ConfigDict(extra="ignore", frozen=True)

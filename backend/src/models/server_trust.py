@@ -12,7 +12,7 @@ class ServerTrustRecord(Base, TimestampMixin):
     """Trust record for an MCP server.
 
     Trust tiers:
-      T0 — internal (FastMCP intelligence/communication servers)
+      T0 — internal (the FastMCP servers Muldro owns)
       T1 — official MCP (Anthropic-published or org-verified)
       T2 — org-approved (admin-allowlisted third-party)
       T3 — user-added (public MCP servers, highest restriction)

@@ -52,11 +52,43 @@ class SchedulerBase:
         """Signal the scheduler to stop."""
         self._running = False
 
+    def _resolve_notifier(self, db):
+        """Resolve a Notifier for a tick that needs to reach the user.
+
+        Preferred: reuse the orchestrator's already-wired notifier (built with a live
+        redis client, so hold-for-briefing + rate-limiting actually work). Fallback:
+        build one from ``settings.redis_url`` so ``_hold_for_briefing`` genuinely
+        buffers. Returns None only when no redis is reachable at all — every caller
+        treats that as "skip the message", never as "skip the work".
+
+        Shared on the base rather than owned by one tick mixin: several ticks need the
+        same three-step resolution, and two copies would drift the moment the preferred
+        source moves.
+        """
+        services = getattr(self._orchestrator, "_services", None) if self._orchestrator else None
+        wired = getattr(services, "notifier", None) if services else None
+        if wired is not None:
+            return wired
+
+        try:
+            import redis.asyncio as aioredis
+
+            from src.services.notifier import Notifier
+            from src.services.surface_registry import SurfaceRegistry
+
+            redis = aioredis.from_url(self._settings.redis_url, decode_responses=True)
+            return Notifier(surface_registry=SurfaceRegistry(redis=redis), redis=redis, db=db)
+        except Exception:
+            logger.debug("Notifier unavailable for this tick", exc_info=True)
+            return None
+
     async def _subtick_timeout(self) -> float:
         """Per-sub-tick wall-clock budget. Each sub-tick uses its own DB
         session, so a timed-out tick's session is torn down by its own
         ``async with`` context — nothing leaks across the boundary."""
-        return float(getattr(self._settings, "scheduler_subtick_timeout_s", 90.0))
+        # The fallback must match Settings' own default, or a settings object
+        # that predates the field silently reinstates the old ceiling.
+        return float(getattr(self._settings, "scheduler_subtick_timeout_s", 300.0))
 
     async def _run_subtick(self, name: str, coro) -> bool:
         """Run a single sub-tick under a wall-clock timeout.
@@ -125,6 +157,11 @@ class SchedulerBase:
 
         # 4b. Persona batch — every 10th tick (~5 min)
         await self._run_subtick("persona_batch", self._tick_persona_batch())
+
+        # 4b-ii. Filter proposals — every 120th tick (~1 hour). Evidence is a
+        # fortnight of triage verdicts and moves slowly; the proposal itself is
+        # throttled to one open card per workspace.
+        await self._run_subtick("filter_proposals", self._tick_filter_proposals(factory))
 
         # 4c. Memory consolidation — once daily at ~2 AM UTC
         from datetime import datetime

@@ -1,190 +1,171 @@
-"""Notion connector — polls for page updates. Read-only: writes go through MCP."""
+"""Notion connector — polls page edits through the OpenConnector gateway.
+
+This connector no longer speaks the Notion REST API. It calls ``notion.search``
+through the gateway and inherits envelope handling, pagination and cursor policy
+from :class:`GatewayConnector`. Retiring its native OAuth is what removes the
+last stdio secret on this provider: the ``@notionhq/notion-mcp-server`` process
+it replaced was launched with ``NOTION_TOKEN`` resolved out of the environment,
+leaving the token readable in ``ps aux`` for as long as the child lived.
+
+**The empty query is load-bearing.** ``notion.search`` marks ``query`` required,
+but the live OpenConnector v1.3.5 schema declares it with NO ``minLength`` — so
+``""`` is legal, and Notion reads an empty query as "everything". This is the
+one thing that lets the whole workspace be enumerated through an action built
+for search. (``slack.search_messages`` sets ``minLength: 1`` and therefore
+cannot be driven this way; it needs a real query carrying its own window.)
+
+**Newest-first, not oldest-first — and that is a fix, not a transcription.**
+The native connector sorted ASCENDING and skipped rows at or below the cursor
+client-side, because ``/v1/search`` accepts no ``last_edited_time`` range and
+the watermark had to be enforced locally either way. But oldest-first means
+every poll re-walks the workspace from its very first page, and once the page
+count passes ``MAX_PAGES`` the walk truncates *before* reaching anything new.
+``_resolve_cursor`` then correctly holds the cursor — and the next poll reads
+exactly the same pages. A workspace large enough to truncate would observe
+nothing, for ever, while reporting healthy polls.
+
+Sorting descending inverts that: new edits are on page one, and the walk stops
+at the first row already at or below the watermark. Cost becomes proportional to
+what changed rather than to workspace size, and truncation now means "there are
+more NEW rows than one poll drains" — a real undrained window, which
+``_resolve_cursor`` holds for, so the remainder is picked up next poll instead
+of skipped.
+
+**Deletions do not arrive**, and did not before either: Notion's search omits
+trashed pages rather than tombstoning them, so an archived page is observed only
+as the edit that archived it, if that edit lands inside a polled window.
+"""
 
 import logging
 from datetime import datetime, timezone
 
-from src.connectors.base import BaseConnector, ConnectorHealth, register_connector
-from src.connectors.poll_result import PollErrorClass, PollResult, _classify_http_status
+from src.connectors.base import register_connector
+from src.connectors.gateway_connector import GatewayConnector
+from src.connectors.poll_result import PollResult
 from src.services.event_processor import RawEvent
 
 logger = logging.getLogger(__name__)
 
-NOTION_API = "https://api.notion.com/v1"
-NOTION_HEADERS = {"Notion-Version": "2022-06-28", "Content-Type": "application/json"}
+# Defensive page cap for a single poll. Newest-first means a cap is reached only
+# when more pages of NEW edits exist than one poll drains, so truncation holds
+# the cursor and the remainder arrives next poll — it is a throttle, not a loss.
+MAX_PAGES = 10
 
-# Defensive page cap for a single poll. Notion's /v1/search paginates via
-# ``has_more`` + ``next_cursor``; a misbehaving provider that always returns
-# ``has_more: true`` would otherwise loop forever. On truncation we warn so
-# silent data loss is visible, consistent with the gmail/github connectors.
-MAX_PAGES = 50
+# Pages requested per call. The action's schema allows up to 100.
+PAGE_SIZE = 50
 
-# Map a Notion error-body ``code`` to a PollErrorClass to refine the status-only
-# mapping. /v1/search only filters by object type (NOT a last_edited_time range),
-# so the watermark is enforced client-side via ascending sort + pagination.
-_NOTION_ERROR_CODE_CLASS: dict[str, PollErrorClass] = {
-    "rate_limited": "rate_limited",
-    "unauthorized": "auth_failed",
-    "restricted_resource": "auth_failed",
-    "object_not_found": "permanent",
-}
+# Notion sorts by ``last_edited_time``; ``object: "page"`` drops data sources and
+# databases, which carry no reader-facing edit signal.
+_SORT_NEWEST_FIRST: dict = {"direction": "descending", "timestamp": "last_edited_time"}
+_FILTER_PAGES_ONLY: dict = {"property": "object", "value": "page"}
+
+
+def _parse_edited(row: dict) -> datetime | None:
+    """Parse a row's ``last_edited_time``, or None if it has no usable stamp.
+
+    Returns an aware datetime so every comparison in this module is between two
+    parsed instants. Notion documents this field as RFC 3339 with a "Z" suffix,
+    but the parse is guarded anyway: a malformed stamp must skip one row, not
+    raise out of the poll and fail the whole window.
+    """
+    raw = row.get("last_edited_time")
+    if not isinstance(raw, str) or not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
 
 
 @register_connector("notion")
-class NotionConnector(BaseConnector):
-    """Polls Notion API for recently edited pages. The MCP server is the ONLY write path."""
+class NotionConnector(GatewayConnector):
+    """Polls Notion page edits through the gateway, watermarked on last_edited_time."""
 
-    cursor_type: str = "since_timestamp"
+    cursor_type: str = "timestamp"
+
+    # Cheapest read for the health probe: it takes no ids and no query.
+    READ_ACTION = "notion.list_users"
+    SEARCH_ACTION = "notion.search"
 
     async def poll(self, user_id: str, cursor: str | None, credentials: dict) -> PollResult:
-        """Poll Notion for pages edited since cursor (ISO last_edited_time watermark).
+        """Poll Notion for pages edited since the cursor watermark.
 
-        Sorts ascending and paginates ``has_more``/``next_cursor`` to completion so
-        edits beyond the first page are not missed; advances the cursor to the max
-        processed ``last_edited_time``. Never advances the cursor on any error.
+        ``credentials`` is unused — the credential lives in OpenConnector and the
+        gateway binds it per connection. The parameter stays because
+        ``BaseConnector.poll`` defines it.
         """
-        import httpx
+        watermark = self._sane_rfc3339_cursor(cursor)
 
-        access_token = credentials.get("access_token", "")
-        if not access_token:
-            return PollResult(events=[], cursor=cursor, error_class="auth_failed")
+        def _reached_watermark(rows: list[dict]) -> bool:
+            """True once a page contains an edit we have already seen.
 
-        events: list[RawEvent] = []
-        # Advance the cursor to the MAX last_edited_time across all processed pages —
-        # NOT wall-clock now(). The boundary item may re-appear next poll (cursor is
-        # an inclusive ``<=`` filter below); EventProcessor dedups on the idempotency
-        # key, which now includes last_edited_time so distinct edits stay distinct.
-        max_edited = cursor
-
-        try:
-            async with httpx.AsyncClient() as client:
-                headers = {**NOTION_HEADERS, "Authorization": f"Bearer {access_token}"}
-                start_cursor: str | None = None
-                pages_fetched = 0
-                truncated = False
-
-                while True:
-                    body: dict = {
-                        "sort": {"direction": "ascending", "timestamp": "last_edited_time"},
-                        "filter": {"property": "object", "value": "page"},
-                        "page_size": 50,
-                    }
-                    if start_cursor:
-                        body["start_cursor"] = start_cursor
-
-                    resp = await client.post(
-                        f"{NOTION_API}/search",
-                        json=body,
-                        headers=headers,
-                        timeout=15,
-                    )
-
-                    if resp.status_code != 200:
-                        error_class = self._classify_error_response(resp)
-                        logger.warning(
-                            "Notion search API returned %d (%s) for user %s",
-                            resp.status_code,
-                            error_class,
-                            user_id,
-                        )
-                        # Cursor never advances on error.
-                        return PollResult(events=[], cursor=cursor, error_class=error_class)
-
-                    data = resp.json()
-                    for result in data.get("results", []):
-                        if result.get("object") != "page":
-                            continue
-                        # Skip pages with no usable id: an empty entity_id collapses
-                        # the idempotency key to "notion::<edited>:..." so two id-less
-                        # pages edited at the same instant collide (silent event loss).
-                        if not result.get("id"):
-                            logger.warning(
-                                "Notion search returned a page with no id for user %s; "
-                                "skipping to avoid idempotency-key collision",
-                                user_id,
-                            )
-                            continue
-                        edited = result.get("last_edited_time", "")
-                        if cursor and edited <= cursor:
-                            continue
-                        event = self._normalize_page(result)
-                        if event:
-                            events.append(event)
-                        if edited and (max_edited is None or edited > max_edited):
-                            max_edited = edited
-
-                    pages_fetched += 1
-                    if not data.get("has_more"):
-                        break
-                    start_cursor = data.get("next_cursor")
-                    if not start_cursor:
-                        break
-                    if pages_fetched >= MAX_PAGES:
-                        truncated = True
-                        break
-
-                if truncated:
-                    logger.warning(
-                        "Notion poll truncated at %d pages for user %s; remaining pages "
-                        "were not drained this poll",
-                        MAX_PAGES,
-                        user_id,
-                    )
-
-        except Exception:
-            logger.warning("Notion poll failed for user %s", user_id, exc_info=True)
-            return PollResult(events=[], cursor=cursor, error_class="transient")
-
-        # Advance to the max processed last_edited_time; keep the incoming cursor when
-        # nothing new was seen — never jump forward past unfetched data.
-        new_cursor = max_edited if max_edited is not None else cursor
-
-        logger.info("Notion poll: %d events, cursor %s -> %s", len(events), cursor, new_cursor)
-        return PollResult(events=events, cursor=new_cursor)
-
-    @staticmethod
-    def _classify_error_response(resp) -> PollErrorClass:
-        """Refine the status-only mapping using the Notion error body ``code`` field."""
-        error_class = _classify_http_status(resp.status_code)
-        try:
-            data = resp.json()
-        except Exception:
-            return error_class
-        if isinstance(data, dict) and data.get("object") == "error":
-            refined = _NOTION_ERROR_CODE_CLASS.get(data.get("code", ""))
-            if refined is not None:
-                return refined
-        return error_class
-
-    async def test(self, credentials: dict) -> ConnectorHealth:
-        import httpx
-
-        access_token = credentials.get("access_token", "")
-        try:
-            async with httpx.AsyncClient() as client:
-                resp = await client.get(
-                    f"{NOTION_API}/users/me",
-                    headers={**NOTION_HEADERS, "Authorization": f"Bearer {access_token}"},
-                    timeout=10,
-                )
-                if resp.status_code == 200:
-                    return ConnectorHealth(
-                        provider="notion",
-                        status="healthy",
-                        last_poll_at=datetime.now(timezone.utc),
-                    )
-                return ConnectorHealth(
-                    provider="notion",
-                    status="down",
-                    last_poll_at=None,
-                    error=f"HTTP {resp.status_code}",
-                )
-        except Exception as e:
-            return ConnectorHealth(
-                provider="notion", status="down", last_poll_at=None, error=str(e)
+            Sound only because the sort is descending: the first row at or below
+            the watermark means every later row is too. On an initial sync
+            (no watermark) nothing is already known, so the walk runs to its cap.
+            """
+            if watermark is None:
+                return False
+            return any(
+                (parsed := _parse_edited(row)) is not None and parsed <= watermark for row in rows
             )
 
-    async def get_auth_url(self, scopes: list[str] | None = None) -> str:
-        return "/v1/auth/oauth/notion/authorize"
+        payload: dict = {
+            "query": "",
+            "sort": _SORT_NEWEST_FIRST,
+            "filter": _FILTER_PAGES_ONLY,
+            "pageSize": PAGE_SIZE,
+        }
+
+        walk = await self._walk_pages(
+            self.SEARCH_ACTION,
+            payload,
+            items_key="results",
+            max_pages=MAX_PAGES,
+            page_token_key="startCursor",
+            next_token_key="next_cursor",
+            stop_when=_reached_watermark,
+        )
+        if walk.error_class is not None:
+            return PollResult(events=[], cursor=cursor, error_class=walk.error_class)
+
+        events: list[RawEvent] = []
+        # The cursor is carried as the row's OWN raw string so it round-trips in
+        # Notion's format, while the ordering is decided on the parsed value --
+        # comparing the strings would require both sides to be byte-identical in
+        # precision, which a re-rendered cursor is not (".105Z" vs ".105000Z"
+        # compares as NEWER, so the boundary row is re-emitted every poll).
+        observed_raw: str | None = None
+        observed_at: datetime | None = None
+        for page in walk.pages:
+            for item in page:
+                parsed = _parse_edited(item)
+                if parsed is None:
+                    # Without a usable stamp the row can be neither watermarked
+                    # nor ordered, and emitting it would collide the idempotency
+                    # key with every other stampless row.
+                    logger.warning("Notion row %r has no usable last_edited_time", item.get("id"))
+                    continue
+                if not item.get("id"):
+                    # An empty entity_id collapses the idempotency key, so two
+                    # id-less pages edited in the same instant would dedup into
+                    # one — silent event loss rather than a visible failure.
+                    logger.warning("Notion row has no id; skipping to avoid a key collision")
+                    continue
+                # The stop predicate ends the walk at the first page CONTAINING a
+                # known row, so that page still carries known rows after it.
+                if watermark is not None and parsed <= watermark:
+                    continue
+                event = self._normalize_page(item)
+                if event:
+                    events.append(event)
+                if observed_at is None or parsed > observed_at:
+                    observed_at = parsed
+                    observed_raw = item["last_edited_time"]
+
+        new_cursor = self._resolve_cursor(walk, incoming=cursor, observed=observed_raw)
+        logger.info("Notion poll: %d events, cursor %s -> %s", len(events), cursor, new_cursor)
+        return PollResult(events=events, cursor=new_cursor)
 
     @staticmethod
     def _normalize_page(page: dict) -> RawEvent | None:

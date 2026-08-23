@@ -10,11 +10,22 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
 from ulid import ULID
 
-from src.models.approvals import Approval
+from src.models.approvals import PREPARED_APPROVAL_TYPE, Approval
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_EXPIRY_HOURS = 24
+
+# Approval types that never expire. Staged work is a fully-derived external write the
+# founder has NOT yet seen, and a timer is not a reviewer: dropping it means the action
+# is gone with nobody having decided anything. Run-linked approvals still expire — there
+# a deadline is real, because a run is parked on the answer.
+#
+# The rule lives here rather than at each gate because ``expires_at=None`` already means
+# "use the default" below. A caller trying to express "never" by passing None would get
+# 24 HOURS — four times shorter than the TTL it replaced — so the intent cannot safely be
+# left to callers to spell.
+NON_EXPIRING_TYPES = frozenset({PREPARED_APPROVAL_TYPE})
 
 
 async def create_approval(
@@ -48,7 +59,7 @@ async def create_approval(
 
     approval_id = f"apr_{ULID()}"
 
-    if expires_at is None:
+    if expires_at is None and approval_type not in NON_EXPIRING_TYPES:
         expires_at = datetime.now(timezone.utc) + timedelta(hours=DEFAULT_EXPIRY_HOURS)
 
     approval = Approval(

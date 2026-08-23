@@ -11,6 +11,7 @@ import pytest
 
 from src.services.event_processor import EventProcessor
 from src.services.schedule_seeder import (
+    CONNECTOR_SCHEDULES,
     DEFAULT_SCHEDULES,
     enable_schedules_for_connector,
     seed_default_schedules,
@@ -227,22 +228,55 @@ class TestScheduleSeeder:
         assert "check_slos" in action_types
         assert "heartbeat" in action_types
 
-    def test_default_schedules_have_8_entries(self):
-        assert len(DEFAULT_SCHEDULES) == 8
+    def test_every_pollable_connector_has_an_observe_schedule(self):
+        """The gap that let Notion poll only by accident.
+
+        A connector missing from CONNECTOR_SCHEDULES is not merely unscheduled:
+        enable_schedules_for_connector returns as soon as it has no schedule
+        name to enable, which is BEFORE the PerceptionState upsert at the end.
+        So the source is never provisioned either, and the only reason Notion
+        polled at all was a one-shot initial observation leaving a row behind.
+        """
+        import src.connectors  # noqa: F401  (registers the connectors)
+        from src.connectors.base import CONNECTOR_REGISTRY
+
+        scheduled = {
+            s["action_config"]["source"]
+            for s in DEFAULT_SCHEDULES
+            if s["action_type"] == "observe_source"
+        }
+        for source in CONNECTOR_REGISTRY:
+            assert source in scheduled, f"connector {source!r} has no observe_ schedule"
+            assert source in CONNECTOR_SCHEDULES, (
+                f"connector {source!r} is absent from CONNECTOR_SCHEDULES, so authorizing "
+                "it enables nothing and provisions no PerceptionState"
+            )
+
+    def test_connector_schedules_name_real_schedules(self):
+        """A typo here disables silently — the name simply matches no row."""
+        known = {s["name"] for s in DEFAULT_SCHEDULES}
+        for connector, names in CONNECTOR_SCHEDULES.items():
+            for name in names:
+                assert name in known, f"{connector} maps to unknown schedule {name!r}"
 
     def test_morning_briefing_at_7am(self):
         briefing = next(s for s in DEFAULT_SCHEDULES if s["name"] == "morning_briefing")
         assert briefing["cron_expr"] == "0 7 * * *"
         assert briefing["priority"] == "high"
 
-    def test_observation_schedules_cover_4_sources(self):
+    def test_observation_schedules_name_real_perception_sources(self):
+        """An observe_ schedule for an unknown source would poll nothing forever."""
+        from src.orchestrator.intent_classifier import VALID_PERCEPTION_SOURCES
+
         observe = [s for s in DEFAULT_SCHEDULES if s["action_type"] == "observe_source"]
-        sources = {s["action_config"]["source"] for s in observe}
-        assert sources == {"gmail", "calendar", "slack", "github"}
+        assert observe
+        for schedule in observe:
+            source = schedule["action_config"]["source"]
+            assert source in VALID_PERCEPTION_SOURCES, f"unknown perception source {source!r}"
 
     @pytest.mark.asyncio
     async def test_seed_creates_all_when_empty(self):
-        """Should seed all 8 schedules when none exist."""
+        """Every default schedule is created when none exist."""
         db = MagicMock()
         result_mock = MagicMock()
         result_mock.scalars.return_value = result_mock
@@ -253,8 +287,8 @@ class TestScheduleSeeder:
 
         count = await seed_default_schedules(db, user_id=TEST_USER_ID)
 
-        assert count == 8
-        assert db.add.call_count == 8
+        assert count == len(DEFAULT_SCHEDULES)
+        assert db.add.call_count == len(DEFAULT_SCHEDULES)
 
     @pytest.mark.asyncio
     async def test_seed_skips_existing(self):
@@ -283,7 +317,7 @@ class TestScheduleSeeder:
 
         count = await seed_default_schedules(db, user_id=TEST_USER_ID)
 
-        assert count == 6  # 8 - 2 existing
+        assert count == len(DEFAULT_SCHEDULES) - 2
 
     @pytest.mark.asyncio
     async def test_seeded_schedules_have_next_run(self):
@@ -346,7 +380,7 @@ class TestScheduleSeeder:
             user_id=TEST_USER_ID,
             workspace_id="ws_a",
         )
-        assert count_a == 8
+        assert count_a == len(DEFAULT_SCHEDULES)
 
         # Reset mocks for workspace B — DB still returns empty for ws_b query
         db.add.reset_mock()
@@ -358,7 +392,8 @@ class TestScheduleSeeder:
             user_id="usr_other",
             workspace_id="ws_b",
         )
-        assert count_b == 8  # Should seed all 8, not skip
+        # Seeded again for the second workspace, not skipped as already-present.
+        assert count_b == len(DEFAULT_SCHEDULES)
 
     @pytest.mark.asyncio
     async def test_enable_connector_scopes_to_workspace(self):

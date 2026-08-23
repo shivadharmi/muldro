@@ -9,11 +9,7 @@ import asyncio
 import json
 import logging
 from collections.abc import AsyncGenerator
-from typing import TYPE_CHECKING, Any
-
-if TYPE_CHECKING:
-    from src.services.relevance_assessor import PerceptionSignal, RelevanceAssessment
-
+from typing import Any
 
 from src.config.model_catalog import default_model_id_for_tier
 from src.config.settings import Settings
@@ -35,7 +31,6 @@ from src.orchestrator.event_publisher import EventPublisher
 from src.orchestrator.perception_runner import PerceptionRunner
 from src.orchestrator.plan_store import PlanStore
 from src.orchestrator.services import ServiceContainer
-from src.orchestrator.surface_pusher import SurfacePusher
 from src.orchestrator.system_capability_handler import SystemCapabilityHandler
 from src.orchestrator.tool_executor import ToolExecutor
 from src.orchestrator.tracing import TraceManager
@@ -107,8 +102,6 @@ class MuldroOrchestrator:
         self._plans = PlanStore(_db_factory_provider)
         # ToolExecutor builds tool definitions and dispatches tool calls.
         self._tool_executor = ToolExecutor(self._events, _db_factory_provider)
-        # SurfacePusher builds + delivers A2UI workspace surfaces.
-        self._surfaces = SurfacePusher(self._events, _db_factory_provider)
         self._background_tasks: set[asyncio.Task] = set()  # C2: track fire-and-forget tasks
         # C1: API circuit breaker — fail fast when Claude API is in sustained outage
         from src.orchestrator.api_circuit_breaker import AnthropicCircuitBreaker
@@ -140,8 +133,8 @@ class MuldroOrchestrator:
             self._events,
         )
         # PerceptionRunner owns the autonomous perception + synthesis loop. It
-        # depends downward on the poller, invoker, events, surfaces, plans and
-        # system capability handler — never on the chat path — which keeps the
+        # depends downward on the poller, invoker, events, plans and the system
+        # capability handler — never on the chat path — which keeps the
         # chat<->perception relationship acyclic.
         self._perception = PerceptionRunner(
             settings,
@@ -152,7 +145,6 @@ class MuldroOrchestrator:
             self._poller,
             self._invoker,
             self._events,
-            self._surfaces,
             self._plans,
             self._system_capability_handler,
             self._spawn_background,
@@ -173,10 +165,10 @@ class MuldroOrchestrator:
         self._haiku_model = default_model_id_for_tier("fast")
 
         # ChatProcessor owns the user-facing chat pipeline (intent → plan → route
-        # → execute → present → surface → learn). Constructed last so all of its
+        # → execute → present → learn). Constructed last so all of its
         # collaborators — including the interaction learner and haiku model set
         # above — already exist. Depends downward on the invoker, context, plans,
-        # surfaces, events, system-capability handler and perception runner; the
+        # events, system-capability handler and perception runner; the
         # orchestrator keeps thin facades delegating to it.
         self._chat = ChatProcessor(
             settings,
@@ -187,7 +179,6 @@ class MuldroOrchestrator:
             self._invoker,
             self._context,
             self._plans,
-            self._surfaces,
             self._events,
             self._system_capability_handler,
             self._perception,
@@ -543,8 +534,8 @@ class MuldroOrchestrator:
             # Per-day idempotency, CHECK-BEFORE-GENERATE: if a briefing row
             # already exists for today, an earlier run already generated AND
             # delivered it. Short-circuit HERE — before get_briefing, the
-            # Presenter LLM reformat, and the Presenter agent's own
-            # push_ui_update (which ships the surface to the UI). Checking AFTER
+            # Presenter LLM reformat, and the Presenter agent's own delivery of
+            # the briefing to the user. Checking AFTER
             # generation (the old bug) only suppressed the secondary notify/push;
             # the user still saw the briefing regenerated and re-pushed every
             # tick. The (user_id, briefing_date) row is the idempotency key.
@@ -611,16 +602,6 @@ class MuldroOrchestrator:
                             body=str(result)[:500],
                             workspace_id=workspace_id,
                         )
-                # The get_briefing tool wrote today's Briefing row mid-run (see the
-                # idempotency note above), so fetch it and push a STRUCTURED briefing
-                # surface deduped with the REST rebuild (same "briefing_<id>" id).
-                # Never fall back to the markdown-blob plan push — if the row is
-                # somehow absent, skip; the REST _build_briefing_surface still renders.
-                briefing_row = await self._get_todays_briefing(user_id, workspace_id)
-                if briefing_row is not None:
-                    await self._push_briefing_surface(
-                        briefing_row, user_id=user_id, workspace_id=workspace_id
-                    )
             except Exception:
                 logger.debug("Briefing delivery failed", exc_info=True)
 
@@ -721,55 +702,6 @@ class MuldroOrchestrator:
             payload=payload,
         )
 
-    async def _check_surface_rate(self, user_id: str, surface_type: str) -> bool:
-        """Delegate to SurfacePusher (facade kept for internal callers)."""
-        return await self._surfaces.check_surface_rate(user_id, surface_type)
-
-    async def _push_presenter_surface(
-        self,
-        spec,
-        user_id: str,
-        workspace_id: str,
-        run_id: str | None = None,
-        response_text: str = "",
-    ) -> str | None:
-        """Delegate to SurfacePusher (facade kept for internal callers)."""
-        return await self._surfaces.push_presenter_surface(
-            spec, user_id, workspace_id, run_id=run_id, response_text=response_text
-        )
-
-    async def _push_workspace_surface(
-        self,
-        plan: "PlanOutput",
-        user_id: str,
-        workspace_id: str,
-        run_id: str | None = None,
-        response_text: str = "",
-    ) -> str | None:
-        """Delegate to SurfacePusher (facade kept for internal callers)."""
-        return await self._surfaces.push_workspace_surface(
-            plan, user_id, workspace_id, run_id=run_id, response_text=response_text
-        )
-
-    async def _push_briefing_surface(
-        self,
-        briefing,
-        user_id: str,
-        workspace_id: str,
-    ) -> str | None:
-        """Delegate to SurfacePusher (facade kept for internal callers + test mockability)."""
-        return await self._surfaces.push_briefing_surface(briefing, user_id, workspace_id)
-
-    async def _push_insight_surface(
-        self,
-        signal: "PerceptionSignal",
-        assessment: "RelevanceAssessment",
-        user_id: str,
-        workspace_id: str,
-    ) -> None:
-        """Delegate to SurfacePusher (facade kept for internal callers)."""
-        await self._surfaces.push_insight_surface(signal, assessment, user_id, workspace_id)
-
     async def _load_conversation_history(
         self,
         conversation_id: str | None,
@@ -829,8 +761,10 @@ class MuldroOrchestrator:
 
     @staticmethod
     def _extract_perception_policy(planner_text: str):
-        """Facade → PerceptionRunner._extract_perception_policy (staticmethod)."""
-        return PerceptionRunner._extract_perception_policy(planner_text)
+        """Facade → perception_insight.extract_perception_policy."""
+        from src.orchestrator.perception_insight import extract_perception_policy
+
+        return extract_perception_policy(planner_text)
 
     def _build_system_prompt(
         self, agent: SubAgent, context: str = "", capability_summary: str = ""

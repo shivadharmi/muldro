@@ -81,8 +81,19 @@ class ApprovalResponse(BaseModel):
     status: str
     title: str
     summary: str | None = None
+    # Required on purpose: the prepared-work queue is the only route to action for a
+    # prepared action (CLAUDE.md), and a caller that silently dropped this field would
+    # leave staged writes indistinguishable from ordinary approvals.
+    approval_type: str
     risk_level: str = "medium"
     created_at: datetime | None = None
+    # Which surface can DECIDE this row: "queue" or "chat". A chat approval
+    # resumes a suspended turn through /v1/muldro/chat/resume and is 409'd by
+    # the decide endpoints on purpose. The client cannot work that out —
+    # `artifact_refs` is on the detail response, not here — so a review queue
+    # offered Approve on a row the server would refuse and surfaced the refusal
+    # as an unexplained error. Defaulted so an older caller is unaffected.
+    decision_route: str = "queue"
 
 
 # ── Tasks ─────────────────────────────────────────────────────────

@@ -34,12 +34,6 @@ class RelevanceAssessment(BaseModel):
     urgency: Literal["immediate", "today", "this_week", "whenever"] = "whenever"
     suggested_actions: list[SuggestedAction] = Field(default_factory=list)
     notification_tier: Literal["push", "briefing", "silent"] = "silent"
-    # Number of supporting observations behind this signal (e.g. recurrences,
-    # days observed). Surfaced as human-readable evidence on the insight card.
-    evidence_count: int | None = None
-    # Unit for evidence_count, used to phrase the evidence string (e.g.
-    # "recurrences", "days observed"). Defaults to a generic noun.
-    evidence_unit: str | None = None
 
     @field_validator("suggested_actions", mode="before")
     @classmethod
@@ -73,22 +67,6 @@ class UserContext(BaseModel):
     preferences: list[str] = Field(default_factory=list)
 
 
-def format_evidence(count: int | None, unit: str | None) -> str | None:
-    """Format a supporting-observation count into a human-readable evidence string.
-
-    Returns ``None`` when there is no usable count (so the insight card simply
-    omits the evidence line). Examples::
-
-        format_evidence(4, "recurrences")   -> "4 recurrences"
-        format_evidence(42, "days observed") -> "42 days observed"
-        format_evidence(3, None)             -> "3 observed"
-    """
-    if count is None or count <= 0:
-        return None
-    label = (unit or "").strip() or "observed"
-    return f"{count} {label}"
-
-
 def _determine_tier(
     relevance_score: float,
     urgency: Literal["immediate", "today", "this_week", "whenever"],
@@ -118,9 +96,7 @@ Respond with a JSON object (no markdown fences):
   "reasoning": "<why this matters or doesn't>",
   "relates_to_goals": ["<goal text if relevant>"],
   "urgency": "<immediate|today|this_week|whenever>",
-  "suggested_actions": [{{"description": "<what to do>", "capability": "<capability.name>"}}],
-  "evidence_count": <integer count of supporting observations, or null>,
-  "evidence_unit": "<unit for evidence_count, e.g. recurrences or days observed, or null>"
+  "suggested_actions": [{{"description": "<what to do>", "capability": "<capability.name>"}}]
 }}
 
 User goals: {goals}

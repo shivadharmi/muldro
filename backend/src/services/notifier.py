@@ -97,26 +97,6 @@ class Notifier:
         # Track delivered notifications for dedup
         self._delivered: dict[str, set[str]] = {}
 
-    async def _hold_for_briefing(self, notification: Notification, priority: float) -> None:
-        """Store a notification as a briefing item instead of delivering it."""
-        if self._redis:
-            try:
-                key = f"notifier:briefing_hold:{notification.user_id}"
-                entry = json.dumps(
-                    {
-                        "notification_id": notification.notification_id,
-                        "title": notification.title,
-                        "body": notification.body,
-                        "type": notification.type,
-                        "priority": priority,
-                        "created_at": notification.created_at,
-                    }
-                )
-                await self._redis.lpush(key, entry)
-                await self._redis.expire(key, 86400)  # 24h TTL
-            except Exception:
-                logger.debug("Failed to hold notification for briefing", exc_info=True)
-
     async def deliver_existing(self, record) -> dict:
         """Re-attempt delivery of an ALREADY-PERSISTED notification row.
 
@@ -296,7 +276,13 @@ class Notifier:
                 )
                 return {"status": "silent", "priority": priority}
             if priority < 0.6:
-                await self._hold_for_briefing(notification, priority)
+                # Held, not dropped: notify() has already persisted the row, and
+                # _tick_pending_notifications is what carries it. There used to
+                # be an LPUSH to notifier:briefing_hold:{user_id} here as well —
+                # a 24h Redis list nothing in the codebase ever read, duplicating
+                # what the row already holds. A write with no reader is
+                # indistinguishable from a working feature, so it went rather
+                # than acquiring a reader it never needed.
                 return {"status": "held_for_briefing", "priority": priority}
 
         surfaces = await self._registry.get_active_surfaces(user_id)
@@ -315,7 +301,7 @@ class Notifier:
                 if await self._check_rate_limit(user_id, surface):
                     allowed_surfaces.append(surface)
             if not allowed_surfaces:
-                await self._hold_for_briefing(notification, priority)
+                # Same as the priority hold above: the persisted row is the carrier.
                 return {"status": "rate_limited", "priority": priority}
             surfaces = allowed_surfaces
 

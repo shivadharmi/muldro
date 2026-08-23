@@ -320,10 +320,12 @@ async def test_raw_event_shape_matches_the_pre_gateway_connector():
     assert event.source_account_id == "gmail_primary"
     assert event.event_type == "email_received"
     assert event.entity_type == "email_thread"
+    # `name` is NOT the whole From: see the actor section below for why the
+    # pre-gateway connector's copy-the-header behaviour was a defect.
     assert event.actor == {
         "type": "person",
         "email": "alice@example.com",
-        "name": "alice@example.com",
+        "name": "alice",
     }
     rp = event.raw_payload
     assert set(rp) == {
@@ -340,6 +342,45 @@ async def test_raw_event_shape_matches_the_pre_gateway_connector():
     assert rp["rfc_message_id"] == "<msg_001@mail.gmail.com>"
     assert rp["in_reply_to"] == "<original@mail.gmail.com>"
     assert rp["references"] == "<original@mail.gmail.com> <reply1@mail.gmail.com>"
+
+
+# ---- the actor: a From header is SPLIT, never copied whole ---------------
+#
+# The pre-gateway connector wrote the raw From into both `email` and `name`.
+# Downstream, `view/frame.py::_plain` reduces an actor name to inert plain
+# text and REMOVES a bare email address, because the headline validator
+# refuses one - so every sender without a display name resolved to "", which
+# dropped the counterparty from the headline and dropped the message's quote
+# entirely (an unattributed quote is discarded by design). This connector is
+# the only place that knows the string is an RFC 5322 From, so it is the only
+# place that can split it.
+
+
+async def test_a_display_name_sender_is_named_by_the_person():
+    event = await _poll_one(_oc_message(sender="Sarah Chen <sarah@acme.com>"))
+    assert event.actor == {"type": "person", "email": "sarah@acme.com", "name": "Sarah Chen"}
+
+
+async def test_a_bare_address_sender_is_named_by_its_local_part():
+    """Not the address: a local part survives `_plain`, an address cannot."""
+    event = await _poll_one(_oc_message(sender="noreply@acme.com"))
+    assert event.actor == {"type": "person", "email": "noreply@acme.com", "name": "noreply"}
+
+
+async def test_an_unparseable_sender_still_yields_a_name():
+    """`parseaddr` returns ("", "") on input it cannot parse. A From we could
+    not parse is still the only sender we were given, so it stands in rather
+    than leaving the event with no counterparty at all."""
+    event = await _poll_one(_oc_message(sender="not an address"))
+    assert event.actor == {"type": "person", "email": "not an address", "name": "not an address"}
+
+
+async def test_a_missing_sender_falls_back_to_unknown_and_is_still_named():
+    msg = _oc_message()
+    msg["sender"] = ""
+    msg["payload"] = None
+    event = await _poll_one(msg)
+    assert event.actor == {"type": "person", "email": "unknown", "name": "unknown"}
 
 
 async def test_entity_id_is_the_thread_id():

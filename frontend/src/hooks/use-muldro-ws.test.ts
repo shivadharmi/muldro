@@ -1,10 +1,10 @@
-import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, test, vi } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 
 // Token always present so onopen sends the auth frame.
 vi.mock("@/lib/auth", () => ({ getStoredToken: () => "tok" }));
 
-import { useMuldroWs } from "./use-muldro-ws";
+import { dispatchMuldroMessage, useMuldroWs } from "./use-muldro-ws";
 
 class MockWebSocket {
   static instances: MockWebSocket[] = [];
@@ -102,4 +102,74 @@ test("a transient close (not auth) still reconnects", () => {
   });
 
   expect(MockWebSocket.instances.length).toBe(2);
+});
+
+/**
+ * The hook dispatches a `unit` frame to onUnitPush, and guards on identity
+ * first.
+ *
+ * The guard is not defensive noise. `render_surface` emitted `surface_id`
+ * where this hook read `id`, so `msg.surface?.id` dropped every surface it
+ * ever sent — silently, because the tool returned {status: "published"}
+ * regardless. The guard stays; the publisher states the field.
+ */
+
+const UNIT = {
+  frame: {
+    key: "gmail:email_thread:t1",
+    group_key: null,
+    kind: "proposal",
+    status: "needs_you",
+    headline: "Sarah Chen - Series A term sheet",
+    source: "gmail",
+    entity_type: "email_thread",
+    occurred_at: "2026-08-22T12:00:00Z",
+    updated_at: "2026-08-22T12:00:00Z",
+    importance: 0,
+    event_count: 3,
+    affordances: [],
+  },
+  body: "",
+  quotes: [],
+};
+
+describe("dispatchMuldroMessage", () => {
+  it("routes a unit frame to onUnitPush", () => {
+    const onUnitPush = vi.fn();
+    dispatchMuldroMessage({ type: "unit", key: UNIT.frame.key, unit: UNIT }, { onUnitPush });
+    expect(onUnitPush).toHaveBeenCalledWith(UNIT);
+  });
+
+  it("drops a unit frame with no key", () => {
+    const onUnitPush = vi.fn();
+    dispatchMuldroMessage({ type: "unit", unit: UNIT }, { onUnitPush });
+    expect(onUnitPush).not.toHaveBeenCalled();
+  });
+
+  it("drops a unit frame with no unit", () => {
+    const onUnitPush = vi.fn();
+    dispatchMuldroMessage({ type: "unit", key: "a:b:c" }, { onUnitPush });
+    expect(onUnitPush).not.toHaveBeenCalled();
+  });
+
+  it("still routes surface_update — the history page reads it", () => {
+    const onSurfaceUpdate = vi.fn();
+    dispatchMuldroMessage(
+      { type: "surface_update", surface_id: "run_1", phase: "executing" },
+      { onSurfaceUpdate }
+    );
+    expect(onSurfaceUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ surface_id: "run_1", phase: "executing" })
+    );
+  });
+
+  it("treats an unknown type as a notification", () => {
+    const onNotification = vi.fn();
+    dispatchMuldroMessage({ type: "notification", title: "hi" }, { onNotification });
+    expect(onNotification).toHaveBeenCalled();
+  });
+
+  it("does not throw on a heartbeat", () => {
+    expect(() => dispatchMuldroMessage({ type: "heartbeat" }, {})).not.toThrow();
+  });
 });

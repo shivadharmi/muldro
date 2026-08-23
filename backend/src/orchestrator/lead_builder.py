@@ -24,8 +24,8 @@ _NON_TOOL_CAPABILITIES = {"reason", "respond", "none"}
 # about X" turn cannot search. So it is translated here, exactly as ``perceive`` is.
 #
 # Curated to LEAST AUTHORITY rather than delegated to ``capabilities_for_step``, whose
-# same-family sweep returns ALL 23 non-approval ``internal.*`` capabilities for any one of
-# them — handing a recall turn ``internal.push_ui``, ``internal.update_execution`` and
+# same-family sweep returns every non-approval ``internal.*`` capability for any one of
+# them — handing a recall turn ``internal.ingest_event``, ``internal.update_execution`` and
 # ``internal.report_verdict``. Same reasoning as ``INTERNAL_READ_FLOOR``.
 KNOWLEDGE_RECALL_CAPABILITIES: frozenset[str] = frozenset(
     {
@@ -52,14 +52,6 @@ _VIRTUAL_KNOWLEDGE_SCOPES: dict[str, frozenset[str]] = {
 }
 
 
-# The lead is ALWAYS the turn's reply producer (`is_reply_lead=True`, unconditional), so it
-# always receives PRESENTER_VOICE and must always be able to act on it. Surfacing is a
-# presentation decision, not a plan capability — a `respond`-only plan that can describe a
-# surface but not create one is a prompt that argues with its own scope. Deliberately a floor
-# of exactly one internal, workspace-scoped capability, not a general write grant.
-PRESENTATION_FLOOR: frozenset[str] = frozenset({"internal.render_surface"})
-
-
 async def derive_lead_scope(
     steps: list[PlanStep],
     resolver: CapabilityResolver,
@@ -77,15 +69,11 @@ async def derive_lead_scope(
     - any real capability C → {C} plus its read-only family capabilities
       (``resolver.capabilities_for_step(C)``) — parity with ``resolve_for_step(C)``.
 
-    The scope starts at ``PRESENTATION_FLOOR`` — the lead is always the turn's reply
-    producer, so it always carries the Presenter voice and must always be able to render a
-    surface, whatever the plan's shape. The floor is additive, never a widening.
-
     The result is plan-bounded and fail-closed: a read-only plan yields a read-only scope
     (no write capability), and a write plan grants only the plan's specific write
     capabilities, never the executor's full write union.
     """
-    scope: set[str] = set(PRESENTATION_FLOOR)
+    scope: set[str] = set()
     perceiver = agents.get("perceiver")
     for step in steps:
         if getattr(step, "actor", None) == "user":

@@ -10,9 +10,6 @@ from typing import Literal
 from croniter import croniter
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from src.ui.components import AnyComponent
-from src.ui.contracts import SurfaceMetric
-
 # Concrete cron values shown to the model as JSON-schema ``examples`` — steer it
 # toward the standard 5-field format instead of natural language.
 CRON_EXAMPLES = ["0 9 * * 1-5", "0 8 * * *", "*/15 * * * *", "0 9 1 * *"]
@@ -194,50 +191,6 @@ class ReportGovernorVerdictInput(BaseModel):
     )
     justification: str = Field(description="Reasoning for the verdict")
     conditions: list[str] = Field(default_factory=list, description="Conditions for approval")
-
-
-class PushUiUpdateInput(BaseModel):
-    """Push a dynamic UI update to the web frontend via Redis pub/sub.
-
-    Delivers A2UI surface payloads to connected browser sessions.
-    """
-
-    surface_id: str = Field(
-        description="UI surface identifier (e.g., 'daily_brief', 'approval_detail')"
-    )
-    payload: str = Field(description="JSON string of the A2UI surface payload")
-
-
-class RenderSurfaceInput(BaseModel):
-    """Render a rich workspace surface from typed A2UI components.
-
-    Use this when your reply has visual value beyond chat text — a comparison, a set of
-    metrics, a table, a timeline. Still write a short chat reply alongside it; the surface is
-    the detailed, persistent view, not a replacement for speaking to the user.
-    """
-
-    kind: Literal["message", "summary", "briefing", "alert", "recommendation"] = Field(
-        description="Surface kind. `message` is the default for a rich reply."
-    )
-    title: str = Field(max_length=80, description="Surface title, under 80 characters")
-    subtitle: str | None = Field(
-        default=None, max_length=120, description="Optional subtitle, under 120 characters"
-    )
-    metrics: list[SurfaceMetric] = Field(
-        default_factory=list,
-        description="Up to 4 headline numbers shown on the card preview",
-        max_length=4,
-    )
-    sections: list[AnyComponent] = Field(
-        description="The component tree to render, in display order"
-    )
-
-    @field_validator("title")
-    @classmethod
-    def _title_not_blank(cls, v: str) -> str:
-        if not v.strip():
-            raise ValueError("surface title must not be empty")
-        return v
 
 
 class StoreMemoryInput(BaseModel):
@@ -482,8 +435,6 @@ TOOL_INPUT_MODELS: dict[str, type[BaseModel]] = {
     "build_context": BuildContextInput,
     "verify_run": VerifyRunInput,
     "report_governor_verdict": ReportGovernorVerdictInput,
-    "push_ui_update": PushUiUpdateInput,
-    "render_surface": RenderSurfaceInput,
     "store_memory": StoreMemoryInput,
     "store_preference": StorePreferenceInput,
     "get_plan_details": GetPlanDetailsInput,
