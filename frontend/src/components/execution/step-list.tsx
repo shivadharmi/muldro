@@ -229,25 +229,3 @@ export function StepList({ steps, currentStep, triggeringStepId }: StepListProps
     </div>
   );
 }
-
-/** Compact step list for surface card preview (shows counts, not full list). */
-export function StepListCompact({ steps }: { steps: StepState[] }) {
-  const completed = steps.filter((s) => isStepDone(s.status)).length;
-  const failed = steps.filter((s) => s.status === "failed").length;
-  const total = steps.length;
-
-  return (
-    <div className="flex items-center gap-2 text-xs text-t-tertiary">
-      <span>{completed}/{total} steps</span>
-      {failed > 0 && <span className="text-j-error font-medium">{failed} failed</span>}
-      {total > 0 && (
-        <div className="w-12 h-1 bg-surface-3 rounded-full overflow-hidden ml-1">
-          <div
-            className={`h-full rounded-full transition-all duration-300 ${failed > 0 ? "bg-j-error" : "bg-j-success"}`}
-            style={{ width: `${(completed / total) * 100}%` }}
-          />
-        </div>
-      )}
-    </div>
-  );
-}

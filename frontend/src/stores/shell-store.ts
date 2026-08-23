@@ -1,12 +1,8 @@
-/** Shell-level state: topbar, workspace, sidebar, command launcher, mobile. */
+/** Shell-level state: right sidebar and the command launcher. */
 
 import { create } from "zustand";
 
 interface ShellState {
-  // Workspace
-  workspaceId: string | null;
-  setWorkspaceId: (id: string | null) => void;
-
   // Right sidebar
   rightSidebarOpen: boolean;
   rightSidebarTab: "context" | "evidence" | "activity";
@@ -17,16 +13,9 @@ interface ShellState {
   commandLauncherOpen: boolean;
   toggleCommandLauncher: () => void;
   closeCommandLauncher: () => void;
-
-  // Mobile
-  isMobileNavOpen: boolean;
-  toggleMobileNav: () => void;
 }
 
 export const useShellStore = create<ShellState>((set) => ({
-  workspaceId: null,
-  setWorkspaceId: (id) => set({ workspaceId: id }),
-
   rightSidebarOpen: false,
   rightSidebarTab: "context",
   toggleRightSidebar: () =>
@@ -37,8 +26,4 @@ export const useShellStore = create<ShellState>((set) => ({
   toggleCommandLauncher: () =>
     set((s) => ({ commandLauncherOpen: !s.commandLauncherOpen })),
   closeCommandLauncher: () => set({ commandLauncherOpen: false }),
-
-  isMobileNavOpen: false,
-  toggleMobileNav: () =>
-    set((s) => ({ isMobileNavOpen: !s.isMobileNavOpen })),
 }));

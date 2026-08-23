@@ -26,26 +26,6 @@ export function SkeletonCard() {
   );
 }
 
-export function SkeletonRow() {
-  return (
-    <div className="flex items-center gap-4 py-3">
-      <Skeleton className="h-4 w-32" />
-      <Skeleton className="h-4 w-20" />
-      <Skeleton className="h-4 w-16 ml-auto" />
-    </div>
-  );
-}
-
-export function SkeletonTable({ rows = 5 }: { rows?: number }) {
-  return (
-    <div className="space-y-1">
-      {Array.from({ length: rows }).map((_, i) => (
-        <SkeletonRow key={i} />
-      ))}
-    </div>
-  );
-}
-
 export function SkeletonGrid({ count = 4 }: { count?: number }) {
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
