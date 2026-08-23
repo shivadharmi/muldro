@@ -34,9 +34,6 @@ AGENT_CAPABILITY_SCOPES: dict[str, set[str]] = {
         "doc.get",
         "doc.search",
         "doc.query",
-        "doc.confluence_search",
-        "doc.confluence_get",
-        "doc.confluence_list_spaces",
         "messaging.list_channels",
         "messaging.get_history",
         "messaging.get_thread",
@@ -152,14 +149,6 @@ AGENT_CAPABILITY_SCOPES: dict[str, set[str]] = {
         "doc.update",
         "doc.comment",
         "doc.append",
-        # Confluence. The reads travel WITH the writes: read-before-write means
-        # a page must be readable before it is edited, and Confluence needs its
-        # current versionNumber to update at all.
-        "doc.confluence_search",
-        "doc.confluence_get",
-        "doc.confluence_list_spaces",
-        "doc.confluence_create",
-        "doc.confluence_update",
         # Internal
         "internal.update_execution",
     },

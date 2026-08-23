@@ -107,15 +107,14 @@ _DEFAULT_INSTALLATIONS: list[dict] = [
         "scopes_granted": None,
     },
     {
-        # Gateway-backed: routed to the OpenConnector adapter. Unlike every
-        # other installation this one fans out to TWO OC providers — jira and
-        # confluence — because OpenConnector has no combined "atlassian"
-        # service. One Atlassian OAuth client backs both, exactly as one Google
-        # client backs gmail + googlecalendar. `remote_url` drops with the
-        # native transport: it addressed Atlassian's own Rovo MCP server, which
-        # the gateway replaces.
+        # Gateway-backed: routed to the OpenConnector adapter, serving the
+        # `jira` OC provider. Confluence is NOT served: OpenConnector requires
+        # an api_key for it and has no OAuth config, so registering it aborts
+        # startup — see gateway_actions/atlassian.py. `remote_url` drops with
+        # the native transport: it addressed Atlassian's own Rovo MCP server,
+        # which the gateway replaces.
         "server_name": "atlassian",
-        "display_name": "Atlassian (Jira + Confluence)",
+        "display_name": "Jira",
         "transport": "streamable-http",
         "remote_url": None,
         "command": None,

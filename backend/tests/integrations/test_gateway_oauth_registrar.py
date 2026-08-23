@@ -29,8 +29,10 @@ def test_every_gateway_provider_declares_an_oauth_credential_key():
         # Atlassian is TWO OC services on one Muldro installation, both backed
         # by the single Atlassian OAuth client — the same fan-out gmail and
         # googlecalendar make onto "google".
+        # Atlassian is one Muldro installation, but only ONE of its two OC
+        # services can be gateway-backed: confluence requires an api_key and has
+        # no OAuth config, so registering it aborts startup.
         "jira": "atlassian",
-        "confluence": "atlassian",
     }
 
 
@@ -135,14 +137,13 @@ async def test_registers_every_provider_with_the_right_credentials():
     admin = FakeAdmin()
     registered = await register_gateway_oauth_configs(_settings(), admin=admin)
 
-    assert registered == ["gmail", "googlecalendar", "github", "notion", "jira", "confluence"]
+    assert registered == ["gmail", "googlecalendar", "github", "notion", "jira"]
     assert admin.calls == [
         ("gmail", "g-id", "g-secret"),
         ("googlecalendar", "g-id", "g-secret"),
         ("github", "gh-id", "gh-secret"),
         ("notion", "n-id", "n-secret"),
         ("jira", "a-id", "a-secret"),
-        ("confluence", "a-id", "a-secret"),
     ]
 
 

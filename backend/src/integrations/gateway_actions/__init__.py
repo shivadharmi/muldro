@@ -18,7 +18,7 @@ from __future__ import annotations
 from types import MappingProxyType
 
 from src.integrations.gateway_actions._types import GatewayAction, GatewayProvider
-from src.integrations.gateway_actions.atlassian import CONFLUENCE, JIRA
+from src.integrations.gateway_actions.atlassian import JIRA
 from src.integrations.gateway_actions.github import GITHUB
 from src.integrations.gateway_actions.gmail import GMAIL
 from src.integrations.gateway_actions.googlecalendar import GOOGLECALENDAR
@@ -41,7 +41,7 @@ __all__ = [
 
 # Registry order is load-bearing: providers_for_server() returns it verbatim, so
 # a server's providers are connected (and their tools listed) in this order.
-_PROVIDERS: tuple[GatewayProvider, ...] = (GMAIL, GOOGLECALENDAR, GITHUB, NOTION, JIRA, CONFLUENCE)
+_PROVIDERS: tuple[GatewayProvider, ...] = (GMAIL, GOOGLECALENDAR, GITHUB, NOTION, JIRA)
 
 PROVIDER_REGISTRY: MappingProxyType[str, GatewayProvider] = MappingProxyType(
     {p.provider_id: p for p in _PROVIDERS}

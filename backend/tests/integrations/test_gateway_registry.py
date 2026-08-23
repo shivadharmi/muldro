@@ -225,3 +225,38 @@ def test_pagination_keys_are_pinned_to_recorded_output_schemas():
         properties = CURATED_ACTIONS[action_id]["outputSchema"]["properties"]
         assert items_key in properties, f"{action_id} no longer returns {items_key!r}"
         assert next_token_key in properties, f"{action_id} no longer returns {next_token_key!r}"
+
+
+# The OpenConnector services that accept an OAuth2 client, read from a live
+# v1.3.5 catalog: `GET /api/oauth/configs` lists exactly github, gmail,
+# googlecalendar, jira, notion and slack. A service outside this set cannot be
+# registered — `confluence` answers
+# `400 unsupported_auth_type: confluence does not support oauth2`, because its
+# `execution.requiredAuthTypes` is `["api_key"]`.
+#
+# This is pinned because `register_gateway_oauth_configs` RAISES on a provider
+# it cannot register, and it runs at STARTUP: adding such a provider does not
+# degrade, it stops the backend from booting. Confluence was added and caught
+# only by running the registrar by hand against the live gateway.
+#
+# Re-verify against a running container before extending, rather than trusting
+# this list:
+#   curl -H "Authorization: Bearer $ADMIN" localhost:3001/api/oauth/configs \
+#     | jq -r '.[].service'
+_OC_OAUTH_CAPABLE_SERVICES = frozenset(
+    {"github", "gmail", "googlecalendar", "jira", "notion", "slack"}
+)
+
+
+def test_every_registered_provider_can_hold_an_oauth_client():
+    """A provider OpenConnector cannot authenticate must not be in the registry.
+
+    The failure is not a broken integration — it is a backend that will not
+    start, because the startup registrar raises rather than skipping.
+    """
+    for provider_id in PROVIDER_REGISTRY:
+        assert provider_id in _OC_OAUTH_CAPABLE_SERVICES, (
+            f"{provider_id!r} is registered as a gateway provider, but OpenConnector "
+            "exposes no OAuth config for it — startup will abort. Confirm with "
+            "GET /api/oauth/configs before adding it."
+        )

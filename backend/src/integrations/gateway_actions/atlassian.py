@@ -1,25 +1,40 @@
-"""Jira and Confluence actions served through the OpenConnector gateway.
+"""Jira actions served through the OpenConnector gateway.
 
 Action ids, parameter names, and input schemas are transcribed verbatim from a
-live OpenConnector v1.3.5 catalog (`GET /api/actions`, filtered to
-``service == "jira"`` — 7 actions — and ``service == "confluence"`` — 5).
+live OpenConnector v1.3.5 catalog (`GET /api/actions`, ``service == "jira"`` —
+7 actions).
 
-**Atlassian is TWO OC services on ONE Muldro installation.** OpenConnector does
-not model an "atlassian" service; it exposes ``jira`` and ``confluence``
-separately, each with its own connection. Both declare
-``server_name="atlassian"`` and ``oauth_credential_key="atlassian"``, so
-``providers_for_server`` fans out to the pair while a single Atlassian OAuth
-client backs both — the same shape ``gmail`` + ``googlecalendar`` already use
-for one Google client. A consequence worth stating: ``integration_status``
-computes ``connected`` as all-of across a server's providers, so linking Jira
-and declining Confluence renders as half-connected rather than as success.
+**Jira only. Confluence CANNOT be gateway-backed, and this was verified live
+rather than assumed.** OpenConnector models Atlassian as two independent
+services, and their credentials differ:
+
+    jira.execution.requiredAuthTypes       == ["oauth2", "custom_credential"]
+    confluence.execution.requiredAuthTypes == ["api_key"]
+
+``GET /api/oauth/configs`` lists github, gmail, googlecalendar, jira, notion and
+slack — no confluence — and registering one anyway answers
+``400 unsupported_auth_type: confluence does not support oauth2``.
+
+That matters beyond Confluence: ``register_gateway_oauth_configs`` runs at
+startup and RAISES on any provider it cannot register, so adding Confluence to
+PROVIDER_REGISTRY would not have degraded gracefully — it would have stopped the
+backend from booting. Any future provider added here must be checked against
+that endpoint first; the registry is not the place to express an intention.
+
+Serving Confluence would mean teaching the gateway path an api_key credential
+flow, which is a separate piece of work from this migration.
+
+Atlassian therefore remains ONE Muldro installation with ONE OC provider today.
+The fan-out machinery is unchanged and already correct for a second one
+(``gmail`` + ``googlecalendar`` share a Google client the same way), so adding
+Confluence later is a registry entry plus that credential flow.
 
 **No perception source, deliberately, and for a different reason than GitHub's.**
 GitHub's poll is deferred because the catalog has no action that can serve it.
-Both actions Atlassian would need DO exist and are expressive —
-``jira.search_issues`` takes JQL and ``confluence.search_content`` takes CQL, so
-``updated >= ...`` is a first-class filter rather than a client-side watermark.
-Two things are missing instead, and neither is code:
+The action Jira would need DOES exist and is more expressive than any other
+provider's — ``jira.search_issues`` takes JQL, so ``updated >= ...`` is a
+first-class server-side filter rather than a client-side watermark. Two things
+are missing instead, and neither is code:
 
   1. **Which signal belongs in the feed has not been decided.** "Issues assigned
      to me", "issues I am mentioned in" and "anything that moved in my projects"
@@ -212,121 +227,10 @@ JIRA_ACTIONS: tuple[GatewayAction, ...] = (
     ),
 )
 
-CONFLUENCE_ACTIONS: tuple[GatewayAction, ...] = (
-    GatewayAction(
-        "confluence.search_content",
-        "doc.confluence_search",
-        "low",
-        False,
-        {
-            "type": "object",
-            "properties": {
-                "cql": {"type": "string", "minLength": 1},
-                "limit": {"type": "integer", "minimum": 1, "maximum": 100},
-                "cursor": {"type": "string", "minLength": 1},
-            },
-            "additionalProperties": False,
-            "required": ["cql"],
-        },
-    ),
-    GatewayAction(
-        "confluence.get_page",
-        "doc.confluence_get",
-        "low",
-        False,
-        {
-            "type": "object",
-            "properties": {
-                "pageId": {"type": "string", "minLength": 1},
-                "bodyFormat": {"type": "string"},
-            },
-            "additionalProperties": False,
-            "required": ["pageId"],
-        },
-    ),
-    GatewayAction(
-        # Also the health probe's cheapest read: it takes no ids and no query.
-        "confluence.list_spaces",
-        "doc.confluence_list_spaces",
-        "low",
-        False,
-        {
-            "type": "object",
-            "properties": {
-                "limit": {"type": "integer", "minimum": 1, "maximum": 100},
-                "cursor": {"type": "string", "minLength": 1},
-                "status": {"type": "string"},
-                "type": {"type": "string"},
-            },
-            "additionalProperties": False,
-        },
-    ),
-    GatewayAction(
-        "confluence.create_page",
-        "doc.confluence_create",
-        "medium",
-        True,
-        {
-            "type": "object",
-            "properties": {
-                "spaceId": {"type": "string", "minLength": 1},
-                "title": {"type": "string", "minLength": 1},
-                # A STRING, not an object: the representation is named
-                # separately rather than inferred from the value's shape.
-                "body": {"type": "string", "minLength": 1},
-                "bodyRepresentation": {
-                    "type": "string",
-                    "enum": ["storage", "atlas_doc_format"],
-                },
-                "parentId": {"type": "string", "minLength": 1},
-                "status": {"type": "string", "enum": ["current", "draft"]},
-            },
-            "additionalProperties": False,
-            "required": ["spaceId", "title", "body"],
-        },
-    ),
-    GatewayAction(
-        "confluence.update_page",
-        "doc.confluence_update",
-        "medium",
-        True,
-        {
-            "type": "object",
-            "properties": {
-                "pageId": {"type": "string", "minLength": 1},
-                "title": {"type": "string", "minLength": 1},
-                # Confluence requires the NEXT version number explicitly, and
-                # OpenConnector marks it required -- there is no "just save"
-                # form, which is what makes a blind overwrite of someone else's
-                # concurrent edit impossible rather than merely discouraged.
-                "versionNumber": {"type": "integer", "minimum": 1},
-                "body": {"type": "string", "minLength": 1},
-                "bodyRepresentation": {
-                    "type": "string",
-                    "enum": ["storage", "atlas_doc_format"],
-                },
-                "status": {"type": "string", "enum": ["current", "draft"]},
-                "versionMessage": {"type": "string", "minLength": 1},
-                "minorEdit": {"type": "boolean"},
-            },
-            "additionalProperties": False,
-            "required": ["pageId", "title", "versionNumber"],
-        },
-    ),
-)
-
 JIRA = GatewayProvider(
     provider_id="jira",
     server_name="atlassian",
     display_name="Jira",
     oauth_credential_key="atlassian",
     actions=JIRA_ACTIONS,
-)
-
-CONFLUENCE = GatewayProvider(
-    provider_id="confluence",
-    server_name="atlassian",
-    display_name="Confluence",
-    oauth_credential_key="atlassian",
-    actions=CONFLUENCE_ACTIONS,
 )

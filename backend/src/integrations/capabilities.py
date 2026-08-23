@@ -156,17 +156,6 @@ CAPABILITY_CATALOG: dict[str, CapabilityMeta] = {
     "doc.drive_search": _cap(CapabilityFamily.DOC, True),
     "doc.drive_create": _cap(CapabilityFamily.DOC, False, "medium"),
     "doc.drive_delete": _cap(CapabilityFamily.DOC, False, "critical"),
-    # Confluence — a SEPARATE namespace from the bare doc.* verbs (which Notion
-    # holds) for the same reason Drive has one, and it is an authorization
-    # boundary rather than tidiness: `capabilities_for_server` is minted into
-    # the platform JWT, so two installations sharing a capability name would let
-    # one installation's token unlock the other's action at the adapter gate.
-    # `tests/integrations/test_gateway_registry.py` fails on any overlap.
-    "doc.confluence_search": _cap(CapabilityFamily.DOC, True),
-    "doc.confluence_get": _cap(CapabilityFamily.DOC, True),
-    "doc.confluence_list_spaces": _cap(CapabilityFamily.DOC, True),
-    "doc.confluence_create": _cap(CapabilityFamily.DOC, False, "medium"),
-    "doc.confluence_update": _cap(CapabilityFamily.DOC, False, "medium"),
     # Workflow (new — additions to existing workflow family)
     "workflow.create_issues": _cap(CapabilityFamily.WORKFLOW, False, "medium"),
     "workflow.bulk_update": _cap(CapabilityFamily.WORKFLOW, False, "medium"),
