@@ -4,8 +4,6 @@ import { Suspense, useState, useEffect } from "react";
 import { useSearchParams } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { PageHeader } from "@/components/layout/page-header";
-import { Card } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import {
   fetchUnifiedIntegrations,
   getAuthUrl,
@@ -21,36 +19,9 @@ import {
 } from "@/hooks/useConnectAccount";
 import { SkeletonGrid } from "@/components/ui/skeleton";
 import {
-  GoogleLogo,
-  GitHubLogo,
-  SlackLogo,
-  NotionLogo,
-  AtlassianLogo,
-  FolderIcon,
-} from "@/components/integrations/logos";
-
-type LogoComponent = React.FC<{ className?: string }>;
-
-const LOGOS: Record<string, LogoComponent> = {
-  "google-workspace": GoogleLogo,
-  github: GitHubLogo,
-  slack: SlackLogo,
-  notion: NotionLogo,
-  atlassian: AtlassianLogo,
-  filesystem: FolderIcon,
-};
-
-/**
- * Display name for an OpenConnector provider slug. The registry owns these
- * (served as `oc_provider_labels`); the client must not restate them, or a
- * newly registered provider silently renders as a raw slug.
- */
-function providerLabel(
-  integration: UnifiedIntegration,
-  provider: string,
-): string {
-  return integration.oc_provider_labels?.[provider] ?? provider;
-}
+  IntegrationCard,
+  providerLabel,
+} from "@/components/integrations/integration-card";
 
 /** How each non-active outcome reads to the user. */
 const OUTCOME_WORDING: Record<Exclude<ProviderOutcome, "active">, string> = {
@@ -63,26 +34,14 @@ const OUTCOME_WORDING: Record<Exclude<ProviderOutcome, "active">, string> = {
 /** Providers a blocked popup left unconnected, per installation server_name. */
 type BlockedProviders = Record<string, string[]>;
 
-function HealthDot({ status }: { status: string }) {
-  const color =
-    status === "healthy"
-      ? "bg-j-success"
-      : status === "degraded"
-        ? "bg-j-warning"
-        : "bg-j-error";
-  return (
-    <span
-      className={`w-2 h-2 rounded-full ${color}`}
-      title={status}
-    />
-  );
-}
-
 function IntegrationsContent() {
   const queryClient = useQueryClient();
   const searchParams = useSearchParams();
   const [connecting, setConnecting] = useState<string | null>(null);
   const [blocked, setBlocked] = useState<BlockedProviders>({});
+  // The native redirect is tracked apart from the gateway walk: a dual-credential
+  // card can offer both, and only one of them navigates this tab.
+  const [redirecting, setRedirecting] = useState<string | null>(null);
   const { addToast } = useToast();
   const gatewayConnect = useConnectAccount();
 
@@ -240,16 +199,22 @@ function IntegrationsContent() {
       );
       return;
     }
-    // Native providers keep the full-page OAuth-redirect flow.
-    const provider = integration.provider;
+    await connectNative(integration, integration.provider);
+  }
+
+  /** Start the full-page OAuth redirect for one natively authenticated grant. */
+  async function connectNative(
+    integration: UnifiedIntegration,
+    provider: string | null | undefined,
+  ) {
     if (!provider) return;
-    setConnecting(integration.server_name);
+    setRedirecting(integration.server_name);
     try {
       const { url } = await getAuthUrl(provider);
       window.location.assign(url);
     } catch (err) {
       addToast(`Failed to start OAuth: ${errorToMessage(err)}`, "error");
-      setConnecting(null);
+      setRedirecting(null);
     }
   }
 
@@ -261,147 +226,24 @@ function IntegrationsContent() {
   );
 
   function renderCard(integration: UnifiedIntegration) {
-    const Logo = LOGOS[integration.server_name];
     const isGateway = !!integration.oc_providers?.length;
-    const isPending =
-      connecting === integration.server_name &&
-      (!isGateway || gatewayConnect.state === "connecting");
-    const providerStates = Object.entries(
-      integration.provider_connections ?? {},
-    );
-    const blockedProviders = blocked[integration.server_name];
-    // The popup-poll flow never navigates this tab, so it must not say so.
-    const pendingLabel = isGateway ? "Waiting for approval…" : "Redirecting...";
-
     return (
-      <Card key={integration.server_name}>
-        <div className="p-4">
-          <div className="flex items-center justify-between mb-2">
-            <div className="flex items-center gap-2.5">
-              {Logo ? (
-                <Logo className="w-5 h-5 shrink-0" />
-              ) : (
-                <span className="w-5 h-5 rounded bg-surface-2" />
-              )}
-              <div>
-                <h3 className="text-sm font-medium text-t-primary">
-                  {integration.display_name}
-                </h3>
-                <p className="text-xs text-t-secondary">
-                  {integration.category === "local"
-                    ? "Local tool"
-                    : integration.category === "token"
-                      ? "Token auth"
-                      : "OAuth connection"}
-                </p>
-              </div>
-            </div>
-            <div className="flex items-center gap-2">
-              <HealthDot status={integration.health_status} />
-              <Badge
-                variant={integration.connected ? "green" : "default"}
-              >
-                {integration.connected ? "Connected" : "Not connected"}
-              </Badge>
-            </div>
-          </div>
-
-          {providerStates.length > 1 && (
-            <div className="flex flex-wrap gap-1.5 mb-3">
-              {providerStates.map(([provider, isConnected]) => (
-                <span
-                  key={provider}
-                  className={`text-[11px] px-1.5 py-0.5 rounded ${
-                    isConnected
-                      ? "bg-j-success-soft text-j-success"
-                      : "bg-surface-2 text-t-secondary"
-                  }`}
-                >
-                  {isConnected ? "✓" : "○"}{" "}
-                  {providerLabel(integration, provider)}
-                </span>
-              ))}
-            </div>
-          )}
-
-          {blockedProviders && !isPending && (
-            <button
-              onClick={() => runGateway(integration, blockedProviders)}
-              className="w-full text-left text-xs px-2.5 py-1.5 mb-3 rounded-[var(--radius-md)] border border-j-warning/40 bg-j-warning-soft text-j-warning hover:bg-j-warning-soft/70"
-            >
-              Popup blocked — click to connect{" "}
-              {blockedProviders
-                .map((p) => providerLabel(integration, p))
-                .join(", ")}
-            </button>
-          )}
-
-          {integration.scopes.length > 0 && (
-            <div className="flex flex-wrap gap-1 mb-3">
-              {integration.scopes.slice(0, 2).map((scope) => (
-                <span
-                  key={scope}
-                  className="text-[11px] px-1.5 py-0.5 rounded bg-surface-2 text-t-secondary"
-                >
-                  {scope.split(".").pop() || scope}
-                </span>
-              ))}
-              {integration.scopes.length > 2 && (
-                <span
-                  className="text-[11px] px-1.5 py-0.5 text-t-secondary"
-                  title={integration.scopes.join(", ")}
-                >
-                  +{integration.scopes.length - 2} more
-                </span>
-              )}
-            </div>
-          )}
-
-          {integration.category !== "local" && (
-            <div className="flex gap-2">
-              {integration.connected && integration.install_id ? (
-                <>
-                  <button
-                    onClick={() => handleConnect(integration)}
-                    disabled={isPending}
-                    className="text-xs px-2.5 py-1 rounded-[var(--radius-md)] border border-b-primary text-t-primary hover:bg-surface-2 disabled:opacity-50"
-                  >
-                    {isPending ? pendingLabel : "Reauthorize"}
-                  </button>
-                  <button
-                    onClick={() =>
-                      disconnectMutation.mutate(integration.install_id!)
-                    }
-                    className="text-xs px-2.5 py-1 rounded-[var(--radius-md)] border border-j-error/30 text-j-error hover:bg-j-error-soft"
-                  >
-                    Disconnect
-                  </button>
-                </>
-              ) : integration.connected ? (
-                <button
-                  onClick={() => handleConnect(integration)}
-                  disabled={isPending}
-                  className="text-xs px-2.5 py-1 rounded-[var(--radius-md)] border border-b-primary text-t-primary hover:bg-surface-2 disabled:opacity-50"
-                >
-                  {isPending ? pendingLabel : "Reauthorize"}
-                </button>
-              ) : (
-                <button
-                  onClick={() => handleConnect(integration)}
-                  disabled={isPending || !integration.configured}
-                  className="text-xs px-2.5 py-1 rounded-[var(--radius-md)] bg-j-primary text-j-primary-fg hover:bg-j-primary-hover disabled:opacity-50"
-                >
-                  {isPending
-                    ? pendingLabel
-                    : !integration.configured
-                      ? "Not configured"
-                      : "Connect"}
-                </button>
-              )}
-            </div>
-          )}
-        </div>
-      </Card>
+      <IntegrationCard
+        key={integration.server_name}
+        integration={integration}
+        isPending={
+          connecting === integration.server_name &&
+          (!isGateway || gatewayConnect.state === "connecting")
+        }
+        isNativePending={redirecting === integration.server_name}
+        blockedProviders={blocked[integration.server_name]}
+        onConnect={() => handleConnect(integration)}
+        onConnectNative={() =>
+          connectNative(integration, integration.native_provider)
+        }
+        onRetryBlocked={(providers) => runGateway(integration, providers)}
+        onDisconnect={() => disconnectMutation.mutate(integration.install_id!)}
+      />
     );
   }
 

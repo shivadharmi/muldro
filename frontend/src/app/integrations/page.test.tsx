@@ -291,3 +291,106 @@ test("a cancelled run still refetches, so a late activation becomes visible", as
   // correct a card that silently reads "Not connected".
   await waitFor(() => expect(fetchMock.mock.calls.length).toBeGreaterThan(1));
 });
+
+/**
+ * GitHub-shaped: gateway-backed for its ACTIONS and holding its own OAuth token
+ * for the notifications poll. The backend derives the shape from its registries;
+ * the card only renders what it is told, so the fixture states it directly.
+ */
+function dual(overrides: Partial<UnifiedIntegration> = {}): UnifiedIntegration {
+  return gateway({
+    server_name: "github",
+    display_name: "GitHub",
+    oc_providers: ["github"],
+    oc_provider_labels: { github: "GitHub" },
+    provider_connections: { github: true },
+    native_provider: "github",
+    native_purpose: "notifications",
+    native_connected: false,
+    ...overrides,
+  });
+}
+
+test("a missing second credential is shown, and offered its own connect", async () => {
+  // The gateway side is linked, so a single all-of "Not connected" tells the
+  // founder nothing about WHICH grant is missing — and the popup flow could
+  // never mint the token the poll needs.
+  fetchMock.mockResolvedValue([dual()]);
+
+  renderPage();
+
+  expect(await screen.findByText("○ notifications")).toBeInTheDocument();
+  expect(screen.getByText("✓ GitHub")).toBeInTheDocument();
+  expect(
+    screen.getByRole("button", { name: "Connect notifications" }),
+  ).toBeInTheDocument();
+});
+
+test("the native connect button redirects instead of opening the popup", async () => {
+  fetchMock.mockResolvedValue([dual()]);
+  authUrlMock.mockResolvedValue({ url: "https://github.test/authorize" });
+  // jsdom refuses to navigate, and an unstubbed assign() only logs about it.
+  const assign = vi.fn();
+  vi.stubGlobal("location", { assign });
+
+  const user = userEvent.setup();
+  renderPage();
+
+  await user.click(
+    await screen.findByRole("button", { name: "Connect notifications" }),
+  );
+
+  await waitFor(() => expect(authUrlMock).toHaveBeenCalledWith("github"));
+  expect(assign).toHaveBeenCalledWith("https://github.test/authorize");
+  // Chaining the two flows would navigate this tab and abandon the popup, so
+  // the native button must never enter the gateway walk.
+  expect(beginMock).not.toHaveBeenCalled();
+});
+
+test("the gateway connect button opens the popup and never redirects", async () => {
+  fetchMock.mockResolvedValue([
+    dual({ provider_connections: { github: false }, native_connected: true }),
+  ]);
+
+  const user = userEvent.setup();
+  renderPage();
+
+  await user.click(
+    await screen.findByRole("button", { name: "Connect actions" }),
+  );
+
+  await waitFor(() =>
+    expect(beginMock.mock.calls.map((c) => c[0])).toEqual(["github"]),
+  );
+  // The popup needs the user-activation budget of the click that opened it;
+  // spending it on a full-page redirect first loses the popup silently.
+  expect(authUrlMock).not.toHaveBeenCalled();
+});
+
+test("a fully connected dual-credential card offers neither extra button", async () => {
+  fetchMock.mockResolvedValue([
+    dual({ connected: true, native_connected: true, install_id: "inst_gh" }),
+  ]);
+
+  renderPage();
+
+  expect(await screen.findByRole("button", { name: "Reauthorize" })).toBeInTheDocument();
+  expect(
+    screen.queryByRole("button", { name: "Connect notifications" }),
+  ).not.toBeInTheDocument();
+  expect(
+    screen.queryByRole("button", { name: "Connect actions" }),
+  ).not.toBeInTheDocument();
+});
+
+test("a single-credential gateway card is untouched by the second credential", async () => {
+  fetchMock.mockResolvedValue([gateway()]);
+
+  renderPage();
+
+  expect(await screen.findByRole("button", { name: "Connect" })).toBeInTheDocument();
+  expect(
+    screen.queryByRole("button", { name: /Connect notifications/ }),
+  ).not.toBeInTheDocument();
+  expect(screen.queryByText(/notifications/)).not.toBeInTheDocument();
+});

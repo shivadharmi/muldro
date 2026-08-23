@@ -831,6 +831,15 @@ export interface UnifiedIntegration {
   oc_provider_labels?: Record<string, string>;
   // Per-provider connection state, e.g. {"gmail": true, "googlecalendar": false}.
   provider_connections?: Record<string, boolean>;
+  // The SECOND credential a dual-credential installation holds: gateway-backed
+  // for its actions AND its own OAuth token for a poll the gateway cannot serve.
+  // Absent on every single-credential installation. When present, the card
+  // renders a chip and a separately-labelled connect button for it, and
+  // `connected` is all-of across both.
+  native_provider?: string | null;
+  native_connected?: boolean;
+  // Short human phrase for what that token buys ("notifications").
+  native_purpose?: string;
 }
 
 export function fetchInstallations(): Promise<Installation[]> {

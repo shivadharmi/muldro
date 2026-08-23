@@ -23,6 +23,23 @@ below are asymmetric — see each one's comment.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class NativePerception:
+    """A provider's OWN OAuth token, and what that token buys.
+
+    ``purpose`` is a short human phrase the integrations UI renders next to the
+    credential. It lives here, beside the sources, so a provider cannot acquire
+    a second credential without also saying what it is for -- and so no reader
+    downstream has to name a brand to find out.
+    """
+
+    sources: tuple[str, ...]
+    purpose: str
+
+
 # OAuth provider -> the perception sources it backs. Providers absent from this
 # map back a single source whose name equals the provider (identity).
 #
@@ -57,8 +74,13 @@ from __future__ import annotations
 # Add an entry the moment a native OAuth provider backs a perception source
 # whose name differs from it, or backs more than one — without it those sources
 # are invisible to the pause/resume path.
+_PROVIDER_NATIVE_PERCEPTION: dict[str, NativePerception] = {
+    "github": NativePerception(sources=("github",), purpose="notifications"),
+}
+
+# Derived, so the sources are declared exactly once above.
 _PROVIDER_SOURCES: dict[str, list[str]] = {
-    "github": ["github"],
+    provider: list(native.sources) for provider, native in _PROVIDER_NATIVE_PERCEPTION.items()
 }
 
 # OAuth provider -> the MCP server names it powers. Providers absent from this
@@ -106,6 +128,18 @@ def provider_for_source(source: str) -> str:
         if source in sources:
             return provider
     return source
+
+
+def native_perception_for_provider(provider: str) -> NativePerception | None:
+    """Return what ``provider`` polls on its OWN OAuth token, or None.
+
+    Unlike ``sources_for_provider`` this has NO identity fallback, and the
+    difference is the whole point: the fallback answers "yes, one source" for
+    every provider ever named, including the fully gateway-backed ones, so a
+    caller asking "does this provider hold a second, native credential?" would
+    get a yes for all of them. Only an explicit declaration above counts.
+    """
+    return _PROVIDER_NATIVE_PERCEPTION.get(provider)
 
 
 def sources_for_provider(provider: str) -> list[str]:

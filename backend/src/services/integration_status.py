@@ -25,7 +25,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.integrations.gateway_actions import capabilities_for_server, providers_for_server
-from src.integrations.provider_map import provider_for_server
+from src.integrations.provider_map import native_perception_for_provider, provider_for_server
 from src.models.connection_map import DEFAULT_ACCOUNT_ALIAS, ConnectionMap
 
 logger = logging.getLogger(__name__)
@@ -158,6 +158,36 @@ class IntegrationStatus:
     # collapsed into one "disconnected".
     oc_providers: list[str] = field(default_factory=list)
     provider_connections: dict[str, bool] = field(default_factory=dict)
+    # The SECOND credential a dual-credential installation holds: gateway-backed
+    # for its actions, plus its own OAuth token for a poll the gateway cannot
+    # serve. `native_provider` is None on every single-credential installation.
+    native_provider: str | None = None
+    native_connected: bool = False
+    # Short human phrase for what the native token buys ("notifications"), from
+    # the provider's own declaration — never restated here.
+    native_purpose: str = ""
+
+
+async def _oauth_token_state(
+    oauth_mgr,
+    user_id: str,
+    oauth_name: str,
+) -> tuple[bool, bool]:
+    """Return ``(connected, needs_reauth)`` for one provider's stored token.
+
+    Both credential paths ask this one question, so "has a usable token" cannot
+    come to mean two different things depending on which branch asked. A missing
+    manager (no encryption key configured) can hold no token at all, so it
+    answers not-connected rather than raising.
+    """
+    if oauth_mgr is None:
+        return False, False
+    try:
+        result = await oauth_mgr.get_valid_token_with_reason(user_id, oauth_name)
+        connected = result.reason == "ok" and result.token is not None
+        return connected, result.reason in _PERMANENT_REAUTH_REASONS
+    except Exception:
+        return False, False
 
 
 async def active_connection_providers(
@@ -253,6 +283,9 @@ async def get_integration_statuses(
         needs_reauth = False
         oc_providers: list[str] = []
         provider_connections: dict[str, bool] = {}
+        native_provider: str | None = None
+        native_connected = False
+        native_purpose = ""
         # Display-only scopes: the installation's hand-maintained
         # `scopes_granted` list, unless the gateway branch below derives them.
         raw_scopes = inst.scopes_granted or []
@@ -279,18 +312,33 @@ async def get_integration_statuses(
             # exactly which capabilities its providers expose, so the badges
             # come from there instead of rendering empty.
             raw_scopes = list(capabilities_for_server(inst.server_name))
+
+            # Dual-credential: gateway-backed for its ACTIONS, and separately
+            # holding its own OAuth token for a perception poll the gateway
+            # catalog has no action for. Both registry facts are asked for by
+            # name — never by brand — so a provider that later grows the same
+            # shape is reported without another code change here.
+            native = native_perception_for_provider(provider_for_server(inst.server_name))
+            if native is not None:
+                native_provider = provider_for_server(inst.server_name)
+                native_purpose = native.purpose
+                native_connected, native_reauth = await _oauth_token_state(
+                    oauth_mgr, user_id, native_provider
+                )
+                needs_reauth = needs_reauth or native_reauth
+                # `connected` is all-of across BOTH credentials: an installation
+                # whose actions are linked but whose poll has no token is half
+                # connected, and must render as such rather than claiming
+                # success the founder would only discover was false when no
+                # notification ever arrived.
+                connected = connected and native_connected
         elif category == "oauth":
             oauth_name = provider_for_server(auth_provider)
             client_id_attr = _PROVIDER_CLIENT_ID_ATTR.get(oauth_name, "")
             configured = bool(getattr(settings, client_id_attr, "")) if client_id_attr else False
             connected = False
-            if configured and oauth_mgr:
-                try:
-                    result = await oauth_mgr.get_valid_token_with_reason(user_id, oauth_name)
-                    connected = result.reason == "ok" and result.token is not None
-                    needs_reauth = result.reason in _PERMANENT_REAUTH_REASONS
-                except Exception:
-                    connected = False
+            if configured:
+                connected, needs_reauth = await _oauth_token_state(oauth_mgr, user_id, oauth_name)
 
         # Determine provider name for the frontend.
         provider_name: str | None = None
@@ -320,6 +368,9 @@ async def get_integration_statuses(
                 needs_reauth=needs_reauth,
                 oc_providers=oc_providers,
                 provider_connections=provider_connections,
+                native_provider=native_provider,
+                native_connected=native_connected,
+                native_purpose=native_purpose,
             )
         )
 

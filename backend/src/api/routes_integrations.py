@@ -103,6 +103,14 @@ class UnifiedIntegrationResponse(BaseModel):
     # installations) — the frontend renders these instead of hand-maintaining
     # its own provider -> label table that degrades to a raw slug.
     oc_provider_labels: dict[str, str] = Field(default_factory=dict)
+    # The second credential a dual-credential installation holds — gateway-backed
+    # for its actions AND its own OAuth token for a poll the gateway cannot
+    # serve. None on every single-credential installation; when set, the card
+    # renders a chip and a separate connect button for it.
+    native_provider: str | None = None
+    native_connected: bool = False
+    # Short human phrase for what that token buys ("notifications").
+    native_purpose: str = ""
 
 
 # ── Endpoints ────────────────────────────────────────────────────────
@@ -165,6 +173,9 @@ async def list_unified_integrations(
             oc_providers=s.oc_providers,
             provider_connections=s.provider_connections,
             oc_provider_labels=provider_labels_for_server(s.server_name),
+            native_provider=s.native_provider,
+            native_connected=s.native_connected,
+            native_purpose=s.native_purpose,
         )
         for s in statuses
     ]
@@ -372,6 +383,7 @@ async def disconnect_installation(
         provider_name = inst.auth_provider
 
     from src.integrations.gateway_actions import provider_labels_for_server, providers_for_server
+    from src.integrations.provider_map import native_perception_for_provider, provider_for_server
     from src.services.integration_status import coarsen_scopes, derive_slug
 
     # Every gateway installation declares the same auth_provider
@@ -380,6 +392,8 @@ async def disconnect_installation(
     # Derive from server_name for those instead, matching integration_status.py.
     gateway_providers = providers_for_server(inst.server_name)
     is_gateway = bool(gateway_providers)
+    native_name = provider_for_server(inst.server_name) if is_gateway else ""
+    native = native_perception_for_provider(native_name) if native_name else None
 
     raw_scopes = inst.scopes_granted or []
     return UnifiedIntegrationResponse(
@@ -401,6 +415,11 @@ async def disconnect_installation(
         oc_providers=list(gateway_providers),
         provider_connections={p: False for p in gateway_providers},
         oc_provider_labels=provider_labels_for_server(inst.server_name),
+        # Named so the card keeps its second chip through the optimistic update;
+        # the refetch this response triggers re-reads the real token state.
+        native_provider=native_name if native else None,
+        native_purpose=native.purpose if native else "",
+        native_connected=False,
     )
 
 
