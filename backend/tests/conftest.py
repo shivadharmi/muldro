@@ -48,7 +48,13 @@ def make_mock_settings(**overrides) -> MagicMock:
         anthropic_api_key="test-key",
         anthropic_model="claude-sonnet-4-20250514",
         database_url="postgresql+asyncpg://test:test@localhost/test",
-        redis_url="redis://localhost:6379/0",
+        # A port nothing serves, DELIBERATELY. This pointed at the real dev
+        # Redis, which docker-compose keeps up locally and CI does not have — so
+        # a unit test that quietly needed Redis was green here and red on the
+        # PR, and the local run that "verified" it proved nothing. Twice.
+        # Matching CI means such a test fails where it can be seen. A test that
+        # genuinely needs Redis should stub the client, not reach for a live one.
+        redis_url="redis://127.0.0.1:6399/0",
         importance_threshold=0.7,
         briefing_lookback_hours=24,
         debug=False,

@@ -97,11 +97,24 @@ def test_provider_map_sees_the_github_source():
 # Authorize
 # ---------------------------------------------------------------------------
 class TestGitHubAuthorize:
-    async def test_returns_a_github_authorize_url_with_the_notifications_scope(self):
+    """Every test here stubs the CSRF state store.
+
+    `oauth_authorize` FAILS CLOSED without one — no Redis, no binding, 503 — so
+    an unstubbed test asserts "a Redis happens to be running". That passed in
+    dev and failed in CI twice before this fixture existed; autouse rather than
+    per-test because the next authorize test would otherwise repeat the mistake.
+    The fail-closed path itself is covered in tests/test_auth_routes.py.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _stub_state_store(self):
         with patch("src.api.routes_auth_oauth.issue_state", AsyncMock(return_value="st_opaque")):
-            resp = await oauth_authorize(
-                "github", scopes="", user_id=TEST_USER_ID, settings=_settings()
-            )
+            yield
+
+    async def test_returns_a_github_authorize_url_with_the_notifications_scope(self):
+        resp = await oauth_authorize(
+            "github", scopes="", user_id=TEST_USER_ID, settings=_settings()
+        )
 
         assert resp.provider == "github"
         assert resp.url.startswith("https://github.com/login/oauth/authorize?")
