@@ -98,9 +98,10 @@ def test_provider_map_sees_the_github_source():
 # ---------------------------------------------------------------------------
 class TestGitHubAuthorize:
     async def test_returns_a_github_authorize_url_with_the_notifications_scope(self):
-        resp = await oauth_authorize(
-            "github", scopes="", user_id=TEST_USER_ID, settings=_settings()
-        )
+        with patch("src.api.routes_auth_oauth.issue_state", AsyncMock(return_value="st_opaque")):
+            resp = await oauth_authorize(
+                "github", scopes="", user_id=TEST_USER_ID, settings=_settings()
+            )
 
         assert resp.provider == "github"
         assert resp.url.startswith("https://github.com/login/oauth/authorize?")
@@ -110,7 +111,11 @@ class TestGitHubAuthorize:
 
         params = parse_qs(urlparse(resp.url).query)
         assert params["scope"] == ["notifications read:user"]
-        assert params["state"] == [TEST_USER_ID]
+        # `state` is a single-use CSRF token bound to the user server-side. It
+        # used to BE the user id, which is not secret and which the callback
+        # trusted as the identity to file the token under.
+        assert params["state"] == ["st_opaque"]
+        assert TEST_USER_ID not in resp.url
         assert params["redirect_uri"] == [_REDIRECT_URI]
 
     async def test_does_not_request_the_repo_scope(self):
@@ -181,6 +186,9 @@ def _callback_patches(post: AsyncMock, oauth_mgr: MagicMock):
         patch("src.api.deps.resolve_workspace_id", AsyncMock(return_value="ws_1")),
         patch("src.services.oauth_manager.OAuthManager", MagicMock(return_value=oauth_mgr)),
         patch("src.api.routes_auth_oauth._ensure_integration", AsyncMock()),
+        # The callback resolves the acting user by CONSUMING the state binding;
+        # passing a user-id-shaped state no longer identifies anyone.
+        patch("src.api.routes_auth_oauth.consume_state", AsyncMock(return_value=TEST_USER_ID)),
     )
 
 
@@ -197,7 +205,7 @@ async def _run_callback(payload: dict, status_code: int = 200):
             "github",
             BackgroundTasks(),
             code="the_code",
-            state=TEST_USER_ID,
+            state="st_opaque",
             error="",
             settings=_settings(),
         )
@@ -261,3 +269,42 @@ class TestGitHubCallback:
 
         mgr.store_token.assert_not_awaited()
         assert "error=" in result.headers["location"]
+
+
+class TestCallbackRefusesAForgedState:
+    """The vulnerability, at the route: a guessed user id used to be enough.
+
+    `state` was the raw user_id and the callback trusted it verbatim, so anyone
+    who could complete a GitHub OAuth dance could have the resulting token filed
+    against another account simply by naming it. User ids are ULID-prefixed and
+    appear in logs, URLs and API responses — they were never secret.
+    """
+
+    async def test_a_user_id_shaped_state_stores_no_token(self):
+        post = AsyncMock(return_value=_token_response({"access_token": "ghu_x"}))
+        oauth_mgr = MagicMock()
+        oauth_mgr.store_token = AsyncMock()
+
+        client = MagicMock()
+        client.post = post
+        client.__aenter__ = AsyncMock(return_value=client)
+        client.__aexit__ = AsyncMock(return_value=False)
+
+        with (
+            patch("httpx.AsyncClient", MagicMock(return_value=client)),
+            patch("src.services.oauth_manager.OAuthManager", MagicMock(return_value=oauth_mgr)),
+            # No state was ever issued for this value.
+            patch("src.api.routes_auth_oauth.consume_state", AsyncMock(return_value=None)),
+        ):
+            result = await oauth_callback(
+                "github",
+                BackgroundTasks(),
+                code="the_code",
+                state=TEST_USER_ID,
+                error="",
+                settings=_settings(),
+            )
+
+        oauth_mgr.store_token.assert_not_awaited()
+        post.assert_not_awaited()
+        assert "Invalid+or+expired+OAuth+state" in result.headers["location"]

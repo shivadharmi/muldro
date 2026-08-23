@@ -21,6 +21,7 @@ from src.api.deps import (
     get_current_user_id,
     get_current_workspace_id,
 )
+from src.api.oauth_state import consume_state, issue_state
 from src.api.routes_auth_oauth_integration import (
     _ensure_integration,
     _error_redirect,
@@ -163,6 +164,32 @@ async def _resume_after_reauth(db_factory, user_id: str, provider: str, workspac
                 logger.debug("Failed to close reauth-resume Redis client", exc_info=True)
 
 
+async def _close_redis(redis) -> None:
+    """Close a short-lived Redis client without letting teardown break the flow."""
+    if redis is None:
+        return
+    try:
+        await redis.aclose()
+    except Exception:
+        logger.debug("Failed to close OAuth-state Redis client", exc_info=True)
+
+
+def _state_redis(settings: Settings):
+    """Open a Redis client for the OAuth state binding, or None.
+
+    A fresh client per call rather than a shared one: both call sites are a
+    single round trip on a browser-driven request, and the reauth-resume helper
+    above already established this shape in this module.
+    """
+    try:
+        import redis.asyncio as aioredis
+
+        return aioredis.from_url(settings.redis_url, decode_responses=True)
+    except Exception:
+        logger.warning("Could not open Redis for OAuth state", exc_info=True)
+        return None
+
+
 @router.get("/v1/auth/{provider}/authorize", response_model=OAuthUrlResponse)
 @router.get("/v1/auth/oauth/{provider}/authorize", response_model=OAuthUrlResponse)
 async def oauth_authorize(
@@ -190,6 +217,22 @@ async def oauth_authorize(
         client_id = settings.github_oauth_client_id
         if not client_id:
             raise HTTPException(status_code=400, detail="GitHub OAuth not configured")
+
+        # `state` used to be the raw user_id. It is echoed back verbatim by the
+        # provider and the callback trusted it as the identity to file the token
+        # under, so a guessed id was enough to have a credential stored against
+        # someone else's account. User ids are not secret; `state` must be.
+        redis = _state_redis(settings)
+        try:
+            state = await issue_state(redis, user_id)
+        except Exception as exc:
+            # Fail closed. Falling back to an unbound state would restore the
+            # vulnerability exactly, in a window nobody can see.
+            raise HTTPException(
+                status_code=503, detail="Could not start OAuth: state store unavailable"
+            ) from exc
+        finally:
+            await _close_redis(redis)
         # ``notifications`` is the scope that grants read access to the
         # /notifications API this connector polls; ``read:user`` identifies the
         # account the notifications belong to. Notifications originating in
@@ -203,7 +246,7 @@ async def oauth_authorize(
             "client_id": client_id,
             "redirect_uri": settings.github_oauth_redirect_uri,
             "scope": scopes or default_scopes,
-            "state": user_id,
+            "state": state,
         }
         url = f"https://github.com/login/oauth/authorize?{urlencode(params)}"
         return OAuthUrlResponse(url=url, provider="github")
@@ -240,10 +283,24 @@ async def oauth_callback(
     if not code:
         return _error_redirect(settings, f"OAuth {provider}: no authorization code received")
 
-    # user_id must be passed in state param from the authorize step
-    if not state or not state.startswith("usr_"):
-        return _error_redirect(settings, "Invalid OAuth state: missing user_id")
-    user_id = state
+    # The provider is checked BEFORE the state is consumed. A state is
+    # single-use, so consuming one for a provider this route cannot serve would
+    # burn a live authorization and force the founder to start over — and it
+    # would let anyone spend a state by replaying the callback against a
+    # nonsense provider.
+    if provider != "github":
+        raise HTTPException(status_code=400, detail=f"Unknown provider: {provider}")
+
+    # `state` names a single-use binding minted at authorize time; it is NOT the
+    # user id. Every failure mode — absent, expired, forged, already spent —
+    # gives the same message on purpose: distinguishing them is a probing oracle.
+    redis = _state_redis(settings)
+    try:
+        user_id = await consume_state(redis, state)
+    finally:
+        await _close_redis(redis)
+    if not user_id:
+        return _error_redirect(settings, "Invalid or expired OAuth state")
 
     if provider == "github":
         client_id = settings.github_oauth_client_id
