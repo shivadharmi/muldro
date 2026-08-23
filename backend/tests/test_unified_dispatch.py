@@ -430,6 +430,14 @@ class TestIsAutoExecuteTool:
 
 
 class TestSessionPoolDeNormalization:
+    """The real-name path, exercised on a server the gateway registry does NOT own.
+
+    These used `notion` until it migrated. A GATEWAY server is the wrong subject
+    here by construction: it registers only the names its registry declares and
+    drops the rest, which is the opposite of the auto-registration under test.
+    Slack is the remaining stdio installation.
+    """
+
     """Tests for session pool storing real tool names (no normalization)."""
 
     def _make_pool(self):
@@ -443,12 +451,12 @@ class TestSessionPoolDeNormalization:
     async def test_unified_stores_real_names(self):
         """Tool names stored as-is (no normalization)."""
         pool = self._make_pool()
-        pool.register_server_config("notion", {"command": "npx", "args": ["notion-mcp"]})
+        pool.register_server_config("slack", {"command": "npx", "args": ["slack-mcp"]})
 
         mock_client = AsyncMock()
         mock_tool = MagicMock()
-        mock_tool.name = "API-post-page"
-        mock_tool.description = "Create a page"
+        mock_tool.name = "slack_post_message"
+        mock_tool.description = "Post a message"
         mock_tool.inputSchema = {"type": "object", "properties": {"title": {"type": "string"}}}
         mock_client.list_tools = AsyncMock(return_value=[mock_tool])
 
@@ -461,12 +469,13 @@ class TestSessionPoolDeNormalization:
             # Mock _register_discovered_tools to avoid DB access in test
             pool._register_discovered_tools = AsyncMock()
 
-            session = await pool.get_or_create_session("notion", "usr_1")
+            session = await pool.get_or_create_session("slack", "usr_1")
 
         # Tool stored under real name
-        assert "API-post-page" in session.tools
-        assert pool._tool_metadata.get(("", "notion", "API-post-page")) is not None
-        assert pool._tool_metadata[("", "notion", "API-post-page")]["name"] == "API-post-page"
+        assert "slack_post_message" in session.tools
+        assert pool._tool_metadata.get(("", "slack", "slack_post_message")) is not None
+        meta = pool._tool_metadata[("", "slack", "slack_post_message")]
+        assert meta["name"] == "slack_post_message"
 
     @pytest.mark.asyncio
     async def test_unified_call_tool_skips_translation(self):
@@ -474,7 +483,7 @@ class TestSessionPoolDeNormalization:
         pool = self._make_pool()
         # Register server config so get_or_create_session resolves the key correctly.
         # auth_provider="none" makes effective_user="__shared__".
-        pool.register_server_config("notion", {"command": "npx", "args": ["notion-mcp"]})
+        pool.register_server_config("slack", {"command": "npx", "args": ["slack-mcp"]})
 
         mock_client = AsyncMock()
         mock_result = MagicMock()
@@ -486,31 +495,31 @@ class TestSessionPoolDeNormalization:
         session = SessionEntry(
             client=mock_client,
             client_ctx=MagicMock(),
-            server_name="notion",
+            server_name="slack",
             user_id="__shared__",
-            tools={"API-post-page": "API-post-page"},
+            tools={"slack_post_message": "slack_post_message"},
         )
-        pool._sessions[("", "notion", "__shared__")] = session
+        pool._sessions[("", "slack", "__shared__")] = session
 
         result = await pool.call_tool(
-            "API-post-page",
+            "slack_post_message",
             {"title": "Test"},
             user_id="usr_1",
-            server_name="notion",
+            server_name="slack",
         )
 
-        mock_client.call_tool.assert_called_once_with("API-post-page", {"title": "Test"})
+        mock_client.call_tool.assert_called_once_with("slack_post_message", {"title": "Test"})
         assert result["status"] == "ok"
 
     @pytest.mark.asyncio
     async def test_unified_registers_unknown_tools(self):
         """Unknown discovered tools are registered in DB."""
         pool = self._make_pool()
-        pool.register_server_config("notion", {"command": "npx", "args": ["notion-mcp"]})
+        pool.register_server_config("slack", {"command": "npx", "args": ["slack-mcp"]})
 
         mock_client = AsyncMock()
         mock_tool = MagicMock()
-        mock_tool.name = "API-new-unknown-tool"
+        mock_tool.name = "slack_new_unknown_tool"
         mock_tool.description = "A new tool"
         mock_tool.inputSchema = {"type": "object"}
         mock_client.list_tools = AsyncMock(return_value=[mock_tool])
@@ -523,10 +532,10 @@ class TestSessionPoolDeNormalization:
 
             # Mock _register_discovered_tools and verify it was called
             pool._register_discovered_tools = AsyncMock()
-            await pool.get_or_create_session("notion", "usr_1")
+            await pool.get_or_create_session("slack", "usr_1")
 
         pool._register_discovered_tools.assert_called_once()
         call_args = pool._register_discovered_tools.call_args
         raw_tools = call_args[0][0]
         assert len(raw_tools) == 1
-        assert raw_tools[0].name == "API-new-unknown-tool"
+        assert raw_tools[0].name == "slack_new_unknown_tool"

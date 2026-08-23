@@ -104,6 +104,8 @@ UNVERIFIABLE_CAPABILITIES: frozenset[str] = frozenset(
         "doc.update_datasource",
         "doc.drive_create",
         "doc.drive_delete",
+        "doc.confluence_create",
+        "doc.confluence_update",
         "workflow.create_issue",
         "workflow.update_issue",
         "workflow.transition",
