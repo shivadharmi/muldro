@@ -10,9 +10,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.deps import get_current_workspace_id, get_session
-from src.config import secret_crypto
+from src.config import provider_catalog, secret_crypto
 from src.config.model_catalog import MODEL_CATALOG, get_model_spec
-from src.config.provider_catalog import PROVIDER_CATALOG, AuthKind, FieldKind
+from src.config.provider_catalog import AuthKind, FieldKind
 from src.contracts.model_config import (
     ConfigWarning,
     ModelBindingDTO,
@@ -22,7 +22,11 @@ from src.contracts.model_config import (
 from src.llm.model_factory import build_langchain_model
 from src.models.provider_credential import ProviderCredential
 from src.orchestrator.agents import AGENT_MODEL_TIERS
-from src.services.model_config_service import ModelConfigService
+from src.services.model_config_service import (
+    ModelConfigService,
+    merge_extra_config,
+    rejected_extra_keys,
+)
 from src.services.model_resolver import KEYLESS_PROVIDERS, ModelResolver, ResolvedModel
 
 router = APIRouter()
@@ -105,7 +109,7 @@ async def get_model_catalog(workspace_id: str = Depends(get_current_workspace_id
                 model_count=len(MODEL_CATALOG.get(name, [])),
                 docs_url=spec.docs_url,
             )
-            for name, spec in PROVIDER_CATALOG.items()
+            for name, spec in provider_catalog.PROVIDER_CATALOG.items()
         ],
         models=[
             CatalogModel(
@@ -197,7 +201,7 @@ class CredentialBody(BaseModel):
     # Optional: local providers like ollama authenticate with a base_url alone (no key).
     api_key: str | None = None
     base_url: str | None = None
-    extra_config: dict | None = None
+    extra_config: dict[str, object] | None = None
 
 
 class TestResult(BaseModel):
@@ -212,6 +216,27 @@ class CredentialDeleteResponse(BaseModel):
     # Bindings this revoke just broke. Reported AFTER the delete, so it describes the
     # state that now exists rather than one predicted before the write.
     orphaned_bindings: list[ConfigWarning] = []
+
+
+# The 400 detail is echoed to the client AND logged, so it is sized for a human
+# reading a typo, not for a caller that submitted a thousand keys. Without these caps
+# a body of long junk keys produced a multi-megabyte error response and log line --
+# the request's own payload reflected back, amplified.
+_MAX_REPORTED_KEYS = 5
+_MAX_REPORTED_KEY_LEN = 64
+
+
+def _describe_rejected(rejected: dict[str, str]) -> str:
+    """One short, bounded sentence naming why a credential write was refused."""
+
+    def _clip(key: str) -> str:
+        return key if len(key) <= _MAX_REPORTED_KEY_LEN else key[: _MAX_REPORTED_KEY_LEN - 1] + "…"
+
+    items = list(rejected.items())
+    shown = [f"{_clip(k)} ({why})" for k, why in items[:_MAX_REPORTED_KEYS]]
+    if len(items) > _MAX_REPORTED_KEYS:
+        shown.append(f"and {len(items) - _MAX_REPORTED_KEYS} more")
+    return ", ".join(shown)
 
 
 def _require_known_provider(provider: str) -> None:
@@ -240,6 +265,10 @@ async def put_provider_credential(
     Assigning every field unconditionally meant a client that sent only the key it was
     rotating silently nulled base_url and extra_config -- and for ollama, whose
     base_url IS the credential, that unconfigured the provider outright (B1).
+
+    The same rule holds one level down, per KEY inside extra_config -- see
+    ``merge_extra_config``. Replacing that map wholesale destroyed any secret the
+    client had omitted, and a client cannot resend a secret it can never read back.
     """
     _require_known_provider(provider)
 
@@ -249,26 +278,50 @@ async def put_provider_credential(
     )
     existing = (await db.execute(stmt)).scalars().first()
 
+    fields = body.model_dump(exclude_unset=True)
+
+    # Validated BEFORE any merge, and before the missing-api_key check below: a
+    # malformed field is a STRUCTURAL error the client cannot guess, whereas the
+    # missing key is one it can. Reporting the guessable one first means fixing it
+    # only surfaces a second 400.
+    rejected = rejected_extra_keys(provider, fields.get("extra_config"))
+    if rejected:
+        raise HTTPException(
+            status_code=400,
+            detail=f"rejected credential fields for {provider}: {_describe_rejected(rejected)}",
+        )
+
     # api_key is required to CREATE a keyed provider's credential, not to edit one:
     # editing a base URL must not force the founder to retype a secret they cannot see.
     if existing is None and not body.api_key and provider not in KEYLESS_PROVIDERS:
         raise HTTPException(status_code=400, detail=f"api_key is required for provider {provider}")
 
-    fields = body.model_dump(exclude_unset=True)
-
     if existing is not None:
+        # Only a REAL write invalidates a prior verification -- `status` renders in
+        # the Providers tab, so downgrading a `valid` provider to `untested` for a
+        # request that changed nothing is a visible lie. A merge makes that check
+        # non-trivial one level down: PUT {"extra_config": {}} carries a field but
+        # writes nothing, so presence in `fields` is no longer proof of a change.
+        wrote = False
         if "api_key" in fields:
             existing.api_key_encrypted = (
                 secret_crypto.encrypt_secret(fields["api_key"]) if fields["api_key"] else None
             )
+            wrote = True
         if "base_url" in fields:
             existing.base_url = fields["base_url"]
+            wrote = True
         if "extra_config" in fields:
-            existing.extra_config = fields["extra_config"]
-        if fields:
-            # Only a real write invalidates a prior verification. An empty body changes
-            # nothing, so it must not downgrade a `valid` provider to `untested` --
-            # `status` renders in the Providers tab.
+            # Merge, never replace: an omitted key is "leave it alone", which is the
+            # only way a client can keep a secret it is never allowed to read back.
+            merged = merge_extra_config(existing.extra_config, fields["extra_config"])
+            # `or None` on the stored side because the merge collapses an emptied map
+            # to None: a row seeded with {} (reachable only by direct DB insert) would
+            # otherwise read as changed by a write that touched nothing.
+            if merged != (existing.extra_config or None):
+                existing.extra_config = merged
+                wrote = True
+        if wrote:
             existing.status = "untested"
             existing.enabled = True
     else:
@@ -280,7 +333,9 @@ async def put_provider_credential(
                 # Keyless providers (ollama) store no ciphertext -- only base_url configures them.
                 api_key_encrypted=secret_crypto.encrypt_secret(api_key) if api_key else None,
                 base_url=fields.get("base_url"),
-                extra_config=fields.get("extra_config"),
+                # No stored row to merge against, but the null-deletes-a-key rule
+                # still applies so a create and an edit agree on what a null means.
+                extra_config=merge_extra_config(None, fields.get("extra_config")),
                 status="untested",
                 enabled=True,
             )
@@ -302,8 +357,16 @@ async def delete_provider_credential(
     """Revoke this workspace's credential, and report what the revoke broke.
 
     Never blocks: a credential the founder cannot revoke is a security problem.
+
+    Deliberately NOT guarded by ``_require_known_provider``. ``catalogued`` is derived
+    as ``provider in MODEL_CATALOG``, which is the same condition that guard rejects on
+    -- so guarding here meant ``catalogued=False`` implied "undeletable", biconditionally.
+    A stray row (a provider dropped from the catalog, or one whose key no longer
+    decrypts) is shown precisely SO it can be removed, and Remove is the only action its
+    row offers; a guard turned that into a button that could never work. PUT and /test
+    keep the guard because they index MODEL_CATALOG afterwards; this handler indexes
+    nothing, it only filters ProviderCredential by (workspace_id, provider).
     """
-    _require_known_provider(provider)
     stmt = select(ProviderCredential).where(
         ProviderCredential.workspace_id == workspace_id,
         ProviderCredential.provider == provider,

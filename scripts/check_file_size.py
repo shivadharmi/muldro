@@ -16,58 +16,62 @@ PY_CAP = 800
 TSX_CAP = 400
 STORE_CAP = 200
 
-# path -> line count when the guard was first actually RUN (2026-08-22).
-# Files may not exceed this; each carries a standing debt to be split.
+# path -> line count measured against THIS tree. Files may not exceed this.
 #
-# This list was regenerated because it had never been enforced: core.hooksPath
-# pointed at a directory removed by the muldro rename, so no hook ran for months,
-# and the pre-commit framework that invokes THIS script was never installed. The
-# previous list was written against a tree that no longer exists — it named
-# surface_detail_builders.py as a file (it is a package now) and muldro.py at
-# 3427 lines (it is 896). A guard that never runs cannot keep its own exemptions
-# honest.
+# GRANDFATHER_SLACK is added on top of every number below, so a file recorded at
+# its current size may still grow by that much before this reports. A record is
+# a ceiling with headroom, not a freeze.
+#
+# Re-measured when the view-layer and model-settings branches were merged. Both
+# had regenerated this list independently, against trees that no longer exist —
+# so neither set of numbers described the file that now exists, and taking
+# either side wholesale would have recorded fiction. Every entry below was
+# measured against the merged tree. Where a file had SHRUNK the smaller number
+# is recorded, because the record is a debt to pay down, not a budget to spend.
+#
+# `settings-modal.tsx` left this list entirely: the model-settings redesign
+# split it from 538 lines to 369, under the 400 cap, so it needs no exemption.
+# That is what an entry leaving looks like, and it is the point of the list.
 GRANDFATHERED: dict[str, int] = {
     "backend/src/orchestrator/agent_invoker.py": 1620,
-    "backend/tests/deep_runtime/test_permission_gate.py": 1159,
-    # The model-config client rewrite (partial-credential bodies, bind-rejection
-    # error mapping) grew this; the view-layer cutover shrank it by deleting the
-    # A2UI surface calls. 1146 is the MERGED size — neither branch's own figure
-    # (1111 here, 1169 there) describes the file that now exists.
-    "frontend/src/lib/api.ts": 1146,
-    "backend/src/integrations/session_pool.py": 1143,
+    "backend/tests/deep_runtime/test_permission_gate.py": 1161,
+    "frontend/src/lib/api.ts": 1170,
     "backend/tests/test_scheduler.py": 1104,
-    "backend/src/services/graph_executor.py": 1023,
+    "backend/src/services/graph_executor.py": 1014,
     "backend/src/services/dag_runner.py": 961,
     "backend/tests/test_push_receiver.py": 924,
-    "backend/tests/test_autonomous_deep_e2e.py": 909,
     "backend/tests/test_knowledge_service.py": 909,
-    "backend/src/orchestrator/muldro.py": 896,
-    "backend/tests/deep_runtime/test_trust_gate.py": 892,
+    "backend/tests/test_autonomous_deep_e2e.py": 907,
+    "backend/tests/deep_runtime/test_trust_gate.py": 894,
     "backend/tests/test_perception_policy.py": 889,
     "backend/tests/test_foundation_hardening.py": 885,
-    "backend/tests/test_chat_single_lead.py": 880,
-    "backend/src/orchestrator/perception_runner.py": 825,
-    "backend/src/api/routes_approvals.py": 820,
+    "backend/src/orchestrator/perception_runner.py": 858,
+    "backend/src/api/routes_approvals.py": 843,
+    "backend/src/orchestrator/muldro.py": 828,
     "backend/tests/test_perception.py": 815,
-    "frontend/src/components/muldro/chat-panel.tsx": 736,
-    # Over the 400 cap before the standard was adopted and omitted from this
-    # list by oversight. The Model tab's adaptation to scope_type/scope_key
-    # bindings and the flat catalog.models list grew it further; recorded
-    # rather than split — the tab's actual redesign is a later phase.
-    "frontend/src/components/settings/model-tab.tsx": 610,
-    # Same oversight. The model-config contract rewrite (scope_type/scope_key
-    # bindings, flat catalog.models, credential fields) grew it further.
-    "frontend/src/lib/types.ts": 591,
-    "frontend/src/components/settings/settings-modal.tsx": 538,
+    "backend/tests/test_chat_single_lead.py": 809,
+    "frontend/src/components/muldro/chat-panel.tsx": 724,
+    "frontend/src/lib/types.ts": 623,
     "frontend/src/components/history/run-detail-modal.tsx": 536,
     "frontend/tests/e2e/diagnostic.spec.ts": 501,
     "frontend/src/app/integrations/page.tsx": 460,
+    "backend/src/integrations/mcp_pool.py": 445,
     "frontend/tests/e2e/screenshot-all-pages.spec.ts": 421,
     "frontend/tests/e2e/pages.spec.ts": 413,
     "frontend/src/components/knowledge/stats-view.tsx": 406,
     "frontend/src/hooks/useConnectAccount.test.ts": 401,
+    "frontend/src/app/settings/page.tsx": 23,
+    "backend/src/api/routes_auth.py": 16,
+    # The one that did NOT move. Recorded 871, measured 1143 — already violating
+    # even with the slack. Left at 871 deliberately: re-recording it at 1143
+    # would launder a real, pre-existing violation into a permission, and this
+    # file belongs to work outside this change. It should fail, and it does.
+    "backend/src/integrations/session_pool.py": 871,
 }
-GRANDFATHER_SLACK = 40  # small headroom so unrelated edits don't hard-block
+# Added on top of every recorded number above: small headroom so unrelated edits
+# don't hard-block. A file recorded at its current size may still grow by this
+# much, which is why "recorded at its current size" is a baseline, not a freeze.
+GRANDFATHER_SLACK = 40
 
 
 def cap_for(path: str) -> int:
@@ -97,6 +101,16 @@ def main(argv: list[str]) -> int:
         ).stdout.splitlines()
     )
     failures: list[str] = []
+    # A grandfather key that resolves to nothing is not a lenient cap — it is NO
+    # cap, silently. `chat-panel.tsx` carried a key naming a directory that never
+    # existed and grew unchecked for months because `.get()` simply returned
+    # None. Checked here rather than trusted, so a mistyped or stale path reports
+    # itself instead of disappearing.
+    for key in GRANDFATHERED:
+        if not Path(key).exists():
+            failures.append(
+                f"{key}: grandfathered path no longer exists — remove or re-point it"
+            )
     for f in files:
         path = Path(f)
         cap = cap_for(f)

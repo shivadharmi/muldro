@@ -40,7 +40,7 @@ export function CommandComposer({ onSend, disabled }: Props) {
             onClick={() => setPermissionMode(m.value)}
             className={`px-2.5 py-1 text-xs rounded-[var(--radius-sm)] transition-colors cursor-pointer ${
               permissionMode === m.value
-                ? "bg-accent-primary text-white"
+                ? "bg-j-primary text-j-primary-fg"
                 : "text-t-tertiary hover:text-t-secondary hover:bg-surface-1"
             }`}
           >
@@ -58,7 +58,17 @@ export function CommandComposer({ onSend, disabled }: Props) {
             permissionMode === "bypass" ? "What should Muldro do?" : "Ask Muldro anything..."
           }
           rows={1}
-          className="flex-1 bg-surface-1 border border-b-primary rounded-[var(--radius-md)] px-3 py-2 text-sm text-t-primary placeholder:text-t-tertiary resize-none focus:outline-none focus:ring-1 focus:ring-accent-primary"
+          // No focus ring here, deliberately. This carried
+          // `focus:outline-none focus:ring-1 focus:ring-accent-primary`; the
+          // `outline-none` and the `accent-primary` were both inert (see the
+          // focus-ring note in `globals.css` — that rule is unlayered, and
+          // `accent-primary` is not a token), but `focus:ring-1` was NOT: with
+          // no ring colour resolving, Tailwind v4 fell back to `currentColor`
+          // and drew a 1px ring nobody chose. A textarea matches
+          // `:focus-visible` whenever it is focused, so the global outline
+          // already fires and a ring beside it is the SECOND indicator that
+          // note forbids. Removed rather than re-pointed at a real token.
+          className="flex-1 bg-surface-1 border border-b-primary rounded-[var(--radius-md)] px-3 py-2 text-sm text-t-primary placeholder:text-t-tertiary resize-none"
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey) {
               e.preventDefault();
@@ -69,7 +79,7 @@ export function CommandComposer({ onSend, disabled }: Props) {
         <button
           type="submit"
           disabled={disabled || !input.trim()}
-          className="px-4 py-2 bg-accent-primary text-white text-sm rounded-[var(--radius-md)] hover:opacity-90 transition-opacity disabled:opacity-40 cursor-pointer"
+          className="px-4 py-2 bg-j-primary text-j-primary-fg text-sm rounded-[var(--radius-md)] hover:opacity-90 transition-opacity disabled:opacity-40 cursor-pointer"
         >
           Send
         </button>

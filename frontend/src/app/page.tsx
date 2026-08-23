@@ -117,7 +117,9 @@ export default function WorkspacePage() {
       />
 
       {firstRunState === "onboarding" && <OnboardingCard />}
-      {firstRunState === "gathering" && <BriefingGatheringCard />}
+      {firstRunState === "gathering" && (
+        <BriefingGatheringCard sourceCount={sourceCount} />
+      )}
 
       {/* The canvas owns its own empty state. Do not guard on units.length
           here — that made the empty state unreachable outside its own test. */}

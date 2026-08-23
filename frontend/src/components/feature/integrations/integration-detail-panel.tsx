@@ -45,7 +45,7 @@ export function IntegrationDetailPanel({ integration }: Props) {
         <div className="rounded-[var(--radius-md)] bg-surface-1 p-3">
           <p className="text-xs text-t-tertiary">Errors (24h)</p>
           <p className={`text-lg font-medium ${
-            (integration.error_count_24h ?? 0) > 0 ? "text-status-error" : "text-t-primary"
+            (integration.error_count_24h ?? 0) > 0 ? "text-j-error" : "text-t-primary"
           }`}>
             {integration.error_count_24h ?? 0}
           </p>
