@@ -26,6 +26,11 @@ def test_every_gateway_provider_declares_an_oauth_credential_key():
         "googlecalendar": "google",
         "github": "github",
         "notion": "notion",
+        # Atlassian is TWO OC services on one Muldro installation, both backed
+        # by the single Atlassian OAuth client — the same fan-out gmail and
+        # googlecalendar make onto "google".
+        "jira": "atlassian",
+        "confluence": "atlassian",
     }
 
 
@@ -117,6 +122,8 @@ def _settings(**overrides) -> Settings:
         github_oauth_client_secret="gh-secret",
         notion_oauth_client_id="n-id",
         notion_oauth_client_secret="n-secret",
+        atlassian_oauth_client_id="a-id",
+        atlassian_oauth_client_secret="a-secret",
         skip_gateway_validation=False,
     )
     base.update(overrides)
@@ -128,29 +135,32 @@ async def test_registers_every_provider_with_the_right_credentials():
     admin = FakeAdmin()
     registered = await register_gateway_oauth_configs(_settings(), admin=admin)
 
-    assert registered == ["gmail", "googlecalendar", "github", "notion"]
+    assert registered == ["gmail", "googlecalendar", "github", "notion", "jira", "confluence"]
     assert admin.calls == [
         ("gmail", "g-id", "g-secret"),
         ("googlecalendar", "g-id", "g-secret"),
         ("github", "gh-id", "gh-secret"),
         ("notion", "n-id", "n-secret"),
+        ("jira", "a-id", "a-secret"),
+        ("confluence", "a-id", "a-secret"),
     ]
 
 
-async def test_never_registers_non_gateway_providers():
-    """atlassian has OAuth settings but is not a gateway provider.
+async def test_registers_exactly_the_registry_and_nothing_else():
+    """Membership in PROVIDER_REGISTRY is what makes a provider gateway-backed.
 
-    Notion used to be the second example here and is now a counter-example: it
-    holds the same shape of settings it always did, and registering it became
-    correct the moment it entered PROVIDER_REGISTRY. Having settings is not what
-    makes a provider gateway-backed; being in the registry is.
+    This test used to name notion and atlassian as providers that "have OAuth
+    settings but are not gateway providers". Both have since migrated, holding
+    the same settings throughout — which is the point: having settings was never
+    the criterion. What must never be registered is a SERVER name that OC does
+    not know, so "atlassian" (the Muldro installation) stays absent while its
+    two OC services, jira and confluence, are present.
     """
     admin = FakeAdmin()
     await register_gateway_oauth_configs(_settings(), admin=admin)
-    assert "atlassian" not in {service for service, _, _ in admin.calls}
-    assert {service for service, _, _ in admin.calls} == {
-        p.provider_id for p in PROVIDER_REGISTRY.values()
-    }
+    called = {service for service, _, _ in admin.calls}
+    assert "atlassian" not in called
+    assert called == {p.provider_id for p in PROVIDER_REGISTRY.values()}
 
 
 async def test_skip_flag_makes_it_a_no_op():

@@ -34,6 +34,9 @@ AGENT_CAPABILITY_SCOPES: dict[str, set[str]] = {
         "doc.get",
         "doc.search",
         "doc.query",
+        "doc.confluence_search",
+        "doc.confluence_get",
+        "doc.confluence_list_spaces",
         "messaging.list_channels",
         "messaging.get_history",
         "messaging.get_thread",
@@ -52,6 +55,8 @@ AGENT_CAPABILITY_SCOPES: dict[str, set[str]] = {
         "workflow.get",
         "workflow.search",
         "workflow.get_teams",
+        "workflow.get_project",
+        "workflow.list_projects",
         # Internal observation tools
         "internal.ingest_event",
         "internal.report_observation",
@@ -140,11 +145,21 @@ AGENT_CAPABILITY_SCOPES: dict[str, set[str]] = {
         "workflow.delete",
         "workflow.delete_comment",
         "workflow.delete_milestone",
+        "workflow.get_project",
+        "workflow.list_projects",
         # Docs
         "doc.create",
         "doc.update",
         "doc.comment",
         "doc.append",
+        # Confluence. The reads travel WITH the writes: read-before-write means
+        # a page must be readable before it is edited, and Confluence needs its
+        # current versionNumber to update at all.
+        "doc.confluence_search",
+        "doc.confluence_get",
+        "doc.confluence_list_spaces",
+        "doc.confluence_create",
+        "doc.confluence_update",
         # Internal
         "internal.update_execution",
     },

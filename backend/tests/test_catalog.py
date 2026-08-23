@@ -271,16 +271,17 @@ def test_get_verified_seeds_helper():
     for seed in verified:
         assert seed.verified is True
 
-    # Verify expected servers are present in verified seeds. google-workspace
-    # and github are gateway-only servers; their derived seeds are all
-    # verified=True (adapter warm-start is the ground truth for these names).
+    # A gateway-backed server's seeds are all derived, and derived seeds are
+    # verified=True (adapter warm-start is the ground truth for those names).
+    # Anything still hand-written is unverified. Both halves come from the
+    # registry so a migration moves a server between them automatically.
     verified_servers = {seed.server for seed in verified}
-    expected_verified = {"notion", "google-workspace", "github"}
-    assert expected_verified.issubset(verified_servers)
+    gateway_servers = {p.server_name for p in PROVIDER_REGISTRY.values()}
+    assert gateway_servers.issubset(verified_servers)
 
-    # Verify unverified servers are NOT in verified seeds
-    unverified_servers = {"slack", "atlassian", "_composite"}
-    assert verified_servers.isdisjoint(unverified_servers)
+    hand_written = {s.server for s in EXTERNAL_TOOL_SEEDS} - gateway_servers
+    assert hand_written, "nothing left unmigrated — update this test's premise"
+    assert verified_servers.isdisjoint(hand_written)
 
 
 def test_seed_server_names_match_installations():
@@ -308,10 +309,14 @@ def test_high_risk_tools_require_approval():
 
 
 def test_verified_tool_servers():
-    """Verify exactly 3 servers have verified tools."""
-    verified = get_verified_seeds()
-    verified_servers = {seed.server for seed in verified}
-    assert verified_servers == {"notion", "google-workspace", "github"}
+    """Verified means gateway-derived: the adapter warm-start is the ground truth.
+
+    Named from the registry rather than listed, because "which servers are
+    verified" is not an independent fact — it IS the set of migrated servers,
+    and a hand-kept list only ever lags a migration by one commit.
+    """
+    verified_servers = {seed.server for seed in get_verified_seeds()}
+    assert verified_servers == {p.server_name for p in PROVIDER_REGISTRY.values()}
 
 
 def test_composite_tools():

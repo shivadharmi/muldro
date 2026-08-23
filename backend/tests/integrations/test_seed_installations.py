@@ -76,5 +76,13 @@ def test_migrated_installations_carry_no_native_transport_config():
 
 
 def test_unmigrated_installations_keep_native_transport():
+    """Slack is the last native installation, and only because OC lacks a client.
+
+    Atlassian left this test when it migrated: its remote_url addressed
+    Atlassian's own Rovo MCP server, which the gateway replaces. Slack cannot
+    follow until a Slack OAuth app exists — MULDRO_SLACK_OAUTH_CLIENT_ID has no
+    setting and no value, and adding slack to PROVIDER_REGISTRY without one
+    makes register_gateway_oauth_configs abort startup.
+    """
     assert _by_name("slack")["command"] == "npx"
-    assert _by_name("atlassian")["remote_url"] == "https://mcp.atlassian.com/v1/mcp"
+    assert _by_name("slack")["transport"] == "stdio"

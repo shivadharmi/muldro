@@ -426,7 +426,7 @@ def _ext(
 # low-risk. Tool-granularity risk is more accurate than capability-granularity.
 EXTERNAL_TOOL_SEEDS: list[ExternalToolSeed] = [
     # _ext(name, capability, server, risk, approval, verified)
-    # google-workspace, github and notion are gateway-only (OpenConnector) --
+    # google-workspace, github, notion and atlassian are gateway-only --
     # see the derived block below EXTERNAL_TOOL_SEEDS. Native hand-written seeds
     # for a migrated server are deliberately absent: leaving them would offer
     # agents two names for one action, one of them addressing a stdio process
@@ -440,20 +440,6 @@ EXTERNAL_TOOL_SEEDS: list[ExternalToolSeed] = [
     _ext("slack_get_users", "messaging.get_users", "slack", "low", False, False),
     _ext("slack_get_user_profile", "messaging.get_profile", "slack", "low", False, False),
     _ext("slack_list_channels", "messaging.list_channels", "slack", "low", False, False),
-    # atlassian (13 tools, verified=False)
-    _ext("getJiraIssue", "issue.get", "atlassian", "low", False, False),
-    _ext("searchJiraIssuesUsingJql", "issue.search", "atlassian", "low", False, False),
-    _ext("getVisibleJiraProjects", "issue.list", "atlassian", "low", False, False),
-    _ext("getJiraIssueTypeMetaWithFields", "issue.get", "atlassian", "low", False, False),
-    _ext("getJiraProjectIssueTypesMetadata", "issue.get", "atlassian", "low", False, False),
-    _ext("getTransitionsForJiraIssue", "issue.get", "atlassian", "low", False, False),
-    _ext("lookupJiraAccountId", "search.users", "atlassian", "low", False, False),
-    _ext("getJiraIssueRemoteIssueLinks", "issue.get", "atlassian", "low", False, False),
-    _ext("createJiraIssue", "issue.create", "atlassian", "medium", True, False),
-    _ext("editJiraIssue", "issue.update", "atlassian", "medium", True, False),
-    _ext("transitionJiraIssue", "issue.transition", "atlassian", "medium", True, False),
-    _ext("addCommentToJiraIssue", "issue.comment", "atlassian", "medium", True, False),
-    _ext("addWorklogToJiraIssue", "issue.update", "atlassian", "medium", True, False),
     # _composite (1 tool, verified=False)
     _ext("web_search", "search.web", "_composite", "low", False, False),
 ]

@@ -1,7 +1,8 @@
 """OAuth routes: provider listing, authorize-URL generation, and the
 callback that exchanges codes for tokens and provisions integrations.
 
-Serves the providers Muldro authenticates natively (github/atlassian).
+Serves the one provider Muldro still authenticates natively: github, and
+only for its notifications poll.
 ``google`` was retired here when it moved behind the OpenConnector gateway: that
 gateway owns its OAuth client and stores its credentials, so it hits the
 "Unknown provider" 400 and is connected through ``routes_integrations`` instead.
@@ -11,7 +12,6 @@ while the token minted here backs only the native notifications poll.
 Extracted from routes_auth.py (decomposition, 2026-06-20)."""
 
 import logging
-from datetime import datetime, timedelta, timezone
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
@@ -208,40 +208,6 @@ async def oauth_authorize(
         url = f"https://github.com/login/oauth/authorize?{urlencode(params)}"
         return OAuthUrlResponse(url=url, provider="github")
 
-    elif provider == "atlassian":
-        client_id = settings.atlassian_oauth_client_id
-        if not client_id:
-            raise HTTPException(status_code=400, detail="Atlassian OAuth not configured")
-        # Scope list required by Atlassian's hosted Remote MCP
-        # (https://mcp.atlassian.com/v1/mcp). Missing `read:me` was the
-        # cause of every MCP tool call returning the opaque
-        # {"error":true,"message":"We are having trouble completing this action..."}
-        # wrapper even though direct REST calls with the same token worked.
-        # The RMCP server needs to resolve the calling identity on every
-        # tool invocation; without read:me / read:account-scoped claims it
-        # fails silently with the generic message instead of a 403.
-        default_scopes = (
-            "offline_access read:me "
-            "read:jira-work write:jira-work read:jira-user manage:jira-project "
-            "read:confluence-content.all read:confluence-content.summary "
-            "write:confluence-content "
-            "read:confluence-space.summary "
-            "read:confluence-props write:confluence-props "
-            "read:confluence-user read:confluence-groups "
-            "search:confluence"
-        )
-        params = {
-            "audience": "api.atlassian.com",
-            "client_id": client_id,
-            "scope": scopes or default_scopes,
-            "redirect_uri": settings.atlassian_oauth_redirect_uri,
-            "state": user_id,
-            "response_type": "code",
-            "prompt": "consent",
-        }
-        url = f"https://auth.atlassian.com/authorize?{urlencode(params)}"
-        return OAuthUrlResponse(url=url, provider="atlassian")
-
     else:
         raise HTTPException(status_code=400, detail=f"Unknown provider: {provider}")
 
@@ -356,195 +322,6 @@ async def oauth_callback(
         logger.info("GitHub integration linked for %s", user_id)
         background_tasks.add_task(_trigger_initial_observation, user_id, ["github"], workspace_id)
 
-    elif provider == "atlassian":
-        client_id = settings.atlassian_oauth_client_id
-        client_secret = settings.atlassian_oauth_client_secret
-        if not client_id or not client_secret:
-            return _error_redirect(settings, "Atlassian OAuth not configured")
-
-        async with httpx.AsyncClient() as client:
-            resp = await client.post(
-                "https://auth.atlassian.com/oauth/token",
-                json={
-                    "grant_type": "authorization_code",
-                    "code": code,
-                    "client_id": client_id,
-                    "client_secret": client_secret,
-                    "redirect_uri": settings.atlassian_oauth_redirect_uri,
-                },
-                headers={"Content-Type": "application/json"},
-                timeout=10,
-            )
-            if resp.status_code != 200:
-                logger.error("Atlassian token exchange failed: %s", resp.text)
-                return _error_redirect(settings, "Failed to exchange Atlassian authorization code")
-            token_data = resp.json()
-
-            # Fetch accessible resources — Atlassian's MCP tools (and any REST
-            # API call we make ourselves) require the cloudId. Agents won't
-            # know this value on their own, so we persist it on the
-            # installation and later auto-inject it into every MCP tool call.
-            cloud_id = ""
-            site_url = ""
-            sites: list[dict] = []
-            res_resp = await client.get(
-                "https://api.atlassian.com/oauth/token/accessible-resources",
-                headers={"Authorization": f"Bearer {token_data['access_token']}"},
-                timeout=10,
-            )
-            if res_resp.status_code == 200:
-                resources = res_resp.json()
-                sites = [
-                    {
-                        "id": r.get("id", ""),
-                        "name": r.get("name", ""),
-                        "url": r.get("url", ""),
-                        "scopes": r.get("scopes", []),
-                    }
-                    for r in resources
-                ]
-                if resources:
-                    cloud_id = resources[0].get("id", "")
-                    site_url = resources[0].get("url", "")
-
-            # Fetch accessible projects up-front so the agent has context
-            # ("your projects are X, Y, Z") without needing a tool call on
-            # every user question. Bounded to 50 to keep the request small;
-            # full list is still available via MCP tools.
-            projects: list[dict] = []
-            if cloud_id:
-                try:
-                    proj_resp = await client.get(
-                        f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/project/search",
-                        params={"maxResults": 50},
-                        headers={
-                            "Authorization": f"Bearer {token_data['access_token']}",
-                            "Accept": "application/json",
-                        },
-                        timeout=10,
-                    )
-                    if proj_resp.status_code == 200:
-                        data = proj_resp.json()
-                        projects = [
-                            {
-                                "id": p.get("id", ""),
-                                "key": p.get("key", ""),
-                                "name": p.get("name", ""),
-                                "project_type": p.get("projectTypeKey", ""),
-                            }
-                            for p in data.get("values", [])
-                        ]
-                    else:
-                        logger.warning(
-                            "Atlassian project fetch returned %s: %s",
-                            proj_resp.status_code,
-                            proj_resp.text[:200],
-                        )
-                except Exception:
-                    logger.warning("Atlassian project fetch failed", exc_info=True)
-
-            # Fetch the current Atlassian user profile so the agent can
-            # personalize output without another roundtrip.
-            atlassian_user: dict = {}
-            if cloud_id:
-                try:
-                    me_resp = await client.get(
-                        f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/myself",
-                        headers={
-                            "Authorization": f"Bearer {token_data['access_token']}",
-                            "Accept": "application/json",
-                        },
-                        timeout=10,
-                    )
-                    if me_resp.status_code == 200:
-                        me = me_resp.json()
-                        atlassian_user = {
-                            "account_id": me.get("accountId", ""),
-                            "display_name": me.get("displayName", ""),
-                            "email": me.get("emailAddress", ""),
-                            "timezone": me.get("timeZone", ""),
-                        }
-                except Exception:
-                    logger.debug("Atlassian user profile fetch failed", exc_info=True)
-
-        expires_at = None
-        if token_data.get("expires_in"):
-            expires_at = datetime.now(timezone.utc) + timedelta(seconds=token_data["expires_in"])
-
-        db_factory = get_session_factory()
-        from src.api.deps import resolve_workspace_id
-
-        async with db_factory() as _db:
-            workspace_id = await resolve_workspace_id(_db, user_id)
-
-        oauth_mgr = OAuthManager(
-            db_factory,
-            encryption_key=settings.oauth_encryption_key,
-            settings=settings,
-        )
-        await oauth_mgr.store_token(
-            user_id=user_id,
-            provider="atlassian",
-            access_token=token_data["access_token"],
-            refresh_token=token_data.get("refresh_token"),
-            expires_at=expires_at,
-            scopes=token_data.get("scope", "").split() if token_data.get("scope") else None,
-            workspace_id=workspace_id,
-        )
-        # server_name matches seed_installations.py ("atlassian"), not provider name
-        await _ensure_integration(
-            db_factory,
-            user_id,
-            "atlassian",
-            workspace_id=workspace_id,
-        )
-        # Persist everything the agent will need on the installation record:
-        # - cloud_id / site_url / sites: so we don't re-fetch from Atlassian
-        # - projects / atlassian_user: give the Planner/Presenter real context
-        # - tool_defaults: auto-injected by session_pool.call_tool so the
-        #   agent never needs to ask "what's your cloudId?" for MCP calls.
-        if cloud_id:
-            from sqlalchemy import select as sa_select
-
-            from src.models.integration_installation import IntegrationInstallation
-
-            async with db_factory() as _db:
-                result = await _db.execute(
-                    sa_select(IntegrationInstallation).where(
-                        IntegrationInstallation.user_id == user_id,
-                        IntegrationInstallation.server_name == "atlassian",
-                        IntegrationInstallation.workspace_id == workspace_id,
-                    )
-                )
-                inst = result.scalar_one_or_none()
-                if inst:
-                    config = inst.config or {}
-                    config["cloud_id"] = cloud_id
-                    if site_url:
-                        config["site_url"] = site_url
-                    if sites:
-                        config["sites"] = sites
-                    if projects:
-                        config["projects"] = projects
-                    if atlassian_user:
-                        config["atlassian_user"] = atlassian_user
-                    # Keys merged into every Atlassian MCP tool_input when
-                    # absent (agent doesn't need to learn cloudId).
-                    config["tool_defaults"] = {"cloudId": cloud_id}
-                    inst.config = config
-                    await _db.commit()
-
-        logger.info(
-            "Atlassian integration linked for %s (cloudId=%s site=%s projects=%d)",
-            user_id,
-            cloud_id,
-            site_url or "?",
-            len(projects),
-        )
-        background_tasks.add_task(
-            _trigger_initial_observation, user_id, ["atlassian"], workspace_id
-        )
-
     else:
         raise HTTPException(status_code=400, detail=f"Unknown provider: {provider}")
 
@@ -556,9 +333,12 @@ async def oauth_callback(
         # absent: their MCP servers authenticate through the OpenConnector
         # gateway's platform JWT. GitHub's native token is for the notifications
         # poll only and its MCP session must not be re-keyed to it.
+        # Only slack remains: every other installation authenticates to the
+        # OpenConnector adapter with a platform JWT, which no native token
+        # re-keys. GitHub's token serves the notifications poll alone and must
+        # NOT be pushed into its MCP session.
         _provider_servers = {
             "slack": ["slack"],
-            "atlassian": ["atlassian"],
         }
         for server_name in _provider_servers.get(provider, []):
             background_tasks.add_task(
@@ -572,7 +352,7 @@ async def oauth_callback(
 
     # Auto-resume: clear any needs-reauth state for this provider — un-pause its
     # perception sources and re-queue runs parked in awaiting_reauth. Runs for
-    # every natively-authenticated provider (github/slack/atlassian),
+    # every natively-authenticated provider (github/slack),
     # best-effort.
     background_tasks.add_task(
         _resume_after_reauth,
