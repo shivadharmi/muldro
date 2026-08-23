@@ -18,7 +18,7 @@ all contributions, including AI-assisted ones.** Read it before you write code. 
   not grow**.
 - Refactoring process: characterization tests first, one mechanical move per commit, structure
   and behavior never in the same commit
-- The A2UI side-effect rule
+- The view-layer side-effect rule
 - Open-source hygiene: no secrets anywhere, conventional commits, no attribution trailers
 
 This file does not repeat any of that. It covers the mechanics: environment, tests, commits, PRs.
@@ -26,7 +26,7 @@ This file does not repeat any of that. It covers the mechanics: environment, tes
 Architecture background lives in [`docs/architecture/`](docs/architecture/README.md) — start with
 `overview.md`, then `message-flow.md` and `execution.md`. [`CLAUDE.md`](CLAUDE.md) at the repo root
 is the densest single description of the system (agent boundaries, capability routing, the trust
-and permission gates, A2UI) and is kept current.
+and permission gates, the view layer) and is kept current.
 
 ## Prerequisites
 

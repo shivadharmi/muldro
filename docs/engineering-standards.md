@@ -36,7 +36,7 @@ wins until changed here first.
 - **Strategy** — capability→agent resolution, model-tier selection.
 - **Adapter** — thin entry points over a shared core (e.g., batch result folded from the
   streaming pipeline). Two public methods must not own two control flows.
-- **Builder** — typed surface construction only (`ui/renderer.py`).
+- **Builder** — typed surface construction only (`view/frame.py`).
 - **Protocol** (structural typing) over ABC inheritance for service interfaces.
 - **Circuit breaker + retry-with-backoff** for every external call (API, MCP, datastore).
 
@@ -76,15 +76,17 @@ wins until changed here first.
   commit referencing the decision that authorized them.
 - No drive-by refactors outside the declared scope of the change.
 
-## 6. A2UI / Artifact Surfaces
+## 6. View Surfaces
 
 - **The side-effect line is law:** UI that triggers actions (approve, execute, dismiss-with-
-  consequences) is a typed, server-authored component wired through TrustEngine and typed
-  contracts. Render-only content may be a generated HTML artifact. No action callbacks from
-  artifact HTML — ever.
-- Artifacts render exclusively inside a sandboxed iframe: strict CSP, no parent DOM access,
-  no network, no storage. All interpolated content is escaped server-side.
-- Artifact kinds are never delivered to text-only surfaces (Slack/email keep Markdown).
+  consequences) is code-authored, never model-authored. An `Affordance` must name a capability
+  that resolves in `CAPABILITY_CATALOG` and its label is written by code; one that does not
+  resolve is not rendered.
+- **The model authors exactly one field:** a Unit's `body`, markdown prose. Not the frame, not
+  the kind, not a capability, not a score — choosing the frame is choosing the salience.
+- **External text is quoted, never inlined.** It reaches the screen only through `quotes`,
+  verbatim and attributed. `frame.headline` is plain text by type; never render it through a
+  markdown renderer.
 - Replaced code is deleted only after the replacement passes tests and a manual verification pass.
 
 ## 7. Open-Source Hygiene
@@ -116,6 +118,8 @@ wins until changed here first.
 ## 9. Enforcement
 
 - **Pre-commit**: ruff check, ruff format, gitleaks secret scan (`.pre-commit-config.yaml`).
-- **CI** (to be added with release packaging): pytest, ruff, frontend lint + build, secret scan.
+- **CI** (`.github/workflows/ci.yml`, on push/PR to `main`): ruff check + ruff format --check,
+  pytest (e2e/eval/golden excluded), frontend lint + build. Secret scanning is not a CI job — it
+  runs in pre-commit (gitleaks) and as the GitGuardian App check on pull requests.
 - Coverage and TDD remain targets, not hard gates, until post-launch — except for new
   feature code, where tests are required at review.

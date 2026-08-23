@@ -93,8 +93,8 @@ All backend settings via env vars with `MULDRO_` prefix (pydantic-settings in `s
 **Binding rules live in [docs/engineering-standards.md](docs/engineering-standards.md)** —
 architecture (one-way deps, frozen god objects, typed boundary contracts), OOP/pattern usage,
 file size caps (200–400 target / 800 hard cap Python, 400 components, enforced via pre-commit),
-refactoring process (characterization tests, structure/behavior commit separation), A2UI
-side-effect rule, and OSS hygiene. Read it before structural changes. Summary below.
+refactoring process (characterization tests, structure/behavior commit separation), the
+view-layer side-effect rule, and OSS hygiene. Read it before structural changes. Summary below.
 
 ### Python
 

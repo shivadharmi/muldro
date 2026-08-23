@@ -82,8 +82,8 @@ to. There is no bug bounty; the project is pre-revenue.
   widens an agent's authority. Injection that only produces wrong *text* is a quality bug; injection
   that produces an *action* is a vulnerability
 - Secrets committed to the repository, or leaked into logs, traces, surfaces or error responses
-- SQL injection, SSRF (notably through the MCP bridge and connector URLs), XSS in the A2UI
-  renderer or artifact iframe, CSRF, path traversal in artifact storage
+- SQL injection, SSRF (notably through the MCP bridge and connector URLs), XSS in the view
+  layer, CSRF, path traversal in artifact storage, unsandboxed artifact content
 - Dependency vulnerabilities that are actually reachable from Muldro's code paths
 
 ### Out of scope
@@ -147,10 +147,19 @@ capability_scope → governor_audit → unavailable_server → trust_gate → [p
   `autonomous`. An assessment outage can never silently auto-execute a write.
 - **The Governor is audit-only.** It is not an approval gate; do not report "the Governor allowed X"
   as a bypass.
-- **A2UI side-effect line.** UI that triggers an action is a typed, server-authored component wired
-  through the gates. Generated HTML artifacts are render-only and run in a sandboxed iframe with a
-  strict CSP, no parent DOM access, no network and no storage. An action callback reachable from
-  artifact HTML is a vulnerability.
+- **View-layer side-effect line.** UI that triggers an action is code-authored, never model-authored.
+  An `Affordance` must name a capability that resolves in `CAPABILITY_CATALOG`, its label is written
+  by code, and one that does not resolve is not rendered. The model authors exactly one field on a
+  Unit — `body`, markdown prose. It cannot choose a frame kind, a capability or a score. External
+  text (an email subject, a message body) reaches the screen only through `quotes`, verbatim and
+  attributed, and `frame.headline` is plain text whose validator refuses every construct a markdown
+  renderer would turn into emphasis, a heading or a live link.
+- **Known gap — artifact content is served without a Content-Security-Policy.**
+  `GET /v1/artifacts/{id}/content` returns the stored bytes with the stored `mime_type` and
+  `Content-Disposition: inline`, and sets no CSP header. Nothing in the frontend renders artifact
+  content today (runs list artifacts as reference rows only), so there is no active rendering
+  surface — but an operator who builds one, or a user who opens that URL directly, gets unsandboxed
+  content in the app origin. Treat stored artifact bytes as untrusted.
 
 Secret hygiene is enforced rather than remembered: gitleaks and `detect-private-key` run in
 pre-commit, `.env` and credential files are untracked, and secrets must not appear in code,
