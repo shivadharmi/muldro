@@ -8,10 +8,10 @@ Muldro is a **Personal AI Operating System** for founders. It is NOT a chatbot �
 
 ## Architecture
 
-Multi-agent hub-and-spoke: a central `MuldroOrchestrator` (`backend/src/orchestrator/muldro.py`) routes to 6 sub-agents on the autonomous path, and to a single plan-scoped `lead` on the chat path. The model layer is **provider-configurable** (Anthropic by default; OpenAI, Google and local Ollama are in the catalog) — see "Model / thinking params". Capability-based routing: Planner produces `PlanOutput` with steps, `CapabilityResolver` maps each step's capability to the appropriate agent. Internal FastMCP servers wrap the intelligence layer; external MCP servers provide connectors — all run **on demand with no Docker dependency**: GitHub and Atlassian as remote HTTP MCP servers, Google Workspace as an on-demand local `uvx` process managed by `LocalMCPProcessManager` (`backend/src/integrations/local_process_manager.py`), and stdio servers (Slack, Notion) via `npx`. MCP sessions are **turn-scoped** via `TurnScope` (`backend/src/integrations/turn_scope.py`) and torn down at turn end; the scheduler's `run_health_tick` idle reaper is the safety net.
+Multi-agent hub-and-spoke: a central `MuldroOrchestrator` (`backend/src/orchestrator/muldro.py`) routes to 6 sub-agents on the autonomous path, and to a single plan-scoped `lead` on the chat path. The model layer is **provider-configurable** (Anthropic by default; OpenAI, Google and local Ollama are in the catalog) — see "Model / thinking params". Capability-based routing: Planner produces `PlanOutput` with steps, `CapabilityResolver` maps each step's capability to the appropriate agent. Internal FastMCP servers wrap the intelligence layer; external MCP servers provide connectors. **Google Workspace, GitHub, Notion and Jira are gateway-backed** — `streamable-http` to the OpenConnector adapter (`backend/src/adapter/`), authenticated by a minted `platform_jwt`, so Muldro never holds the provider's OAuth token. Slack alone remains a stdio `npx` server. The gateway itself is a Docker deployment (`infra/gateway/`); the MCP servers Muldro spawns are not. MCP sessions are **turn-scoped** via `TurnScope` (`backend/src/integrations/turn_scope.py`) and torn down at turn end; the scheduler's `run_health_tick` idle reaper is the safety net.
 
 ```
-User <-> Next.js Frontend (A2UI)
+User <-> Next.js Frontend (Unit feed)
               |
          MuldroOrchestrator (provider-configurable model layer)
          Chat turn      -> ONE plan-scoped lead
@@ -35,13 +35,13 @@ User <-> Next.js Frontend (A2UI)
 - Orchestrator + agents: `backend/src/orchestrator/` (muldro.py, agents.py, hooks.py, prompts.py, tracing.py, budget.py, perception_runner.py, connector_poller.py, recovery.py, intent_classifier.py, api_circuit_breaker.py, capability_summary.py, services.py)
 - Deep runtime (the single execution engine): `backend/src/deep_runtime/` (agent_builder.py, model_factory.py, confirmation.py, stream_adapter.py, middleware/) + the model layer `backend/src/llm/` (model_factory.py, utility.py) + the provider capability map `backend/src/config/` (model_catalog.py, capability_map.py)
 - Services (business logic): `backend/src/services/` — planner, governor, executor, presenter, memory_service, world_model, event_processor, capability_resolver, risk_assessor, trust_engine, etc.
-- Tool layer: `backend/src/tools/` (catalog.py, schemas.py, validation.py, intelligence_server.py, communication_server.py, server.py)
-- Runtime contracts: `backend/src/contracts/` (PlanOutput, PlanStep, CapabilityGap, PolicyDecision, SurfaceUpdate, InsightSurfaceData, StepResult, ToolCallRequest, DomainEvent, WorkspaceSurfacePush) — neutral layer both api and services import downward from
-- A2UI component system: `backend/src/ui/` (contracts.py, renderer.py)
-- A2UI surface builder: `backend/src/services/surface_builder.py` (SurfaceService) + `surface_detail_builders.py`
+- Tool layer: `backend/src/tools/` (catalog.py, schemas.py, validation.py, intelligence_server/, server.py)
+- Runtime contracts: `backend/src/contracts/` (PlanOutput, PlanStep, CapabilityGap, PolicyDecision, SurfaceUpdate, StepResult, ToolCallRequest, DomainEvent) — neutral layer both api and services import downward from
+- View layer (frame and body): `backend/src/view/` — contracts.py (Frame/Quote/Unit), frame.py, body*.py, feed.py, ranking/, publish.py. Authoritative spec: [`docs/view-layer/spec.md`](docs/view-layer/spec.md)
+- Gateway adapter (the only connect path): `backend/src/adapter/` + `backend/src/integrations/gateway_actions/`
 - API routes: `backend/src/api/` — all `/v1/` prefixed
 - SQLAlchemy models: `backend/src/models/` — all workspace-scoped
-- Frontend: `frontend/src/` (Next.js + A2UI renderer + chat split-pane)
+- Frontend: `frontend/src/` (Next.js + Unit feed + chat split-pane)
 - Infra: `infra/` (Terraform for AWS) + `docker-compose.yml` (local dev)
 
 ## Commands
@@ -104,7 +104,7 @@ view-layer side-effect rule, and OSS hygiene. Read it before structural changes.
 - **Naming**: snake_case. Prefixed IDs with ULID (e.g., `evt_`, `plan_`, `exec_`, `mem_`, `apr_`).
 - **Imports**: absolute from `src.` prefix. Ruff handles sorting.
 - **Errors**: `HTTPException` for HTTP errors. Always use Pydantic response models, never bare dicts.
-- **Tests**: pytest + pytest-asyncio (asyncio_mode = "auto"). Test files mirror `src/` structure. Use `make_mock_settings()` from `tests/conftest.py`. Mock Anthropic client via `@patch("src.orchestrator.muldro.get_anthropic_client")`.
+- **Tests**: pytest. `asyncio_mode` is **not** configured anywhere — `tests/conftest.py` installs its own `pytest_pyfunc_call` hook that runs coroutine tests, so **write new async tests unmarked**. Test files mirror `src/` structure. Use `make_mock_settings()` from `tests/conftest.py`.
 
 ### Frontend (React/Next.js)
 
@@ -130,7 +130,7 @@ view-layer side-effect rule, and OSS hygiene. Read it before structural changes.
 | Librarian | balanced | Extract entities, update world model, store memories | entities, relationships, memories |
 | Planner | reasoning | Produce capability-based plans (structured PlanOutput JSON) via PLANNER_PROMPT_V2 | plans, plan_tasks, goal memories |
 | Executor | balanced | Execute approved plans via tools, scoped per step (reads context first; offered only the current step's capability tools, not the full write union) | task_runs, task_steps |
-| Presenter | balanced | Generate user-facing text output | briefings, A2UI surfaces (via SurfaceService + renderer.py) |
+| Presenter | balanced | Generate user-facing text output | briefings |
 | Persona | fast | Learn and store preferences (batched every 10th scheduler tick, min 5 interactions) | memories (preference type) |
 
 **Only Planner decides intent.** The table above is the **autonomous** path's cast: only the Executor performs external actions (scoped to the step's capability) and only Presenter talks to the user. A **chat** turn routes to none of them — it builds one synthetic `lead` (`orchestrator/lead_builder.py`, not a registry row) scoped to the plan's capability union, and that lead acts and answers for itself. **Every external write is gated at action time** — `trust_gate` (TrustEngine, per capability) on the autonomous path, `permission_gate` (per action) on chat — and with no human on the turn a gated write is *prepared* for review rather than executed.
@@ -212,69 +212,79 @@ Fast intent classification (utility `fast` tier — Haiku by default) is extract
 - `classify_intent()` — one `complete_text(tier="haiku")` call (mapped onto the resolver's `fast` tier), returns `(intent, confidence, sources)`
 - `intent_to_plan()` — synthesizes lightweight PlanOutput from fast intents (replaces `intent_to_decision`)
 - `extract_plan()` — parses structured JSON from Planner response text (replaces `extract_decision`)
-- `_match_read_capability()` — keyword-to-capability mapping for fast-path single reads
 - Constants: `FAST_INTENTS`, `INTENT_CONFIDENCE_THRESHOLD` (0.7), `VALID_PERCEPTION_SOURCES`
 
 Fast intents (`greeting`, `chitchat`, `simple_question`, `data_fetch`, `status_query`, `approval_response`, `direct_answer`, `single_read`, `memory_operation`, `acknowledgment`) skip the Planner entirely and produce lightweight PlanOutput via `intent_to_plan()`.
 
 ## Data Flow
 
-**Autonomous path:** Perceiver → EventProcessor (normalize, score, dedup, DLQ on failure) → Librarian (entities, memories) → Planner (PlanOutput with capability steps) → TrustEngine (approval gate per step) → Executor (execute via GraphExecutor, per-step capability scope via `resolve_for_step`) → Presenter (deliver via A2UI / web)
+**Autonomous path:** Perceiver → EventProcessor (normalize, score, dedup, DLQ on failure) → Librarian (entities, memories) → Planner (PlanOutput with capability steps) → TrustEngine (approval gate per step) → Executor (execute via GraphExecutor, per-step capability scope via `resolve_for_step`) → Presenter (briefing / user-facing text). Perception publishes `Unit`s directly via `src/view/` — see "View Layer" above.
 
 **Chat path:** intent → Planner (or fast-path plan) → ONE lead scoped to the plan's capability union → `permission_gate` at each write (allow / interrupt / prepare) → the lead's own reply. No per-step routing, no Presenter step.
 
 **Perception signal flow:** Scheduler → PerceptionPolicyService (circuit breaker, rate limiting) → Perceiver → RelevanceAssessor (tier routing: act/alert/brief/silent) → Notifier (priority-scored delivery with hold-for-briefing)
 
-## A2UI System (Agent-to-UI)
+## View Layer (frame and body)
 
-A2UI is the dynamic interface generation layer. Backend agents produce typed component trees that the frontend renders via a recursive React dispatcher.
+Replaces A2UI. **Code owns the frame · the model writes one markdown body · external text is
+quoted by code and enters neither.** Authoritative design: [`docs/view-layer/spec.md`](docs/view-layer/spec.md)
+(`mockup.html` is normative for appearance).
 
-**Backend pipeline:**
-```
-SurfaceService (surface_builder.py) or _push_workspace_surface (muldro.py)
-  → uses renderer.py builders: card(), heading(), text(), badge(), button(), alert(), etc.
-  → produces A2UISurface with populated children[]
-  → delivered via: GET /v1/workspace/surfaces (REST) or muldro:a2ui:{user_id} (Redis → WebSocket)
-  → persisted to ui_surfaces table (24h TTL)
-  → live execution updates via SurfaceUpdate (emission points in graph_executor.py)
-```
+`Unit` (`src/view/contracts.py`) is the only object in the view layer:
+- **`frame`** — built by code from a domain row. `key` (`{source}:{entity_type}:{entity_id}`,
+  deterministic), `kind` (closed Literal `proposal | finding | run | record | briefing`),
+  `status`, `headline`, `source`, `entity_type`, `occurred_at`, `updated_at`, `importance`,
+  `event_count`, `affordances`. No field is model-authored.
+- **`body`** — ONE markdown field, the model's entire contract. Paragraph 1 is the lede; the card
+  renders the lede, the Full renders the whole body. Stored as a row (`unit_bodies`), not recomputed.
+- **`quotes`** — external text, verbatim and attributed. The only route by which external text
+  reaches the screen.
 
-**Frontend pipeline:**
-```
-fetchWorkspaceSurfaces() or useMuldroWs hook (surface_update message type)
-  → A2UISurface objects with children[]
-  → useSurfaceStore (Zustand) — single store, updateSurface() for live merges
-  → A2UIRenderer (renderer.tsx) — switch dispatcher
-  → React components in components/a2ui/components/
-  → ExecutionSurface, InsightSurface, InlineApprovalCard (new surface types)
-```
+**Backend:** `NormalizedEvent` → `view/frame.py::frame_for_event` → `view/perception.py` →
+`view/body_fill.py` (bodies written by `view/body_generator.py`) → `view/feed.py::assemble_feed`
+(ordered by `view/ranking/`) → `GET /v1/workspace/units`, or `view/publish.py` → Redis
+`muldro:a2ui:{user_id}` (channel name retained as wire vocabulary) → WebSocket, `type: "unit"`.
 
-**Key files:**
-- Contracts: `src/ui/contracts.py` (A2UIComponent, A2UISurface, ComponentType enum)
-- Builders: `src/ui/renderer.py` (builder functions: card, text, button, table, metric, etc.)
-- Surface builder: `src/services/surface_builder.py` (SurfaceService — builds workspace surfaces from DB)
-- Surface details: `src/services/surface_detail_builders/` (package — per-kind tab builders + a `(kind, tab_id)` registry)
-- WS surface push: `src/orchestrator/muldro.py` `_push_workspace_surface()` + `_push_insight_surface()`
-- Notifier: `src/services/notifier.py` (priority-scored delivery with rate limiting + hold-for-briefing)
-- Frontend renderer: `frontend/src/components/a2ui/renderer.tsx`
-- Frontend store: `frontend/src/stores/surface-store.ts` (single Zustand store)
-- Execution surface: `frontend/src/components/a2ui/components/execution-surface.tsx` (phase-aware live renderer)
-- Insight surface: `frontend/src/components/a2ui/components/insight-surface.tsx` (proactive insights with dismiss)
-- Inline approval: `frontend/src/components/a2ui/components/inline-approval.tsx` (risk, trust, approve/edit/reject)
-- Workspace: `frontend/src/app/page.tsx` → `workspace-canvas.tsx` (pure A2UIRenderer grid)
-- Chat: `frontend/src/app/chat/page.tsx` → split-pane layout (chat left, surfaces right)
+**Frontend:** `fetchWorkspaceUnits()` or `useMuldroWs` (`unit` message) → `useUnitStore` (Zustand)
+→ `workspace-canvas.tsx` → `unit-card.tsx` (the Glance) / `unit-detail.tsx` (the Full). Body prose
+renders through `MarkdownRenderer`; the lede through `workspace/lede.tsx` (inline-only, links stripped).
 
-**Surface kinds:** run, summary, briefing, alert, recommendation, proactive_insight, `prepared_work` (the standing review queue for actions staged on turns with no human present), message (system/agent-managed) + legacy `plan` (still produced by `derive_surface_kind`) and `approval` (demoted to an inline run-surface detail tab). See the `SurfaceKind` Literal in `src/ui/contracts.py` for the authoritative set.
+**Invariants** (spec §10 — tested):
+1. A view is a pure function of a domain row; no view reads a cache. Glance and Full cannot disagree.
+2. `frame.headline` is plain text. Its validator refuses every construct `remark-gfm` would turn
+   into emphasis, a heading or a live link (all three GFM autolink forms included), plus newlines
+   and control/bidi characters. **Never pass a headline to a markdown renderer.**
+3. No external-origin value reaches a frame field un-neutralized. `frame_for_event` is the single
+   construction site from perception.
+4. The model authors exactly one field: `body`. No structure, no kind, no capability, no score.
+5. Every affordance names a capability in `CAPABILITY_CATALOG`; the label is code-authored. An
+   affordance whose capability does not resolve is not rendered.
+6. `frame.key` is deterministic. 7. The lede is paragraph 1 of `body` — `lede_of` (backend) and
+   `ledeOf` (`unit-card.tsx`) are pinned to agree. 8. The ranker reads derived features only
+   (`view/ranking/features.py`) — no external prose. 9. Nothing expires. 10. Promotion is
+   structural, never semantic (`message_promotion.py`).
 
-**Capability → Surface mapping** (in `_push_workspace_surface`): derives surface kind from plan capabilities.
+**Prepared work, insights, briefings, runs and connector health are Units** — see
+`view/domain_units.py`. Dismissal: `POST /v1/workspace/units/dismiss` + `unit_dismissals`;
+`EngagementService` penalises at 3+ consecutive dismissals and suppresses at 5+.
 
-**Live execution surfaces:** `SurfaceUpdate` contract (`src/contracts/__init__.py`, the neutral contracts layer — NOT `src/ui/contracts.py`, which holds the A2UI component tree) with phases: plan_ready → executing → approval_needed → completed/failed. This phase machine is **autonomous-path only** (emitted from `graph_executor.py`/`dag_runner.py`/`trust_gate.py` via `execution_surface_emitter.py`); the deep chat path emits none. Frontend `StepList` shows status icons (○ ◉ ✓ ✗ ⚠ 👤), plus the verification-nuance icons `✓?` (`completed_unverified` — sent but read-back-unconfirmed) and `⚠` (`partially_completed` — read-back contradicted). Those two DB statuses now pass through `step_status_to_ui` un-collapsed; the server-side `ui/units.py` step-icon map and the frontend `step-presentation.tsx` map both render them.
+**Live execution updates are a separate contract.** `SurfaceUpdate` (`src/contracts/__init__.py`),
+phases plan_ready → executing → approval_needed → completed/failed, is the **autonomous path's**
+phase machine (emitted from `graph_executor.py`/`dag_runner.py`/`trust_gate.py` via
+`execution_surface_emitter.py`); the deep chat path emits none. It is NOT a view-layer contract —
+it rides the same Redis channel as `type: "surface_update"` and is rendered by `/history`. DB step
+statuses reach the UI through `contracts.step_status_to_ui`, which passes `completed_unverified`
+and `partially_completed` through un-collapsed; `execution/step-presentation.tsx` renders them
+`✓?` and `⚠`. No durable copy is kept — a client that missed a frame re-reads `GET /v1/history`.
 
-**Proactive insight surfaces:** `InsightSurfaceData` contract with signal summary, relevance reasoning, goals, suggested actions. Delivered via `_push_insight_surface()`. Dismissal tracked by `EngagementService` (3+ dismissals: penalty, 5+: suppressed). API: `POST /v1/insights/{surface_id}/dismiss`.
-
-**API:** `GET /v1/workspace/surfaces` — unified endpoint returning pre-built A2UI surfaces. `POST /v1/insights/{surface_id}/dismiss` — dismiss insight. WebSocket `execute_insight` action bridges proposal→execution.
-
-**Do not:** create surfaces with empty `children[]`. Always use `renderer.py` builders to populate component trees. Do not create client-side surface conversion (e.g., `approvalToSurface()`). Do not use `useSurfaceState` hook (deleted — use `useSurfaceStore` only).
+**Do not:**
+- Do not reintroduce a model-authored component tree. `render_surface` never rendered anything.
+- Do not put external text (an email subject, a message body) into `frame.headline` or `body` —
+  it goes in `quotes`.
+- Do not let the model choose `frame.kind` or mint an `Affordance.capability` — choosing the frame
+  is choosing the salience.
+- Do not truncate a body to fit. Overrun is a validation failure whose message is the repair prompt.
+- Do not add a second "paragraph 1" implementation.
 
 ## Trust Infrastructure & Approval
 
@@ -359,18 +369,18 @@ The deep runtime is a LangGraph graph over `langchain-anthropic`, so several beh
 
 ## Background Tasks
 
-The `SchedulerLoop` (`src/services/scheduler.py`) runs a `_tick_background_tasks()` method every 30s that picks up `TaskRun` records with `status="pending"` and `source="background"`, executes them via `GraphExecutor`, and notifies the user on completion.
+The `SchedulerLoop` (`src/services/scheduler/`) runs a `_tick_background_tasks()` method every 30s that picks up `TaskRun` records with `status="pending"` and `source="background"`, executes them via `GraphExecutor`, and notifies the user on completion.
 
 ## Conversation Context
 
-`_load_conversation_history` loads up to 20 messages (8000 chars) including `metadata_` column. Assistant messages are annotated with their decision type (e.g., `Assistant [create_task]: ...`), giving downstream agents execution lineage. When history overflows, older messages are summarized on the utility `fast` tier (`_summarize_history` in `orchestrator/context_assembler.py`) and prepended as `[Earlier conversation summary]`. Most recent 5 messages are kept verbatim.
+`_load_conversation_history` loads up to 20 messages (20000 chars) including `metadata_` column. Assistant messages are annotated with their decision type (e.g., `Assistant [create_task]: ...`), giving downstream agents execution lineage. When history overflows, older messages are summarized on the utility `fast` tier (`_summarize_history` in `orchestrator/context_assembler.py`) and prepended as `[Earlier conversation summary]`. Most recent 5 messages are kept verbatim.
 
 ## Intelligence Loop (Soul)
 
 The system learns from execution outcomes and synthesizes across perception sources:
 
-- **Outcome learning** (`_learn_from_outcome`): After each run completes, checks for linked approval decisions. Approved/rejected actions are stored as preference memories. Failed plans are stored as task_context memories (30-day TTL). These flow into future context packs via the preference system.
-- **Cross-source synthesis**: When 2+ perception sources have new events in the same scheduler tick, triggers a Planner synthesis call to identify cross-cutting insights. Throttled to once per 30 minutes, budget-aware.
+- **Outcome learning** (`OutcomeLearner.writeback_memories`, `src/services/outcome_learner.py`): after a run completes, memories are extracted from its completed steps and the world model is enriched with entities/relationships from the outcome (skipped when every completed step was knowledge-routed — the Librarian already did it). Approval decisions do **not** become memories; they feed `TrustState` graduation.
+- **Cross-source synthesis**: When 2+ perception sources have new events in the same scheduler tick, triggers a Planner synthesis call to identify cross-cutting insights. Fires when a tick has ≥2 sources with new events AND ≥3 events total, and only if an actionable-events precheck passes. There is no time-based throttle.
 - **Explicit preference injection**: `ContextBuilder.build()` fetches ALL active preferences via `get_user_preferences()` and merges with semantic matches, ensuring preferences always influence decisions even when they don't match the current query semantically.
 - **Context enrichment**: `_assemble_context()` builds a full ContextPack with entities, memories, preferences, graph relationships (Neo4j), related runs, procedures, artifacts, goals, constraints, and risks. Rendered as structured sections in the agent system prompt.
 
@@ -448,11 +458,11 @@ See [docs/engineering-standards.md](docs/engineering-standards.md) for the full 
 - Do not assume external MCP servers run in Docker — they run on-demand as host processes (remote HTTP for GitHub/Atlassian, `uvx` for Google Workspace, `npx` for others); the `google-workspace-mcp` Docker image and service were removed
 - Do not assume MCP tool schemas are discovered at startup — `initialize_mcp_bridge()` registers configs only; schemas are lazily fetched on first agent build and persisted in `ToolDefinition.input_schema`
 
-### A2UI & Frontend
-- Do not push A2UI surfaces with empty `children[]` — use `renderer.py` builders
-- Do not create client-side surface conversion functions — surfaces built server-side by `SurfaceService`
-- Do not use `useSurfaceState` hook — deleted. Use `useSurfaceStore` (Zustand)
-- Do not import from `src/ui/views.py` — deleted. Use `renderer.py` builders + `SurfaceService`
+### View Layer & Frontend
+- Do not reference `src/ui/`, `SurfaceService`, `surface_builder.py`, `surface_detail_builders/`, `A2UISurface`, `A2UIComponent`, `SurfaceKind`, `render_surface`, `derive_surface_kind`, `_push_workspace_surface`, `InsightSurfaceData`, `ui_surfaces`, `components/a2ui/`, `surface-store.ts` or `useSurfaceStore` — all deleted. Use `src/view/` + `useUnitStore`
+- Do not reference `GET /v1/workspace/surfaces` or `POST /v1/insights/{id}/dismiss` — replaced by `GET /v1/workspace/units` and `POST /v1/workspace/units/dismiss`
+- Do not render `frame.headline` through a markdown renderer — it is plain text by type, and an email subject is what its validator exists to refuse
+- Do not let a model author anything but `body`
 
 ### Streaming & Handlers
 - Do not add handlers only to `process_message` — always wire into BOTH `process_message` and `process_message_stream`

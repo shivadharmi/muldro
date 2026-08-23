@@ -1,6 +1,6 @@
 # The ranker interface — §6, drafted against what actually exists
 
-> **Status:** draft, pending founder review. Expands `spec.md` §6 into a typed interface.
+> **Status:** implemented in `src/view/ranking/`. Expands `spec.md` §6 into a typed interface.
 > **Binds to:** `spec.md` §10 invariant 8 — *the ranker's inputs contain no external prose.*
 > **Scope:** the feature record, the ranking contract, and the audit of which features are
 > buildable today. Not the weights — `spec.md` §13 leaves those open on purpose.

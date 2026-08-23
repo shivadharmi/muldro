@@ -1,6 +1,9 @@
 # Deep Agents Migration Assessment & Plan
 
-**Status:** Draft for decision · **Date:** 2026-06-22 · **Author:** architecture audit
+**Status:** Historical. The migration described here shipped — the deep runtime is now the only
+execution engine. Kept because §B.7 (the invariant register) and §B.8 (constraints) are cited by
+`deep_runtime/middleware/__init__.py`; those two sections remain current, the rest is a record of
+how the decision was made. · **Date:** 2026-06-22
 **Question:** Should Muldro replace its hand-rolled multi-agent runtime with LangChain's
 **Deep Agents** framework (`deepagents`), and if so, how?
 

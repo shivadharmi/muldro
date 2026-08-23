@@ -1,3 +1,28 @@
+# Muldro CI — drop-in replacement for .github/workflows/ci.yml
+#
+# Preserves everything the previous workflow did (backend-lint, backend-test,
+# frontend lint + build, uv/node caching, the tests/e2e|eval|golden ignores and
+# the MULDRO_ANTHROPIC_API_KEY placeholder) and adds:
+#
+#   * gitleaks         — defense in depth, NOT a gap being closed. GitGuardian already
+#                        scans PRs as a GitHub App check (it is not in this file, so
+#                        grepping the workflow alone makes CI look unscanned). This adds
+#                        a self-hosted scan with no third-party dependency, matching the
+#                        gitleaks v8.21.2 the repo already runs in pre-commit — which
+#                        only protects contributors who ran `pre-commit install`.
+#   * npm test         — vitest is configured (frontend/vitest.config.mts) and
+#                        `npm test` -> `vitest run` exists, but CI never called it.
+#   * tsc --noEmit     — matches the `tsc` hook the integration branch adds to
+#                        .pre-commit-config.yaml.
+#   * CodeQL           — python + javascript-typescript, build-mode: none.
+#   * alembic-heads    — backend/tests/infra/test_alembic_single_head.py already
+#                        exists but was only reachable through the full suite,
+#                        which runs with -x, so an unrelated earlier failure hid it.
+#
+# Hardening: least-privilege `permissions:` per job (top-level default is
+# read-only), all actions pinned to major version tags, and `concurrency:` so a
+# new push cancels the superseded run.
+
 name: CI
 
 on:
@@ -6,9 +31,23 @@ on:
   pull_request:
     branches: [main]
 
+# A force-push or a rapid second push should not leave two runs racing.
+# Never cancel on main: main runs are the ones whose green tick is load-bearing.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+# Read-only by default. Jobs that need more say so explicitly.
+permissions:
+  contents: read
+
 jobs:
+  # ---------------------------------------------------------------- backend --
   backend-lint:
+    name: Backend lint + format
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     defaults:
       run:
         working-directory: backend
@@ -35,6 +74,15 @@ jobs:
           source .venv/bin/activate
           uv pip install -e ".[dev]"
 
+      # pyproject pins only `ruff>=0.8.0`, so CI resolves to the latest release.
+      # .pre-commit-config.yaml on the integration branch pins v0.15.7. Printing
+      # the version makes a lint break caused by a ruff bump legible in the log
+      # instead of looking like a code regression.
+      - name: Ruff version
+        run: |
+          source .venv/bin/activate
+          ruff --version
+
       - name: Lint
         run: |
           source .venv/bin/activate
@@ -45,8 +93,54 @@ jobs:
           source .venv/bin/activate
           ruff format --check src/ tests/
 
-  backend-test:
+  alembic-heads:
+    name: Alembic single head
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Cache uv
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/uv
+          key: uv-${{ runner.os }}-${{ hashFiles('backend/pyproject.toml') }}
+          restore-keys: uv-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: |
+          uv venv .venv
+          source .venv/bin/activate
+          uv pip install -e ".[dev]"
+
+      # Two migrations sharing a down_revision give Alembic two heads. Each
+      # branch's own suite still passes; `alembic upgrade head` then aborts at
+      # deploy time. The guard is a pure structural read of the migration graph
+      # -- no database, no network -- so it is worth its own fast job rather than
+      # being buried in a -x suite where an earlier failure hides it.
+      - name: Exactly one Alembic head
+        env:
+          MULDRO_ANTHROPIC_API_KEY: ci-placeholder-not-a-real-key
+        run: |
+          source .venv/bin/activate
+          pytest tests/infra/test_alembic_single_head.py -v
+
+  backend-test:
+    name: Backend tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
     defaults:
       run:
         working-directory: backend
@@ -80,12 +174,22 @@ jobs:
           # non-empty placeholder is enough — no real credential in CI. Not an sk-ant-shaped
           # value, so it does not trip secret scanning.
           MULDRO_ANTHROPIC_API_KEY: ci-placeholder-not-a-real-key
+          # The API lifespan registers gateway OAuth configs with OpenConnector and
+          # ABORTS startup if that fails; there is no OpenConnector in CI.
+          # tests/conftest.py already does os.environ.setdefault() for this, so the
+          # line is a no-op today -- it is here so the requirement is visible at the
+          # CI layer and survives a conftest refactor.
+          MULDRO_SKIP_GATEWAY_VALIDATION: "true"
         run: |
           source .venv/bin/activate
           pytest tests/ -v --ignore=tests/e2e --ignore=tests/eval --ignore=tests/golden -x
 
+  # --------------------------------------------------------------- frontend --
   frontend:
+    name: Frontend lint + typecheck + test + build
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     defaults:
       run:
         working-directory: frontend
@@ -109,5 +213,72 @@ jobs:
       - name: Lint
         run: npm run lint
 
+      # Mirrors the `tsc` hook on the integration branch's .pre-commit-config.yaml.
+      # `npm run build` type-checks app code as a side effect, but this covers the
+      # *.test.tsx files the build never compiles -- and it fails in seconds
+      # instead of after a full Next build.
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      # vitest (frontend/vitest.config.mts). `npm test` is `vitest run`; the
+      # config already excludes tests/e2e, which is Playwright's.
+      - name: Unit tests
+        run: npm test
+
       - name: Build
         run: npm run build
+
+  # --------------------------------------------------------------- security --
+  gitleaks:
+    name: Secret scan (gitleaks)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # gitleaks scans commit history, not just the tree. Without full depth
+          # it sees one commit and a key committed two commits ago goes unnoticed.
+          fetch-depth: 0
+
+      # Same engine and major version as the gitleaks hook in
+      # .pre-commit-config.yaml (rev v8.21.2), so a contributor who has run
+      # `pre-commit install` sees the same verdict locally that CI reaches.
+      # gitleaks-action is free for public repositories; GITLEAKS_LICENSE is only
+      # required for organisation-owned private repos. If this repo is ever moved
+      # under an org or made private, replace this step with the standalone
+      # binary, which has no licence gate:
+      #   curl -sSfL .../gitleaks_8.21.2_linux_x64.tar.gz | tar -xz -C /usr/local/bin gitleaks
+      #   gitleaks detect --source . --redact --verbose
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  codeql:
+    name: CodeQL (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write   # required to upload the SARIF results
+      actions: read            # required for private/internal repos
+    strategy:
+      fail-fast: false
+      matrix:
+        language: ["python", "javascript-typescript"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          # Neither language needs a compiler; `none` skips the autobuilder and
+          # analyses the checked-out source directly. Keeps this job independent
+          # of the uv/npm install steps above.
+          build-mode: none
+          queries: security-and-quality
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{ matrix.language }}"
