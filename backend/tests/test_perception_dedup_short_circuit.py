@@ -143,3 +143,35 @@ class TestOnlyProseBecomesAnInsight:
         from src.orchestrator.perception_runner import _is_publishable_insight
 
         assert _is_publishable_insight(goal) is True
+
+
+class TestOnlySynthesisPublishesAnInsight:
+    """A single-source poll has no cross-cutting insight to publish, by definition.
+
+    The escape hatch exists so the SYNTHESIS path — which correlates 2+ sources
+    and has no prior relevance-routing step — does not silently discard a
+    cross-cutting observation. On an ordinary single-source poll it published
+    the Planner's goal whenever nothing was actionable, and with nothing
+    actionable the goal is a restatement of the signal. The founder's feed
+    accumulated exactly that:
+
+        "You have 1 new Gmail event. Without information about sender, subject,
+         or calendar impact, ..."
+        "A new Gmail event means the user has at least one new message. With no
+         stated goals or rec..."
+
+    Both are the model reporting that it knows nothing, rendered as a finding.
+    This is the per-poll-cycle card the frame-and-body redesign set out to
+    remove, surviving on a different path.
+    """
+
+    def test_a_single_source_poll_publishes_nothing(self):
+        from src.orchestrator.perception_runner import _publishes_insights
+
+        for source in ("gmail", "calendar", "github", "notion", "slack"):
+            assert _publishes_insights(source) is False, source
+
+    def test_synthesis_still_publishes(self):
+        from src.orchestrator.perception_runner import _publishes_insights
+
+        assert _publishes_insights("synthesis") is True

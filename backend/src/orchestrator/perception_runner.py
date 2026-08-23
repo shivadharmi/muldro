@@ -102,6 +102,31 @@ _NOT_PROSE_PREFIXES = ("{", "[", "```", '"goal"', "goal:")
 _MIN_INSIGHT_CHARS = 12
 
 
+# The one perception "source" that is not a connector: the cross-source
+# synthesis pass, which correlates 2+ sources in a single tick.
+SYNTHESIS_SOURCE = "synthesis"
+
+
+def _publishes_insights(source: str) -> bool:
+    """Whether this cycle may turn a non-actionable plan goal into a finding.
+
+    Only synthesis may. The escape hatch below exists because the synthesis path
+    has no prior relevance-routing step, so a genuine cross-cutting observation
+    would otherwise be discarded silently. A SINGLE-source poll has no
+    cross-cutting anything — and when it finds nothing actionable, the Planner's
+    goal is a restatement of the signal it was handed. That is how the founder's
+    feed came to hold "You have 1 new Gmail event. Without information about
+    sender, subject, or calendar impact, ..." — the model reporting that it
+    knows nothing, rendered as a finding.
+
+    Gating on the path rather than on the prose is deliberate. A blocklist of
+    hedging phrases is a losing game against a model that can rephrase, and it
+    would also reject a real insight that happened to be tentative. The
+    structural fact is that a source with nothing actionable has nothing to say.
+    """
+    return source == SYNTHESIS_SOURCE
+
+
 def _is_publishable_insight(goal: str | None) -> bool:
     """Whether a plan goal is prose a human should be shown."""
     text = (goal or "").strip()
@@ -189,7 +214,7 @@ class PerceptionRunner:
             # Queue any actionable plans from the synthesis
             plan = await self._queue_perception_plan(
                 planner_result,
-                "synthesis",
+                SYNTHESIS_SOURCE,
                 user_id,
                 workspace_id,
                 trace.trace_id,
@@ -692,7 +717,7 @@ class PerceptionRunner:
             # cross-cutting insight (esp. on the synthesis path, which has no
             # prior relevance-routing step). Surface it as a briefing item so
             # the reasoning isn't silently discarded.
-            if _is_publishable_insight(plan.goal):
+            if _publishes_insights(source) and _is_publishable_insight(plan.goal):
                 try:
                     from src.services.memory_service import MemoryService
 
