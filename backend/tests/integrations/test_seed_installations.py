@@ -86,3 +86,25 @@ def test_unmigrated_installations_keep_native_transport():
     """
     assert _by_name("slack")["command"] == "npx"
     assert _by_name("slack")["transport"] == "stdio"
+
+
+def test_every_seeded_field_the_installer_writes_is_also_synced():
+    """A seed field that is created but never updated silently does not ship.
+
+    `display_name` was exactly that: the Atlassian card kept advertising
+    "Atlassian (Jira + Confluence)" after Confluence was found unservable,
+    because the re-seed only synced transport/command/args/auth/scopes/env. The
+    row was created from the seed and then frozen against it.
+    """
+    src = inspect.getsource(seed_mod.seed_installations)
+    for field in (
+        "display_name",
+        "transport",
+        "remote_url",
+        "command",
+        "args",
+        "auth_provider",
+        "scopes_granted",
+        "env_template",
+    ):
+        assert f"inst.{field} = " in src, f"{field} is created from the seed but never synced"

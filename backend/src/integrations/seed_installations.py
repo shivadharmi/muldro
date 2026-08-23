@@ -178,6 +178,15 @@ async def seed_installations(db: AsyncSession, workspace_id: str, user_id: str) 
         inst = existing[server_name]
         needs_update = False
 
+        # display_name is synced like every other seeded field. It was not, and
+        # the omission surfaced the moment a migration changed one: the
+        # Atlassian installation kept rendering "Atlassian (Jira + Confluence)"
+        # after Confluence was found to be unservable, so the card advertised a
+        # product the gateway cannot reach. A field the seed declares but never
+        # propagates is a code change that silently does not ship.
+        if inst.display_name != inst_data["display_name"]:
+            inst.display_name = inst_data["display_name"]
+            needs_update = True
         if inst.transport != inst_data.get("transport", "stdio"):
             # Transport changed — tool schemas may differ between modes, so
             # clear them once. Steady-state restarts no longer clear schemas,
