@@ -521,3 +521,40 @@ def test_ensure_aware_utc_treats_a_non_datetime_as_absent():
     assert ensure_aware_utc("2026-08-21T10:00:00") is None
     assert ensure_aware_utc(None) is None
     assert ensure_aware_utc(1755777600) is None
+
+
+# ── benign punctuation survives ───────────────────────────────────────────
+#
+# The neutralizer deleted `#`, `(`, `)`, `[`, `]`, `<` and `>` wholesale, but
+# the validator refuses `#` only at LINE START and a link only as the PAIR
+# `](`. That asymmetry was pure over-removal, and it landed on the text most
+# likely to reach a card: GitHub PR titles and conventional-commit prefixes,
+# which almost always carry exactly this punctuation.
+
+BENIGN_TITLES = [
+    ("fix: close all open PR#12/#13 findings", "fix: close all open PR#12/#13 findings"),
+    ("fix(pdf): page count is off by one", "fix(pdf): page count is off by one"),
+    ("feat(view): dismiss hides the card", "feat(view): dismiss hides the card"),
+    ("Fix parse_url crash on empty host", "Fix parse_url crash on empty host"),
+    ("Bump deps [skip ci]", "Bump deps [skip ci]"),
+    ("Handle 5 < n < 10 correctly", "Handle 5 < n < 10 correctly"),
+]
+
+
+@pytest.mark.parametrize("subject,expected", BENIGN_TITLES)
+def test_ordinary_punctuation_survives_neutralization(subject, expected):
+    """A PR title must arrive intact, not silently rewritten.
+
+    `fix(pdf):` rendering as `fixpdf:` is not a cosmetic problem — the founder
+    reads the card as the record of what happened, and a mangled identifier is
+    a wrong record.
+    """
+    frame = frame_for_event(_event(title=subject, actor_entities=None))
+    assert frame.headline == expected
+
+
+@pytest.mark.parametrize("subject,_expected", BENIGN_TITLES)
+def test_benign_titles_still_satisfy_the_validator(subject, _expected):
+    """Relaxing the neutralizer must not start emitting text the type refuses."""
+    frame = frame_for_event(_event(title=subject, actor_entities=None))
+    assert _MARKDOWN_IN_HEADLINE.search(frame.headline) is None

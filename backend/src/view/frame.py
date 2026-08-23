@@ -19,7 +19,14 @@ import re
 from datetime import datetime, timezone
 from typing import Any
 
-from src.view.contracts import MAX_HEADLINE_CHARS, Affordance, Frame, FrameKind, FrameStatus
+from src.view.contracts import (
+    _MARKDOWN_IN_HEADLINE,
+    MAX_HEADLINE_CHARS,
+    Affordance,
+    Frame,
+    FrameKind,
+    FrameStatus,
+)
 
 # Frame.headline's validator REFUSES markdown, all three GFM autolink forms,
 # CommonMark protocol autolinks, control characters and bidi overrides. A real
@@ -34,25 +41,71 @@ _STRIP_CONTROL = re.compile(
     r"\u2066-\u2069]"  # bidi isolates
 )
 _STRIP_LINK = re.compile(r"\[([^\]]*)\]\([^)]*\)")
+# Last-resort blunt strip, applied only if the validator-driven pass below has
+# not converged. It is the original neutralizer, kept as a floor: emitting a
+# headline the validator refuses costs the founder the whole card, so a
+# pathological input must lose its punctuation rather than its card.
 _STRIP_MARKS = re.compile(r"[*_`#\[\]()~<>]")
+# How many times the validator-driven pass may run before falling back. Each
+# pass strictly removes a match, so real input converges in one or two.
+_NEUTRALIZE_PASSES = 4
 # Trailing `\S*` (not `\S+`) so a bare truncated scheme - "https://" with
 # nothing after it - is removed too; the validator refuses it either way.
 _STRIP_AUTOLINK = re.compile(r"https?://\S*|www\.\S*|\S+@\S+\.\S+")
 
 
+def _neutralize_one(match: re.Match[str]) -> str:
+    """Replace a single refused construct with the least the type will accept.
+
+    Emphasis WRAPS text worth keeping — "*urgent*" carries the word "urgent" —
+    so the delimiters go and the content stays. Everything else (a code span,
+    a heading marker, an autolink, a bidi override) carries no content of its
+    own and is replaced by a space, which also stops the text on either side
+    from splicing into a construct neither side contained.
+    """
+    text = match.group(0)
+    if len(text) > 1 and text[0] in "*_" and text[-1] == text[0]:
+        return text[1:-1]
+    return " "
+
+
 def _plain(text: str | None) -> str:
-    """Reduce external text to inert plain text. May return ''."""
+    """Reduce external text to inert plain text. May return ''.
+
+    Driven by the VALIDATOR'S OWN pattern rather than a parallel character
+    class, so it removes exactly what `Frame.headline` refuses and nothing
+    more. The blunt version deleted `#`, `(`, `)`, `[`, `]`, `<` and `>`
+    outright, while the validator refuses `#` only at line start and a link
+    only as the pair `](`. That over-removal landed hardest on the text most
+    likely to reach a card: "fix(pdf): ..." rendered as "fixpdf: ...", PR
+    numbers lost their `#`, and `parse_url` became `parseurl` — a wrong record,
+    not merely an ugly one.
+
+    Deriving both sides from one pattern also retires the drift risk the old
+    pairing carried: an alternative added to the validator is now neutralized
+    automatically instead of silently starting to refuse cards.
+    """
     if not text:
         return ""
     out = _STRIP_CONTROL.sub(" ", text)
     out = _STRIP_LINK.sub(r"\1", out)
-    out = _STRIP_MARKS.sub("", out)
-    # Autolinks are removed AFTER the markdown punctuation, because stripping
-    # that punctuation can reveal a link it was hiding: "a[.]b@c[.]d" only
-    # becomes the email "a.b@c.d" once the brackets are gone. Substituting a
-    # space rather than "" keeps the text either side of a removed link from
-    # splicing into a fresh one.
+    # Autolinks first: a link can hide behind punctuation the pass below would
+    # otherwise leave in place. Bracketed obfuscation ("a[.]b@c[.]d") is caught
+    # here because the brackets are non-space and the email alternative spans
+    # them, so the pass no longer depends on brackets having been removed.
     out = _STRIP_AUTOLINK.sub(" ", out)
+
+    for _ in range(_NEUTRALIZE_PASSES):
+        if _MARKDOWN_IN_HEADLINE.search(out) is None:
+            break
+        # Repeated because unwrapping emphasis can expose a construct the outer
+        # layer was hiding: "**_x_**" needs two passes to reach "x".
+        out = _MARKDOWN_IN_HEADLINE.sub(_neutralize_one, out)
+    else:
+        # Did not converge. The card matters more than the punctuation.
+        out = _STRIP_MARKS.sub("", out)
+        out = _STRIP_AUTOLINK.sub(" ", out)
+
     return " ".join(out.split())
 
 
